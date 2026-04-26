@@ -90,9 +90,9 @@ metadata {
         attribute "displayOn",          "string"    // on | off
         attribute "timerRemain",        "number"    // seconds remaining on active timer
         attribute "errorCode",          "number"
-        // displayingType: pyvesync says "Unknown functionality" -- read-only diagnostic attribute.
-        // We expose the raw int 0/1 from the response so contributors can observe it.
-        // Intentionally NO setDisplayingType command (HA finding #5).
+        // displayingType: pyvesync vesyncfan.py says "Unknown functionality" -- read-only diagnostic.
+        // CROSS-CHECK: no setter; raw int exposed for contributor observation only.
+        // See applyStatus() CROSS-CHECK block for full rationale (HA finding #5).
         attribute "displayingType",     "number"    // 0 | 1 -- raw, meaning unknown
         // sleepPreferenceType: nested response field, read-only
         attribute "sleepPreferenceType","string"    // e.g. "default", "advanced", "quiet"
@@ -213,11 +213,27 @@ def setLevel(val){
 }
 
 // ---------- Mode ----------
-// API method: setTowerFanMode (NOT setPurifierMode -- Tower Fan-specific method name)
-// Mode reverse-mapping (HA finding #d):
-//   user "sleep" -> API "advancedSleep"
-//   API "advancedSleep" -> user "sleep"
-//   all other modes pass through unchanged
+// CROSS-CHECK [pyvesync device_map.py LTF-F422S entry / HA bonus finding #d]:
+//   Decision (setTowerFanMode): Tower Fan uses API method "setTowerFanMode", NOT
+//     "setPurifierMode" and NOT "setFanMode" (which Pedestal Fan uses).
+//   Rationale: pyvesync device_map.py LTF-F422S entry explicitly sets
+//     set_mode_method='setTowerFanMode'. The ST+HB cross-check parenthetical claimed Tower
+//     Fan also uses "setFanMode", but this was directly contradicted by pyvesync's registry.
+//     We verified the pyvesync device_map.py entry directly.
+//   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/device_map.py
+//     (LTF-F422S entry, set_mode_method='setTowerFanMode').
+//
+// CROSS-CHECK [pyvesync device_map.py LTF-F422S entry / HA bonus finding #d]:
+//   Decision (sleep reverse-mapping): user-facing "sleep" maps to/from API literal
+//     "advancedSleep" bidirectionally.
+//   Rationale: pyvesync device_map.py LTF-F422S entry: FanModes.SLEEP: 'advancedSleep'.
+//     The API requires the literal "advancedSleep"; users expect the simpler "sleep" label.
+//     This is the same pattern as V201S "autoPro" <-> "auto". HA bonus finding #d
+//     independently confirmed this mapping.
+//   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/device_map.py
+//     (LTF-F422S FanModes.SLEEP: 'advancedSleep'); HA vesync cross-check bonus finding #d.
+//   Refutation: community user reports "advancedSleep" is rejected and "sleep" is the
+//     correct API literal --> remove the reverse-mapping and send "sleep" directly.
 def setMode(mode){
     logDebug "setMode(${mode})"
     String m = (mode as String).toLowerCase()
@@ -225,7 +241,7 @@ def setMode(mode){
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|auto|sleep"
         return
     }
-    // Map user-facing "sleep" to API "advancedSleep" (HA finding #d)
+    // Map user-facing "sleep" to API "advancedSleep" (HA finding #d + pyvesync device_map.py)
     String apiMode = (m == "sleep") ? "advancedSleep" : m
     def resp = hubBypass("setTowerFanMode", [workMode: apiMode], "setTowerFanMode(${apiMode})")
     if (httpOk(resp)) {
@@ -398,7 +414,9 @@ def applyStatus(status){
     }
 
     // ---- Mode ----
-    // Reverse-map API "advancedSleep" -> user-facing "sleep" (HA finding #d)
+    // CROSS-CHECK: reverse-map API "advancedSleep" -> user-facing "sleep".
+    // See setMode() CROSS-CHECK block above for full rationale (pyvesync device_map.py
+    // LTF-F422S FanModes.SLEEP:'advancedSleep' + HA bonus finding #d).
     String rawWorkMode = (r.workMode ?: "normal") as String
     String reportedMode = (rawWorkMode == "advancedSleep") ? "sleep" : rawWorkMode
     state.mode = reportedMode
@@ -421,9 +439,22 @@ def applyStatus(status){
     device.sendEvent(name:"displayOn", value: screenState == 1 ? "on" : "off")
 
     // ---- Temperature ----
-    // CRITICAL (HA finding #1): pyvesync reads temperature raw (vesyncfan.py bug).
-    // Real device (LTF-F422S-KEU idle) returns e.g. 717 = 71.7°F.
-    // We MUST divide by 10 before emitting. Comment here documents the known pyvesync discrepancy.
+    // CROSS-CHECK [HA fixture tests/components/vesync/fixtures/fan-detail.json line 19 /
+    //   pyvesync vesyncfan.py asymmetry]:
+    //   Decision: divide temperature by 10 before emitting (raw / 10 = degrees F).
+    //   Rationale: the HA cross-check fixture contains a real LTF-F422S-KEU device capture
+    //     with temperature:717 at idle -- 71.7°F is a plausible room temperature; 717°F is
+    //     impossible. The ST+HB cross-check report claimed pyvesync vesyncfan.py reading raw
+    //     was authoritative, but pyvesync vesyncfan.py has a KNOWN ASYMMETRY: VeSyncTowerFan
+    //     reads temperature raw while VeSyncPedestalFan divides by 10 (vesyncfan.py:314).
+    //     The asymmetry between two closely related devices strongly suggests the Tower Fan
+    //     path is a pyvesync bug, not a genuine hardware difference. We trust the empirical
+    //     real-device fixture over the suspect source code.
+    //   Source: HA tests/components/vesync/fixtures/fan-detail.json line 19 (real-device
+    //     LTF-F422S-KEU capture, temperature:717); pyvesync vesyncfan.py VeSyncTowerFan vs
+    //     VeSyncPedestalFan temperature handling asymmetry (cross-check finding #1, 2026-04-26).
+    //   Refutation: community user reports temperature:72 (already degrees F without /10) -->
+    //     remove the divide; emit raw as degrees F. Also check if pyvesync has been patched.
     if (r.temperature != null) {
         Integer rawTemp = r.temperature as Integer
         // Sanity gate: 0 raw = 0°F which is almost certainly an uninitialized field, skip
@@ -434,8 +465,19 @@ def applyStatus(status){
     }
 
     // ---- displayingType ----
-    // "Unknown functionality" per pyvesync -- exposed as read-only diagnostic attribute.
-    // No setter command is offered (HA finding #5).
+    // CROSS-CHECK [HA cross-check finding #5 / pyvesync vesyncfan.py:166-176]:
+    //   Decision: expose displayingType as read-only attribute (raw int 0/1); no setter.
+    //   Rationale: pyvesync's own inline comment at vesyncfan.py:166-176 says "Unknown
+    //     functionality" for displayingType. The HA core doesn't expose it as a controllable
+    //     feature. Community speculation (HA feature-request thread) suggests it might toggle
+    //     what the LED display shows (fan level vs temperature), but no one has empirically
+    //     confirmed what values 0 and 1 mean. Exposing as a read-only diagnostic attribute
+    //     lets contributors observe it without committing to a semantic we might get wrong.
+    //   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/devices/
+    //     vesyncfan.py lines 166-176 ("Unknown functionality" comment); HA vesync integration
+    //     cross-check finding #5 (2026-04-26).
+    //   Refutation: community user empirically determines what displayingType 0 vs 1 controls
+    //     --> add setDisplayingType command with a friendly label describing the behavior.
     if (r.displayingType != null) {
         device.sendEvent(name:"displayingType", value: r.displayingType as Integer)
     }

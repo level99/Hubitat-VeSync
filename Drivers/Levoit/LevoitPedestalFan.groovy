@@ -52,6 +52,20 @@
  *  Marketing:  Levoit Smart Pedestal Fan
  *  Reference:  pyvesync VeSyncPedestalFan + LPF-R423S.yaml fixture (note typo in filename)
  *              https://github.com/webdjoe/pyvesync
+ *
+ *  CROSS-CHECK [pyvesync device_map.py LPF-R432S entry]:
+ *    Decision: parent driver's deviceType() switch matches against LPF-R432S-* (real codes).
+ *      Fixture content (LPF-R423S.yaml) is correct despite the filename being a typo.
+ *    Rationale: pyvesync device_map.py lists the device as LPF-R432S with dev_types
+ *      ['LPF-R432S-AEU', 'LPF-R432S-AUS'], while the YAML fixture filename and the
+ *      setup_entry key inside it both use 'LPF-R423S' (digits 4-2-3 instead of 4-3-2).
+ *      This is a pyvesync internal inconsistency (number transposition), NOT a real-world
+ *      divergence. Real Levoit hardware ships with LPF-R432S model codes.
+ *    Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/device_map.py
+ *      (LPF-R432S entry, dev_types=['LPF-R432S-AEU','LPF-R432S-AUS']);
+ *      https://github.com/webdjoe/pyvesync/blob/master/src/tests/api/vesyncfan/
+ *      LPF-R423S.yaml (filename typo; content correct).
+ *    Refutation: not applicable -- this is a pyvesync source artifact, not device behavior.
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  Key implementation notes:
@@ -167,13 +181,20 @@ metadata {
         command "setMute",    [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         command "setDisplay", [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
 
-        // NOTE: setChildLock is intentionally absent -- pyvesync VeSyncPedestalFan has no
-        // set_child_lock method, and no community source (ST/HB) shows the request payload.
-        // childLock is exposed as a read-only attribute only.
+        // NOTE: setChildLock is intentionally absent -- see applyStatus() CROSS-CHECK block
+        // for rationale (pyvesync VeSyncPedestalFan: no set_child_lock method; ST+HB: silent).
         //
-        // NOTE: setTimer/cancelTimer are intentionally absent -- no setTimer/clearTimer methods
-        // in pyvesync VeSyncPedestalFan, not in fixture, not in any community source.
-        // Defer to v2.2 after hardware-arrival payload capture.
+        // CROSS-CHECK [pyvesync VeSyncPedestalFan class / LPF-R423S.yaml fixture /
+        //   HA PR #163353 (open as of 2026-04-26)]:
+        //   Decision: setTimer/cancelTimer are intentionally absent from v2.1.
+        //   Rationale: pyvesync VeSyncPedestalFan has no set_timer() or clear_timer() methods.
+        //     Timer commands are not present in the LPF-R423S.yaml fixture. HA PR #163353
+        //     (fan timer support) was still open/unmerged as of 2026-04-26; no confirmed
+        //     payload shapes from any community source. We don't ship commands we'd have to guess.
+        //   Source: https://github.com/webdjoe/pyvesync (VeSyncPedestalFan class, no timer);
+        //     https://github.com/home-assistant/core/pull/163353 (HA fan timer PR, open).
+        //   Refutation: maintainer's hardware capture reveals timer payload --> add setTimer/
+        //     cancelTimer in v2.2 using the confirmed payload format.
     }
 
     preferences {
@@ -273,13 +294,25 @@ def setLevel(val){
 }
 
 // ---------- Mode ----------
-// API method: setFanMode (NOT setTowerFanMode -- Pedestal Fan-specific method name)
-// Modes: normal, turbo, eco, sleep
-// Note: ECO mode (not AUTO) -- differentiator from Tower Fan which has "auto" not "eco"
-// Mode reverse-mapping (same pattern as Tower Fan, HA cross-check finding #d):
-//   user "sleep" -> API "advancedSleep"
-//   API "advancedSleep" -> user "sleep"
-//   all other modes (normal, turbo, eco) pass through unchanged
+// CROSS-CHECK [pyvesync device_map.py LPF-R432S entry]:
+//   Decision: Pedestal Fan uses API method "setFanMode", NOT "setTowerFanMode".
+//     Tower Fan uses "setTowerFanMode"; Pedestal Fan uses "setFanMode" -- DIFFERENT names.
+//   Rationale: pyvesync device_map.py LPF-R432S entry explicitly sets
+//     set_mode_method='setFanMode'. The ST+HB cross-check parenthetical did not distinguish
+//     the two fan method names; pyvesync device_map.py is the authoritative source.
+//   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/device_map.py
+//     (LPF-R432S entry, set_mode_method='setFanMode').
+//   Refutation: community user reports "setFanMode" is rejected and "setTowerFanMode" works
+//     --> swap to "setTowerFanMode" and update the header note.
+//
+// CROSS-CHECK [pyvesync device_map.py LPF-R432S entry / HA cross-check finding #d]:
+//   Decision: "sleep" reverse-maps to/from API "advancedSleep" (same pattern as Tower Fan).
+//   Decision: mode "eco" (NOT "auto") is the Pedestal Fan's 4th mode.
+//     Tower Fan has "auto"; Pedestal Fan has "eco" -- do NOT confuse these.
+//   Source: pyvesync device_map.py LPF-R432S FanModes entries (eco, advancedSleep);
+//     HA vesync cross-check finding #d (advancedSleep reverse-mapping).
+//   Refutation for eco: community user confirms "auto" is accepted on their Pedestal Fan -->
+//     add "auto" as an alias or replace "eco" with "auto".
 def setMode(mode){
     logDebug "setMode(${mode})"
     String m = (mode as String).toLowerCase()
@@ -287,7 +320,7 @@ def setMode(mode){
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|eco|sleep"
         return
     }
-    // Map user-facing "sleep" to API "advancedSleep"
+    // Map user-facing "sleep" to API "advancedSleep" (pyvesync device_map.py + HA finding #d)
     String apiMode = (m == "sleep") ? "advancedSleep" : m
     def resp = hubBypass("setFanMode", [workMode: apiMode], "setFanMode(${apiMode})")
     if (httpOk(resp)) {
@@ -300,11 +333,21 @@ def setMode(mode){
 }
 
 // ---------- Oscillation ----------
-// Pedestal Fan has 2-axis oscillation (horizontal + vertical) via setOscillationStatus.
-// This is different from Tower Fan's single-axis setOscillationSwitch.
-// Per pyvesync _set_oscillation_state: H and V must be sent in separate payloads --
-// if verticalOscillationState is set, horizontalOscillationState and ranges are ignored.
-// Therefore: no combined H+V toggle command. Call H and V separately.
+// CROSS-CHECK [pyvesync LPF-R423S.yaml fixture / pyvesync VeSyncPedestalFan._set_oscillation_state]:
+//   Decision: use method "setOscillationStatus" (NOT "setOscillationSwitch").
+//     Pedestal Fan is 2-axis (horizontal + vertical); Tower Fan is single-axis.
+//     Different method name AND different semantics.
+//   Rationale: pyvesync LPF-R423S.yaml fixture (note: filename typo, content is correct for
+//     LPF-R432S) shows the oscillation method as setOscillationStatus with fields
+//     horizontalOscillationState and verticalOscillationState. Tower Fan uses
+//     setOscillationSwitch with oscillationSwitch field -- completely different.
+//     Per pyvesync VeSyncPedestalFan._set_oscillation_state: H and V must be sent in
+//     separate payloads (if verticalOscillationState is present, horizontal and ranges
+//     are ignored). Therefore: no combined H+V toggle command.
+//   Source: https://github.com/webdjoe/pyvesync/blob/master/src/tests/api/vesyncfan/
+//     LPF-R423S.yaml (fixture); pyvesync VeSyncPedestalFan._set_oscillation_state method.
+//   Refutation: community user reports setOscillationStatus is rejected, setOscillationSwitch
+//     works --> swap method name and revise semantics to single-axis.
 
 // Toggle horizontal oscillation on or off (without changing range)
 def setHorizontalOscillation(onOff){
@@ -481,7 +524,9 @@ def applyStatus(status){
     }
 
     // ---- Mode ----
-    // Reverse-map API "advancedSleep" -> user-facing "sleep"
+    // CROSS-CHECK: reverse-map API "advancedSleep" -> user-facing "sleep".
+    // See setMode() CROSS-CHECK block above for full rationale (pyvesync device_map.py
+    // LPF-R432S FanModes.SLEEP:'advancedSleep' + HA cross-check finding #d).
     // Other modes (normal, turbo, eco) pass through unchanged.
     String rawWorkMode   = (r.workMode ?: "normal") as String
     String reportedMode  = (rawWorkMode == "advancedSleep") ? "sleep" : rawWorkMode
@@ -523,15 +568,34 @@ def applyStatus(status){
     device.sendEvent(name:"displayOn", value: screenState == 1 ? "on" : "off")
 
     // ---- childLock (READ-ONLY) ----
-    // pyvesync VeSyncPedestalFan has no set_child_lock method.
-    // Exposed as read-only attribute; no setter command.
+    // CROSS-CHECK [pyvesync VeSyncPedestalFan class / ST+HB cross-check]:
+    //   Decision: expose childLock as read-only attribute only; NO setChildLock command.
+    //   Rationale: pyvesync VeSyncPedestalFan has no set_child_lock() method (contrast with
+    //     VeSyncTowerFan which also lacks it -- both fans omit child-lock write support in
+    //     pyvesync). ST+HB community drivers are also silent on the request payload shape.
+    //     Without any community-captured request payload, we'd be guessing the field names
+    //     and values; wrong guesses produce inner code -1 silently.
+    //   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/devices/
+    //     vesyncfan.py VeSyncPedestalFan class (no set_child_lock method present);
+    //     ST+HB cross-check (2026-04-26, silent on payload).
+    //   Refutation: maintainer's hardware capture (week of 2026-04-26) reveals the payload
+    //     format --> add setChildLock command in v2.2 with the confirmed payload.
     if (r.childLock != null) {
         device.sendEvent(name:"childLock", value: (r.childLock as Integer) == 1 ? "on" : "off")
     }
 
     // ---- Temperature ----
-    // pyvesync source (vesyncfan.py:314) confirms: temperature / 10 for Pedestal Fan.
-    // e.g. raw 750 = 75.0°F.
+    // CROSS-CHECK [pyvesync vesyncfan.py:314 / HA cross-check / ST+HB cross-check]:
+    //   Decision: divide temperature by 10 (raw / 10 = degrees F). NO ambiguity.
+    //   Rationale: pyvesync VeSyncPedestalFan source explicitly does:
+    //     state.temperature = (res.temperature / 10) if res.temperature else None
+    //     (vesyncfan.py:314). Both HA cross-check and ST+HB cross-check independently
+    //     confirm /10 for Pedestal Fan. This is the non-contentious case (contrast with
+    //     Tower Fan where the pyvesync source has a known asymmetry/bug).
+    //   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/devices/
+    //     vesyncfan.py line 314 (VeSyncPedestalFan, temperature / 10).
+    //   Refutation: community user reports impossible value (e.g. 750°F) -- investigate
+    //     pyvesync source to see if the /10 was changed in a newer version.
     if (r.temperature != null) {
         Integer rawTemp = r.temperature as Integer
         // Sanity gate: 0 raw = 0°F which is almost certainly an uninitialized field, skip

@@ -137,8 +137,18 @@ def setMode(mode){
 }
 
 // ---------- Mist level ----------
+// CROSS-CHECK [pyvesync device_map.py LUH-A601S entry / ST+HB homebridge-levoit-humidifiers]:
+//   Decision: expose mist range 1-9 (NOT 1-3, even though the physical button has only 3 steps).
+//   Rationale: pyvesync device_map.py confirms LUH-A601S mist_levels=9; the VeSync app also
+//     exposes 9 levels via the cloud UI. homebridge-levoit-humidifiers independently sets
+//     mistLevels:9 for Classic300S. The physical button is a 3-step subset; the API is 1-9.
+//   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/device_map.py
+//     (LUH-A601S HumidifierMap entry, mist_levels=9);
+//     https://github.com/RaresAil/homebridge-levoit-humidifiers (Classic300S config).
+//   Refutation: community user confirms the device rejects levels 4-9 with an API error -->
+//     reduce range to 1-3.
 // setVirtualLevel payload: {id: 0, level: N, type: 'mist'}
-// NOTE: field names id/level/type — NOT levelIdx/virtualLevel/levelType (Superior 6000S)
+// NOTE: field names id/level/type -- NOT levelIdx/virtualLevel/levelType (Superior 6000S)
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
@@ -196,12 +206,23 @@ def setAutoStop(onOff){
 }
 
 // ---------- Night-light (HA finding #9 — discrete 3-step only) ----------
+// CROSS-CHECK [HA PR #137544 / ST+HB homebridge-levoit-humidifiers]:
+//   Decision: expose night-light as 3-step discrete enum: off/dim/bright = 0/50/100.
+//     Values outside {0, 50, 100} are rejected with logError.
+//   Rationale: HA PR #137544 author physically tested the Classic 300S and confirmed only
+//     0, 50, and 100 are accepted; arbitrary values (e.g. 25, 75) are rejected by the device.
+//     homebridge-levoit-humidifiers uses a continuous 0-100 slider, which CONTRADICTS the HA
+//     author's physical test. We take the more conservative approach matching empirical evidence.
+//   Source: https://github.com/home-assistant/core/pull/137544 (HA Classic300S humidifier PR,
+//     HA cross-check finding #9, 2026-04-26).
+//   Refutation: community user reports values like 25 or 75 actually take effect on their
+//     device --> broaden to continuous range or add the intermediate values to the enum.
 // Accepts enum "off" | "dim" | "bright". Rejects anything outside the 3-step table.
 // Request payload: {night_light_brightness: 0|50|100}
 def setNightLight(level){
     logDebug "setNightLight(${level})"
     String lvlStr = (level as String).toLowerCase()
-    // Night-light is discrete 3-step only (HA finding #9 — physical device constraint)
+    // Night-light is discrete 3-step only (HA finding #9 -- physical device constraint)
     Map nlNameToInt = [off: 0, dim: 50, bright: 100]
     if (!nlNameToInt.containsKey(lvlStr)) {
         logError "Invalid nightLight value '${lvlStr}' -- must be one of: off, dim, bright"
@@ -339,10 +360,19 @@ def applyStatus(status){
     }
     if (autoStopEnabled != null) device.sendEvent(name:"autoStopEnabled", value: autoStopEnabled ? "on" : "off")
 
-    // ---- Display (HA finding #8 — field aliasing) ----
-    // Canonical key for Classic 300S: `display` (boolean) at top level.
-    // Fallback: `indicator_light_switch` (legacy firmware alias used by Classic 200S).
-    // Also check configuration.display as a secondary source.
+    // ---- Display (HA finding #8 -- field aliasing) ----
+    // CROSS-CHECK [HA cross-check finding #8 / HA Classic300S fixture humidifier-detail.json]:
+    //   Decision: read `display` first, then fall back to `indicator_light_switch`, then
+    //     fall back to configuration.display.
+    //   Rationale: `display` is the canonical response key per real-device HA captures.
+    //     `indicator_light_switch` is an older alias present on Classic 200S and some Classic
+    //     300S firmware variants; retained as a defensive fallback. configuration.display is a
+    //     tertiary fallback if both top-level keys are absent.
+    //   Source: HA vesync integration cross-check finding #8 (2026-04-26); real-device
+    //     humidifier-detail.json fixture in HA tests/components/vesync/fixtures/.
+    //   Refutation: community user reports response includes neither `display` nor
+    //     `indicator_light_switch` --> add a debug-level log about the missing field and
+    //     investigate whether a new firmware key is in play.
     def displayRaw = null
     if (r.display != null) {
         displayRaw = r.display
@@ -357,13 +387,21 @@ def applyStatus(status){
         device.sendEvent(name:"displayOn", value: displayOn ? "on" : "off")
     }
 
-    // ---- Night-light (HA finding #9 — discrete 3-step: 0=off, 50=dim, 100=bright) ----
+    // ---- Night-light (HA finding #9 -- discrete 3-step: 0=off, 50=dim, 100=bright) ----
+    // CROSS-CHECK [HA PR #137544 / ST+HB homebridge-levoit-humidifiers]:
+    //   Decision: map {0->off, 50->dim, 100->bright}; snap unexpected values to "off".
+    //   Rationale: see setNightLight() citation above. Same empirical basis -- HA author's
+    //     physical test confirmed only these 3 values are valid. Snapping to "off" on
+    //     unexpected parse (rather than crashing or emitting raw) matches the conservative
+    //     approach and keeps the attribute consistent with the setter enum.
+    //   Refutation: community user reports night_light_brightness=25 in a real API response
+    //     --> broaden the mapping or log the intermediate value as-received.
     if (r.night_light_brightness != null) {
         Integer nlRaw = r.night_light_brightness as Integer
         Map nlIntToName = [0: "off", 50: "dim", 100: "bright"]
         String nlName = nlIntToName[nlRaw]
         if (nlName == null) {
-            // Unexpected value — snap to "off" with a debug note (per HA production findings)
+            // Unexpected value -- snap to "off" with a debug note (per HA production findings)
             logDebug "applyStatus: unexpected night_light_brightness=${nlRaw}, snapping to 'off'"
             nlName = "off"
             nlRaw = 0

@@ -460,10 +460,21 @@ def applyStatus(status){
         device.sendEvent(name:"roomSize", value: rs)
     }
 
-    // NOTE: lightDetectionSwitch and environmentLightState ARE present in the response
-    // (V100S shares the PurifierVitalDetailsResult model with V201S) but V100S has no
-    // LIGHT_DETECT feature. These fields are intentionally ignored here — no attribute
-    // declarations exist for them, no sendEvent calls are made.
+    // CROSS-CHECK [HA cross-check finding #4 / pyvesync device_map.py line ~898]:
+    //   Decision: lightDetectionSwitch and environmentLightState fields ARE present in the
+    //     V102S response (shared PurifierVitalDetailsResult model with V201S) but are
+    //     intentionally ignored here -- no attribute declarations, no sendEvent calls.
+    //   Rationale: pyvesync device_map.py lists V102S with features=[AIR_QUALITY] only; the
+    //     LIGHT_DETECT feature flag is NOT present for V102S (it IS present for V201S). The
+    //     feature flag is pyvesync's authoritative per-model capability gate. The ST+HB cross-
+    //     check claimed lightDetectionSwitch is "live boolean, implement toggle", but that ignored
+    //     the V102S-vs-V201S feature-flag distinction. The HA finding (which correctly checks
+    //     device_map.py) wins.
+    //   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/device_map.py
+    //     (V102S HumidifierMap entry; LIGHT_DETECT absent); HA vesync integration cross-check
+    //     finding #4 (2026-04-26).
+    //   Refutation: community user confirms setLightDetection WORKS on V102S hardware -->
+    //     expose the toggle conditionally (feature-flag check or simple expose).
 
     device.sendEvent(name:"childLock", value: r.childLockSwitch == 1 ? "on":"off")
     device.sendEvent(name:"display",   value: r.screenSwitch == 1 ? "on":"off")

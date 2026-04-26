@@ -24,8 +24,22 @@
  *              LUH-O601S-WUS, LUH-O601S-KUS (all map to VeSyncHumid200300S class)
  *  Marketing:  Levoit OasisMist 450S Smart Humidifier (US), OasisMist 4.5L Series
  *  Reference:  pyvesync VeSyncHumid200300S + LUH-O451S-WUS.yaml fixture
- *              device_map.py line ~700 — HumidifierMap entry confirms all 4 dev_types
+ *              device_map.py line ~700 -- HumidifierMap entry confirms all 4 dev_types
  *              https://github.com/webdjoe/pyvesync
+ *
+ *  CROSS-CHECK [pyvesync device_map.py line ~700 / ST+HB cross-check finding #11]:
+ *    Decision: all 4 model codes (LUH-O451S-WUS, LUH-O451S-WUSR, LUH-O601S-WUS,
+ *      LUH-O601S-KUS) route to this single driver.
+ *    Rationale: pyvesync groups all four under the same HumidifierMap entry (class
+ *      VeSyncHumid200300S); the HA core has no LUH-O601S-specific code paths; ST+HB
+ *      cross-check finding #11 noted no behavioral divergence between 450 and 600 series
+ *      in community reports. Identical API behavior assumed across all 4 model codes.
+ *    Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/device_map.py
+ *      (HumidifierMap LUH-O451S-WUS/WUSR + LUH-O601S-WUS/KUS entry, line ~700);
+ *      ST+HB cross-check finding #11 (2026-04-26).
+ *    Refutation: community user with LUH-O601S reports field-name divergence or a
+ *      capability the 450S driver doesn't support --> split into a separate driver file
+ *      (remember: driver name change = Bug Pattern #9, so use a new driver name).
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
@@ -45,12 +59,17 @@
  *                      codes route to this driver per device_map.py grouping.
  */
 
-// NOTE: 'humidity' mode is intentionally NOT exposed in setMode for the
-// OasisMist 450S US driver. Per pyvesync issue #295, the device firmware
-// returns API error code 11000000 ("Mode value invalid!") when sent
-// setHumidityMode{mode:'humidity'}. The earlier HA bonus finding #a
-// claiming firmware-variant-dependent acceptance was refuted by user-
-// reported API captures. Only auto/sleep/manual are accepted.
+// CROSS-CHECK [pyvesync issue #295 / HA bonus finding #a (refuted)]:
+//   Decision: 'humidity' mode is intentionally NOT exposed in setMode for the OasisMist 450S.
+//   Rationale: pyvesync issue #295 documents that the OasisMist 450S US firmware returns API
+//     error code 11000000 ("Mode value invalid!") when sent setHumidityMode{mode:'humidity'}.
+//     The HA bonus finding #a claimed firmware-variant-dependent acceptance, but this was
+//     refuted by user-reported API captures showing universal rejection across US model codes.
+//     Only auto/sleep/manual are accepted.
+//   Source: https://github.com/webdjoe/pyvesync/issues/295 (pyvesync issue #295);
+//     HA vesync integration cross-check bonus finding #a (2026-04-26).
+//   Refutation: community user with LUH-O451S-WUS confirms 'humidity' mode works on their
+//     firmware --> re-add as optional mode with a note about firmware version dependency.
 
 metadata {
     definition(
@@ -69,6 +88,8 @@ metadata {
 
         attribute "mode",             "string"   // auto | sleep | manual
         attribute "mistLevel",        "number"   // 0-9 (0 = inactive)
+        // CROSS-CHECK: 40-80% range (NOT 30-80%) -- firmware limit per pyvesync issue #296 +
+        //   homebridge-levoit-humidifiers minHumidityLevel:40 confirmation. See setHumidity().
         attribute "targetHumidity",   "number"   // 40-80 % (firmware limit; pyvesync issue #296)
         attribute "waterLacks",       "string"   // yes | no
         attribute "warmMistLevel",    "number"   // 0-3 (0 = warm mist off)
@@ -135,14 +156,14 @@ def toggle(){
 }
 
 // ---------- Mode ----------
-// Three valid modes: auto, sleep, manual.
-// 'humidity' is intentionally excluded -- device firmware universally rejects it with
-// API error 11000000 ("Mode value invalid!") per pyvesync issue #295. The earlier HA
-// bonus finding #a claiming firmware-variant-dependent acceptance was refuted.
+// CROSS-CHECK [pyvesync issue #295 / HA bonus finding #a (refuted)]:
+//   Decision: three valid modes only -- auto, sleep, manual. 'humidity' excluded.
+//   See top-of-file CROSS-CHECK block above for full rationale.
 // payload: {mode: <value>} -- NOT {workMode: <value>} (Superior 6000S style)
 def setMode(mode){
     logDebug "setMode(${mode})"
     String m = (mode as String).toLowerCase()
+    // 'humidity' is not in this list -- device universally rejects it (pyvesync issue #295)
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"; return }
     def resp = hubBypass("setHumidityMode", [mode: m], "setHumidityMode(${m})")
     if (httpOk(resp)) {
@@ -171,13 +192,23 @@ def setMistLevel(level){
 }
 
 // ---------- Warm-mist level ----------
+// CROSS-CHECK [pyvesync vesynchumidifier.py:328 (known bug) / pyvesync VeSyncLV600S class]:
+//   Decision: level=0 sets warmMistEnabled="off"; level 1-3 sets warmMistEnabled="on".
+//     This is the CORRECT semantic -- mirrors VeSyncLV600S class logic, not the buggy
+//     VeSyncHumid200300S class logic.
+//   Rationale: pyvesync VeSyncHumid200300S.set_warm_level() sets warm_mist_enabled=True
+//     unconditionally even when level=0, which is a bug. The VeSyncLV600S class has the
+//     correct version: warm_mist_enabled = (warm_level > 0). The real device almost certainly
+//     behaves correctly (level=0 = warm mist off, matching the "Heat Off" physical button
+//     position). We trust the corrected LV600S logic over the bugged 200300S logic.
+//   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/devices/
+//     vesynchumidifier.py line ~328 (VeSyncHumid200300S.set_warm_level, the bug);
+//     same file VeSyncLV600S class (correct logic: warm_mist_enabled = warm_level > 0).
+//   Refutation: community user reports level=0 still produces warm mist (device truly
+//     ignores level=0 and stays on) --> reverse the logic; always set warmMistEnabled
+//     from warm_enabled field instead.
 // setVirtualLevel payload: {id: 0, level: N, type: 'warm'} -- same method, different type
 // Valid range: 0-3 (0 = warm mist off; 1-3 = warm intensity levels)
-//
-// IMPORTANT: pyvesync VeSyncHumid200300S.set_warm_level() has a known bug:
-//   it sets state.warm_mist_enabled = True unconditionally, even for level=0.
-//   The correct logic (per VeSyncLV600S class) is: warm_mist_enabled = (warm_level > 0).
-//   This driver mirrors the LV600S correct behavior.
 def setWarmMistLevel(level){
     logDebug "setWarmMistLevel(${level})"
     Integer lvl = (level as Integer) ?: 0
@@ -202,10 +233,18 @@ def setWarmMistLevel(level){
 }
 
 // ---------- Target humidity ----------
+// CROSS-CHECK [pyvesync issue #296 / homebridge-levoit-humidifiers]:
+//   Decision: clamp target humidity to 40-80%, NOT 30-80%.
+//   Rationale: pyvesync's VeSyncHumid200300S base class inherits humidity_min=30, which is
+//     incorrect for OasisMist 450S. pyvesync issue #296 documents that the device firmware
+//     rejects values below 40 with API error code 11003000. homebridge-levoit-humidifiers
+//     independently sets minHumidityLevel:40 for this model family, confirming the 40-floor.
+//   Source: https://github.com/webdjoe/pyvesync/issues/296 (pyvesync issue #296);
+//     https://github.com/RaresAil/homebridge-levoit-humidifiers (OasisMist 450S config,
+//     minHumidityLevel:40).
+//   Refutation: community user confirms values 30-39 are accepted by their device -->
+//     restore the 30 floor (or make it model-code conditional).
 // setTargetHumidity payload: {target_humidity: N} -- note snake_case (not camelCase)
-// Range: 40-80% (NOT 30-80%). Device firmware rejects values below 40 with API error
-// 11003000. pyvesync's base class inherits (30, 80) which is incorrect for this model
-// (confirmed: pyvesync issue #296; homebridge-levoit-humidifiers minHumidityLevel: 40).
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
     Integer p = Math.max(40, Math.min(80, (percent as Integer) ?: 50))
@@ -342,13 +381,14 @@ def applyStatus(status){
     if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
 
     // ---- Warm-mist ----
+    // CROSS-CHECK [pyvesync vesynchumidifier.py:328 (known bug) / VeSyncLV600S class]:
+    //   Decision: derive warmMistEnabled from warm_level value (level > 0 = on), NOT from
+    //     warm_enabled boolean field. This mirrors the correct VeSyncLV600S logic and
+    //     guards against the pyvesync VeSyncHumid200300S bug where warm_enabled=True is
+    //     emitted even when warm_level=0.
+    //   See setWarmMistLevel() CROSS-CHECK block above for full rationale.
     // warm_enabled and warm_level are top-level response fields (ClassicLVHumidResult)
     // OasisMist 450S populates these (unlike Classic 300S which always has warm_enabled=false)
-    //
-    // IMPORTANT: We apply correct semantics here regardless of what warm_enabled says.
-    // If warm_level == 0, we treat warm mist as OFF (warmMistEnabled="off") even if the
-    // API response says warm_enabled=true. This guards against pyvesync's known bug
-    // (VeSyncHumid200300S.set_warm_level sets warm_mist_enabled=True even for level=0).
     if (r.warm_level != null) {
         Integer warmLvl = r.warm_level as Integer
         // Derive enabled state from level value (correct logic from LV600S class)
