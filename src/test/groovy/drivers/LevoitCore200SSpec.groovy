@@ -1,0 +1,169 @@
+package drivers
+
+import support.HubitatSpec
+
+/**
+ * Unit tests for LevoitCore200S.groovy (Levoit Core 200S Air Purifier).
+ *
+ * Covers:
+ *   Bug Pattern #1  — 2-arg update(status, nightLight) signature exists
+ *   Bug Pattern #12 — pref-seed in update(status, nightLight)
+ *   Happy path      — update(status, nightLight) parses Core 200S response correctly
+ *
+ * NOTE: The Core 200S uses an OLDER driver structure. Unlike Vital 200S,
+ * it does NOT have a separate applyStatus() method — status parsing happens
+ * directly in update(status, nightLight). The pref-seed block and all state
+ * mutations are in that method.
+ *
+ * The response format is also different from V2:
+ *   - status.result.level (Integer, 1-3) for fan speed
+ *   - status.result.mode (String: "manual" | "sleep")
+ *   - status.result.enabled (Boolean)
+ *   - status.result.filter_life (Integer, 0-100)
+ *   - status.result.night_light (String: "on" | "off" | "dim")
+ */
+class LevoitCore200SSpec extends HubitatSpec {
+
+    @Override
+    String driverSourcePath() {
+        "Drivers/Levoit/LevoitCore200S.groovy"
+    }
+
+    @Override
+    Map defaultSettings() {
+        return [descriptionTextEnable: null, debugOutput: false]
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #1: 2-arg update signature
+    // -------------------------------------------------------------------------
+
+    def "update(status, nightLight) 2-arg signature is callable (Bug Pattern #1)"() {
+        given: "Core 200S status response with result nested under result key"
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def status = fixture.responses.device_on_manual_speed2 as Map
+
+        when: "parent calls update(status, nightLight)"
+        def result = driver.update(status, null)
+
+        then:
+        noExceptionThrown()
+        // Returns the parsed status map
+        result != null
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #12: pref-seed (lives in update, not applyStatus for Core 200S)
+    // -------------------------------------------------------------------------
+
+    def "pref-seed fires in update() when descriptionTextEnable is null (Bug Pattern #12)"() {
+        given: "settings has descriptionTextEnable=null"
+        settings.descriptionTextEnable = null
+        assert !state.prefsSeeded
+
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def status = fixture.responses.device_on_manual_speed2 as Map
+
+        when:
+        driver.update(status, null)
+
+        then: "updateSetting called to seed descriptionTextEnable=true"
+        def seedCall = testDevice.settingsUpdates.find { it.name == "descriptionTextEnable" }
+        seedCall != null
+        seedCall.value == true
+        state.prefsSeeded == true
+    }
+
+    def "pref-seed does NOT overwrite user-set false (Bug Pattern #12)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def status = fixture.responses.device_on_manual_speed2 as Map
+
+        when:
+        driver.update(status, null)
+
+        then:
+        def seedCall = testDevice.settingsUpdates.find { it.name == "descriptionTextEnable" }
+        seedCall == null
+        state.prefsSeeded == true
+    }
+
+    // -------------------------------------------------------------------------
+    // Happy path
+    // -------------------------------------------------------------------------
+
+    def "update(status, nightLight) happy path from device_on_manual_speed2 fixture"() {
+        given:
+        settings.descriptionTextEnable = true
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def status = fixture.responses.device_on_manual_speed2 as Map
+        // status structure: { result: { level:2, mode:"manual", enabled:true, filter_life:85, ... }, code:0 }
+        assert status.result != null
+        assert status.result.enabled == true
+
+        when:
+        driver.update(status, null)
+
+        then: "switch is on"
+        lastEventValue("switch") == "on"
+
+        and: "mode is manual"
+        lastEventValue("mode") == "manual"
+
+        and: "filter is 85"
+        lastEventValue("filter") == 85
+
+        and: "speed is set from level 2 -> 'medium'"
+        lastEventValue("speed") == "medium"
+
+        and: "no errors logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "update(status, nightLight) happy path from device_off fixture"() {
+        given:
+        settings.descriptionTextEnable = true
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def status = fixture.responses.device_off as Map
+        assert status.result.enabled == false
+
+        when:
+        driver.update(status, null)
+
+        then: "switch is off"
+        lastEventValue("switch") == "off"
+
+        and: "no errors logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "filter life threshold INFO logs when below 10 percent"() {
+        given: "prior filter life was 15 (above critical)"
+        settings.descriptionTextEnable = true
+        state.lastFilterLife = 15
+
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def status = fixture.responses.device_filter_low as Map  // filter_life=8
+
+        when:
+        driver.update(status, null)
+
+        then: "INFO logged about low filter"
+        testLog.infos.any { it.contains("Filter") || it.contains("filter") || it.contains("8") }
+    }
+
+    def "speed mapIntegerToSpeed level=2 maps to 'medium'"() {
+        given:
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def status = fixture.responses.device_on_manual_speed2 as Map  // level=2
+
+        when:
+        driver.update(status, null)
+
+        then: "speed is 'medium' for level 2"
+        lastEventValue("speed") == "medium"
+    }
+}

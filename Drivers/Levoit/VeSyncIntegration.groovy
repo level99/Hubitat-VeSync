@@ -72,7 +72,7 @@ metadata {
 
 def installed() {
 	logDebug "Installed with settings: ${settings}"
-    runIn(15, initialize)
+    runIn(15, "initialize")
 }
 
 def updated() { 
@@ -91,10 +91,10 @@ def updated() {
     state.remove('driverReloading')
     
     // Delay initialization to allow HTTP connection pool to stabilize (15s for reliability)
-	runIn(15, initialize)
+	runIn(15, "initialize")
 
     // Turn off debug log in 30 minutes
-    if (settings?.debugOutput) runIn(1800, logDebugOff);
+    if (settings?.debugOutput) runIn(1800, "logDebugOff");
 }
 
 def uninstalled() {
@@ -220,7 +220,7 @@ def Boolean updateDevices()
 
     // Immediately schedule the next update -- this will keep the
     // referesh interval as close to constant as possible.
-    runIn((int)settings.refreshInterval, updateDevices)
+    runIn((int)settings.refreshInterval, "updateDevices")
 
     sendEvent(name: "heartbeat", value: "syncing", isStateChange: true, descriptionText: "Waiting on update from VeSync servers.")
     logInfo "Heartbeat: syncing"
@@ -274,7 +274,7 @@ def Boolean updateDevices()
 
     // Schedule a call to the timeout method. This will cancel any outstanding
     // schedules.
-    runIn(5 * (int)settings.refreshInterval, timeOutLevoit)
+    runIn(5 * (int)settings.refreshInterval, "timeOutLevoit")
 }
 
 private deviceType(code) {
@@ -503,10 +503,10 @@ private Boolean getDevices() {
                 }                
 
                 state.deviceList = newList
-                runIn(5 * (int)settings.refreshInterval, timeOutLevoit)
-                
+                runIn(5 * (int)settings.refreshInterval, "timeOutLevoit")
+
                 // Delay before first device update to ensure connection pool is stable
-                runIn(10, updateDevices)
+                runIn(10, "updateDevices")
                 result = true
             }
         }

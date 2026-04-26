@@ -553,6 +553,7 @@ private void updateAQIandFilter(String val, filter) {
         def html = "AQI: ${aqi}<br>PM2.5: ${pm} &micro;g/m&sup3;<br>Filter: ${filter}%"
 
         handleEvent("info", html)
+        handleEvent("filter", filter)
     }
 }
 

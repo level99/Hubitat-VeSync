@@ -1,0 +1,43 @@
+# Gradle build output and caches
+build/
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+**/build/
+out/
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Eclipse
+.project
+.classpath
+.settings/
+bin/
+
+# VS Code (per-user config)
+.vscode/
+
+# Claude Code per-user state (agent defs + project context ARE checked in)
+.claude/settings.local.json
+.claude/.credentials.json
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor swap / backup files
+*.swp
+*.swo
+*~
+
+# Logs from local test/dev runs
+*.log
+
+# Local env files (in case anyone adds CI secrets locally)
+.env
+.env.local
