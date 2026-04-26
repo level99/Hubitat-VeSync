@@ -1,5 +1,6 @@
 {
   "packageName": "Levoit Air Purifiers and Humidifiers",
+  "description": "Drivers for Levoit air purifiers and humidifiers via the VeSync cloud API.",
   "author": "Dan Cox (level99 fork); Niklas Gustafsson (original upstream)",
   "version": "2.0",
   "minimumHEVersion": "2.3.2",
