@@ -71,7 +71,7 @@ metadata {
         name: "Levoit Tower Fan",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
-        description: "Levoit Tower Fan (LTF-F422S-WUS/WUSR/KEU/WJP) — power, fan speed 1-12, modes (normal/turbo/auto/sleep), oscillation, mute, display, timer, ambient temperature; canonical pyvesync payloads",
+        description: "[PREVIEW v2.1] Levoit Tower Fan (LTF-F422S-WUS/WUSR/KEU/WJP) — power, fan speed 1-12, modes (normal/turbo/auto/sleep), oscillation, mute, display, timer, ambient temperature; canonical pyvesync payloads",
         version: "2.0",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {

@@ -50,7 +50,7 @@ metadata {
         name: "Levoit Vital 100S Air Purifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
-        description: "Levoit Vital 100S (LAP-V102S) — power, fan speed, mode, timer, AQ/PM2.5, filter health; canonical pyvesync payloads",
+        description: "[PREVIEW v2.1] Levoit Vital 100S (LAP-V102S) — power, fan speed, mode, timer, AQ/PM2.5, filter health; canonical pyvesync payloads",
         version: "2.0",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
