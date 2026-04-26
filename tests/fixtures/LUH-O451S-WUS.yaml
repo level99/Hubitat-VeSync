@@ -29,9 +29,12 @@
 #   - Auto-stop: {enabled: bool}         NOT {autoStopSwitch}
 #   - targetHumidity lives under configuration.auto_target_humidity
 #
-# Firmware variant note (HA finding #a / home-assistant/core#138004):
-#   Some 450S US firmware uses "auto" for auto-target-humidity behavior;
-#   other firmware uses "humidity" for the same. Both modes are valid inputs.
+# Firmware variant note (HA finding #a REFUTED -- pyvesync issue #295):
+#   The earlier claim that some 450S US firmware accepts "humidity" mode was refuted
+#   by user-reported API captures. Device firmware universally returns error 11000000
+#   ("Mode value invalid!") when sent setHumidityMode{mode:'humidity'}.
+#   Only auto/sleep/manual are valid setMode inputs. The device_on_humidity_mode
+#   response scenario is retained for read-path (applyStatus passthrough) tests only.
 #
 # REQUEST payloads -- as sent to /cloud/v2/deviceManaged/bypassV2
 
@@ -73,8 +76,10 @@ requests:
       method: setHumidityMode
       source: APP
 
-  # 450S-specific: humidity mode (variant b firmware, or both variants per maintainer)
-  set_humidity_mode:
+  # REFUTED (pyvesync issue #295): 'humidity' mode is rejected by device firmware with
+  # error 11000000. This payload is retained as a documentary artifact only -- the driver
+  # does NOT produce it. Real devices return "Mode value invalid!" if sent this payload.
+  set_humidity_mode_REJECTED:
     payload:
       data:
         mode: humidity
@@ -204,7 +209,11 @@ responses:
       display: false
       automatic_stop: true
 
-  # Humidity mode -- variant b firmware where "humidity" is the auto mode name
+  # Synthetic: device reporting mode='humidity' in status response.
+  # This is a READ-PATH test only -- the driver does NOT set this mode (pyvesync issue #295
+  # confirms device rejects setHumidityMode{mode:'humidity'} with error 11000000).
+  # Scenario: device was set externally (via app) or is in an unexpected state.
+  # applyStatus should emit mode='humidity' as-received (reality wins over our allow-list).
   device_on_humidity_mode:
     enabled: true
     humidity: 55

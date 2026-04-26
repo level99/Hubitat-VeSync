@@ -33,28 +33,31 @@
  *                      pyvesync payloads (LUH-O451S-WUS.yaml + call_json_humidifiers.py
  *                      + device_map.py + HA issue #138004 warm-mist/mode findings).
  *                      Extends Classic 300S (same VeSyncHumid200300S class) with:
- *                      warm-mist control (setWarmMistLevel 0-3, 0=off), humidity mode
- *                      (4-mode enum: auto/sleep/manual/humidity). NO nightlight (hardware
- *                      does not have it). Features: WARM_MIST, AUTO_STOP.
+ *                      warm-mist control (setWarmMistLevel 0-3, 0=off), 3-mode enum
+ *                      (auto/sleep/manual). NO nightlight (hardware does not have it).
+ *                      Features: WARM_MIST, AUTO_STOP. Target humidity range 40-80%
+ *                      (device firmware limit; pyvesync issue #296). 'humidity' mode
+ *                      intentionally excluded: device universally rejects it with API
+ *                      error 11000000 (pyvesync issue #295; HA bonus finding #a refuted).
  *                      Warm-mist level=0 sets warmMistEnabled=off (corrects pyvesync bug
- *                      in VeSyncHumid200300S.set_warm_level that unconditionally sets
- *                      warm_mist_enabled=True regardless of level -- LV600S class has
- *                      the correct logic; we mirror that). All 4 LUH-O451S/O601S model
+ *                      in VeSyncHumid200300S.set_warm_level -- LV600S class has the
+ *                      correct logic; we mirror that). All 4 LUH-O451S/O601S model
  *                      codes route to this driver per device_map.py grouping.
  */
 
-// NOTE: OasisMist 450S US has two firmware variants. Some firmware accepts
-// setMode("auto"); others require setMode("humidity") for the same
-// auto-target-humidity behavior. Both modes are exposed in the setMode
-// command -- if "auto" doesn't take effect on your device, try "humidity".
-// Per pyvesync maintainer feedback on home-assistant/core#138004.
+// NOTE: 'humidity' mode is intentionally NOT exposed in setMode for the
+// OasisMist 450S US driver. Per pyvesync issue #295, the device firmware
+// returns API error code 11000000 ("Mode value invalid!") when sent
+// setHumidityMode{mode:'humidity'}. The earlier HA bonus finding #a
+// claiming firmware-variant-dependent acceptance was refuted by user-
+// reported API captures. Only auto/sleep/manual are accepted.
 
 metadata {
     definition(
         name: "Levoit OasisMist 450S Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
-        description: "Levoit OasisMist 450S/600S US (LUH-O451S-WUS, LUH-O451S-WUSR, LUH-O601S-WUS, LUH-O601S-KUS) — mist 1-9, warm mist 0-3, target humidity, auto/sleep/manual/humidity modes, auto-stop, display; no nightlight; canonical pyvesync payloads",
+        description: "Levoit OasisMist 450S/600S US (LUH-O451S-WUS, LUH-O451S-WUSR, LUH-O601S-WUS, LUH-O601S-KUS) — mist 1-9, warm mist 0-3, target humidity 40-80%, auto/sleep/manual modes, auto-stop, display; no nightlight; canonical pyvesync payloads",
         version: "2.0",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
@@ -64,9 +67,9 @@ metadata {
         capability "Actuator"
         capability "Refresh"
 
-        attribute "mode",             "string"   // auto | sleep | manual | humidity
+        attribute "mode",             "string"   // auto | sleep | manual
         attribute "mistLevel",        "number"   // 0-9 (0 = inactive)
-        attribute "targetHumidity",   "number"   // 30-80 %
+        attribute "targetHumidity",   "number"   // 40-80 % (firmware limit; pyvesync issue #296)
         attribute "waterLacks",       "string"   // yes | no
         attribute "warmMistLevel",    "number"   // 0-3 (0 = warm mist off)
         attribute "warmMistEnabled",  "string"   // on | off  (NOTE: level=0 -> off, 1-3 -> on)
@@ -76,11 +79,11 @@ metadata {
         attribute "humidityHigh",     "string"   // yes | no
         attribute "info",             "string"   // HTML summary for dashboard tiles
 
-        // setMode: both "auto" and "humidity" exposed -- some 450S US firmware accepts
-        // one over the other for the same auto-target-humidity behavior (finding #a).
-        command "setMode",          [[name:"Mode*",    type:"ENUM",   constraints:["auto","sleep","manual","humidity"]]]
+        // setMode: 3 valid modes. 'humidity' is excluded -- device firmware universally
+        // rejects it with API error 11000000 (pyvesync issue #295; HA finding #a refuted).
+        command "setMode",          [[name:"Mode*",    type:"ENUM",   constraints:["auto","sleep","manual"]]]
         command "setMistLevel",     [[name:"Level*",   type:"NUMBER", description:"1-9"]]
-        command "setHumidity",      [[name:"Percent*", type:"NUMBER", description:"30-80"]]
+        command "setHumidity",      [[name:"Percent*", type:"NUMBER", description:"40-80"]]
         command "setWarmMistLevel", [[name:"Level*",   type:"NUMBER", description:"0-3 (0=off)"]]
         command "setDisplay",       [[name:"On/Off*",  type:"ENUM",   constraints:["on","off"]]]
         command "setAutoStop",      [[name:"On/Off*",  type:"ENUM",   constraints:["on","off"]]]
@@ -132,15 +135,15 @@ def toggle(){
 }
 
 // ---------- Mode ----------
-// Four valid modes: auto, sleep, manual, humidity
-// NOTE: "auto" and "humidity" may behave identically on some 450S US firmware variants
-// (per pyvesync maintainer comment on home-assistant/core#138004 -- finding #a).
-// We expose BOTH and let the user choose which their firmware accepts.
+// Three valid modes: auto, sleep, manual.
+// 'humidity' is intentionally excluded -- device firmware universally rejects it with
+// API error 11000000 ("Mode value invalid!") per pyvesync issue #295. The earlier HA
+// bonus finding #a claiming firmware-variant-dependent acceptance was refuted.
 // payload: {mode: <value>} -- NOT {workMode: <value>} (Superior 6000S style)
 def setMode(mode){
     logDebug "setMode(${mode})"
     String m = (mode as String).toLowerCase()
-    if (!(m in ["auto","sleep","manual","humidity"])) { logError "Invalid mode: ${m}"; return }
+    if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"; return }
     def resp = hubBypass("setHumidityMode", [mode: m], "setHumidityMode(${m})")
     if (httpOk(resp)) {
         state.mode = m
@@ -200,9 +203,12 @@ def setWarmMistLevel(level){
 
 // ---------- Target humidity ----------
 // setTargetHumidity payload: {target_humidity: N} -- note snake_case (not camelCase)
+// Range: 40-80% (NOT 30-80%). Device firmware rejects values below 40 with API error
+// 11003000. pyvesync's base class inherits (30, 80) which is incorrect for this model
+// (confirmed: pyvesync issue #296; homebridge-levoit-humidifiers minHumidityLevel: 40).
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
-    Integer p = Math.max(30, Math.min(80, (percent as Integer) ?: 50))
+    Integer p = Math.max(40, Math.min(80, (percent as Integer) ?: 50))
     def resp = hubBypass("setTargetHumidity", [target_humidity: p], "setTargetHumidity(${p})")
     if (httpOk(resp)) {
         state.targetHumidity = p
@@ -317,7 +323,10 @@ def applyStatus(status){
     if (targetH != null) device.sendEvent(name:"targetHumidity", value: targetH)
 
     // ---- Mode ----
-    // 450S has 4 modes: auto, sleep, manual, humidity
+    // 450S accepts 3 modes via setMode: auto, sleep, manual.
+    // If the response includes an unexpected mode value (e.g. 'humidity' from legacy
+    // pyvesync state), we emit it as-received rather than rejecting it -- the device
+    // may be in a state we didn't set, and the attribute should reflect reality.
     String rawMode = (r.mode ?: "manual") as String
     state.mode = rawMode
     device.sendEvent(name:"mode", value: rawMode)

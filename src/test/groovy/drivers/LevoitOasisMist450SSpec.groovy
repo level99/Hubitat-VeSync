@@ -18,13 +18,14 @@ import support.TestParent
  *                      level=0 produces type:'warm' with level:0 (warm mist off)
  *   HA finding #10  -- level=0 => warmMistEnabled='off' (guards against pyvesync 200300S bug
  *                      that sets warm_mist_enabled=True unconditionally after set_warm_level)
- *   Mode enum       -- all 4 modes (auto/sleep/manual/humidity) produce setHumidityMode;
- *                      invalid 5th value is rejected
- *   Bonus finding #a -- setMode("auto") and setMode("humidity") both produce valid requests
- *                       with their literal mode strings (driver does NOT collapse one into the other)
+ *   Mode enum       -- exactly 3 valid modes (auto/sleep/manual); 'humidity' is REJECTED
+ *                      (pyvesync issue #295: device returns 11000000 "Mode value invalid!");
+ *                      HA bonus finding #a was refuted and is NOT tested here
  *   No nightlight   -- setNightLight is not a callable command; applyStatus ignores any
  *                      night_light_brightness field in the response
- *   Target humidity -- setHumidity(50) produces setTargetHumidity with {target_humidity:50}
+ *   Target humidity -- setHumidity(50) produces setTargetHumidity with {target_humidity:50};
+ *                      clamp floor is 40 (NOT 30) -- pyvesync issue #296, firmware rejects
+ *                      values below 40 with API error 11003000
  *   Display         -- setDisplay produces setDisplay with {state: bool}
  *   Auto-stop       -- setAutoStop produces setAutomaticStop with {enabled: bool}
  *   Toggle pattern  -- state.lastSwitchSet populated -> toggle reads state; unset -> currentValue
@@ -255,7 +256,11 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         lastEventValue("warmMistEnabled") == "off"
     }
 
-    def "applyStatus device_on_humidity_mode: mode='humidity' (variant b firmware)"() {
+    def "applyStatus emits mode='humidity' as-received if API response contains it (passthrough, not a valid setMode value)"() {
+        // The driver cannot set humidity mode (device rejects it -- pyvesync issue #295),
+        // but if a device somehow ends up reporting mode='humidity' in its status response
+        // (e.g. state set externally or via the app), applyStatus should emit the literal
+        // value rather than mangling it. Reality wins over our mode allow-list on reads.
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
@@ -264,7 +269,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         when:
         driver.applyStatus(status)
 
-        then:
+        then: "mode attribute reflects what the device reported, not what we can set"
         lastEventValue("switch") == "on"
         lastEventValue("mode") == "humidity"
         lastEventValue("warmMistLevel") == 0
@@ -626,7 +631,12 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Mode enum: all 4 modes
+    // Mode enum: exactly 3 valid modes (auto/sleep/manual)
+    // 'humidity' mode is NOT a valid setMode input for OasisMist 450S US.
+    // Per pyvesync issue #295: device firmware returns API error 11000000
+    // ("Mode value invalid!") when sent setHumidityMode{mode:'humidity'}.
+    // The earlier HA bonus finding #a claiming firmware-variant-dependent
+    // acceptance was refuted by user-reported API captures.
     // -------------------------------------------------------------------------
 
     def "setMode('auto') sends setHumidityMode with {mode:'auto'} -- NOT workMode"() {
@@ -669,20 +679,21 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         req.data.mode == "manual"
     }
 
-    def "setMode('humidity') sends setHumidityMode with {mode:'humidity'} -- 4th mode (450S-specific)"() {
+    def "setMode('humidity') is REJECTED -- device returns error 11000000 on this value (pyvesync issue #295)"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
         driver.setMode("humidity")
 
-        then:
-        def req = testParent.allRequests.find { it.method == "setHumidityMode" }
-        req != null
-        req.data.mode == "humidity"
+        then: "no request sent -- humidity is an invalid mode on OasisMist 450S US firmware"
+        testParent.allRequests.isEmpty()
+
+        and: "error was logged"
+        testLog.errors.any { it.contains("humidity") || it.contains("Invalid mode") }
     }
 
-    def "setMode with invalid 5th value logs error and sends no request"() {
+    def "setMode with unknown value (turbo) logs error and sends no request"() {
         given:
         settings.descriptionTextEnable = false
 
@@ -692,37 +703,6 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         then:
         testParent.allRequests.isEmpty()
         testLog.errors.any { it.contains("Invalid mode") || it.contains("turbo") }
-    }
-
-    // -------------------------------------------------------------------------
-    // Bonus finding #a: both 'auto' and 'humidity' accepted as distinct modes
-    // Driver does NOT collapse one into the other -- each produces its literal string.
-    // Some 450S US firmware uses "auto"; others use "humidity" for the same behavior.
-    // Per pyvesync maintainer comment on home-assistant/core#138004.
-    // -------------------------------------------------------------------------
-
-    def "setMode('auto') and setMode('humidity') each produce their OWN literal mode string (bonus finding #a)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when: "auto is set"
-        driver.setMode("auto")
-
-        then: "request carries 'auto' literally, NOT 'humidity'"
-        def autoReq = testParent.allRequests.find { it.method == "setHumidityMode" }
-        autoReq != null
-        autoReq.data.mode == "auto"
-        autoReq.data.mode != "humidity"
-
-        when: "humidity is set on fresh test state"
-        testParent.allRequests.clear()
-        driver.setMode("humidity")
-
-        then: "request carries 'humidity' literally, NOT 'auto'"
-        def humidityReq = testParent.allRequests.find { it.method == "setHumidityMode" }
-        humidityReq != null
-        humidityReq.data.mode == "humidity"
-        humidityReq.data.mode != "auto"
     }
 
     // -------------------------------------------------------------------------
@@ -778,6 +758,10 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
 
     // -------------------------------------------------------------------------
     // Target humidity payload
+    // Range: 40-80% (NOT 30-80%).
+    // Device firmware rejects values below 40 with API error 11003000.
+    // pyvesync's base class inherits (30, 80) which is incorrect for this model.
+    // Confirmed: pyvesync issue #296; homebridge-levoit-humidifiers minHumidityLevel: 40.
     // -------------------------------------------------------------------------
 
     def "setHumidity(50) sends setTargetHumidity with {target_humidity:50} -- snake_case"() {
@@ -794,17 +778,32 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         !req.data.containsKey("targetHumidity")
     }
 
-    def "setHumidity clamps values below 30 to 30"() {
+    def "setHumidity clamps values below 40 to 40 (firmware floor -- pyvesync issue #296)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "value below firmware floor is requested"
+        driver.setHumidity(35)
+
+        then: "clamped to 40, NOT 30 (pyvesync base class bug -- OasisMist 450S rejects <40)"
+        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
+        req != null
+        req.data.target_humidity == 40
+        req.data.target_humidity != 35
+        req.data.target_humidity != 30
+    }
+
+    def "setHumidity(25) also clamps to 40 -- well below firmware floor"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setHumidity(10)
+        driver.setHumidity(25)
 
         then:
         def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
         req != null
-        req.data.target_humidity == 30
+        req.data.target_humidity == 40
     }
 
     def "setHumidity clamps values above 80 to 80"() {
