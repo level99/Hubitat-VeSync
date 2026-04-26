@@ -121,7 +121,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson (original); Dan Cox (fork: Vital 200S, Superior 6000S, parent fixes); elfege (contributor)",
         description: "Integrates Levoit air purifiers and humidifiers with Hubitat Elevation via VeSync cloud API",
-        version: "2.0",
+        version: "2.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"

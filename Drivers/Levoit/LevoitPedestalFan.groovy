@@ -118,7 +118,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Pedestal Fan (LPF-R432S-AEU/AUS) — power, fan speed 1-12, modes (normal/turbo/eco/sleep), 2-axis oscillation with range control, mute, display, ambient temperature; canonical pyvesync payloads",
-        version: "2.0",
+        version: "2.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
