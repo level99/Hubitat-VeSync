@@ -6,7 +6,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/level99/Hubitat-VeSync?label=version)](https://github.com/level99/Hubitat-VeSync/releases)
 [![Last commit](https://img.shields.io/github/last-commit/level99/Hubitat-VeSync)](https://github.com/level99/Hubitat-VeSync/commits/main)
 
-A Hubitat Elevation driver pack for **Levoit smart home devices** (air purifiers and humidifiers), communicating with the VeSync cloud API. Discover and control your Levoit hardware from Hubitat — fan speeds, modes, schedules, AQ + PM2.5 sensors, target humidity, water level, drying — alongside everything else on your hub.
+A Hubitat Elevation driver pack for **Levoit smart home devices** (air purifiers, humidifiers, and fans), communicating with the VeSync cloud API. Discover and control your Levoit hardware from Hubitat — fan speeds, modes, schedules, AQ + PM2.5 sensors, target humidity, water level, drying, oscillation — alongside everything else on your hub.
 
 ## Supported devices
 
@@ -16,13 +16,20 @@ A Hubitat Elevation driver pack for **Levoit smart home devices** (air purifiers
 | **Levoit Core 300S** Air Purifier | `Core300S`, `LAP-C301S-WJP` | Switch, FanControl (1-4), Mode, Timer, Display, ChildLock, Filter, AQ + PM2.5 |
 | **Levoit Core 400S** Air Purifier | `Core400S`, `LAP-C401S-WJP/-WUSR/-WAAA` | Switch, FanControl (1-4), Mode, AutoPreference, Timer, Display, ChildLock, Filter, AQ + PM2.5 |
 | **Levoit Core 600S** Air Purifier | `Core600S`, `LAP-C601S-WUS/-WUSR/-WEU` | Switch, FanControl (1-5), Mode, AutoPreference, Timer, Display, ChildLock, Filter, AQ + PM2.5 |
+| **Levoit Vital 100S** Air Purifier *(v2.1 preview)* | `LAP-V102S-AASR/-WUS/-WEU/-AUSR/-WJP/-AJPR/-AEUR` | Switch, FanControl (1-4), Mode (manual/auto/sleep/pet), AutoPreference, PetMode, Timer, Display, ChildLock, Filter, AQ + PM2.5, RoomSize. **No light-detection** (V102S lacks the LIGHT_DETECT feature flag). |
 | **Levoit Vital 200S** Air Purifier | `LAP-V201S-WUS/-WUSR/-WEU/-WEUR/-AASR/-AUSR` | Switch, FanControl (1-4), Mode, AutoPreference, PetMode, LightDetection, Timer, Display, ChildLock, Filter, AQ + PM2.5, RoomSize |
+| **Levoit Classic 300S** Humidifier *(v2.1 preview)* | `LUH-A601S-WUSB/-AUSW` (`Classic300S`) | Switch, MistLevel (1-9), TargetHumidity (30-80), Mode (auto/sleep/manual), AutoStop, NightLight (off/dim/bright), Display, Humidity sensor |
 | **Levoit Superior 6000S** Humidifier | `LEH-S601S-WUS/-WUSR/-WEUR`, `LEH-S602S-WUS` | Switch, MistLevel (1-9), TargetHumidity, Mode (auto/sleep/manual), DryingMode, AutoStop, ChildLock, Display, WickFilterLife, Water level, Pump cleaning, Temperature |
+| **Levoit OasisMist 450S** Smart Humidifier (US) *(v2.1 preview)* | `LUH-O451S-WUS/-WUSR`, `LUH-O601S-WUS/-KUS` | Switch, MistLevel (1-9), WarmMistLevel (0-3), TargetHumidity (40-80), Mode (auto/sleep/manual), AutoStop, Display, Humidity sensor. **No night light** (hardware lacks it). |
+| **Levoit Tower Fan** *(v2.1 preview)* | `LTF-F422S-WUS/-WUSR/-KEU/-WJP` | Switch, FanControl (1-12), SwitchLevel, Mode (normal/turbo/auto/sleep), Oscillation (single-axis), Mute, Timer, Display, Temperature, ErrorCode |
+| **Levoit Pedestal Fan** *(v2.1 preview)* | `LPF-R432S-AEU/-AUS` | Switch, FanControl (1-12), SwitchLevel, Mode (normal/turbo/eco/sleep), 2-axis Oscillation with range control, Mute, Display, Temperature, ChildLock (read-only) |
 | **Levoit Generic Device** | Fall-through for unsupported `LAP-` / `LEH-` / `LV-` Levoit models | Best-effort Switch + SwitchLevel + AirQuality + Humidity, plus `captureDiagnostics()` for filing new-device-support issues |
+
+*Preview drivers* are v2.1 drivers built without maintainer hardware, validated against canonical pyvesync fixtures + Home Assistant + SmartThings/Homebridge community drivers. Each carries inline `CROSS-CHECK` comment blocks documenting every contentious decision. If your device behaves differently, please [open an issue](https://github.com/level99/Hubitat-VeSync/issues) with a `captureDiagnostics` paste and a debug log.
 
 For per-device attribute and command details: [`Drivers/Levoit/readme.md`](Drivers/Levoit/readme.md).
 
-For upcoming devices in v2.1+ (Vital 100S, Classic 300S, OasisMist 450S US, Tower/Pedestal Fans, etc.): [`ROADMAP.md`](ROADMAP.md).
+For upcoming devices beyond v2.1: [`ROADMAP.md`](ROADMAP.md).
 
 ## Install via Hubitat Package Manager
 
@@ -54,9 +61,10 @@ To re-scan after adding a new device in the VeSync app: open the parent device �
 
 Each child device exposes standard Hubitat capabilities plus device-specific attributes:
 
-- **Air purifiers** — control fan speed via `setSpeed`/`cycleSpeed`, switch modes via `setMode("auto"/"manual"/"sleep"/...)`, see real-time AQ + PM2.5 readings, monitor filter life percentage. Vital 200S also exposes pet mode and light-detection sleep mode.
-- **Humidifiers** — set target humidity, control mist level (1-9), monitor water and wick status, enable drying mode after manual shutdown, watch ambient temperature. Superior 6000S also exposes pump cleaning state.
-- **All devices** — standard `Switch` (on/off), `Refresh`, child-lock, display on/off, sleep timers.
+- **Air purifiers** — control fan speed via `setSpeed`/`cycleSpeed`, switch modes via `setMode("auto"/"manual"/"sleep"/...)`, see real-time AQ + PM2.5 readings, monitor filter life percentage. Vital 100S/200S also expose pet mode; Vital 200S adds light-detection sleep mode.
+- **Humidifiers** — set target humidity, control mist level (1-9), monitor water and wick status, watch ambient humidity (and temperature where available). Superior 6000S adds drying mode + pump cleaning; Classic 300S adds 3-step night light; OasisMist 450S adds warm-mist (0-3).
+- **Fans** — control fan speed (1-12), switch modes (Tower: normal/turbo/auto/sleep; Pedestal: normal/turbo/eco/sleep), single-axis oscillation (Tower) or 2-axis with range control (Pedestal), monitor ambient temperature.
+- **All devices** — standard `Switch` (on/off), `Refresh`, child-lock (read-only on Pedestal Fan), display on/off, sleep timers (where the hardware supports them).
 - **`info` HTML attribute** on every child — multi-line summary suitable for dashboard tiles.
 
 ## Migrating from upstream NiklasGustafsson/Hubitat?
@@ -65,7 +73,7 @@ Install the HPM package the same way as a first-time install — Hubitat matches
 
 ## Architecture
 
-A single **parent driver** (`VeSyncIntegration.groovy`) holds your VeSync credentials, logs in, discovers devices, schedules periodic polling, and routes API calls. Per-model **child drivers** (one for Core 200S, one for Vital 200S, etc.) expose Hubitat capabilities and parse status responses. All API traffic uses VeSync's `bypassV2` cloud endpoint with model-specific method names + payloads. Token auto-refresh on expiry; PII redaction in all log paths; connection-pool retry on transient failures.
+A single **parent driver** (`VeSyncIntegration.groovy`) holds your VeSync credentials, logs in, discovers devices, schedules periodic polling, and routes API calls. Per-model **child drivers** (one for Core 200S, one for Vital 200S, one for Tower Fan, etc.) expose Hubitat capabilities and parse status responses. All API traffic uses VeSync's `bypassV2` cloud endpoint with model-specific method names + payloads. Token auto-refresh on expiry; PII redaction in all log paths; connection-pool retry on transient failures.
 
 ## Logging
 
@@ -101,9 +109,9 @@ Roadmap and unscheduled future work: [`ROADMAP.md`](ROADMAP.md).
 ## Credits
 
 - **Niklas Gustafsson** — original VeSyncIntegration framework, Core 200S/300S/400S/600S drivers
-- **Dan Cox** — community fork maintainer, v1.6+ contributions, Vital 200S, Superior 6000S, parent humidifier-method fix, Generic diagnostic driver, token-expiry auto-recovery, infrastructure
+- **Dan Cox** — community fork maintainer, v1.6+ contributions, Vital 100S/200S, Classic 300S, Superior 6000S, OasisMist 450S, Tower Fan, Pedestal Fan, parent humidifier-method fix, Generic diagnostic driver, token-expiry auto-recovery, infrastructure
 - **elfege** — `setLevel()` support, Core 600S 'max' speed
-- **[pyvesync](https://github.com/webdjoe/pyvesync)** — canonical VeSync API payload reference
+- **[pyvesync](https://github.com/webdjoe/pyvesync)** — canonical VeSync API payload reference; HA `vesync` integration, SmartThings + Homebridge community drivers used as v2.1 cross-check sources
 
 ## License
 
