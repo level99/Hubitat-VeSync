@@ -82,7 +82,22 @@ Skip bullets that are pure churn (CI tweaks, agent-config edits, lint exemption 
 
 ### Artifact C — Driver-version surfaces (if any)
 
-Currently, driver source files do **not** carry per-driver version constants — the package version lives only in `levoitManifest.json`. If this changes in the future, scan for `DRIVER_VERSION` or top-of-file `// vX.Y` comments in `Drivers/Levoit/*.groovy` and propose updates here. For now, this artifact is empty for most cuts. Note it explicitly: *"No driver-version surfaces to update."*
+Scan for any `DRIVER_VERSION` constants or top-of-file `// vX.Y` version comments in `Drivers/Levoit/*.groovy`. These are distinct from the `version:` field in `definition()` — they are imperative version strings sometimes used by driver logic at runtime. If found and the value differs from the new package version, propose an update. If none found, note: *"No runtime DRIVER_VERSION constants to update."*
+
+### Artifact C.7 — Per-driver `version` field lockstep
+
+For every file matched by `Drivers/Levoit/*.groovy`:
+
+1. Read the `definition(...)` block (from `definition(` to the matching `)` before the opening `{`).
+2. Look for a `version:` field inside that block.
+3. If present and the value differs from the new package version, propose updating it to match.
+4. If absent, propose adding it as a new named-argument line immediately before `documentationLink:` (or before `importUrl:` / `singleThreaded:` if `documentationLink:` is absent).
+
+Show the proposed edits in unified-diff form so the user can review before approving.
+
+Lockstep rule: all drivers must carry the same `version` value as the package `version` field in `levoitManifest.json` at the time of every release cut. Per-driver drift (e.g. only Vital 200S at v2.0.1 while others stay at v2.0) is NOT supported in this fork. If the user wants per-driver release cycles, that is a separate architectural change outside the scope of this procedure.
+
+Static enforcement: lint rule 20 (`tests/lint_rules/version_lockstep.py`) enforces this invariant at the static analysis layer. `uv run --python 3.12 tests/lint.py --strict` will fail with RULE20_missing_version_field or RULE20_version_drift findings if any driver drifts. The Spock harness does NOT contain a lockstep spec (it was replaced by the lint rule; cross-file consistency checks belong in the static lint layer, not in runtime tests).
 
 ### Artifact C.5 — Manifest `drivers` array reconciliation
 
@@ -158,7 +173,11 @@ Output a single message structured as:
 
 ### Artifact C — driver-version surfaces
 
-<list, or "None">
+<list of runtime DRIVER_VERSION constants, or "None">
+
+### Artifact C.7 — per-driver version field lockstep
+
+<unified diff of version: field additions/updates per .groovy file, or "No drift detected — all drivers already at vX.Y">
 
 ### Artifact C.5 — manifest drivers-array reconciliation
 
@@ -185,7 +204,8 @@ After explicit approval (e.g., "approved", "go", "ship it"):
 
 - Edit `levoitManifest.json`: update `version`, `dateReleased`, `releaseNotes`. Apply any Artifact C.5 drivers-array additions (do NOT remove entries on `WARNING:` cases — those need human-only review per the spec). Leave `packageName`, `author`, `documentationLink`, `communityLink`, `licenseFile` untouched (those are stable fields changed manually outside of release cuts).
 - Edit (or create) `CHANGELOG.md`: prepend the new entry per Step 4 Artifact B.
-- Apply any Artifact C edits if applicable.
+- Apply any Artifact C edits if applicable (runtime DRIVER_VERSION constants).
+- Apply Artifact C.7 edits: for each `.groovy` file in `Drivers/Levoit/`, update or add the `version:` field inside `definition()` to match the new package version.
 - Apply Artifact D `ROADMAP.md` edits if any were proposed.
 - Apply Artifact E `TODO.md` edits if `TODO.md` exists locally and edits were proposed.
 
@@ -199,9 +219,9 @@ Print a short summary:
 v<version> release prepared. Files staged-ready (uncommitted):
   - levoitManifest.json
   - CHANGELOG.md
+  - Drivers/Levoit/*.groovy   (version: field lockstep — all N files updated)
   - ROADMAP.md         (if advanced)
   - TODO.md            (if present locally and swept)
-  - <any driver source files updated>
 
 Next steps for you:
   1. Review with: git diff

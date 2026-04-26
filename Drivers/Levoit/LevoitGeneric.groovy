@@ -50,6 +50,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Fall-through diagnostic driver for unsupported Levoit models. Provides best-effort power control and diagnostic capture for new-device-support issue filing.",
+        version: "2.0",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"

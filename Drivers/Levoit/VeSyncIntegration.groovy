@@ -26,6 +26,11 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-26: v2.0+ Added version field to every driver's definition() block.
+//                  Hubitat UI now displays driver version in the device detail
+//                  panel. /cut-release keeps this lockstep with the package
+//                  version. No per-driver release cycles -- all drivers at the
+//                  package version on every cut.
 // 2026-04-26: v2.0+ Defensive addChildDevice validation + state.deviceList
 //                  self-heal pass. Live-test discovered that when a child
 //                  device is deleted and forceReinitialize triggered shortly
@@ -102,6 +107,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson (original); Dan Cox (fork: Vital 200S, Superior 6000S, parent fixes); elfege (contributor)",
         description: "Integrates Levoit air purifiers and humidifiers with Hubitat Elevation via VeSync cloud API",
+        version: "2.0",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"
