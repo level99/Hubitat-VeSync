@@ -1,0 +1,21 @@
+# Gemini Code Assist configuration for level99/Hubitat-VeSync
+# Docs: https://developers.google.com/gemini-code-assist/docs/customize-gemini-behavior-github
+#
+# Defaults omitted from this file (have_fun=false, max_review_comments=-1,
+# code_review.disable=false, memory_config.disabled=false). Only deviations
+# from default are set explicitly.
+
+code_review:
+  comment_severity_threshold: MEDIUM
+  pull_request_opened:
+    summary: true
+    include_drafts: false
+
+ignore_patterns:
+  - "tests/fixtures/**"
+  - "gradle/wrapper/gradle-wrapper.jar"
+  - "build/**"
+  - ".gradle/**"
+  - "**/*.iml"
+  - "CLAUDE.md"
+  - "TODO.md"
