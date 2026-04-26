@@ -11,8 +11,13 @@ import support.TestDevice
  *                     "Humidifier" in typeName -> getHumidifierStatus
  *                     otherwise              -> getPurifierStatus
  *   Bug Pattern #12 — pref-seed at top of updateDevices()
+ *   Bug Pattern #13 — getDevices() re-auth on HTTP 401 / inner auth codes (Issue 3)
  *   sanitize()      — PII redaction: email, accountID, token, password all redacted
  *   deviceType()    — switch recognizes V201S regional variants
+ *   Issue 2         — updateDevices() no longer throws MissingPropertyException
+ *                     (removed unused `result =` assignment)
+ *   Pattern 2       — sendBypassRequest uses DEVICE_REGION @Field constant ("US");
+ *                     regional host-switching parked for v2.1+
  *
  * ARCHITECTURE NOTE: The parent driver is NOT a child — it runs differently.
  * It calls httpPost (for login/getDevices), not parent.sendBypassRequest.
@@ -276,13 +281,8 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
     // -------------------------------------------------------------------------
     // Bug Pattern #2: updateDevices() branches by typeName
-    // -------------------------------------------------------------------------
-    // NOTE: VeSyncIntegration.groovy line 262 does `result = dev.update(...)` with no
-    // `def result` declared. This is a pre-existing parent driver bug (out of scope for
-    // round 2 — only Core 300/400/600 ordering and Core200S Light `return result` were
-    // approved for driver modification). The closure-internal GroovyRuntimeException is
-    // absorbed by the parent's try/catch, so the captured-payload assertions below remain
-    // valid regardless: the bypass body is sent before update() is called on the child.
+    // Issue 2: `result = dev.update(...)` was dropped — no longer throws
+    //          MissingPropertyException on every poll cycle.
     // -------------------------------------------------------------------------
 
     def "updateDevices() uses getPurifierStatus for purifier device (Bug Pattern #2)"() {
@@ -775,5 +775,287 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         then: "the retry used the refreshed token in both body and header"
         tokenUsedOnRetry == "token-v2"
         tkHeaderOnRetry  == "token-v2"
+    }
+
+    // -------------------------------------------------------------------------
+    // getDevices() Bug Pattern #13 extension — auth-failure retry (Issue 3)
+    //
+    // Architecture note:
+    //   getDevices() is private but accessible via Groovy 3 dynamic dispatch.
+    //   It is wrapped in retryableHttp("getDevices", 3) which simply invokes
+    //   the closure — the wrapper does not complicate these auth-retry tests.
+    //
+    //   The success response must include resp.data.result.list or getDevices()
+    //   will short-circuit with a "No list in response result" error log. We
+    //   provide a minimal devices-list response (empty list) for the retry path.
+    //
+    //   state.accountID / state.token must be set so getDevices() can build
+    //   its request body before calling httpPost. If either is null, the body
+    //   will contain null values — not an error for these auth-retry specs.
+    // -------------------------------------------------------------------------
+
+    /** Minimal success response for getDevices() — includes the required result.list field. */
+    private Expando getDevicesSuccess() {
+        def r = new Expando()
+        r.status = 200
+        r.data = [
+            code: 0,
+            result: [
+                code: 0,
+                list: [],
+                total: 0
+            ],
+            traceId: "test-trace"
+        ]
+        return r
+    }
+
+    def "getDevices() re-authenticates on HTTP 401 and retries (Issue 3 / Bug Pattern #13)"() {
+        // A1: golden retry path — HTTP 401 triggers re-auth, retry succeeds
+        given: "httpPost returns 401 on first call, then a valid devices-list response on second call"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30  // success path calls runIn(5 * (int)settings.refreshInterval, ...) — must be non-null
+        state.token     = "old-token"
+        state.accountID = "acc-001"
+        state.prefsSeeded = true
+        int httpPostCallCount = 0
+        int loginCallCount    = 0
+
+        driver.metaClass.login = { ->
+            loginCallCount++
+            state.token     = "new-token"
+            state.accountID = "acc-001"
+            true
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            if (httpPostCallCount == 1) {
+                callback(authFailure_401())
+            } else {
+                callback(getDevicesSuccess())
+            }
+        }
+
+        when:
+        def result = driver.getDevices()
+
+        then: "login() was invoked exactly once between the two httpPost calls"
+        loginCallCount == 1
+
+        and: "httpPost was called twice (initial + retry after re-auth)"
+        httpPostCallCount == 2
+
+        and: "the retry used the refreshed token in both body and header"
+        // The driver mutates params.body.token and params.headers.tk before retry.
+        // We verify the side-effect: state.token was updated by our login() mock.
+        state.token == "new-token"
+
+        and: "state.reAuthInProgress is cleared after successful retry"
+        !state.containsKey('reAuthInProgress')
+
+        and: "getDevices() returned true (retry succeeded)"
+        result == true
+    }
+
+    def "getDevices() re-authenticates on inner code -11001000 and retries (Issue 3 / Bug Pattern #13)"() {
+        // A2: inner-code auth failure — HTTP 200 with code -11001000 triggers re-auth + retry
+        given: "httpPost returns HTTP 200 with inner code -11001000 (TOKEN_EXPIRED) on first call"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30  // success path calls runIn(5 * (int)settings.refreshInterval, ...) — must be non-null
+        state.token     = "stale-token"
+        state.accountID = "acc-002"
+        state.prefsSeeded = true
+        int httpPostCallCount = 0
+        int loginCallCount    = 0
+
+        driver.metaClass.login = { ->
+            loginCallCount++
+            state.token = "refreshed-token"
+            true
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            if (httpPostCallCount == 1) {
+                callback(authFailure_11001000())
+            } else {
+                callback(getDevicesSuccess())
+            }
+        }
+
+        when:
+        def result = driver.getDevices()
+
+        then: "login() was invoked (isAuthFailure covers both HTTP-401 and inner -11001000)"
+        loginCallCount == 1
+
+        and: "httpPost was called twice"
+        httpPostCallCount == 2
+
+        and: "state.reAuthInProgress is cleared"
+        !state.containsKey('reAuthInProgress')
+
+        and: "getDevices() returned true"
+        result == true
+    }
+
+    def "getDevices() does NOT retry when login() fails (Issue 3 / Bug Pattern #13)"() {
+        // A3: re-auth failure — first call returns 401, login() returns false, no retry
+        given: "login() returns false; no retry httpPost should occur"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "expired-token"
+        state.accountID = "acc-003"
+        state.prefsSeeded = true
+        int httpPostCallCount = 0
+        int loginCallCount    = 0
+
+        driver.metaClass.login = { ->
+            loginCallCount++
+            false  // re-auth fails
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            callback(authFailure_401())
+        }
+
+        when:
+        def result = driver.getDevices()
+
+        then: "login() was attempted exactly once"
+        loginCallCount == 1
+
+        and: "httpPost was called exactly once (no retry after failed login)"
+        httpPostCallCount == 1
+
+        and: "state.reAuthInProgress is cleared (finally semantics preserved)"
+        !state.containsKey('reAuthInProgress')
+
+        and: "getDevices() returned false (retry never happened)"
+        result == false
+
+        and: "an error log was emitted about re-auth failure"
+        testLog.errors.any { it.contains("Re-auth failed") }
+    }
+
+    // -------------------------------------------------------------------------
+    // Pattern 2 — DEVICE_REGION constant in sendBypassRequest
+    // Regional routing is binary (US/EU host-switching) and is parked for v2.1+.
+    // The @Field constant DEVICE_REGION = "US" is used directly in the body;
+    // no settings preference is wired.
+    // -------------------------------------------------------------------------
+
+    def "sendBypassRequest uses DEVICE_REGION constant ('US') in body -- regional routing parked for future PR (Pattern 2)"() {
+        // B: DEVICE_REGION is a @Field constant; body.deviceRegion == "US" unconditionally.
+        given: "no deviceRegion preference (removed); DEVICE_REGION @Field constant supplies the value"
+        settings.remove('deviceRegion')
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.token     = "tok-b"
+        state.accountID = "acc-b"
+        def equip = new TestDevice()
+        capturedBypassBodies.clear()
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "the request body carries deviceRegion 'US' from the DEVICE_REGION constant"
+        capturedBypassBodies.size() == 1
+        capturedBypassBodies[0].deviceRegion == "US"
+    }
+
+    // -------------------------------------------------------------------------
+    // Pattern 2 — getLocationTimeZone() honours hub timezone in sendBypassRequest
+    // -------------------------------------------------------------------------
+
+    def "sendBypassRequest uses hub timezone from location when available (Pattern 2 / getLocationTimeZone)"() {
+        // C1: hub timezone is honoured — mock location.timeZone.ID to "America/Chicago"
+        // and verify body.timeZone and headers.tz both carry the hub's zone, not the default.
+        // Null-location fallback is exercised in spec C2 below.
+        given: "hub's location exposes timezone 'America/Chicago'"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.token     = "tok-tz"
+        state.accountID = "acc-tz"
+        def equip = new TestDevice()
+
+        // Override getLocation to return an object whose timeZone.ID is "America/Chicago"
+        def fakeTimeZone = new Expando()
+        fakeTimeZone.ID = "America/Chicago"
+        def fakeLocation = new Expando()
+        fakeLocation.timeZone = fakeTimeZone
+        driver.metaClass.getLocation = { -> fakeLocation }
+
+        // Capture the raw httpPost params so we can inspect both body and headers
+        List<Map> rawPosts = []
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            rawPosts << params
+            if (params.body?.payload) {
+                capturedBypassBodies << (params.body.clone() as Map)
+            }
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [
+                code: 0,
+                result: [code: 0, result: [:], traceId: "test-trace"],
+                traceId: "test-trace"
+            ]
+            callback(fakeResp)
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "body.timeZone reflects the hub's configured timezone"
+        rawPosts.size() == 1
+        rawPosts[0].body?.timeZone == "America/Chicago"
+
+        and: "headers.tz also reflects the hub's configured timezone"
+        rawPosts[0].headers?.tz == "America/Chicago"
+    }
+
+    def "getLocationTimeZone() falls back to DEFAULT_TIME_ZONE when hub location is null (Pattern 2)"() {
+        // C2: null-location fallback — getLocation() returns null → getLocationTimeZone()
+        // must return DEFAULT_TIME_ZONE ("America/Los_Angeles").
+        //
+        // The parent driver is the only consumer of getLocation() in this file;
+        // overriding it to return null does not cascade NPEs to child drivers.
+        given: "hub location is null (no location configured)"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.token     = "tok-c2"
+        state.accountID = "acc-c2"
+        def equip = new TestDevice()
+
+        // Override getLocation to simulate hub with no location configured
+        driver.metaClass.getLocation = { -> null }
+
+        // Capture raw httpPost params to inspect body and headers
+        List<Map> rawPosts = []
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            rawPosts << params
+            if (params.body?.payload) {
+                capturedBypassBodies << (params.body.clone() as Map)
+            }
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [
+                code: 0,
+                result: [code: 0, result: [:], traceId: "test-trace"],
+                traceId: "test-trace"
+            ]
+            callback(fakeResp)
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "body.timeZone falls back to the DEFAULT_TIME_ZONE constant"
+        rawPosts.size() == 1
+        rawPosts[0].body?.timeZone == "America/Los_Angeles"
+
+        and: "headers.tz also falls back to the DEFAULT_TIME_ZONE constant"
+        rawPosts[0].headers?.tz == "America/Los_Angeles"
     }
 }

@@ -26,6 +26,22 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-26: v2.0+ Defensive check fix in getDevices() — empty device list
+//                  ([]) is a valid VeSync response (zero-device account), not an
+//                  error. Changed `!resp.data.result.list` to `== null` so the
+//                  success path completes for accounts with no devices.
+// 2026-04-25: v2.0+ Parent-driver NIT fixes (Issues 2, 3, Pattern 2):
+//                  - Issue 2: removed unused `result =` assignment in updateDevices()
+//                    (was causing MissingPropertyException on every poll cycle)
+//                  - Issue 3: getDevices() now retries with re-auth on token expiry
+//                    (same effectiveClosure pattern as sendBypassRequest)
+//                  - Pattern 2: extracted hardcoded API metadata to @Field constants
+//                    (APP_VERSION, DEFAULT_TRACE_ID, DEFAULT_TIME_ZONE, DEVICE_REGION);
+//                    timeZone now derived from hub location with fallback to DEFAULT_TIME_ZONE.
+//                    NOTE: regional API routing is binary (US→smartapi.vesync.com,
+//                    EU→smartapi.vesync.eu per pyvesync const.py); a full implementation
+//                    requires switching the endpoint host, not just the body field. Parked
+//                    for v2.1+ — DEVICE_REGION constant left as breadcrumb.
 // 2026-04-25: v2.0+ Token-expiry re-auth fix (Bug Pattern #13).
 //                  - isAuthFailure() detects HTTP 401 and inner code -11001000 (token expired)
 //                    and -11201000 (invalid credentials); also handles rare 4-digit variants
@@ -49,6 +65,17 @@ SOFTWARE.
 // 2021-10-22: v1.0 Support for Levoit Air Purifier Core 200S / 400S
 
 import java.security.MessageDigest
+import groovy.transform.Field
+
+// VeSync API metadata constants — centralised here so version/ID changes are one-line fixes.
+// DO NOT change DEFAULT_TRACE_ID to a dynamic value — pyvesync uses "1634265366" verbatim
+// and changing it risks triggering VeSync anti-bot detection.
+@Field static final String APP_VERSION       = "2.5.1"
+@Field static final String DEFAULT_TRACE_ID  = "1634265366"
+@Field static final String DEFAULT_TIME_ZONE = "America/Los_Angeles"
+// Regional routing is binary: US → smartapi.vesync.com, EU → smartapi.vesync.eu
+// (per pyvesync const.py). Full support requires switching the endpoint host — parked for v2.1+.
+@Field static final String DEVICE_REGION     = "US"
 
 metadata {
     definition(
@@ -173,26 +200,26 @@ Boolean login() {
             contentType: "application/json",
             requestContentType: "application/json",
             body: [
-                "timeZone": "America/Los_Angeles",
+                "timeZone": getLocationTimeZone(),
                 "acceptLanguage": "en",
-                "appVersion": "2.5.1",
+                "appVersion": APP_VERSION,
                 "phoneBrand": "SM N9005",
                 "phoneOS": "Android",
-                "traceId": "1634265366",
+                "traceId": DEFAULT_TRACE_ID,
                 "email": email,
                 "password": logmd5,
                 "devToken": "",
                 "userType": "1",
                 "method": "login"
             ],
-            headers: [ 
+            headers: [
                 "Accept": "application/json",
                 "Accept-Encoding": "gzip, deflate, br",
                 "Connection": "keep-alive",
-                "User-Agent": "Hubitat Elevation", 
+                "User-Agent": "Hubitat Elevation",
                 "accept-language": "en",
-                "appVersion": "2.5.1",
-                "tz": "America/Los_Angeles"
+                "appVersion": APP_VERSION,
+                "tz": getLocationTimeZone()
             ]
         ]
 
@@ -267,7 +294,7 @@ def Boolean updateDevices()
                     if (status == null)
                         logError "No status returned from ${method}: ${resp.msg}"
                     else
-                        result = dev.update(status, getChildDevice(dni+"-nl"))
+                        dev.update(status, getChildDevice(dni+"-nl"))
                 }
             }
         }
@@ -331,48 +358,54 @@ private Boolean getDevices() {
             contentType: "application/json",
             requestContentType: "application/json",
             body: [
-                "timeZone": "America/Los_Angeles",
+                "timeZone": getLocationTimeZone(),
                 "acceptLanguage": "en",
-                "appVersion": "2.5.1",
+                "appVersion": APP_VERSION,
                 "phoneBrand": "SM N9005",
                 "phoneOS": "Android",
-                "traceId": "1634265366",
+                "traceId": DEFAULT_TRACE_ID,
                 "accountID": state.accountID,
                 "token": state.token,
                 "method": "devices",
                 "pageNo": "1",
                 "pageSize": "100"
             ],
-            headers: [ 
-                "tz": "America/Los_Angeles",
+            headers: [
+                "tz": getLocationTimeZone(),
                 "Accept": "application/json",
                 "Accept-Encoding": "gzip, deflate, br",
                 "Connection": "keep-alive",
-                "User-Agent": "Hubitat Elevation", 
+                "User-Agent": "Hubitat Elevation",
                 "accept-language": "en",
-                "appVersion": "2.5.1",
+                "appVersion": APP_VERSION,
                 "accountID": state.accountID,
-                "tk": state.token 
+                "tk": state.token
             ]
         ]
 
-        def result = false
-        httpPost(params) { resp ->
+        // processResponse: the inner handler that does the actual device-list work.
+        // Called by effectiveClosure below (either directly or after re-auth retry).
+        // Returns true on success, false on failure. Uses a holder list for symmetry
+        // with potential future closure-passed-by-reference patterns; plain
+        // `def result = false` also works (see login() at line ~219 for the
+        // established pattern).
+        def resultHolder = [false]
+        Closure processResponse = { resp ->
             if (checkHttpResponse("getDevices", resp)) {
                 // Defensive null checks for API response structure
                 if (!resp.data) {
                     logError "getDevices: No data in response"
-                    return false
+                    return
                 }
                 if (!resp.data.result) {
                     logError "getDevices: No result in response data"
-                    return false
+                    return
                 }
-                if (!resp.data.result.list) {
+                if (resp.data.result.list == null) {
                     logError "getDevices: No list in response result"
-                    return false
+                    return
                 }
-                
+
                 def newList = [:]
 
                 for (device in resp.data.result.list) {
@@ -388,7 +421,7 @@ private Boolean getDevices() {
                         newList[device.cid] = device.configModule;
                     }
                 }
-                
+
                 logInfo "Discovered ${resp.data.result.list.size()} VeSync device(s)"
 
                 // Remove devices that are no longer present.
@@ -420,7 +453,7 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} Light / " + dtype;
                             equip2.name = device.deviceName + " Light";
                             equip2.label = device.deviceName + " Light";
-                        }                        
+                        }
 
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
@@ -534,10 +567,40 @@ private Boolean getDevices() {
 
                 // Delay before first device update to ensure connection pool is stable
                 runIn(10, "updateDevices")
-                result = true
+                resultHolder[0] = true
             }
         }
-        return result
+
+        // effectiveClosure: detect auth failure, re-authenticate once, retry.
+        // Mirrors the same pattern used in sendBypassRequest. Re-uses the
+        // state.reAuthInProgress guard so the two entry points don't collide.
+        Closure effectiveClosure = { resp ->
+            if (isAuthFailure(resp) && !state.reAuthInProgress) {
+                logInfo "VeSync token expired or invalid (getDevices) -- re-authenticating"
+                state.reAuthInProgress = true
+                try {
+                    if (login()) {
+                        // Refresh tokens in both body and headers before retry
+                        params.body.token       = state.token
+                        params.body.accountID   = state.accountID
+                        params.headers.tk       = state.token
+                        params.headers.accountID = state.accountID
+                        logDebug "Re-auth succeeded -- retrying getDevices"
+                        httpPost(params, processResponse)
+                        return
+                    } else {
+                        logError "Re-auth failed during getDevices -- check VeSync credentials"
+                    }
+                } finally {
+                    state.remove('reAuthInProgress')
+                }
+            }
+            // Not an auth failure (or re-auth failed): process the response as-is
+            processResponse(resp)
+        }
+
+        httpPost(params, effectiveClosure)
+        return resultHolder[0]
     }
 }
 
@@ -607,12 +670,12 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
         contentType: "application/json; charset=UTF-8",
         requestContentType: "application/json; charset=UTF-8",
         body: [
-            "timeZone": "America/Los_Angeles",
+            "timeZone": getLocationTimeZone(),
             "acceptLanguage": "en",
-            "appVersion": "2.5.1",
+            "appVersion": APP_VERSION,
             "phoneBrand": "SM N9005",
             "phoneOS": "Android",
-            "traceId": "1634265366",
+            "traceId": DEFAULT_TRACE_ID,
             "cid": equipment.getDataValue("cid"),
             "configModule": equipment.getDataValue("configModule"),
             "payload": payload,
@@ -620,16 +683,16 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
             "token": getAccountToken(),
             "method": "bypassV2",
             "debugMode": false,
-            "deviceRegion": "US"
+            "deviceRegion": DEVICE_REGION
         ],
         headers: [
-            "tz": "America/Los_Angeles",
+            "tz": getLocationTimeZone(),
             "Accept": "application/json",
             "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
             "User-Agent": "Hubitat Elevation",
             "accept-language": "en",
-            "appVersion": "2.5.1",
+            "appVersion": APP_VERSION,
             "accountID": getAccountID(),
             "tk": getAccountToken()
         ]
@@ -757,6 +820,23 @@ def getAccountToken() {
 
 def getAccountID() {
     return state.accountID
+}
+
+/**
+ * Return the hub's configured timezone ID, falling back to the hard-coded
+ * DEFAULT_TIME_ZONE if the hub has no location configured.
+ *
+ * Hubitat exposes `location.timeZone` as a java.util.TimeZone. Its `.ID`
+ * property returns the IANA zone name (e.g. "America/Chicago"). This is the
+ * value VeSync expects in the timeZone request field.
+ *
+ * Fallback: hubs without a location configured (common in early setup or
+ * developer-mode installs) return null for location?.timeZone, so we fall
+ * back to "America/Los_Angeles" (the value previously hardcoded in this driver
+ * since the original upstream -- preserved for backward-compat with existing installs).
+ */
+private String getLocationTimeZone() {
+    return location?.timeZone?.ID ?: DEFAULT_TIME_ZONE
 }
 
 def MD5(s) {
