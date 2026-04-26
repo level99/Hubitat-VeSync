@@ -100,30 +100,44 @@ def initialize() {
 
 def on() {
     logDebug "on()"
-	handlePower(true)
-    logInfo "Power on"
-    device.sendEvent(name: "switch", value: "on")
 
-	if (state.speed != null) {
-        setSpeed(state.speed)
-	}
-    else {
-        setSpeed("low")
-    }
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        handlePower(true)
+        logInfo "Power on"
+        device.sendEvent(name: "switch", value: "on")
 
-    if (state.mode != null) {
-        setMode(state.mode)
-    }
-    else {
-        update(null)
+        if (state.speed != null) {
+            setSpeed(state.speed)
+        }
+        else {
+            setSpeed("low")
+        }
+
+        if (state.mode != null) {
+            setMode(state.mode)
+        }
+        else {
+            update(null)
+        }
+    } finally {
+        state.remove('turningOn')
     }
 }
 
 def off() {
     logDebug "off()"
-	handlePower(false)
-    logInfo "Power off"
-    device.sendEvent(name: "switch", value: "off")
+
+    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
+    state.turningOff = true
+    try {
+        handlePower(false)
+        logInfo "Power off"
+        device.sendEvent(name: "switch", value: "off")
+    } finally {
+        state.remove('turningOff')
+    }
 }
 
 def toggle() {

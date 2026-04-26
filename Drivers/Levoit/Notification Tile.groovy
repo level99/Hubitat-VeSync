@@ -74,13 +74,13 @@ metadata {
 	}
 
 	void installed() {
-		if (settings?.debugOutput) log.trace "installed()"
+		logDebug "installed()"
 		state.lastLimit=0
 		configure()
 	}
 
 	void updated(){
-        if (settings?.debugOutput) log.trace "updated()"
+        logDebug "updated()"
 		if(settings?.debugOutput) runIn(1800,logsOff)
 
 	// V2.0.2 When converting from original version set state variables, adjust html in last5 to make it work with V2.0.0+	
@@ -93,22 +93,22 @@ metadata {
 				{
 				msgFilled=5
 				int i = wkTile.lastIndexOf('<br /> </span>');	
-				if (settings?.debugOutput) log.debug "at While i: ${i} ${msgFilled}"
+				logDebug "at While i: ${i} ${msgFilled}"
 				while (i>0 && msgFilled>0)
 					{
-					if (settings?.debugOutput) log.debug "in loop i: ${i} ${msgFilled}"
+					logDebug "in loop i: ${i} ${msgFilled}"
 					msgFilled--
 					wkTile = wkTile.substring(0, i) + '</span>'
 					i = wkTile.lastIndexOf('<br /> </span>');
-					if (settings?.debugOutput) log.debug "out loop i: ${i} ${msgFilled}"
+					logDebug "out loop i: ${i} ${msgFilled}"
 					}
-				if (settings?.debugOutput) log.debug "done While i: ${i} ${msgFilled}"
+				logDebug "done While i: ${i} ${msgFilled}"
 				sendEvent(name:"last5", value:wkTile)
 				state.msgCount=msgFilled
 				}
 			else
 				{												//process empty tile
-				if (settings?.debugOutput) log.debug "Initialize an empty tile" 
+				logDebug "Initialize an empty tile"
 				state.msgCount=0
 				configure()
 				}
@@ -120,14 +120,14 @@ metadata {
 			{
 			wkTile=device.currentValue("last5")
 			msgFilled=state.msgCount.toInteger()
-			if (settings?.debugOutput) log.debug "Shinking tile count lastLimit ${state.lastLimit} newLimit ${settings.msgLimit} msgCount ${msgFilled}"
+			logDebug "Shinking tile count lastLimit ${state.lastLimit} newLimit ${settings.msgLimit} msgCount ${msgFilled}"
 			int i = wkTile.lastIndexOf('<br />');
 			while (i != -1 && msgFilled > settings.msgLimit.toInteger())
 				{
 				wkTile = wkTile.substring(0, i) + '</span>';
 				msgFilled--
 				i = wkTile.lastIndexOf('<br />');
-				if (settings?.debugOutput) log.debug "looping on shrink msgCount ${msgFilled}"
+				logDebug "looping on shrink msgCount ${msgFilled}"
 				}
 			state.msgCount=msgFilled
 			sendEvent(name:"last5", value:wkTile)
@@ -139,7 +139,7 @@ metadata {
 	}
 
 	void configure() {
-		log.trace "configure()"
+		logDebug "configure()"
         if(msgLimit == null) device.updateSetting("msgLimit",[value:5,type:"number"])
 		sendEvent(name:"last5", value:'<span class="last5"></span>')
 		sendEvent(name:"last5H", value:'<span class="last5"></span>')
@@ -156,7 +156,7 @@ metadata {
 	}
 
 void deviceNotification(notification){
-	if (settings?.debugOutput) log.debug "deviceNotification entered: ${notification}"
+	logDebug "deviceNotification entered: ${notification}"
     // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
     if (!state.prefsSeeded) {
         if (settings?.descriptionTextEnable == null) {
@@ -187,7 +187,7 @@ void deviceNotification(notification){
 			wkTile=device.currentValue("last5").replace('<span class="last5">','<span class="last5">' + notification)
 
 	//	when msg count exceeds limit, purge last message
-		if (settings?.debugOutput) log.debug "deviceNotification2 msgFilled: ${msgFilled} msgLimit: ${settings.msgLimit}" 
+		logDebug "deviceNotification2 msgFilled: ${msgFilled} msgLimit: ${settings.msgLimit}"
 		if (msgFilled < settings.msgLimit.toInteger())
 			msgFilled++
 		else
@@ -201,7 +201,7 @@ void deviceNotification(notification){
 		int wkLen=wkTile.length()	
 		while (wkLen > 1024 && msgFilled > 0)
 			{
-			if (settings?.debugOutput) log.debug "wkTile length ${wkLen}> 1024 truncating msgCount: ${msgFilled}"
+			logDebug "wkTile length ${wkLen}> 1024 truncating msgCount: ${msgFilled}"
 			int i = wkTile.lastIndexOf('<br />');
 			if (i != -1) 
 				{
@@ -214,7 +214,7 @@ void deviceNotification(notification){
 				msgFilled=0
 				}
 			wkLen=wkTile.length()
-			if (settings?.debugOutput) log.debug "Truncated wkTile length ${wkLen}, msgCount: ${msgFilled}"
+			logDebug "Truncated wkTile length ${wkLen}, msgCount: ${msgFilled}"
 			}
 
 	//	Update attributes and state
@@ -227,6 +227,10 @@ void deviceNotification(notification){
 
 	void logsOff(){
 		device.updateSetting("debugOutput",[value:"false",type:"bool"])
+	}
+
+	def logDebug(msg) {
+		if (settings?.debugOutput) log.debug msg
 	}
 
 	def logInfo(msg) {

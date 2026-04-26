@@ -137,9 +137,16 @@ def setLevel(level) {
 }
 
 def update() {
-
-    parent.updateDevices()
-
+    // Refresh only the parent Core 200S purifier, which will then update this night-light child
+    // via the 2-arg update(status, nightLight) callback. Avoid calling parent.updateDevices()
+    // which would poll every device on the account (cross-coupling, wasteful).
+    def parentDNI = device.deviceNetworkId.replace("-nl", "")
+    def parentDevice = parent.getChildDevice(parentDNI)
+    if (parentDevice) {
+        parentDevice.update()
+    } else {
+        logDebug "update(): parent purifier device not found for DNI=${parentDNI}"
+    }
 }
 
 def update(status) {

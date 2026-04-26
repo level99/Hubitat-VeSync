@@ -155,7 +155,7 @@ The driver fork's threat surface is small (single-cloud-endpoint integration wit
 
 3. **PII in committed AI-context files.** `.claude/agents/*.md`, `CLAUDE.md`, `TODO.md`, `README.md`, `Drivers/Levoit/readme.md`, `levoitManifest.json` — none of these should contain real device IDs, real driver IDs, real hub IPs, or real personal usernames/emails. Conceptual references ("user's account email", "the parent driver's accountID") are fine; concrete values are not. Flag concrete leakage as BLOCKING.
 
-4. **No expansion of attack surface.** The parent's existing outbound surface is one URL: `https://smartapt.vesync.com/cloud/v2/...`. Adding new outbound endpoints (analytics, telemetry, secondary auth servers) requires explicit justification + sanitize coverage for new credential fields. Flag any new outbound HTTP target without justification.
+4. **No expansion of attack surface.** The parent's existing outbound surface is one URL: `https://smartapi.vesync.com/cloud/v2/...`. Adding new outbound endpoints (analytics, telemetry, secondary auth servers) requires explicit justification + sanitize coverage for new credential fields. Flag any new outbound HTTP target without justification.
 
 5. **No credential-state expansion without sanitize coverage.** If the diff adds a new `state.X` or `settings.X` field that holds anything secret-like (token, password, key, secret, hash), verify that the parent's `sanitize()` helper is updated to redact it. New credentials added without sanitize coverage are BLOCKING. Existing sanitize covers `email`, `state.accountID`, `state.token`, `settings.password`.
 

@@ -107,31 +107,45 @@ def initialize() {
 
 def on() {
     logDebug "on()"
-	handlePower(true)
-    logInfo "Power on"
-    handleEvent("switch", "on")
 
-	if (state.speed != null) {
-        setSpeed(state.speed)
-	}
-    else {
-        setSpeed("low")
-    }
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        handlePower(true)
+        logInfo "Power on"
+        handleEvent("switch", "on")
 
-    if (state.mode != null) {
-        setMode(state.mode)
-    }
-    else {
-        update()
+        if (state.speed != null) {
+            setSpeed(state.speed)
+        }
+        else {
+            setSpeed("low")
+        }
+
+        if (state.mode != null) {
+            setMode(state.mode)
+        }
+        else {
+            update()
+        }
+    } finally {
+        state.remove('turningOn')
     }
 }
 
 def off() {
     logDebug "off()"
-	handlePower(false)
-    logInfo "Power off"
-    handleEvent("switch", "off")
-    handleEvent("speed", "off")
+
+    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
+    state.turningOff = true
+    try {
+        handlePower(false)
+        logInfo "Power off"
+        handleEvent("switch", "off")
+        handleEvent("speed", "off")
+    } finally {
+        state.remove('turningOff')
+    }
 }
 
 def toggle() {
@@ -456,14 +470,14 @@ def update(status, nightLight)
 
     def speed = mapIntegerToSpeed(status.result.level)
     def mode = status.result.mode
-    def auto_mode = status.result.configuration.auto_preference.type
-    def room_size = status.result.configuration.auto_preference.room_size
+    def auto_mode = status?.result?.configuration?.auto_preference?.type
+    def room_size = status?.result?.configuration?.auto_preference?.room_size
 
     handleEvent("switch", status.result.enabled ? "on" : "off")
     if (state.mode == null || mode != state.mode)
         handleEvent("mode",   status.result.mode)
     if (state.auto_mode == null || auto_mode != state.auto_mode)
-        handleEvent("auto_mode", status.result.configuration.auto_preference.type)
+        handleEvent("auto_mode", auto_mode)
 
     // state.mode must be set BEFORE switch evaluates — see Core 200S line 336/355 for canonical ordering
     state.speed = speed
