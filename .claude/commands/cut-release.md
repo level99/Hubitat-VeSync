@@ -53,6 +53,7 @@ Then collect, in parallel:
   - Mention any breaking change or migration step prominently if applicable.
   - Skip refactors, internal cleanup, test additions, doc-only changes.
   - Skip implementation details (e.g., don't say "auth-aware closure pattern" — say "fixes session expiry causing devices to go unresponsive").
+  - **Skip development methodology and contributor process.** The HPM popup is for end-users clicking Update, not for developers. Don't explain how the drivers were built (e.g., "cross-referenced pyvesync, Home Assistant, SmartThings, and Homebridge community drivers"), don't mention QA / cross-check / citation policies, don't describe contributor workflow. If a user wonders *how* a feature was built, the commit history and `CHANGELOG.md` are where they look — not the HPM update popup.
 
 ### Artifact B — `CHANGELOG.md` entry
 
