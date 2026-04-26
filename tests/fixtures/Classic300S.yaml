@@ -1,0 +1,234 @@
+# pyvesync canonical API fixtures for Classic 300S (LUH-A601S) humidifier
+# Source: https://github.com/webdjoe/pyvesync
+# Commit: c98729c45860cc765d63d49a9a02bbc18de090c4 (2026-04-16)
+# Retrieved: 2026-04-26
+#
+# REQUEST payloads sourced from src/tests/api/vesynchumidifier/Classic300S.yaml
+# RESPONSE data for device_on_manual_speed5 sourced from src/tests/call_json_humidifiers.py
+#   HUMIDIFIER_DETAILS["Classic300S"] with overrides for this test scenario.
+#
+# Key differences from Superior 6000S (LEH-S601S):
+#   - Switch payload: {enabled: bool, id: 0} — NOT {powerSwitch: int, switchIdx: 0}
+#   - Mode payload: {mode: <value>} — NOT {workMode: <value>}
+#   - setVirtualLevel payload: {id:0, level:N, type:'mist'} — NOT {levelIdx, virtualLevel, levelType}
+#   - Display payload: {state: bool} — NOT {screenSwitch: int}
+#   - Auto-stop payload: {enabled: bool} — NOT {autoStopSwitch: int}
+#   - Response `enabled` (bool) for power, NOT `powerSwitch` (int)
+#   - Response uses snake_case field names: mist_virtual_level, water_lacks, night_light_brightness
+#   - targetHumidity lives under configuration.auto_target_humidity (not top-level)
+#   - Night-light brightness is DISCRETE 3-step: 0=off, 50=dim, 100=bright (HA finding #9)
+#   - No warm mist (warm_enabled always false; Classic 300S hardware does not have warm mist)
+#   - Response shape: single-wrapped (one result envelope layer, not double-wrapped)
+#
+# HA cross-check production findings incorporated:
+#   #8: display field key is `display` (bool); fallback `indicator_light_switch` for legacy firmware
+#   #9: night_light_brightness is discrete 3-step (0|50|100 only)
+#
+# REQUEST payloads — as sent to /cloud/v2/deviceManaged/bypassV2
+
+requests:
+  turn_on:
+    payload:
+      data:
+        enabled: true
+        id: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        enabled: false
+        id: 0
+      method: setSwitch
+      source: APP
+
+  set_auto_mode:
+    payload:
+      data:
+        mode: auto
+      method: setHumidityMode
+      source: APP
+
+  set_sleep_mode:
+    payload:
+      data:
+        mode: sleep
+      method: setHumidityMode
+      source: APP
+
+  set_manual_mode:
+    payload:
+      data:
+        mode: manual
+      method: setHumidityMode
+      source: APP
+
+  set_mist_level:
+    payload:
+      data:
+        id: 0
+        level: 2
+        type: mist
+      method: setVirtualLevel
+      source: APP
+
+  set_humidity:
+    payload:
+      data:
+        target_humidity: 50
+      method: setTargetHumidity
+      source: APP
+
+  turn_on_display:
+    payload:
+      data:
+        state: true
+      method: setDisplay
+      source: APP
+
+  turn_off_display:
+    payload:
+      data:
+        state: false
+      method: setDisplay
+      source: APP
+
+  turn_on_automatic_stop:
+    payload:
+      data:
+        enabled: true
+      method: setAutomaticStop
+      source: APP
+
+  turn_off_automatic_stop:
+    payload:
+      data:
+        enabled: false
+      method: setAutomaticStop
+      source: APP
+
+  set_nightlight_off:
+    payload:
+      data:
+        night_light_brightness: 0
+      method: setNightLightBrightness
+      source: APP
+
+  set_nightlight_dim:
+    payload:
+      data:
+        night_light_brightness: 50
+      method: setNightLightBrightness
+      source: APP
+
+  set_nightlight_bright:
+    payload:
+      data:
+        night_light_brightness: 100
+      method: setNightLightBrightness
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getHumidifierStatus
+      source: APP
+
+# RESPONSE device data — what the Classic 300S returns after envelope peel.
+# Note: Classic 300S responses are SINGLE-WRAPPED. The parent passes resp.data.result
+# to child.update(), which is:
+#   { code:0, result: { <device fields> } }
+# The peel-while-loop in applyStatus() may peel once to reach device fields.
+#
+# Field naming uses snake_case (pyvesync ClassicLVHumidResult model):
+#   enabled, mist_virtual_level, mist_level, mode, display, water_lacks,
+#   humidity, humidity_high, automatic_stop_reach_target, water_tank_lifted,
+#   warm_enabled, warm_level, night_light_brightness
+# plus nested: configuration.auto_target_humidity, configuration.display,
+#              configuration.automatic_stop
+#
+# NOTE: Classic 300S has NO warm mist (warm_enabled: false, warm_level: null)
+
+responses:
+  # Canonical: from call_json_humidifiers.py HUMIDIFIER_DETAILS["Classic300S"]
+  # Override: mist level 5 (manual mode) for richer test assertions
+  device_on_manual_speed5:
+    enabled: true
+    humidity: 42
+    mist_virtual_level: 5
+    mist_level: 5
+    mode: manual
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    display: true
+    automatic_stop_reach_target: false
+    night_light_brightness: 50
+    configuration:
+      auto_target_humidity: 50
+      display: true
+      automatic_stop: false
+
+  # Device off — mist_virtual_level=0, enabled=false
+  device_off:
+    enabled: false
+    humidity: 38
+    mist_virtual_level: 0
+    mist_level: 3
+    mode: manual
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    display: false
+    automatic_stop_reach_target: false
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 50
+      display: false
+      automatic_stop: true
+
+  # Water reservoir empty
+  device_water_lacks:
+    enabled: true
+    humidity: 28
+    mist_virtual_level: 3
+    mist_level: 3
+    mode: auto
+    water_lacks: true
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    display: true
+    automatic_stop_reach_target: false
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 55
+      display: true
+      automatic_stop: true
+
+  # Synthetic: legacy firmware — uses indicator_light_switch instead of display (HA finding #8)
+  # display key is absent; indicator_light_switch is the only display indicator
+  device_legacy_display_alias:
+    enabled: true
+    humidity: 45
+    mist_virtual_level: 4
+    mist_level: 4
+    mode: sleep
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    indicator_light_switch: true
+    automatic_stop_reach_target: false
+    night_light_brightness: 100
+    configuration:
+      auto_target_humidity: 60
+      display: true
+      automatic_stop: false
