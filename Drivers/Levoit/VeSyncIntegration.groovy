@@ -26,6 +26,14 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-26: v2.0+ Generic-driver dispatch filter -- only Levoit climate-class
+//                  devices (LAP-/LEH-/LV- prefixes + literal Core200S/300S/400S/
+//                  600S/Vital200S names) attach to the Generic driver. Non-Levoit
+//                  devices on the same VeSync account (Etekcity plugs, Cosori,
+//                  thermostats, etc.) are now skipped with an INFO log instead
+//                  of getting a malfunctioning Generic child. Fan prefixes
+//                  (LTF-/LPF-) intentionally excluded from v2.0; will be added
+//                  in v2.1 alongside proper fan drivers.
 // 2026-04-26: v2.0+ Defensive check fix in getDevices() — empty device list
 //                  ([]) is a valid VeSync response (zero-device account), not an
 //                  error. Changed `!resp.data.result.list` to `== null` so the
@@ -351,6 +359,36 @@ private deviceType(code) {
     }
 }
 
+/**
+ * Returns true if the raw VeSync model code looks like a Levoit climate-class device
+ * (air purifier or humidifier) that should be attached to a Levoit driver.
+ *
+ * Whitelist (v2.0):
+ *   LAP-*  — Levoit Air Purifier (Core, Vital, and future variants)
+ *   LEH-*  — Levoit Evaporative Humidifier (Superior, OasisMist, and future)
+ *   LV-*   — Older Levoit purifiers/humidifiers (LV-PUR131S, LV-RH131S, etc.)
+ *   Literal names recognized by deviceType() — included for completeness so
+ *     this method can also be used as a standalone classifier if needed.
+ *
+ * Deliberately excluded from v2.0:
+ *   LTF-*  — Tower Fan (Levoit) — locked for v2.1, where a proper fan driver
+ *             will be added alongside this prefix.
+ *   LPF-*  — Pedestal Fan (Levoit) — same rationale as LTF-*.
+ *   Adding fan prefixes now would create Generic children that users would
+ *   need to manually remove before v2.1's proper fan drivers can attach.
+ *
+ * Everything else (Etekcity WS-, ESW-, ESO-, Cosori CS-, thermostats, etc.)
+ * is not a Levoit climate device and returns false.
+ */
+private Boolean isLevoitClimateDevice(String code) {
+    if (!code) return false
+    if (code.startsWith("LAP-")) return true
+    if (code.startsWith("LEH-")) return true
+    if (code.startsWith("LV-"))  return true
+    if (code in ["Core200S", "Core300S", "Core400S", "Core600S", "Vital200S"]) return true
+    return false
+}
+
 private Boolean getDevices() {
     return retryableHttp("getDevices", 3) {
         def params = [
@@ -417,7 +455,10 @@ private Boolean getDevices() {
                         newList[device.cid] = device.configModule;
                         newList[device.cid+"-nl"] = device.configModule;
                     }
-                    else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S" || dtype == "GENERIC") {
+                    else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S") {
+                        newList[device.cid] = device.configModule;
+                    }
+                    else if (dtype == "GENERIC" && isLevoitClimateDevice(device.deviceType)) {
                         newList[device.cid] = device.configModule;
                     }
                 }
@@ -545,19 +586,23 @@ private Boolean getDevices() {
                         }
                     }
                     else if (dtype == "GENERIC") {
-                        if (equip1 == null) {
-                            logDebug "Adding ${device.deviceName} (unrecognized model ${device.deviceType} — using Generic driver)"
-                            equip1 = addChildDevice("Levoit Generic Device", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
-                            equip1.updateDataValue("configModule", device.configModule);
-                            equip1.updateDataValue("cid", device.cid);
-                            equip1.updateDataValue("uuid", device.uuid);
-                            equip1.updateDataValue("deviceType", device.deviceType);
-                            logInfo "Added child device: ${device.deviceName} (Levoit Generic Device — model ${device.deviceType} not yet supported; run captureDiagnostics to file a new-device-support request)"
-                        }
-                        else {
-                            logDebug "Updating ${device.deviceName} / " + dtype;
-                            equip1.name = device.deviceName;
-                            equip1.label = device.deviceName;
+                        if (isLevoitClimateDevice(device.deviceType)) {
+                            if (equip1 == null) {
+                                logDebug "Adding ${device.deviceName} (unrecognized model ${device.deviceType} -- using Generic driver)"
+                                equip1 = addChildDevice("Levoit Generic Device", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                                equip1.updateDataValue("configModule", device.configModule);
+                                equip1.updateDataValue("cid", device.cid);
+                                equip1.updateDataValue("uuid", device.uuid);
+                                equip1.updateDataValue("deviceType", device.deviceType);
+                                logInfo "Added child device: ${device.deviceName} (Levoit Generic Device -- model ${device.deviceType} not yet supported; run captureDiagnostics to file a new-device-support request)"
+                            }
+                            else {
+                                logDebug "Updating ${device.deviceName} / " + dtype;
+                                equip1.name = device.deviceName;
+                                equip1.label = device.deviceName;
+                            }
+                        } else {
+                            logInfo "Skipping unsupported device type: ${device.deviceType} (${device.deviceName}) -- not a Levoit air purifier or humidifier. If this is a Levoit device, please file a new-device-support issue."
                         }
                     }
                 }

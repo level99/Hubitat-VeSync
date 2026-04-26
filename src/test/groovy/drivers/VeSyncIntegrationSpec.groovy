@@ -1058,4 +1058,129 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         and: "headers.tz also falls back to the DEFAULT_TIME_ZONE constant"
         rawPosts[0].headers?.tz == "America/Los_Angeles"
     }
+
+    // -------------------------------------------------------------------------
+    // D: isLevoitClimateDevice() — Generic-driver dispatch filter
+    //
+    // This filter prevents non-Levoit VeSync devices (Etekcity plugs, Cosori
+    // air fryers, etc.) from getting a malfunctioning Generic Levoit child.
+    // Only devices whose model codes carry LAP-/LEH-/LV- prefixes, or one of
+    // the legacy literal names (Core200S etc.), are attached as Generic.
+    // -------------------------------------------------------------------------
+
+    def "isLevoitClimateDevice() returns true for Levoit purifier/humidifier codes (D1)"(String code) {
+        // D1: positive path — all known Levoit climate-class prefixes and literals.
+        expect:
+        driver.isLevoitClimateDevice(code) == true
+
+        where:
+        code << [
+            "LAP-V201S-WUS",    // Vital 200S (US)
+            "LAP-C601S-WEU",    // Core 600S (EU)
+            "LEH-S601S-WUS",    // Superior 6000S (US)
+            "LEH-S602S-WUSR",   // Superior 6000S variant
+            "LV-PUR131S",       // older Levoit purifier
+            "LV-RH131S",        // older Levoit humidifier
+            "Core200S",         // legacy literal recognized by deviceType()
+            "Core400S",
+            "Vital200S"
+        ]
+    }
+
+    def "isLevoitClimateDevice() returns false for non-Levoit VeSync device codes (D2)"(String code) {
+        // D2: negative path — Etekcity, Cosori, and non-prefix codes should be
+        // skipped so they never receive a malfunctioning Generic Levoit child.
+        expect:
+        driver.isLevoitClimateDevice(code) == false
+
+        where:
+        code << [
+            "WS-WHM01",     // Etekcity smart switch
+            "ESW15-USA",    // Etekcity smart plug
+            "ESO15-TB",     // Etekcity outdoor outlet
+            "CS158-AF",     // Cosori air fryer
+            null,
+            "",
+            "unknown-thing"
+        ]
+    }
+
+    def "isLevoitClimateDevice() returns false for v2.0-excluded Levoit fan prefixes (D3)"(String code) {
+        // D3: fan prefixes (LTF-* Tower Fan, LPF-* Pedestal Fan) are intentionally
+        // excluded from the v2.0 whitelist. They will be added in v2.1 alongside
+        // proper fan drivers. Adding them now would create Generic children that
+        // users would need to manually remove before v2.1 drivers can attach.
+        // NOTE: when v2.1 adds fan drivers, flip these to true and add the prefixes
+        // to isLevoitClimateDevice().
+        expect:
+        driver.isLevoitClimateDevice(code) == false
+
+        where:
+        code << [
+            "LTF-F422S-WUS",    // Tower Fan — locked v2.1
+            "LPF-R432S-AEU"     // Pedestal Fan — locked v2.1
+        ]
+    }
+
+    def "getDevices() skips non-Levoit device -- no addChildDevice call, INFO log emitted, cid absent from deviceList (D4)"() {
+        // D4: integration test — a non-Levoit device on the VeSync account (here an
+        // Etekcity smart switch) must not trigger addChildDevice and must not appear
+        // in state.deviceList. An INFO-level skip log must be emitted so the user
+        // understands why the device has no Hubitat child.
+        given: "VeSync account returns one non-Levoit device (Etekcity WS-WHM01)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-d4"
+        state.accountID = "acc-d4"
+        state.prefsSeeded = true
+        int addChildDeviceCallCount = 0
+
+        // Override addChildDevice to count invocations (parent wireSandbox installs a
+        // no-op that returns a TestDevice; we override here to also count calls).
+        driver.metaClass.addChildDevice = { String typeName, String dni, Map props ->
+            addChildDeviceCallCount++
+            def dev = new TestDevice()
+            dev.name = typeName
+            childDevices[dni] = dev
+            dev
+        }
+
+        // httpPost: return a device list containing only the Etekcity device.
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    list: [
+                        [
+                            deviceType  : "WS-WHM01",
+                            deviceName  : "Kitchen Plug",
+                            cid         : "etk-001",
+                            configModule: "EtekcitySwitch",
+                            uuid        : "uuid-etk-001",
+                            macID       : "AA:BB:CC:DD:EE:FF"
+                        ]
+                    ],
+                    total: 1
+                ],
+                traceId: "test-trace"
+            ]
+            callback(r)
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "no addChildDevice call was made for the non-Levoit device"
+        addChildDeviceCallCount == 0
+
+        and: "an INFO log was emitted explaining the skip"
+        testLog.infos.any { it.contains("Skipping unsupported device type: WS-WHM01") }
+
+        and: "the device's cid is absent from state.deviceList"
+        !(state.deviceList?.containsKey("etk-001"))
+    }
 }

@@ -15,7 +15,7 @@ Fast-follow after v2.0. Targets the remaining Tier 1 community asks plus an adja
 - **OasisMist 450S US** — `LUH-O451S-WUS`. Extends the Classic 300S template with warm-mist control + humidity mode (US variant only).
 - **Levoit Tower Fan** — `LTF-F422S` family. Built from canonical [pyvesync](https://github.com/webdjoe/pyvesync) fixtures + class semantics, ships as a **preview** with explicit caveat asking community fan owners to report issues. No maintainer fan hardware available for live-test.
 - **Levoit Pedestal Fan** — `LPF-R432S` family. Same preview caveat as Tower Fan.
-- **Manifest `packageName` rename** to *"Levoit Fans, Air Purifiers and Humidifiers"* — lands alongside the proper fan drivers.
+- **Manifest `packageName` rename** to *"Levoit Air Purifiers, Humidifiers, and Fans"* — lands alongside the proper fan drivers.
 - **Generic-driver whitelist extension** to include `LTF-` / `LPF-` prefixes.
 - **Spock specs** for all new drivers (bug-pattern catalog coverage + happy path + state-change gating).
 
