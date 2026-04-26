@@ -24,7 +24,11 @@ SOFTWARE.
 */
 
 // History:
-// 
+//
+// 2026-04-25: v2.0 (community fork, level99/Hubitat-VeSync, by Dan Cox)
+//                  - Added descriptionTextEnable preference (default true) and gated logInfo helper
+//                  - Added INFO logging at state-change transitions (night light on/off/dim)
+//                  - debugOutput consistently defaults to false
 // 2023-02-05: v1.6 Fixed the heartbeat logic.
 // 2023-02-04: v1.5 Adding heartbeat event
 // 2023-02-03: v1.4 Logging errors properly.
@@ -42,11 +46,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S / 300S air purifiers' night light capability",
-        category: "My Apps",
-        iconUrl: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",
-        iconX2Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png",
-        iconX3Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png",
-        documentationLink: "https://github.com/dcmeglio/hubitat-bond/blob/master/README.md")
+        documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
             capability "Switch Level"
@@ -56,6 +56,7 @@ metadata {
         }
 
     preferences {
+        input("descriptionTextEnable", "bool", title: "Enable descriptive (info-level) logging?", defaultValue: true)
         input("debugOutput", "bool", title: "Enable debug logging?", defaultValue: false, required: false)
     }
 }
@@ -109,10 +110,11 @@ def setNightLight(mode)
 			if (checkHttpResponse("setNightLight", resp))
 			{
                 sendLevelEvent(mode)
+                logInfo "Night light: ${mode}"
 				result = true
 			}
 		}
-    return result   
+    return result
 }
 
 def sendLevelEvent(mode)
@@ -143,7 +145,15 @@ def update() {
 def update(status) {
 
     logDebug "update()"
+    // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
+    if (!state.prefsSeeded) {
+        if (settings?.descriptionTextEnable == null) {
+            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
+        }
+        state.prefsSeeded = true
+    }
 
+    def result = null  // declared here to avoid MissingPropertyException on return
     def mode = status.result.night_light
     state.mode = mode
 
@@ -157,6 +167,10 @@ def logDebug(msg) {
     if (settings?.debugOutput) {
 		log.debug msg
 	}
+}
+
+def logInfo(msg) {
+    if (settings?.descriptionTextEnable) log.info msg
 }
 
 void logDebugOff() {

@@ -1,94 +1,172 @@
-## VeSync: Levoit Air Purifier Drivers
+## VeSync: Levoit Air Purifier and Humidifier Drivers (Community Fork)
 
-These drivers add support for Levoit Air Core 200S, 300S, 400S, and 600S air purifiers. Installing the integration driver, and configuring with the VeSync account information will automatically discover existing equipment, as long as they have been setup with a VeSync account using the VeSync app.
+Hubitat drivers for Levoit air purifiers and humidifiers, controlled via the VeSync cloud API.
 
-Equipment found will be added as child devices under the VeSync Integration device, and will have the same name and initial label as what is configures in the VeSync account. Pressing 'Resync Equipment' will discover all newly added devices.
+This is a **community fork** of [NiklasGustafsson/Hubitat](https://github.com/NiklasGustafsson/Hubitat). It preserves the original Core 200S/300S/400S/600S drivers and adds:
 
-When discovered, a Core 200S purifier  will result in two devices being installed in Hubitat, one to control the operation of the purifier fan and display, one to control the night light. A Core 300S, 400S, or 600S purifier will result in one device being installed.
+- **Levoit Vital 200S Air Purifier** (LAP-V201S) — full controls, AQ/PM2.5 sensors, timer
+- **Levoit Superior 6000S Humidifier** (LEH-S601S) — mist control, drying mode, auto-stop, water-pump cleaning, ambient temp sensor
+- **Parent driver fix**: humidifier devices were silently failing every poll because the parent always sent `getPurifierStatus`. The parent now branches by device type.
+- **Connection-pool retry logic** for transient HTTP failures.
 
-The purifiers show up as fans, switches, and dimmers. And there's also an 'info' attribute that is useful for displaying in a dashboard tile as HTML. The child devices are actuators, so their public methods may be invoked from rules.
+Installing the integration driver and configuring it with your VeSync account credentials will automatically discover existing equipment, as long as it has been set up in the VeSync app.
+
+Equipment found will be added as child devices under the VeSync Integration parent device, named to match the labels in the VeSync app. Pressing 'Resync Equipment' will discover newly added devices.
+
+The Core 200S installs as two child devices (purifier + night light). All other models install as a single child device. Devices show up as fans, switches, dimmers, humidity sensors, or temperature sensors depending on capabilities. There's also an `info` attribute that's useful for dashboard tiles.
 
 ## Installation
 
-There are six files to install, all as Hubitat drivers. Use the Hubitat package manager to install the drivers. The manifest file is located at: https://raw.githubusercontent.com/NiklasGustafsson/Hubitat/master/levoitManifest.json.
+### Via Hubitat Package Manager (recommended)
 
-If you do not use the HPM, then copy and paste into the Hubitat UI under driver code. Remember to use the 'Raw' view of the code in GitHub before copying. You only need to install drivers for the kinds of devices you have, plus the integration driver, which is the parent device. Not that the 200S requires two drivers, since there's also night light to control, which shows up as its own switch device.
+1. In Hubitat: Apps → Hubitat Package Manager → Install → From a URL
+2. Manifest URL: `https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/levoitManifest.json`
+3. Install only the drivers for the device types you own (the integration driver is required).
 
-1. VeSyncIntegration.groovy -- this is the parent device. It represents the VeSync account.<br/> Configure with account email and password, plus a refresh (polling) interval.
-2. LevoitCore200S.groovy -- the driver for the 200S purifier.
-3. LevoitCore200S Light.groovy -- the driver for the 200S night light.
-4. LevoitCore400S.groovy -- the driver for the 300S purifier.
-5. LevoitCore400S.groovy -- the driver for the 400S purifier.
-6. LevoitCore600S.groovy -- the driver for the 600S purifier.
+### Manual install
 
-After installing the drivers, add a virtual device with the VeSync Integration driver, then configure it with your credentials and the desired data refresh internal, and hit 'Save Preferences.' Once that is done, press the 'Resync Equipment' button on the device page and if your credentials are correct, you should see child devices come online. 
+Copy the relevant `.groovy` files from the `Drivers/Levoit/` directory into Hubitat's "Drivers Code" page. Use the **Raw** view of each file in GitHub.
 
-The refresh interval determines how often the drivers will poll the status of your equipment. If you are planning on mostly use automation or the Hubitat dashboards to control things, then it can be relatively high.
+| File | Purpose |
+| --- | --- |
+| `VeSyncIntegration.groovy` | **Required.** Parent driver — represents the VeSync account, polls all devices. |
+| `LevoitCore200S.groovy` | Levoit Core 200S air purifier |
+| `LevoitCore200S Light.groovy` | Night light child for Core 200S |
+| `LevoitCore300S.groovy` | Levoit Core 300S air purifier |
+| `LevoitCore400S.groovy` | Levoit Core 400S air purifier |
+| `LevoitCore600S.groovy` | Levoit Core 600S air purifier |
+| `LevoitVital200S.groovy` | Levoit Vital 200S / 200S-P air purifier |
+| `LevoitSuperior6000S.groovy` | Levoit Superior 6000S evaporative humidifier |
 
-__Note__: 
+### Setup
 
-If you rename a device in the VeSync app, the device will automatically be renamed in Hubitat when you hit 'Resync Equipment' in the device page for the parent device. That does not change its device identity, just the label and name, so no rules are affected.
+After installing the drivers:
 
-## Events
+1. Add a virtual device with type **VeSync Integration**.
+2. Configure email + password for your VeSync account, plus a refresh (polling) interval.
+3. Hit **Save Preferences**, then press **Resync Equipment**. Child devices come online within a few seconds.
 
-The main driver, i.e. the VeSync only has one event attribute: `heartbeat`, which has the possible values `syncing`, `synced`, and `not synced`. The last one may be used in a rule to detect that the hub has failed to contact the VeSync servers for some time.
+The refresh interval (default 30 s) determines how often the drivers poll device status. For mostly-automated use, 60–120 s is plenty and reduces total API load.
 
-The devices themselves have more attributes:
+## Migration from legacy hand-installed drivers
 
-### 200S
+If you previously hand-pasted "Levoit Vital200S/V201S Air Purifier (...)" or "Levoit 600S Humidifier" drivers into your hub, the new drivers in this fork have different metadata names. To migrate:
 
-|event|Values|Description|
+1. Install the fork drivers (HPM or manual).
+2. For each existing device:
+   - Open device page → **Type** dropdown → pick the new driver name (e.g. **Levoit Vital 200S Air Purifier** or **Levoit Superior 6000S Humidifier**).
+   - **Save Device**. Hit **Refresh** to repopulate state.
+3. Once all devices are on the new drivers, the old hand-installed drivers can be deleted from "Drivers Code".
+
+Existing rules / dashboards continue to work — same commands, same attributes (plus several new ones).
+
+## Events / attributes
+
+The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing`, `synced`, `not synced`). Use `not synced` in a rule to detect prolonged loss of contact with VeSync servers.
+
+### Core 200S
+
+| event | Values | Description |
 | --- | --- | --- |
-|filter|0-100|The remaining filter life as a percentage.|
-|mode|manual,sleep|The current mode of the purifier.|
-|info|HTML TEXT|HTML suitable for displaying in a Hubitat dashboard tile.|
-|switch|on,off|Whether the purifier is turned on or off.|
-|speed|off,low,medium,high|The fan speed.|
+| filter | 0-100 | Remaining filter life (%) |
+| mode | manual, sleep | Current mode |
+| info | HTML | Dashboard-tile-friendly summary |
+| switch | on, off | Power state |
+| speed | off, low, medium, high | Fan speed |
 
-### 300S
+### Core 300S
 
-|event|Values|Description|
+| event | Values | Description |
 | --- | --- | --- |
-|filter|0-100|The remaining filter life as a percentage.|
-|mode|manual,sleep,auto|The current mode of the purifier.|
-|auto_mode|default,quiet,efficient|The Levoit auto-mode setting.|
-|aqi|0-500|The Air Quality Index, computed by the formula used in the United States.|
-|aqiDanger|Various|A risk level string suitable for displaying in a Hubitat dashboard tile.|
-|aqiColor|Hexadecimal Number|A color code suitable for use in HTML|
-|info|HTML TEXT|HTML suitable for displaying in a Hubitat dashboard tile.|
-|switch|on,off|Whether the purifier is turned on or off.|
-|speed|off,sleep,low,medium,high|The fan speed.|
+| filter | 0-100 | Filter life (%) |
+| mode | manual, sleep, auto | Current mode |
+| auto_mode | default, quiet, efficient | Auto-mode preference |
+| aqi | 0-500 | US-formula AQI |
+| aqiDanger | string | Risk level for tile display |
+| aqiColor | hex | Color for HTML |
+| info | HTML | Tile summary |
+| switch | on, off | Power |
+| speed | off, sleep, low, medium, high | Fan speed |
 
-### 400S
+### Core 400S
 
-|event|Values|Description|
+Same as 300S except `speed` adds `max`.
+
+### Core 600S
+
+Same as 400S; `auto_mode` adds `eco`.
+
+### Vital 200S (LAP-V201S)
+
+| event | Values | Description |
 | --- | --- | --- |
-|filter|0-100|The remaining filter life as a percentage.|
-|mode|manual,sleep,auto|The current mode of the purifier.|
-|auto_mode|default,quiet,efficient|The Levoit auto-mode setting.|
-|aqi|0-500|The Air Quality Index, computed by the formula used in the United States.|
-|aqiDanger|Various|A risk level string suitable for displaying in a Hubitat dashboard tile.|
-|aqiColor|Hexadecimal Number|A color code suitable for use in HTML|
-|info|HTML TEXT|HTML suitable for displaying in a Hubitat dashboard tile.|
-|switch|on,off|Whether the purifier is turned on or off.|
-|speed|off,sleep,low,medium,high,max|The fan speed.|
+| switch | on, off | Power |
+| speed | off, sleep, low, medium, high, max | Fan speed (off when device is off) |
+| mode | manual, auto, sleep, pet | Current mode |
+| petMode | on, off | True if mode is "pet" |
+| filter | 0-100 | Filter life (%) |
+| pm25 | µg/m³ | Real-time PM2.5 reading |
+| airQualityIndex | 1-4 | Levoit-internal AQ index |
+| airQuality | good, moderate, poor, very poor, unknown | Categorical AQ |
+| autoPreference | default, efficient, quiet | Auto-mode preference |
+| roomSize | sq ft | User-configured room size for auto mode |
+| lightDetection | on, off | Whether light-detection is enabled |
+| lightDetected | yes, no | Whether ambient light is detected |
+| childLock | on, off | Child-lock state |
+| display | on, off | Front-panel display state |
+| errorCode | int | Device error code (0 = healthy) |
+| timerRemain | seconds | Auto-off timer remaining |
+| info | HTML | Tile summary |
 
-### 600S
+Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize`, `setLightDetection`, `setChildLock`, `setDisplay`, `setTimer` (minutes), `cancelTimer`, `resetFilter`, `toggle`.
 
-|event|Values|Description|
+### Superior 6000S Humidifier (LEH-S601S)
+
+| event | Values | Description |
 | --- | --- | --- |
-|filter|0-100|The remaining filter life as a percentage.|
-|mode|manual,sleep,auto|The current mode of the purifier.|
-|auto_mode|default,quiet,eco,efficient|The Levoit auto-mode setting.|
-|aqi|0-500|The Air Quality Index, computed by the formula used in the United States.|
-|aqiDanger|Various|A risk level string suitable for displaying in a Hubitat dashboard tile.|
-|aqiColor|Hexadecimal Number|A color code suitable for use in HTML|
-|info|HTML TEXT|HTML suitable for displaying in a Hubitat dashboard tile.|
-|switch|on,off|Whether the purifier is turned on or off.|
-|speed|off,sleep,low,medium,high,max|The fan speed.|
+| switch | on, off | Power |
+| mode | manual, auto, sleep | Current mode (auto is "autoPro" internally) |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 30-80 | Auto-mode target humidity |
+| temperature | °F or °C | Ambient temp from onboard sensor |
+| mistLevel | 1-9 | Actual reported mist level |
+| virtualLevel | 1-9 | Set/requested mist level |
+| level | 0-100 | SwitchLevel mapping (mistLevel mapped to %) |
+| water | ok, empty, removed | Water-tank state |
+| display | on, off | Front-panel display |
+| childLock | on, off | Child-lock state |
+| autoStopConfig | on, off | Auto-stop-when-target-reached config |
+| autoStopActive | yes, no | Whether auto-stop is currently active |
+| dryingMode | active, complete, idle, off | Wick auto-drying state |
+| dryingTimeRemain | seconds | Time remaining in drying cycle |
+| pumpCleanStatus | cleaning, idle | Water pump self-clean cycle |
+| pumpCleanRemain | seconds | Time remaining in clean cycle |
+| wickFilterLife | 0-100 | Wick filter life (%) |
+| timerRemain | seconds | Auto-off timer remaining |
+| info | HTML | Tile summary |
 
-### Acknowledgements
+Commands: `setMode`, `setMistLevel`, `setTargetHumidity`, `setDisplay`, `setChildLock`, `setAutoStop`, `setDryingMode`, `toggle`.
 
-The Groovy code is loosely based on the Etekcity Python library at: https://github.com/webdjoe/pyvesync
+## Reporting issues
 
-Thank you to elfege, who added setLevel() and figured out that the 'max' speed was missing.
+If something doesn't work right, capture a debug log and post it ([Hubitat community thread](https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816) or [GitHub issue](https://github.com/level99/Hubitat-VeSync/issues)):
+
+1. On the **VeSync Integration** parent device, set **Enable debug logging** to **true** and **Save Preferences**.
+2. Trigger or wait for the issue (e.g. press the misbehaving button, or wait one poll cycle for status issues).
+3. In Hubitat → **Logs**, copy any lines mentioning the affected device.
+
+Account email, accountID, and auth token are auto-redacted in every log line — you can post directly without scrubbing. Debug logging auto-disables 30 minutes after enabling.
+
+If a maintainer asks for deeper API output, they'll point you to the **Verbose API response logging** preference on the parent device — same procedure, that toggle additionally captures the full API response body.
+
+## Acknowledgements
+
+The Groovy code is loosely based on the Python library at: https://github.com/webdjoe/pyvesync
+
+The original Core 200S/300S/400S/600S drivers and the VeSyncIntegration framework are by **Niklas Gustafsson**.
+
+Thank you to **elfege** for adding `setLevel()` and figuring out the 'max' speed was missing on Core 600S.
+
+The Vital 200S, Superior 6000S, parent driver fixes, and v2.0 fork release are by **Dan Cox**, with payload research from pyvesync's test fixtures (`LAP-V201S.yaml`, `LEH-S601S.yaml`).
+
+If you're a Vital 200S or Superior 6000S user who tried this integration before and hit "device discovered but data retrieval fails" — that's the bug fixed in v2.0.

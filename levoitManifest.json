@@ -1,54 +1,69 @@
 {
-  "packageName": "Levoit Air Purifiers",
-  "author": "Niklas Gustafsson",
-  "version": "1.6",
+  "packageName": "Levoit Air Purifiers and Humidifiers",
+  "author": "Niklas Gustafsson (original); Dan Cox (community fork)",
+  "version": "2.0",
   "minimumHEVersion": "2.3.2",
-  "dateReleased": "2022-02-05",
-  "releaseNotes": "Added proper heartbeat logic for the synchronization with VeSync servers.\nRemove reporting of room size.",
-  "documentationLink": "https://github.com/NiklasGustafsson/Hubitat/blob/master/Drivers/Levoit/readme.md",
-  "licenseFile": "https://raw.githubusercontent.com/NiklasGustafsson/Hubitat/master/LICENSE",
+  "dateReleased": "2026-04-25",
+  "releaseNotes": "v2.0 community fork release. Adds Levoit Vital 200S (LAP-V201S) and Levoit Superior 6000S Humidifier (LEH-S601S) support. Fixes parent driver bug where humidifier polling silently failed (was sending getPurifierStatus to humidifier devices). Adds connection-pool retry logic. Both new drivers built from canonical pyvesync payloads with diagnostic raw-response logging gated by debugOutput preference.",
+  "documentationLink": "https://github.com/level99/Hubitat-VeSync/blob/main/Drivers/Levoit/readme.md",
+  "communityLink": "https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816",
+  "licenseFile": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/LICENSE",
   "drivers": [
+    {
+      "id": "65bbed4f-4075-46ad-a2fc-c148e1af21e4",
+      "name": "VeSync Integration",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/VeSyncIntegration.groovy",
+      "required": true
+    },
     {
       "id": "e55e1532-f00f-407b-ad00-c27077225592",
       "name": "Levoit Core200S Air Purifier Light",
       "namespace": "NiklasGustafsson",
-      "location": "https://raw.githubusercontent.com/NiklasGustafsson/Hubitat/master/Drivers/Levoit/LevoitCore200S%20Light.groovy",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore200S%20Light.groovy",
       "required": false
     },
     {
       "id": "4467437a-8850-4a9e-9722-cbf98c984952",
       "name": "Levoit Core200S Air Purifier",
       "namespace": "NiklasGustafsson",
-      "location": "https://raw.githubusercontent.com/NiklasGustafsson/Hubitat/master/Drivers/Levoit/LevoitCore200S.groovy",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore200S.groovy",
       "required": false
     },
     {
       "id": "9044814e-27d1-498d-a0a8-308f49002467",
       "name": "Levoit Core300S Air Purifier",
       "namespace": "NiklasGustafsson",
-      "location": "https://raw.githubusercontent.com/NiklasGustafsson/Hubitat/master/Drivers/Levoit/LevoitCore300S.groovy",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore300S.groovy",
       "required": false
     },
     {
       "id": "a9c8ab02-abd9-4956-b000-68331d59f1df",
       "name": "Levoit Core400S Air Purifier",
       "namespace": "NiklasGustafsson",
-      "location": "https://raw.githubusercontent.com/NiklasGustafsson/Hubitat/master/Drivers/Levoit/LevoitCore400S.groovy",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore400S.groovy",
       "required": false
     },
     {
       "id": "b7d0cbb9-3419-4c5c-8926-a90519ce929f",
       "name": "Levoit Core600S Air Purifier",
       "namespace": "NiklasGustafsson",
-      "location": "https://raw.githubusercontent.com/NiklasGustafsson/Hubitat/master/Drivers/Levoit/LevoitCore600S.groovy",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore600S.groovy",
       "required": false
     },
     {
-      "id": "65bbed4f-4075-46ad-a2fc-c148e1af21e4",
-      "name": "VeSync Integration",
+      "id": "c4f9d7b3-1a2b-4c8e-9f3a-7e8d4b2a1c5e",
+      "name": "Levoit Vital 200S Air Purifier",
       "namespace": "NiklasGustafsson",
-      "location": "https://raw.githubusercontent.com/NiklasGustafsson/Hubitat/master/Drivers/Levoit/VeSyncIntegration.groovy",
-      "required": true
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitVital200S.groovy",
+      "required": false
+    },
+    {
+      "id": "d8a5e2f1-3c7b-49d6-b1f8-2e9c5a8b4d7a",
+      "name": "Levoit Superior 6000S Humidifier",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitSuperior6000S.groovy",
+      "required": false
     }
   ]
 }
