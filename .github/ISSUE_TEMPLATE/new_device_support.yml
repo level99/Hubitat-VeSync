@@ -1,0 +1,117 @@
+name: New device support request
+description: Request driver support for a Levoit device that this fork doesn't yet recognize.
+title: "[New device] "
+labels: ["new-device-support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us add support for your device. The most useful thing you can do is install the **Levoit Generic Diagnostic Driver**, run `captureDiagnostics()`, and paste the output below — that gives the maintainer the exact API response shape needed to author a proper driver.
+
+        **Before submitting:**
+        - Check the [supported models list](https://github.com/level99/Hubitat-VeSync/blob/main/Drivers/Levoit/readme.md) — your device may already work under a regional variant.
+        - Search [existing new-device requests](https://github.com/level99/Hubitat-VeSync/issues?q=is%3Aissue+label%3Anew-device-support) — someone may have already requested it.
+        - For initial discussion or "is anyone else asking for this?", the [Hubitat community thread](https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816) is a good first stop.
+
+  - type: input
+    id: marketing_name
+    attributes:
+      label: Marketing name
+      description: What Levoit calls it on the box / website.
+      placeholder: "e.g. Levoit Vital 100S Air Purifier"
+    validations:
+      required: true
+
+  - type: input
+    id: model_codes
+    attributes:
+      label: Model code(s)
+      description: |
+        The exact model code(s) — visible in the VeSync app device details, or on the device's bottom-label sticker. List all variants you own (region-specific suffixes matter).
+      placeholder: "e.g. LAP-V102S-WUS, LAP-V102S-WEU"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: region
+    attributes:
+      label: Region
+      description: Which regional variant do you own?
+      options:
+        - US
+        - EU
+        - UK
+        - Japan
+        - Australia / NZ
+        - Canada
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: pyvesync_status
+    attributes:
+      label: pyvesync support status
+      description: |
+        Optional but extremely helpful. Check [webdjoe/pyvesync `device_map.py`](https://github.com/webdjoe/pyvesync/blob/main/src/pyvesync/device_map.py) for your model code. Pyvesync is the canonical reference this fork uses; if pyvesync supports it, adding fork support is much faster.
+      options:
+        - "Yes — pyvesync has a class for this model"
+        - "No — pyvesync doesn't list this model"
+        - "Unknown / didn't check"
+    validations:
+      required: false
+
+  - type: textarea
+    id: capture_diagnostics
+    attributes:
+      label: captureDiagnostics() output
+      description: |
+        **REQUIRED.** This is the highest-signal data for adding support.
+
+        How to capture:
+        1. Install the **Levoit Generic Diagnostic Driver** via HPM (it ships with v2.0+).
+        2. In Hubitat → **Devices**, find your unsupported device — it should already be discovered with the Generic driver auto-assigned.
+        3. Open the device page → click the **`captureDiagnostics`** custom command.
+        4. Wait ~10 seconds, then refresh the device page.
+        5. Copy the **`diagnostics`** attribute value (it's a markdown block) and paste it below.
+
+        If the Generic driver hasn't auto-assigned (model code not yet in parent's discovery list), use the manual route described in the driver's readme.
+
+        **Credentials are auto-redacted** — safe to paste without scrubbing.
+      render: markdown
+    validations:
+      required: true
+
+  - type: input
+    id: hub_firmware
+    attributes:
+      label: Hubitat hub firmware version
+      placeholder: "e.g. 2.3.8.140"
+    validations:
+      required: true
+
+  - type: textarea
+    id: community_thread
+    attributes:
+      label: Community thread context (optional)
+      description: If you've discussed this device in the [Hubitat community thread](https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816), link to your post(s) so the maintainer can correlate.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: willing_to_test
+    attributes:
+      label: Willing to test
+      options:
+        - label: I'm willing to install draft drivers and report back via debug-log captures. (Drivers for unsupported models often ship as DRAFT first because the maintainer doesn't have the hardware to verify; community testers are how those drivers get to stable.)
+          required: true
+
+  - type: checkboxes
+    id: prereqs
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched [existing new-device requests](https://github.com/level99/Hubitat-VeSync/issues?q=is%3Aissue+label%3Anew-device-support) and confirmed this device isn't already requested.
+          required: true
+        - label: I checked the [supported models list](https://github.com/level99/Hubitat-VeSync/blob/main/Drivers/Levoit/readme.md) — my device isn't already supported under a different model code.
+          required: true

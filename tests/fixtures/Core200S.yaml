@@ -1,0 +1,134 @@
+# pyvesync canonical API fixtures for Core200S (Levoit Core 200S Air Purifier)
+# Source: https://github.com/webdjoe/pyvesync
+# Commit: c98729c45860cc765d63d49a9a02bbc18de090c4 (2026-04-16)
+# Retrieved: 2026-04-25
+#
+# REQUEST payloads sourced from src/tests/api/vesyncpurifier/Core200S.yaml
+# RESPONSE data for device_on_manual_speed1 sourced from src/tests/call_json_purifiers.py
+#   PURIFIER_DETAILS["Core200S"] with PurifierDefaults constants resolved:
+#     fan_level=1, filter_life=80, purifier_mode="manual", night_light=DeviceStatus.ON="on"
+#     air_quality not present in Core200S (added in Core300S+)
+# All other response scenarios are synthesized from driver code field names.
+#
+# NOTE Core-line field conventions differ from V2 line:
+#   setSwitch: { enabled: true/false, id: 0 }   (not powerSwitch/switchIdx)
+#   setLevel:  { level: 1-3, id: 0, type: "wind" }  (not levelIdx/manualSpeedLevel)
+#   setPurifierMode: { mode: "sleep" }            (not workMode)
+
+requests:
+  turn_on:
+    payload:
+      data:
+        enabled: true
+        id: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        enabled: false
+        id: 0
+      method: setSwitch
+      source: APP
+
+  set_fan_speed:
+    payload:
+      data:
+        id: 0
+        level: 3
+        type: wind
+      method: setLevel
+      source: APP
+
+  set_manual_mode:
+    payload:
+      data:
+        id: 0
+        level: 1
+        type: wind
+      method: setLevel
+      source: APP
+
+  set_sleep_mode:
+    payload:
+      data:
+        mode: sleep
+      method: setPurifierMode
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getPurifierStatus
+      source: APP
+
+# RESPONSE device data — what the purifier returns for getPurifierStatus
+# Core 200S uses an older response structure. The parent calls resp.data.result
+# and passes it to update(status, nightLight). The driver reads status.result.*
+# (result.level, result.mode, result.enabled, result.filter_life,
+#  result.night_light, result.air_quality).
+# NOTE: These are the actual field names used by the driver code in update().
+
+responses:
+  # Canonical: from call_json_purifiers.py PURIFIER_DETAILS["Core200S"]
+  # PurifierDefaults: fan_level=1, filter_life=80, purifier_mode="manual", night_light="on"
+  # Core200S does not have air_quality in its canonical response (added in Core300S+)
+  device_on_manual_speed1:
+    result:
+      level: 1
+      mode: manual
+      enabled: true
+      filter_life: 80
+      night_light: "on"
+      display: true
+      child_lock: true
+      configuration:
+        display: true
+        display_forever: true
+      device_error_code: 0
+    code: 0
+
+  # Synthesized: level=2 for testing mapIntegerToSpeed(2)="medium"
+  device_on_manual_speed2:
+    result:
+      level: 2
+      mode: manual
+      enabled: true
+      filter_life: 85
+      night_light: "off"
+      air_quality_value: 5.0
+    code: 0
+
+  # Synthesized scenario: sleep mode
+  device_on_sleep_mode:
+    result:
+      level: 1
+      mode: sleep
+      enabled: true
+      filter_life: 70
+      night_light: "dim"
+      air_quality_value: 8.0
+    code: 0
+
+  # Synthesized scenario: device off
+  device_off:
+    result:
+      level: 2
+      mode: manual
+      enabled: false
+      filter_life: 90
+      night_light: "off"
+      air_quality_value: 3.0
+    code: 0
+
+  # Synthesized scenario: filter critically low (<10%)
+  device_filter_low:
+    result:
+      level: 1
+      mode: manual
+      enabled: true
+      filter_life: 8
+      night_light: "off"
+      air_quality_value: 45.0
+    code: 0

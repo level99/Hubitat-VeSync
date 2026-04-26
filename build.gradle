@@ -1,0 +1,46 @@
+plugins {
+    id 'groovy'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Groovy 3 for Spock 2.3-groovy-3.0 compatibility.
+    // Drivers run on Hubitat's Groovy 2.4, but 3.0 is backward-compatible
+    // for the imperative-script patterns our drivers use, and Spock 2.x
+    // requires it.
+    testImplementation 'org.codehaus.groovy:groovy-all:3.0.25'
+
+    // Spock 2.3 with Groovy 3.0 binding — the stable Spock 2.x release line.
+    testImplementation 'org.spockframework:spock-core:2.3-groovy-3.0'
+
+    // SnakeYAML for parsing pyvesync fixture files at test time.
+    // Also a Gradle runtime dep (transitive), but explicit keeps our
+    // compile path deterministic across Gradle version bumps.
+    testImplementation 'org.yaml:snakeyaml:2.0'
+
+    // byte-buddy: required by Spock 2.x to Mock/Spy non-interface types
+    // (e.g. TestDevice, TestParent). Neither byte-buddy nor cglib-nodep
+    // is a transitive dep of spock-core 2.3, so we declare it explicitly.
+    testImplementation 'net.bytebuddy:byte-buddy:1.14.17'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+test {
+    useJUnitPlatform()
+    // Single-threaded: HubitatSpec installs per-class MetaClass overrides
+    // on driver objects; parallel specs could race on the same class's
+    // MetaClassRegistry entry.
+    maxParallelForks = 1
+    testLogging {
+        events 'started', 'passed', 'skipped', 'failed'
+        exceptionFormat = 'full'
+    }
+}

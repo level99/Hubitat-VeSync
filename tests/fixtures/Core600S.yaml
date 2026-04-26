@@ -1,0 +1,144 @@
+# pyvesync canonical API fixtures for Core600S (Levoit Core 600S Air Purifier)
+# Source: https://github.com/webdjoe/pyvesync
+# Commit: c98729c45860cc765d63d49a9a02bbc18de090c4 (2026-04-16)
+# Retrieved: 2026-04-25
+#
+# REQUEST payloads sourced from src/tests/api/vesyncpurifier/Core600S.yaml
+# RESPONSE data for device_on_manual_speed1 sourced from src/tests/call_json_purifiers.py
+#   PURIFIER_DETAILS["Core600S"] with PurifierDefaults constants resolved:
+#     fan_level=1, filter_life=80, purifier_mode="manual", air_quality=1, air_quality_value=3
+#     configuration.auto_preference.{type:"default", room_size:0}
+# All other response scenarios are synthesized from driver code field names.
+#
+# Same Core-line conventions as Core 300S/400S.
+
+requests:
+  turn_on:
+    payload:
+      data:
+        enabled: true
+        id: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        enabled: false
+        id: 0
+      method: setSwitch
+      source: APP
+
+  set_fan_speed:
+    payload:
+      data:
+        id: 0
+        level: 3
+        type: wind
+      method: setLevel
+      source: APP
+
+  set_auto_mode:
+    payload:
+      data:
+        mode: auto
+      method: setPurifierMode
+      source: APP
+
+  set_sleep_mode:
+    payload:
+      data:
+        mode: sleep
+      method: setPurifierMode
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getPurifierStatus
+      source: APP
+
+# RESPONSE device data for Core 600S.
+# Same structure as Core 400S — reads status.result.* fields.
+
+responses:
+  # Canonical: from call_json_purifiers.py PURIFIER_DETAILS["Core600S"]
+  # PurifierDefaults: fan_level=1, filter_life=80, purifier_mode="manual",
+  #   air_quality=1, air_quality_value=3, configuration.auto_preference={type:"default", room_size:0}
+  device_on_manual_speed1:
+    result:
+      level: 1
+      mode: manual
+      enabled: true
+      filter_life: 80
+      air_quality: 1
+      air_quality_value: 3
+      display: true
+      child_lock: true
+      configuration:
+        display: true
+        display_forever: true
+        auto_preference:
+          type: default
+          room_size: 0
+      extension:
+        schedule_count: 0
+        timer_remain: 0
+      device_error_code: 0
+    code: 0
+
+  # Synthesized: level=2 for testing speed="medium" mapping
+  device_on_manual_speed2:
+    result:
+      level: 2
+      mode: manual
+      enabled: true
+      filter_life: 80
+      air_quality_value: 5.0
+      configuration:
+        auto_preference:
+          type: default
+          room_size: 800
+    code: 0
+
+  # Synthesized scenario: auto mode
+  device_on_auto_mode:
+    result:
+      level: 3
+      mode: auto
+      enabled: true
+      filter_life: 65
+      air_quality_value: 18.0
+      configuration:
+        auto_preference:
+          type: quiet
+          room_size: 800
+    code: 0
+
+  # Synthesized scenario: device off
+  device_off:
+    result:
+      level: 2
+      mode: manual
+      enabled: false
+      filter_life: 92
+      air_quality_value: 2.0
+      configuration:
+        auto_preference:
+          type: default
+          room_size: 800
+    code: 0
+
+  # Synthesized scenario: filter critically low (<10%)
+  device_filter_low:
+    result:
+      level: 1
+      mode: manual
+      enabled: true
+      filter_life: 7
+      air_quality_value: 60.0
+      configuration:
+        auto_preference:
+          type: default
+          room_size: 800
+    code: 0

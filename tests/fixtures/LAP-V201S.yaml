@@ -1,0 +1,235 @@
+# pyvesync canonical API fixtures for LAP-V201S (Levoit Vital 200S Air Purifier)
+# Source: https://github.com/webdjoe/pyvesync
+# Commit: c98729c45860cc765d63d49a9a02bbc18de090c4 (2026-04-16)
+# Retrieved: 2026-04-25
+#
+# REQUEST payloads sourced from src/tests/api/vesyncpurifier/LAP-V201S.yaml
+# RESPONSE data for device_on_manual_speed2 sourced from src/tests/call_json_purifiers.py
+#   PURIFIER_DETAILS["LAP-V201S"] with PurifierDefaults constants resolved:
+#     fan_level=1, fan_set_level=2, filter_life=80,
+#     air_quality_enum=AirQualityLevel.GOOD=2 (NOT air_quality_level=1; that constant is for LV-RH131S),
+#     air_quality_value_pm25=3, purifier_mode=PurifierModes.MANUAL.value="manual"
+# Other response scenarios (device_off, device_filter_low, etc.) are synthesized
+#   from driver code field names and documented in tests/fixtures/SOURCE.md.
+#
+# ADAPTATION NOTE (V201S int-vs-bool fields):
+#   Pyvesync's PURIFIER_DETAILS["LAP-V201S"] writes screenState, childLockSwitch,
+#   screenSwitch, lightDetectionSwitch, environmentLightState as raw DeviceStatus
+#   (StrEnum, e.g. 'on'/'off') and Python booleans — NOT int(...). Our fixture uses
+#   integers because (a) the driver was written against real device responses which
+#   use integers, and (b) sibling models in the same call_json file (LAP-V102S,
+#   EL551S, LAP-B851S-WUS) DO use int(...) wrappers — suggesting V201S is upstream-
+#   inconsistent. The integer form here is a deliberate, documented adaptation.
+#
+# REQUEST payloads — as sent to /cloud/v2/deviceManaged/bypassV2
+
+requests:
+  turn_on:
+    payload:
+      data:
+        powerSwitch: 1
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        powerSwitch: 0
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  set_fan_speed:
+    payload:
+      data:
+        levelIdx: 0
+        levelType: wind
+        manualSpeedLevel: 3
+      method: setLevel
+      source: APP
+
+  set_manual_mode:
+    payload:
+      data:
+        levelIdx: 0
+        levelType: wind
+        manualSpeedLevel: 1
+      method: setLevel
+      source: APP
+
+  set_auto_mode:
+    payload:
+      data:
+        workMode: auto
+      method: setPurifierMode
+      source: APP
+
+  set_sleep_mode:
+    payload:
+      data:
+        workMode: sleep
+      method: setPurifierMode
+      source: APP
+
+  set_pet_mode:
+    payload:
+      data:
+        workMode: pet
+      method: setPurifierMode
+      source: APP
+
+  turn_on_display:
+    payload:
+      data:
+        screenSwitch: 1
+      method: setDisplay
+      source: APP
+
+  turn_off_display:
+    payload:
+      data:
+        screenSwitch: 0
+      method: setDisplay
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getPurifierStatus
+      source: APP
+
+# RESPONSE device data — what the purifier returns for getPurifierStatus
+# Fields at the innermost result level after envelope peel.
+#
+# device_on_manual_speed2 is sourced from call_json_purifiers.py PURIFIER_DETAILS["LAP-V201S"]
+# with PurifierDefaults constants resolved to literal values.
+# All other scenarios are synthesized from driver source field names.
+
+responses:
+  # Canonical: from call_json_purifiers.py PURIFIER_DETAILS["LAP-V201S"]
+  # PurifierDefaults: fan_level=1, fan_set_level=2, filter_life=80,
+  #   air_quality_enum=AirQualityLevel.GOOD=2 (per const.py),
+  #   air_quality_value_pm25=3, purifier_mode="manual"
+  device_on_manual_speed2:
+    powerSwitch: 1
+    workMode: manual
+    fanSpeedLevel: 1
+    manualSpeedLevel: 2
+    AQLevel: 2
+    PM25: 3
+    filterLifePercent: 80
+    autoPreference:
+      autoPreferenceType: default
+      roomSize: 0
+    childLockSwitch: 1
+    lightDetectionSwitch: 0
+    environmentLightState: 1
+    screenState: 1
+    screenSwitch: 1
+    errorCode: 0
+    timerRemain: 0
+    efficientModeTimeRemain: 0
+    scheduleCount: 0
+    sleepPreference:
+      sleepPreferenceType: default
+      cleaningBeforeBedSwitch: 1
+      cleaningBeforeBedSpeedLevel: 3
+      cleaningBeforeBedMinutes: 5
+      whiteNoiseSleepAidSwitch: 1
+      whiteNoiseSleepAidSpeedLevel: 1
+      whiteNoiseSleepAidMinutes: 45
+      duringSleepSpeedLevel: 5
+      duringSleepMinutes: 480
+      afterWakeUpPowerSwitch: 1
+      afterWakeUpWorkMode: auto
+      afterWakeUpFanSpeedLevel: 1
+
+  # Synthesized scenario: device on in auto mode
+  device_on_auto_mode:
+    powerSwitch: 1
+    workMode: auto
+    fanSpeedLevel: 2
+    manualSpeedLevel: 2
+    AQLevel: 2
+    PM25: 15
+    filterLifePercent: 70
+    autoPreference:
+      autoPreferenceType: efficient
+      roomSize: 500
+    childLockSwitch: 0
+    lightDetectionSwitch: 0
+    environmentLightState: 0
+    screenState: 1
+    screenSwitch: 1
+    errorCode: 0
+    timerRemain: 0
+    efficientModeTimeRemain: 0
+    scheduleCount: 0
+
+  # Synthesized scenario: device off (powerSwitch=0, fanSpeedLevel=255)
+  # manualSpeedLevel=3 is intentionally non-255 to exercise Bug Pattern #6 test
+  device_off:
+    powerSwitch: 0
+    workMode: manual
+    fanSpeedLevel: 255
+    manualSpeedLevel: 3
+    AQLevel: 1
+    PM25: 4
+    filterLifePercent: 90
+    autoPreference:
+      autoPreferenceType: default
+      roomSize: 600
+    childLockSwitch: 0
+    lightDetectionSwitch: 0
+    environmentLightState: 0
+    screenState: 0
+    screenSwitch: 0
+    errorCode: 0
+    timerRemain: 0
+    efficientModeTimeRemain: 0
+    scheduleCount: 0
+
+  # Synthesized scenario: filter critically low (<10%) to exercise filter-alert logging
+  device_filter_low:
+    powerSwitch: 1
+    workMode: manual
+    fanSpeedLevel: 1
+    manualSpeedLevel: 1
+    AQLevel: 3
+    PM25: 45
+    filterLifePercent: 8
+    autoPreference:
+      autoPreferenceType: default
+      roomSize: 600
+    childLockSwitch: 0
+    lightDetectionSwitch: 0
+    environmentLightState: 0
+    screenState: 1
+    screenSwitch: 1
+    errorCode: 0
+    timerRemain: 0
+    efficientModeTimeRemain: 0
+    scheduleCount: 0
+
+  # Synthesized scenario: pet mode active
+  device_pet_mode:
+    powerSwitch: 1
+    workMode: pet
+    fanSpeedLevel: 4
+    manualSpeedLevel: 4
+    AQLevel: 1
+    PM25: 3
+    filterLifePercent: 60
+    autoPreference:
+      autoPreferenceType: default
+      roomSize: 600
+    childLockSwitch: 0
+    lightDetectionSwitch: 0
+    environmentLightState: 0
+    screenState: 1
+    screenSwitch: 1
+    errorCode: 0
+    timerRemain: 0
+    efficientModeTimeRemain: 0
+    scheduleCount: 0

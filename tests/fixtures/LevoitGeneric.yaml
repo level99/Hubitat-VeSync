@@ -1,0 +1,78 @@
+# Synthetic fixtures for LevoitGeneric.groovy (fall-through diagnostic driver)
+# These are NOT real pyvesync API captures — they are synthesized from known field sets
+# documented in the VeSync API for the Vital 200S (purifier shape) and Superior 6000S
+# (humidifier shape) families. The Generic driver uses heuristic detection on these fields.
+#
+# Used in: src/test/groovy/drivers/LevoitGenericSpec.groovy
+
+responses:
+  # --- Purifier-shape device (on, manual, speed 2) ---
+  # Mimics a LAP-* purifier that has not yet been added to deviceType() switch.
+  # Fields that trigger purifier detection: PM25, AQLevel, fanSpeedLevel, manualSpeedLevel.
+  purifier_on_manual:
+    powerSwitch: 1
+    workMode: manual
+    fanSpeedLevel: 2
+    manualSpeedLevel: 2
+    AQLevel: 1
+    PM25: 5
+    filterLifePercent: 75
+    lightDetectionSwitch: 0
+    environmentLightState: 0
+    childLockSwitch: 0
+    screenSwitch: 1
+    screenState: 1
+    errorCode: 0
+    timerRemain: 0
+
+  # --- Purifier-shape device (off) ---
+  purifier_off:
+    powerSwitch: 0
+    workMode: manual
+    fanSpeedLevel: 255
+    manualSpeedLevel: 2
+    AQLevel: 1
+    PM25: 5
+    filterLifePercent: 75
+    lightDetectionSwitch: 0
+    environmentLightState: 0
+    childLockSwitch: 0
+    screenSwitch: 1
+    screenState: 1
+    errorCode: 0
+    timerRemain: 0
+
+  # --- Humidifier-shape device (on, auto) ---
+  # Mimics a LEH-* humidifier that has not yet been added to deviceType() switch.
+  # Fields that trigger humidifier detection: humidity, mistLevel, virtualLevel, targetHumidity.
+  humidifier_on_auto:
+    powerSwitch: 1
+    workMode: autoPro
+    humidity: 42
+    targetHumidity: 55
+    mistLevel: 4
+    virtualLevel: 4
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenState: 1
+    screenSwitch: 1
+    filterLifePercent: 90
+    childLockSwitch: 0
+    temperature: 720
+    timerRemain: 0
+    dryingMode:
+      dryingState: 0
+      autoDryingSwitch: 1
+      dryingLevel: 1
+      dryingRemain: 0
+
+  # --- Unknown shape — minimal fields ---
+  # Simulates a device where neither purifier nor humidifier indicators are present.
+  unknown_shape_minimal:
+    powerSwitch: 1
+    errorCode: 0
+
+  # --- Empty shape (empty result) ---
+  empty_result: {}

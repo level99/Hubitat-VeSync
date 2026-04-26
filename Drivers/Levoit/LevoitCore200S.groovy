@@ -24,7 +24,13 @@ SOFTWARE.
 */
 
 // History:
-// 
+//
+// 2026-04-25: v2.0 (community fork, level99/Hubitat-VeSync, by Dan Cox)
+//                  - Added descriptionTextEnable preference (default true) and gated logInfo helper
+//                  - Added INFO logging at state-change transitions (power, mode, speed, filter alerts)
+//                  - debugOutput consistently defaults to false
+//                  - Removed legacy SmartThings icon URLs and "My Apps" category from metadata
+//                  - Updated documentationLink to fork repo
 // 2023-02-05: v1.6 Fixed the heartbeat logic.
 // 2023-02-04: v1.5 Adding heartbeat event
 // 2023-02-03: v1.4 Logging errors properly.
@@ -42,11 +48,8 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S / 300S air purifiers",
-        category: "My Apps",
-        iconUrl: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",
-        iconX2Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png",
-        iconX3Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png",
-        documentationLink: "https://github.com/dcmeglio/hubitat-bond/blob/master/README.md")
+        version: "2.0",
+        documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
             capability "SwitchLevel"
@@ -65,6 +68,7 @@ metadata {
         }
 
     preferences {
+        input("descriptionTextEnable", "bool", title: "Enable descriptive (info-level) logging?", defaultValue: true)
         input("debugOutput", "bool", title: "Enable debug logging?", defaultValue: false, required: false)
     }
 }
@@ -97,28 +101,44 @@ def initialize() {
 
 def on() {
     logDebug "on()"
-	handlePower(true)
-    device.sendEvent(name: "switch", value: "on")
 
-	if (state.speed != null) {
-        setSpeed(state.speed)
-	}
-    else {
-        setSpeed("low")
-    }
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        handlePower(true)
+        logInfo "Power on"
+        device.sendEvent(name: "switch", value: "on")
 
-    if (state.mode != null) {
-        setMode(state.mode)
-    }
-    else {
-        update(null)
+        if (state.speed != null) {
+            setSpeed(state.speed)
+        }
+        else {
+            setSpeed("low")
+        }
+
+        if (state.mode != null) {
+            setMode(state.mode)
+        }
+        else {
+            update(null)
+        }
+    } finally {
+        state.remove('turningOn')
     }
 }
 
 def off() {
     logDebug "off()"
-	handlePower(false)
-    device.sendEvent(name: "switch", value: "off")
+
+    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
+    state.turningOff = true
+    try {
+        handlePower(false)
+        logInfo "Power off"
+        device.sendEvent(name: "switch", value: "off")
+    } finally {
+        state.remove('turningOff')
+    }
 }
 
 def toggle() {
@@ -168,12 +188,14 @@ def setSpeed(speed) {
         handleSpeed(speed)
         state.speed = speed
         device.sendEvent(name: "speed", value: speed)
+        logInfo "Speed: ${speed}"
     }
     else if (state.mode == "sleep") {
         setMode("manual")
         handleSpeed(speed)
         state.speed = speed
         device.sendEvent(name: "speed", value: speed)
+        logInfo "Speed: ${speed}"
     }
 }
 
@@ -182,6 +204,7 @@ def setMode(mode) {
     handleMode(mode)
     state.mode = mode
 	device.sendEvent(name: "mode", value: mode)
+    logInfo "Mode: ${mode}"
     switch(mode)
     {
         case "manual":
@@ -214,6 +237,14 @@ def logDebug(msg) {
     if (settings?.debugOutput) {
 		log.debug msg
 	}
+}
+
+def logInfo(msg) {
+    if (settings?.descriptionTextEnable) log.info msg
+}
+
+def logError(msg) {
+    log.error msg
 }
 
 void logDebugOff() {
@@ -306,6 +337,13 @@ def update() {
 def update(status, nightLight)
 {
     logDebug "update(status, nightLight)"
+    // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
+    if (!state.prefsSeeded) {
+        if (settings?.descriptionTextEnable == null) {
+            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
+        }
+        state.prefsSeeded = true
+    }
 
     logDebug status
 
@@ -314,7 +352,20 @@ def update(status, nightLight)
 
     device.sendEvent(name: "switch", value: status.result.enabled ? "on" : "off")
     device.sendEvent(name: "mode", value: status.result.mode)
-    device.sendEvent(name: "filter", value: status.result.filter_life)
+
+    def fl = status.result.filter_life
+    device.sendEvent(name: "filter", value: fl)
+    if (fl != null) {
+        Integer flInt = fl as Integer
+        Integer lastFl = state.lastFilterLife as Integer
+        if (lastFl == null || lastFl >= 20) {
+            if (flInt < 10) logInfo "Filter life critically low at ${flInt}%"
+            else if (flInt < 20) logInfo "Filter life at ${flInt}% — consider replacement"
+        } else if (lastFl >= 10 && flInt < 10) {
+            logInfo "Filter life critically low at ${flInt}%"
+        }
+        state.lastFilterLife = flInt
+    }
 
     switch(state.mode)
     {

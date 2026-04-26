@@ -1,0 +1,1324 @@
+package drivers
+
+import support.HubitatSpec
+import support.TestDevice
+
+/**
+ * Unit tests for VeSyncIntegration.groovy (parent driver).
+ *
+ * Covers:
+ *   Bug Pattern #2  — updateDevices() branches on device type name:
+ *                     "Humidifier" in typeName -> getHumidifierStatus
+ *                     otherwise              -> getPurifierStatus
+ *   Bug Pattern #12 — pref-seed at top of updateDevices()
+ *   Bug Pattern #13 — getDevices() re-auth on HTTP 401 / inner auth codes (Issue 3)
+ *   sanitize()      — PII redaction: email, accountID, token, password all redacted
+ *   deviceType()    — switch recognizes V201S regional variants
+ *   Issue 2         — updateDevices() no longer throws MissingPropertyException
+ *                     (removed unused `result =` assignment)
+ *   Pattern 2       — sendBypassRequest uses DEVICE_REGION @Field constant ("US");
+ *                     regional host-switching parked for v2.1+
+ *
+ * ARCHITECTURE NOTE: The parent driver is NOT a child — it runs differently.
+ * It calls httpPost (for login/getDevices), not parent.sendBypassRequest.
+ * For testing its pure helper methods, we load it as a script and call
+ * private/package-accessible methods via Groovy reflection or by invoking
+ * them through their public interfaces.
+ *
+ * We CANNOT easily test the full updateDevices() → httpPost flow here because
+ * updateDevices() makes real HTTP calls via httpPost. Instead we:
+ *   1. Test deviceType() by calling it directly.
+ *   2. Test sanitize() by calling it via logInfo/logDebug which route through it.
+ *   3. Test pref-seed in updateDevices() by prepping state and calling it directly,
+ *      with httpPost wired to a no-op (it will short-circuit when state.driverReloading is set).
+ *
+ * For the updateDevices() branching test, we use a targeted approach:
+ *   - Wire two mock child devices (one humidifier, one purifier) into state.deviceList
+ *   - Wire httpPost (called by sendBypassRequest inside updateDevices) to capture method
+ *   - Verify the payload.method differs per device type
+ *
+ * IMPORTANT: The parent driver calls sendBypassRequest (not parent.sendBypassRequest).
+ * Its httpPost is a top-level sandbox global. We wire it via metaClass in HubitatSpec.
+ * For the parent driver spec, we OVERRIDE the httpPost mock to capture calls instead
+ * of throwing.
+ */
+// NOTE: deviceType() tests rely on Groovy 3 dynamic dispatch ignoring 'private'.
+// Do NOT add @CompileStatic to VeSyncIntegration.groovy or these 12 tests will break.
+class VeSyncIntegrationSpec extends HubitatSpec {
+
+    // Captured HTTP POST calls for verifying updateDevices() branching
+    List<Map> capturedHttpPosts = []
+    List<Map> capturedBypassBodies = []
+
+    @Override
+    String driverSourcePath() {
+        "Drivers/Levoit/VeSyncIntegration.groovy"
+    }
+
+    @Override
+    Map defaultSettings() {
+        return [
+            descriptionTextEnable: true,
+            debugOutput: false,
+            verboseDebug: false,
+            refreshInterval: 30,
+            email: "test@example.com",
+            password: "testpassword"
+        ]
+    }
+
+    /**
+     * Override sandbox wiring to customize httpPost for parent driver tests.
+     * The parent uses httpPost directly (not via parent.sendBypassRequest),
+     * so we need to capture calls without throwing.
+     */
+    @Override
+    protected void wireSandbox(def driverInstance) {
+        super.wireSandbox(driverInstance)
+        def mc = driverInstance.metaClass
+        def self = this
+
+        // Override httpPost to capture the request body (for bypass method verification)
+        // and call the closure with a minimal success response.
+        mc.httpPost = { Map params, Closure callback ->
+            self.capturedHttpPosts << params.clone()
+            // Extract the bypass body if present
+            if (params.body?.payload) {
+                self.capturedBypassBodies << (params.body.clone() as Map)
+            }
+            // Simulate a minimal success response so the driver's closure body runs
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    result: [:],
+                    traceId: "test-trace"
+                ],
+                traceId: "test-trace"
+            ]
+            callback(fakeResp)
+        }
+
+        // getChildDevice: used by updateDevices() to find the child driver object
+        // Return a mock child device keyed by DNI from state.deviceList
+        mc.getChildDevice = { String dni ->
+            self.childDevices[dni]
+        }
+
+        // getChildDevices: used by getDevices() cleanup pass
+        mc.getChildDevices = { -> [] }
+
+        // addChildDevice: no-op in these tests
+        mc.addChildDevice = { String typeName, String dni, Map props ->
+            def dev = new TestDevice()
+            dev.name = typeName
+            self.childDevices[dni] = dev
+            dev
+        }
+
+        // deleteChildDevice: no-op
+        mc.deleteChildDevice = { String dni -> }
+
+        // sendEvent: parent fires heartbeat events
+        mc.sendEvent = { Map args -> testDevice.sendEvent(args) }
+    }
+
+    // Child device registry for parent test — keyed by DNI
+    Map<String, TestDevice> childDevices = [:]
+
+    def setup() {
+        capturedHttpPosts = []
+        capturedBypassBodies = []
+        childDevices = [:]
+    }
+
+    // -------------------------------------------------------------------------
+    // sanitize() PII redaction
+    // -------------------------------------------------------------------------
+
+    def "sanitize() redacts email address from log messages"() {
+        given: "driver has a settings.email to redact"
+        settings.email = "user@example.com"
+        settings.descriptionTextEnable = true
+
+        when: "logInfo is called with a message containing the email"
+        // We call logInfo which routes through sanitize().
+        // The redacted message goes to testLog.infos.
+        driver.logInfo("Login successful for user@example.com")
+
+        then: "log message has email redacted"
+        testLog.infos.any { it.contains("[email-redacted]") }
+        !testLog.infos.any { it.contains("user@example.com") }
+    }
+
+    def "sanitize() redacts state.accountID from log messages"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.accountID = "ACC12345"
+
+        when:
+        driver.logInfo("AccountID is ACC12345 and token is XYZ")
+
+        then:
+        testLog.infos.any { it.contains("[accountID-redacted]") }
+        !testLog.infos.any { it.contains("ACC12345") }
+    }
+
+    def "sanitize() redacts state.token from log messages"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.token = "mySecretToken999"
+
+        when:
+        driver.logInfo("Token: mySecretToken999")
+
+        then:
+        testLog.infos.any { it.contains("[token-redacted]") }
+        !testLog.infos.any { it.contains("mySecretToken999") }
+    }
+
+    def "sanitize() redacts settings.password from log messages"() {
+        given:
+        settings.descriptionTextEnable = true
+        settings.password = "hunter2"
+
+        when:
+        driver.logError("Auth failed, password was hunter2")
+
+        then:
+        testLog.errors.any { it.contains("[password-redacted]") }
+        !testLog.errors.any { it.contains("hunter2") }
+    }
+
+    def "sanitize() handles null message gracefully"() {
+        when:
+        driver.logInfo(null)
+
+        then:
+        noExceptionThrown()
+    }
+
+    def "sanitize() does not corrupt message when no PII present"() {
+        given:
+        settings.descriptionTextEnable = true
+
+        when:
+        driver.logInfo("Login successful, 3 devices discovered")
+
+        then:
+        testLog.infos.any { it.contains("Login successful") && it.contains("3 devices discovered") }
+    }
+
+    // -------------------------------------------------------------------------
+    // deviceType() — regional variant recognition
+    // -------------------------------------------------------------------------
+
+    def "deviceType() recognizes LAP-V201S-WUS as V200S"() {
+        expect:
+        driver.deviceType("LAP-V201S-WUS") == "V200S"
+    }
+
+    def "deviceType() recognizes LAP-V201S-WUSR as V200S"() {
+        expect:
+        driver.deviceType("LAP-V201S-WUSR") == "V200S"
+    }
+
+    def "deviceType() recognizes LAP-V201S-AASR as V200S"() {
+        expect:
+        driver.deviceType("LAP-V201S-AASR") == "V200S"
+    }
+
+    def "deviceType() recognizes LAP-V201S-WEU as V200S"() {
+        expect:
+        driver.deviceType("LAP-V201S-WEU") == "V200S"
+    }
+
+    def "deviceType() recognizes LAP-V201S-AUSR as V200S (Australia variant from TODO)"() {
+        expect:
+        driver.deviceType("LAP-V201S-AUSR") == "V200S"
+    }
+
+    def "deviceType() recognizes Vital200S string as V200S"() {
+        expect:
+        driver.deviceType("Vital200S") == "V200S"
+    }
+
+    def "deviceType() recognizes Core200S as 200S"() {
+        expect:
+        driver.deviceType("Core200S") == "200S"
+    }
+
+    def "deviceType() recognizes Core400S as 400S"() {
+        expect:
+        driver.deviceType("Core400S") == "400S"
+    }
+
+    def "deviceType() recognizes LEH-S601S-WUS as V601S (Superior 6000S)"() {
+        expect:
+        driver.deviceType("LEH-S601S-WUS") == "V601S"
+    }
+
+    def "deviceType() recognizes LEH-S601S-WUSR as V601S"() {
+        expect:
+        driver.deviceType("LEH-S601S-WUSR") == "V601S"
+    }
+
+    def "deviceType() recognizes LEH-S602S-WUS as V601S (variant)"() {
+        expect:
+        driver.deviceType("LEH-S602S-WUS") == "V601S"
+    }
+
+    def "deviceType() returns GENERIC for unknown codes (fall-through to LevoitGeneric driver)"() {
+        // Unknown model codes route to the Generic Levoit Diagnostic Driver per the v2.0+
+        // fall-through behavior. Was "N/A" pre-Generic; now "GENERIC" so unknown devices
+        // get a working Hubitat presence + captureDiagnostics() self-service instead of
+        // silent skip. See LevoitGeneric.groovy + the new-device-support issue template.
+        expect:
+        driver.deviceType("UnknownModel-XYZ") == "GENERIC"
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #2: updateDevices() branches by typeName
+    // Issue 2: `result = dev.update(...)` was dropped — no longer throws
+    //          MissingPropertyException on every poll cycle.
+    // -------------------------------------------------------------------------
+
+    def "updateDevices() uses getPurifierStatus for purifier device (Bug Pattern #2)"() {
+        given: "state has a purifier device"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.deviceList = ["PURIFIER-CID": "test-config-module"]
+
+        // Wire a mock child device with purifier typeName
+        def purifierDevice = new TestDevice()
+        purifierDevice.typeName = "Levoit Vital 200S Air Purifier"
+        // Mock its update(status, nightLight) method via metaClass
+        purifierDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["PURIFIER-CID"] = purifierDevice
+
+        when:
+        driver.updateDevices()
+
+        then: "the bypass request body used getPurifierStatus"
+        def purifierBody = capturedBypassBodies.find { b ->
+            b.payload?.method == "getPurifierStatus"
+        }
+        purifierBody != null
+    }
+
+    def "updateDevices() uses getHumidifierStatus for humidifier device (Bug Pattern #2)"() {
+        given: "state has a humidifier device"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.deviceList = ["HUMIDIFIER-CID": "test-config-module"]
+
+        // Wire a mock child device with humidifier typeName
+        def humDevice = new TestDevice()
+        humDevice.typeName = "Levoit Superior 6000S Humidifier"
+        humDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["HUMIDIFIER-CID"] = humDevice
+
+        when:
+        driver.updateDevices()
+
+        then: "the bypass request body used getHumidifierStatus"
+        def humBody = capturedBypassBodies.find { b ->
+            b.payload?.method == "getHumidifierStatus"
+        }
+        humBody != null
+    }
+
+    def "updateDevices() correctly branches both devices in same deviceList (Bug Pattern #2)"() {
+        given: "state has both a purifier and a humidifier"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.deviceList = [
+            "PURIFIER-CID":   "config-module-p",
+            "HUMIDIFIER-CID": "config-module-h"
+        ]
+
+        def purifierDevice = new TestDevice()
+        purifierDevice.typeName = "Levoit Core 400S Air Purifier"
+        purifierDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["PURIFIER-CID"] = purifierDevice
+
+        def humDevice = new TestDevice()
+        humDevice.typeName = "Levoit Superior 6000S Humidifier"
+        humDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["HUMIDIFIER-CID"] = humDevice
+
+        when:
+        driver.updateDevices()
+
+        then: "getPurifierStatus was sent for the purifier"
+        capturedBypassBodies.any { it.payload?.method == "getPurifierStatus" }
+
+        and: "getHumidifierStatus was sent for the humidifier"
+        capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #12: pref-seed in updateDevices()
+    // -------------------------------------------------------------------------
+
+    def "pref-seed fires at top of updateDevices() when descriptionTextEnable is null (Bug Pattern #12)"() {
+        given:
+        settings.descriptionTextEnable = null
+        settings.refreshInterval = 30
+        state.deviceList = [:]   // empty — no HTTP calls to sendBypassRequest
+        assert !state.prefsSeeded
+
+        when:
+        driver.updateDevices()
+
+        then: "pref-seed ran"
+        state.prefsSeeded == true
+        def seedCall = testDevice.settingsUpdates.find { it.name == "descriptionTextEnable" }
+        seedCall != null
+        seedCall.value == true
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #13: token-expiry re-auth in sendBypassRequest()
+    //
+    // Architecture note:
+    //   sendBypassRequest() is a method on the parent driver itself. It calls
+    //   httpPost() and login() as bare top-level calls (sandbox globals / driver
+    //   methods). We override both via the driver's metaClass inside each test's
+    //   given: block to inject controlled responses.
+    //
+    //   login() is a private method on the parent driver. Groovy 3 ignores
+    //   private on dynamic dispatch, so we can override it via metaClass the
+    //   same way we override httpPost.
+    //
+    //   Equipment mock: we use a TestDevice as the 'equipment' arg (it provides
+    //   getDataValue("cid") and getDataValue("configModule") via the TestDevice
+    //   default values).
+    //
+    //   Closure tracking: sendBypassRequest takes a caller-provided Closure.
+    //   We capture what response that closure received by storing it in a local
+    //   list that the closure writes to.
+    // -------------------------------------------------------------------------
+
+    /**
+     * Helper: build a minimal Expando response for httpPost callback.
+     * status + data.code shape mirrors what Hubitat's httpPost callback receives.
+     */
+    private Expando makeResponse(int httpStatus, Integer outerCode, Map resultData = [:]) {
+        def r = new Expando()
+        r.status = httpStatus
+        r.data = [
+            code: outerCode,
+            result: [code: 0, result: resultData, traceId: "test-trace"],
+            traceId: "test-trace"
+        ]
+        return r
+    }
+
+    /** Auth-failure response: HTTP 200, outer code -11001000 (TOKEN_EXPIRED). */
+    private Expando authFailure_11001000() {
+        def r = new Expando()
+        r.status = 200
+        r.data = [code: -11001000, result: [:], traceId: "test-trace"]
+        return r
+    }
+
+    /** Auth-failure response: HTTP 200, outer code -11201000 (PASSWORD_ERROR). */
+    private Expando authFailure_11201000() {
+        def r = new Expando()
+        r.status = 200
+        r.data = [code: -11201000, result: [:], traceId: "test-trace"]
+        return r
+    }
+
+    /** Auth-failure response: HTTP 401 (transport-level). */
+    private Expando authFailure_401() {
+        def r = new Expando()
+        r.status = 401
+        r.data = null
+        return r
+    }
+
+    /** Normal success response used as the retry response. */
+    private Expando successResp(Map deviceData = [powerSwitch: 1]) {
+        def r = new Expando()
+        r.status = 200
+        r.data = [
+            code: 0,
+            result: [code: 0, result: deviceData, traceId: "test-trace"],
+            traceId: "test-trace"
+        ]
+        return r
+    }
+
+    def "sendBypassRequest detects HTTP 401 and re-authenticates (Bug Pattern #13)"() {
+        given: "httpPost returns 401 on first call, then success on retry"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "old-token"
+        state.accountID = "acc-001"
+        int httpPostCallCount = 0
+        List<Object> closureReceivedResponses = []
+        def equip = new TestDevice()
+
+        // Wire login() to succeed and update state token
+        driver.metaClass.login = { ->
+            state.token     = "new-token"
+            state.accountID = "acc-001"
+            true
+        }
+
+        // Wire httpPost: first call returns 401, second call returns success
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            if (httpPostCallCount == 1) {
+                callback(authFailure_401())
+            } else {
+                callback(successResp())
+            }
+        }
+
+        // The caller's closure records what it receives
+        Closure callerClosure = { resp -> closureReceivedResponses << resp }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], callerClosure)
+
+        then: "login() was called once"
+        // We can't count login calls directly, but we can verify the token was refreshed
+        state.token == "new-token"
+
+        and: "httpPost was called twice (initial + retry)"
+        httpPostCallCount == 2
+
+        and: "the caller's closure received the retry's success response (not the 401)"
+        closureReceivedResponses.size() == 1
+        closureReceivedResponses[0].status == 200
+        closureReceivedResponses[0].data?.code == 0
+
+        and: "an info log about re-authentication was emitted"
+        testLog.infos.any { it.contains("re-authenticating") }
+
+        and: "state.reAuthInProgress is cleared"
+        !state.containsKey('reAuthInProgress')
+    }
+
+    def "sendBypassRequest detects inner code -11001000 and re-authenticates (Bug Pattern #13)"() {
+        given: "httpPost returns HTTP 200 with inner code -11001000 on first call"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "old-token"
+        state.accountID = "acc-001"
+        int httpPostCallCount = 0
+        List<Object> closureReceivedResponses = []
+        def equip = new TestDevice()
+
+        driver.metaClass.login = { ->
+            state.token = "new-token"
+            true
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            if (httpPostCallCount == 1) {
+                callback(authFailure_11001000())
+            } else {
+                callback(successResp())
+            }
+        }
+        Closure callerClosure = { resp -> closureReceivedResponses << resp }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getHumidifierStatus", source: "APP", data: [:]], callerClosure)
+
+        then: "re-auth was triggered"
+        state.token == "new-token"
+
+        and: "httpPost was called twice"
+        httpPostCallCount == 2
+
+        and: "caller's closure received the retry's success response"
+        closureReceivedResponses.size() == 1
+        closureReceivedResponses[0].status == 200
+        closureReceivedResponses[0].data?.code == 0
+
+        and: "state.reAuthInProgress is cleared"
+        !state.containsKey('reAuthInProgress')
+    }
+
+    def "sendBypassRequest detects inner code -11201000 and re-authenticates (Bug Pattern #13)"() {
+        given: "httpPost returns HTTP 200 with inner code -11201000 (PASSWORD_ERROR) on first call"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "old-token"
+        state.accountID = "acc-001"
+        int httpPostCallCount = 0
+        List<Object> closureReceivedResponses = []
+        def equip = new TestDevice()
+
+        driver.metaClass.login = { ->
+            state.token = "refreshed-token"
+            true
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            if (httpPostCallCount == 1) {
+                callback(authFailure_11201000())
+            } else {
+                callback(successResp())
+            }
+        }
+        Closure callerClosure = { resp -> closureReceivedResponses << resp }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "setSwitch", source: "APP", data: [powerSwitch: 1, switchIdx: 0]], callerClosure)
+
+        then: "re-auth triggered and token refreshed"
+        state.token == "refreshed-token"
+
+        and: "httpPost called twice"
+        httpPostCallCount == 2
+
+        and: "caller's closure received retry success"
+        closureReceivedResponses.size() == 1
+        closureReceivedResponses[0].data?.code == 0
+
+        and: "state.reAuthInProgress is cleared"
+        !state.containsKey('reAuthInProgress')
+    }
+
+    def "sendBypassRequest does NOT re-authenticate on inner code -1 -- not an auth failure (Bug Pattern #13 negative control)"() {
+        given: "httpPost returns inner code -1 (device-side rejection, e.g. wrong method on humidifier)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "my-token"
+        state.accountID = "acc-001"
+        int httpPostCallCount = 0
+        int loginCallCount    = 0
+        List<Object> closureReceivedResponses = []
+        def equip = new TestDevice()
+
+        driver.metaClass.login = { ->
+            loginCallCount++
+            true
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            // Inner code -1: device rejected the method (not an auth failure)
+            def r = new Expando()
+            r.status = 200
+            r.data = [code: -1, result: [:], traceId: "test-trace"]
+            callback(r)
+        }
+        Closure callerClosure = { resp -> closureReceivedResponses << resp }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], callerClosure)
+
+        then: "login() was NOT called"
+        loginCallCount == 0
+
+        and: "httpPost was called exactly once (no retry)"
+        httpPostCallCount == 1
+
+        and: "caller's closure received the -1 response directly"
+        closureReceivedResponses.size() == 1
+        closureReceivedResponses[0].data?.code == -1
+
+        and: "no info log about re-authentication"
+        !testLog.infos.any { it.contains("re-authenticating") }
+    }
+
+    def "sendBypassRequest does NOT recurse when login fails (Bug Pattern #13)"() {
+        given: "login() returns false; caller's closure should receive original auth-failure response"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "expired-token"
+        state.accountID = "acc-001"
+        int httpPostCallCount = 0
+        int loginCallCount    = 0
+        List<Object> closureReceivedResponses = []
+        def equip = new TestDevice()
+
+        driver.metaClass.login = { ->
+            loginCallCount++
+            false  // login fails
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            callback(authFailure_11001000())
+        }
+        Closure callerClosure = { resp -> closureReceivedResponses << resp }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], callerClosure)
+
+        then: "login() was attempted exactly once"
+        loginCallCount == 1
+
+        and: "httpPost was called exactly once (no retry after failed login)"
+        httpPostCallCount == 1
+
+        and: "caller's closure received the original auth-failure response"
+        closureReceivedResponses.size() == 1
+        closureReceivedResponses[0].data?.code == -11001000
+
+        and: "an error log about re-auth failure was emitted"
+        testLog.errors.any { it.contains("Re-auth failed") }
+
+        and: "state.reAuthInProgress is cleared after login failure"
+        !state.containsKey('reAuthInProgress')
+    }
+
+    def "state.reAuthInProgress is cleared after successful re-auth (Bug Pattern #13)"() {
+        given: "normal re-auth flow"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "old-token"
+        state.accountID = "acc-001"
+        def equip = new TestDevice()
+        Boolean reAuthInProgressDuringRetry = null  // captured mid-retry
+
+        driver.metaClass.login = { ->
+            state.token = "fresh-token"
+            true
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (state.reAuthInProgress == null || !state.reAuthInProgress) {
+                // First call (no guard yet, or guard cleared): trigger auth failure
+                callback(authFailure_11001000())
+            } else {
+                // Second call happens while reAuthInProgress == true (guard is set inside the closure)
+                reAuthInProgressDuringRetry = state.reAuthInProgress
+                callback(successResp())
+            }
+        }
+        Closure callerClosure = { resp -> /* consume */ }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], callerClosure)
+
+        then: "guard was set during the retry (confirms finally block timing)"
+        // reAuthInProgress was true when the retry httpPost was executing
+        reAuthInProgressDuringRetry == true
+
+        and: "guard is cleared after sendBypassRequest returns"
+        !state.containsKey('reAuthInProgress')
+    }
+
+    def "state.reAuthInProgress is cleared after login failure (Bug Pattern #13 finally semantics)"() {
+        given:
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "expired-token"
+        state.accountID = "acc-001"
+        def equip = new TestDevice()
+
+        driver.metaClass.login = { ->
+            // Simulate login throwing an unexpected exception
+            throw new RuntimeException("Network unreachable")
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(authFailure_11001000())
+        }
+        Closure callerClosure = { resp -> /* consume */ }
+
+        when: "login() throws — the finally block must still clear the flag"
+        // The outer try/catch in sendBypassRequest wraps everything, so
+        // an exception from login() inside the closure will bubble up.
+        // We expect the finally in the effectiveClosure to clear the flag
+        // even when login() throws.
+        try {
+            driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], callerClosure)
+        } catch (ignored) { /* exception expected when login throws */ }
+
+        then: "state.reAuthInProgress is cleared despite login() throwing"
+        !state.containsKey('reAuthInProgress')
+    }
+
+    def "sendBypassRequest re-auth: retry request uses refreshed token in params (Bug Pattern #13)"() {
+        given: "verify that params.body.token and params.headers.tk are updated before retry"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "token-v1"
+        state.accountID = "acc-001"
+        def equip = new TestDevice()
+        String tokenUsedOnRetry = null
+        String tkHeaderOnRetry  = null
+        int callCount = 0
+
+        driver.metaClass.login = { ->
+            state.token     = "token-v2"
+            state.accountID = "acc-001"
+            true
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callCount++
+            if (callCount == 1) {
+                callback(authFailure_11001000())
+            } else {
+                // Capture what token was in the params on the retry call
+                tokenUsedOnRetry = params.body?.token
+                tkHeaderOnRetry  = params.headers?.tk
+                callback(successResp())
+            }
+        }
+        Closure callerClosure = { resp -> /* consume */ }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], callerClosure)
+
+        then: "the retry used the refreshed token in both body and header"
+        tokenUsedOnRetry == "token-v2"
+        tkHeaderOnRetry  == "token-v2"
+    }
+
+    // -------------------------------------------------------------------------
+    // getDevices() Bug Pattern #13 extension — auth-failure retry (Issue 3)
+    //
+    // Architecture note:
+    //   getDevices() is private but accessible via Groovy 3 dynamic dispatch.
+    //   It is wrapped in retryableHttp("getDevices", 3) which simply invokes
+    //   the closure — the wrapper does not complicate these auth-retry tests.
+    //
+    //   The success response must include resp.data.result.list or getDevices()
+    //   will short-circuit with a "No list in response result" error log. We
+    //   provide a minimal devices-list response (empty list) for the retry path.
+    //
+    //   state.accountID / state.token must be set so getDevices() can build
+    //   its request body before calling httpPost. If either is null, the body
+    //   will contain null values — not an error for these auth-retry specs.
+    // -------------------------------------------------------------------------
+
+    /** Minimal success response for getDevices() — includes the required result.list field. */
+    private Expando getDevicesSuccess() {
+        def r = new Expando()
+        r.status = 200
+        r.data = [
+            code: 0,
+            result: [
+                code: 0,
+                list: [],
+                total: 0
+            ],
+            traceId: "test-trace"
+        ]
+        return r
+    }
+
+    def "getDevices() re-authenticates on HTTP 401 and retries (Issue 3 / Bug Pattern #13)"() {
+        // A1: golden retry path — HTTP 401 triggers re-auth, retry succeeds
+        given: "httpPost returns 401 on first call, then a valid devices-list response on second call"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30  // success path calls runIn(5 * (int)settings.refreshInterval, ...) — must be non-null
+        state.token     = "old-token"
+        state.accountID = "acc-001"
+        state.prefsSeeded = true
+        int httpPostCallCount = 0
+        int loginCallCount    = 0
+
+        driver.metaClass.login = { ->
+            loginCallCount++
+            state.token     = "new-token"
+            state.accountID = "acc-001"
+            true
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            if (httpPostCallCount == 1) {
+                callback(authFailure_401())
+            } else {
+                callback(getDevicesSuccess())
+            }
+        }
+
+        when:
+        def result = driver.getDevices()
+
+        then: "login() was invoked exactly once between the two httpPost calls"
+        loginCallCount == 1
+
+        and: "httpPost was called twice (initial + retry after re-auth)"
+        httpPostCallCount == 2
+
+        and: "the retry used the refreshed token in both body and header"
+        // The driver mutates params.body.token and params.headers.tk before retry.
+        // We verify the side-effect: state.token was updated by our login() mock.
+        state.token == "new-token"
+
+        and: "state.reAuthInProgress is cleared after successful retry"
+        !state.containsKey('reAuthInProgress')
+
+        and: "getDevices() returned true (retry succeeded)"
+        result == true
+    }
+
+    def "getDevices() re-authenticates on inner code -11001000 and retries (Issue 3 / Bug Pattern #13)"() {
+        // A2: inner-code auth failure — HTTP 200 with code -11001000 triggers re-auth + retry
+        given: "httpPost returns HTTP 200 with inner code -11001000 (TOKEN_EXPIRED) on first call"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30  // success path calls runIn(5 * (int)settings.refreshInterval, ...) — must be non-null
+        state.token     = "stale-token"
+        state.accountID = "acc-002"
+        state.prefsSeeded = true
+        int httpPostCallCount = 0
+        int loginCallCount    = 0
+
+        driver.metaClass.login = { ->
+            loginCallCount++
+            state.token = "refreshed-token"
+            true
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            if (httpPostCallCount == 1) {
+                callback(authFailure_11001000())
+            } else {
+                callback(getDevicesSuccess())
+            }
+        }
+
+        when:
+        def result = driver.getDevices()
+
+        then: "login() was invoked (isAuthFailure covers both HTTP-401 and inner -11001000)"
+        loginCallCount == 1
+
+        and: "httpPost was called twice"
+        httpPostCallCount == 2
+
+        and: "state.reAuthInProgress is cleared"
+        !state.containsKey('reAuthInProgress')
+
+        and: "getDevices() returned true"
+        result == true
+    }
+
+    def "getDevices() does NOT retry when login() fails (Issue 3 / Bug Pattern #13)"() {
+        // A3: re-auth failure — first call returns 401, login() returns false, no retry
+        given: "login() returns false; no retry httpPost should occur"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "expired-token"
+        state.accountID = "acc-003"
+        state.prefsSeeded = true
+        int httpPostCallCount = 0
+        int loginCallCount    = 0
+
+        driver.metaClass.login = { ->
+            loginCallCount++
+            false  // re-auth fails
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            callback(authFailure_401())
+        }
+
+        when:
+        def result = driver.getDevices()
+
+        then: "login() was attempted exactly once"
+        loginCallCount == 1
+
+        and: "httpPost was called exactly once (no retry after failed login)"
+        httpPostCallCount == 1
+
+        and: "state.reAuthInProgress is cleared (finally semantics preserved)"
+        !state.containsKey('reAuthInProgress')
+
+        and: "getDevices() returned false (retry never happened)"
+        result == false
+
+        and: "an error log was emitted about re-auth failure"
+        testLog.errors.any { it.contains("Re-auth failed") }
+    }
+
+    // -------------------------------------------------------------------------
+    // Pattern 2 — DEVICE_REGION constant in sendBypassRequest
+    // Regional routing is binary (US/EU host-switching) and is parked for v2.1+.
+    // The @Field constant DEVICE_REGION = "US" is used directly in the body;
+    // no settings preference is wired.
+    // -------------------------------------------------------------------------
+
+    def "sendBypassRequest uses DEVICE_REGION constant ('US') in body -- regional routing parked for future PR (Pattern 2)"() {
+        // B: DEVICE_REGION is a @Field constant; body.deviceRegion == "US" unconditionally.
+        given: "no deviceRegion preference (removed); DEVICE_REGION @Field constant supplies the value"
+        settings.remove('deviceRegion')
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.token     = "tok-b"
+        state.accountID = "acc-b"
+        def equip = new TestDevice()
+        capturedBypassBodies.clear()
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "the request body carries deviceRegion 'US' from the DEVICE_REGION constant"
+        capturedBypassBodies.size() == 1
+        capturedBypassBodies[0].deviceRegion == "US"
+    }
+
+    // -------------------------------------------------------------------------
+    // Pattern 2 — getLocationTimeZone() honours hub timezone in sendBypassRequest
+    // -------------------------------------------------------------------------
+
+    def "sendBypassRequest uses hub timezone from location when available (Pattern 2 / getLocationTimeZone)"() {
+        // C1: hub timezone is honoured — mock location.timeZone.ID to "America/Chicago"
+        // and verify body.timeZone and headers.tz both carry the hub's zone, not the default.
+        // Null-location fallback is exercised in spec C2 below.
+        given: "hub's location exposes timezone 'America/Chicago'"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.token     = "tok-tz"
+        state.accountID = "acc-tz"
+        def equip = new TestDevice()
+
+        // Override getLocation to return an object whose timeZone.ID is "America/Chicago"
+        def fakeTimeZone = new Expando()
+        fakeTimeZone.ID = "America/Chicago"
+        def fakeLocation = new Expando()
+        fakeLocation.timeZone = fakeTimeZone
+        driver.metaClass.getLocation = { -> fakeLocation }
+
+        // Capture the raw httpPost params so we can inspect both body and headers
+        List<Map> rawPosts = []
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            rawPosts << params
+            if (params.body?.payload) {
+                capturedBypassBodies << (params.body.clone() as Map)
+            }
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [
+                code: 0,
+                result: [code: 0, result: [:], traceId: "test-trace"],
+                traceId: "test-trace"
+            ]
+            callback(fakeResp)
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "body.timeZone reflects the hub's configured timezone"
+        rawPosts.size() == 1
+        rawPosts[0].body?.timeZone == "America/Chicago"
+
+        and: "headers.tz also reflects the hub's configured timezone"
+        rawPosts[0].headers?.tz == "America/Chicago"
+    }
+
+    def "getLocationTimeZone() falls back to DEFAULT_TIME_ZONE when hub location is null (Pattern 2)"() {
+        // C2: null-location fallback — getLocation() returns null → getLocationTimeZone()
+        // must return DEFAULT_TIME_ZONE ("America/Los_Angeles").
+        //
+        // The parent driver is the only consumer of getLocation() in this file;
+        // overriding it to return null does not cascade NPEs to child drivers.
+        given: "hub location is null (no location configured)"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.token     = "tok-c2"
+        state.accountID = "acc-c2"
+        def equip = new TestDevice()
+
+        // Override getLocation to simulate hub with no location configured
+        driver.metaClass.getLocation = { -> null }
+
+        // Capture raw httpPost params to inspect body and headers
+        List<Map> rawPosts = []
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            rawPosts << params
+            if (params.body?.payload) {
+                capturedBypassBodies << (params.body.clone() as Map)
+            }
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [
+                code: 0,
+                result: [code: 0, result: [:], traceId: "test-trace"],
+                traceId: "test-trace"
+            ]
+            callback(fakeResp)
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "body.timeZone falls back to the DEFAULT_TIME_ZONE constant"
+        rawPosts.size() == 1
+        rawPosts[0].body?.timeZone == "America/Los_Angeles"
+
+        and: "headers.tz also falls back to the DEFAULT_TIME_ZONE constant"
+        rawPosts[0].headers?.tz == "America/Los_Angeles"
+    }
+
+    // -------------------------------------------------------------------------
+    // D: isLevoitClimateDevice() — Generic-driver dispatch filter
+    //
+    // This filter prevents non-Levoit VeSync devices (Etekcity plugs, Cosori
+    // air fryers, etc.) from getting a malfunctioning Generic Levoit child.
+    // Only devices whose model codes carry LAP-/LEH-/LV- prefixes, or one of
+    // the legacy literal names (Core200S etc.), are attached as Generic.
+    // -------------------------------------------------------------------------
+
+    def "isLevoitClimateDevice() returns true for Levoit purifier/humidifier codes (D1)"(String code) {
+        // D1: positive path — all known Levoit climate-class prefixes and literals.
+        expect:
+        driver.isLevoitClimateDevice(code) == true
+
+        where:
+        code << [
+            "LAP-V201S-WUS",    // Vital 200S (US)
+            "LAP-C601S-WEU",    // Core 600S (EU)
+            "LEH-S601S-WUS",    // Superior 6000S (US)
+            "LEH-S602S-WUSR",   // Superior 6000S variant
+            "LV-PUR131S",       // older Levoit purifier
+            "LV-RH131S",        // older Levoit humidifier
+            "Core200S",         // legacy literal recognized by deviceType()
+            "Core400S",
+            "Vital200S"
+        ]
+    }
+
+    def "isLevoitClimateDevice() returns false for non-Levoit VeSync device codes (D2)"(String code) {
+        // D2: negative path — Etekcity, Cosori, and non-prefix codes should be
+        // skipped so they never receive a malfunctioning Generic Levoit child.
+        expect:
+        driver.isLevoitClimateDevice(code) == false
+
+        where:
+        code << [
+            "WS-WHM01",     // Etekcity smart switch
+            "ESW15-USA",    // Etekcity smart plug
+            "ESO15-TB",     // Etekcity outdoor outlet
+            "CS158-AF",     // Cosori air fryer
+            null,
+            "",
+            "unknown-thing"
+        ]
+    }
+
+    def "isLevoitClimateDevice() returns false for v2.0-excluded Levoit fan prefixes (D3)"(String code) {
+        // D3: fan prefixes (LTF-* Tower Fan, LPF-* Pedestal Fan) are intentionally
+        // excluded from the v2.0 whitelist. They will be added in v2.1 alongside
+        // proper fan drivers. Adding them now would create Generic children that
+        // users would need to manually remove before v2.1 drivers can attach.
+        // NOTE: when v2.1 adds fan drivers, flip these to true and add the prefixes
+        // to isLevoitClimateDevice().
+        expect:
+        driver.isLevoitClimateDevice(code) == false
+
+        where:
+        code << [
+            "LTF-F422S-WUS",    // Tower Fan — locked v2.1
+            "LPF-R432S-AEU"     // Pedestal Fan — locked v2.1
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // E: Defensive addChildDevice validation + self-heal pass
+    //
+    // Live-test finding: addChildDevice may return a non-null phantom handle if
+    // the DNI was recently deleted and Hubitat's platform purge has not yet
+    // completed. The parent now re-fetches via getChildDevice to confirm the
+    // device is actually queryable before calling updateDataValue.
+    //
+    // updateDevices() now runs a self-heal pass early in its body that removes
+    // state.deviceList entries whose getChildDevice returns null, so orphaned
+    // polls clean themselves up between forceReinitialize calls.
+    //
+    // Architecture note for wireSandbox:
+    //   addChildDevice is wired in wireSandbox to return a TestDevice AND register
+    //   it in childDevices[dni] so getChildDevice can find it. For the phantom test
+    //   (E1) we need addChildDevice to return a TestDevice but getChildDevice to
+    //   return null for that same DNI — simulating a phantom handle. We override
+    //   both inside each spec's given: block.
+    // -------------------------------------------------------------------------
+
+    def "getDevices() phantom addChildDevice: logError emitted and updateDataValue skipped (E1)"() {
+        // E1: addChildDevice returns a non-null TestDevice (phantom), but getChildDevice
+        // subsequently returns null for the same cid. The parent must log an error
+        // and skip updateDataValue (the phantom handle must not be written to).
+        given: "VeSync account returns one V601S device"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-e1"
+        state.accountID = "acc-e1"
+        state.prefsSeeded = true
+        def phantomDevice = new TestDevice()
+        int updateDataValueCallCount = 0
+        phantomDevice.metaClass.updateDataValue = { String k, String v -> updateDataValueCallCount++ }
+
+        // addChildDevice: returns the phantom but does NOT register it in childDevices.
+        // getChildDevice will therefore return null for this cid (simulating a phantom).
+        driver.metaClass.addChildDevice = { String typeName, String dni, Map props ->
+            // Deliberately do NOT put it in childDevices[dni] -- platform phantom
+            phantomDevice
+        }
+        // getChildDevice: returns null for the phantom cid, real device for any other
+        driver.metaClass.getChildDevice = { String dni ->
+            childDevices[dni]  // phantomDevice is not in childDevices, so returns null
+        }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    list: [
+                        [
+                            deviceType  : "LEH-S601S-WUS",
+                            deviceName  : "My Humidifier",
+                            cid         : "phantom-cid-001",
+                            configModule: "LEH-S601S-configModule",
+                            uuid        : "uuid-phantom-001",
+                            macID       : "AA:BB:CC:DD:EE:01"
+                        ]
+                    ],
+                    total: 1
+                ],
+                traceId: "test-trace"
+            ]
+            callback(r)
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "logError was called mentioning the phantom cid"
+        testLog.errors.any { it =~ /addChildDevice for My Humidifier .* appeared to succeed but the device is not queryable/ }
+
+        and: "updateDataValue was NOT called on the phantom handle"
+        updateDataValueCallCount == 0
+    }
+
+    def "updateDevices() self-heal removes stale cid from state.deviceList (E2)"() {
+        // E2: state.deviceList contains two entries — one has a live child device, one is
+        // a ghost (getChildDevice returns null). updateDevices() should remove the ghost
+        // and log an INFO message. The live entry must remain intact.
+        given: "state.deviceList has one ghost cid and one real cid"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = true
+        state.prefsSeeded = true
+        state.deviceList = [
+            "vsaqGhost": "config-ghost",
+            "vsaqReal":  "config-real"
+        ]
+
+        // Wire a real child device for vsaqReal, null for vsaqGhost
+        def realDevice = new TestDevice()
+        realDevice.typeName = "Levoit Vital 200S Air Purifier"
+        realDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["vsaqReal"] = realDevice
+        // vsaqGhost intentionally absent from childDevices -> getChildDevice returns null
+
+        when:
+        driver.updateDevices()
+
+        then: "the ghost cid is removed from state.deviceList"
+        !state.deviceList.containsKey("vsaqGhost")
+
+        and: "the real cid is still present in state.deviceList"
+        state.deviceList.containsKey("vsaqReal")
+
+        and: "an INFO log was emitted identifying the stale entry"
+        testLog.infos.any { it.contains("Removing stale device tracking entry for vsaqGhost") }
+    }
+
+    def "updateDevices() self-heal also removes the paired -nl entry for a stale cid (E3)"() {
+        // E3: when a ghost cid has a paired night-light (-nl) entry in state.deviceList,
+        // both must be removed by the self-heal pass.
+        given: "state.deviceList has a ghost cid plus its -nl companion"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = true
+        state.prefsSeeded = true
+        state.deviceList = [
+            "vsaqGhost":     "config-ghost",
+            "vsaqGhost-nl":  "config-ghost-nl"
+        ]
+        // Neither vsaqGhost nor vsaqGhost-nl is in childDevices (both ghosts)
+        // The self-heal loop only iterates non-nl keys, but on finding vsaqGhost null
+        // it must also remove vsaqGhost-nl.
+
+        when:
+        driver.updateDevices()
+
+        then: "the ghost cid is removed"
+        !state.deviceList.containsKey("vsaqGhost")
+
+        and: "the paired -nl entry is also removed"
+        !state.deviceList.containsKey("vsaqGhost-nl")
+    }
+
+    def "getDevices() skips non-Levoit device -- no addChildDevice call, INFO log emitted, cid absent from deviceList (D4)"() {
+        // D4: integration test — a non-Levoit device on the VeSync account (here an
+        // Etekcity smart switch) must not trigger addChildDevice and must not appear
+        // in state.deviceList. An INFO-level skip log must be emitted so the user
+        // understands why the device has no Hubitat child.
+        given: "VeSync account returns one non-Levoit device (Etekcity WS-WHM01)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-d4"
+        state.accountID = "acc-d4"
+        state.prefsSeeded = true
+        int addChildDeviceCallCount = 0
+
+        // Override addChildDevice to count invocations (parent wireSandbox installs a
+        // no-op that returns a TestDevice; we override here to also count calls).
+        driver.metaClass.addChildDevice = { String typeName, String dni, Map props ->
+            addChildDeviceCallCount++
+            def dev = new TestDevice()
+            dev.name = typeName
+            childDevices[dni] = dev
+            dev
+        }
+
+        // httpPost: return a device list containing only the Etekcity device.
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    list: [
+                        [
+                            deviceType  : "WS-WHM01",
+                            deviceName  : "Kitchen Plug",
+                            cid         : "etk-001",
+                            configModule: "EtekcitySwitch",
+                            uuid        : "uuid-etk-001",
+                            macID       : "AA:BB:CC:DD:EE:FF"
+                        ]
+                    ],
+                    total: 1
+                ],
+                traceId: "test-trace"
+            ]
+            callback(r)
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "no addChildDevice call was made for the non-Levoit device"
+        addChildDeviceCallCount == 0
+
+        and: "an INFO log was emitted explaining the skip"
+        testLog.infos.any { it.contains("Skipping unsupported device type: WS-WHM01") }
+
+        and: "the device's cid is absent from state.deviceList"
+        !(state.deviceList?.containsKey("etk-001"))
+    }
+}

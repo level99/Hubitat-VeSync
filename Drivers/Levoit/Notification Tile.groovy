@@ -35,6 +35,8 @@
 *    2022-04-06  thebearmay    fix max message state coming back as string
 *    2022-09-15  thebearmay    issue with clean install
 *    2022-12-06  thebearmay    additional date/time format
+*    2026-04-25  Dan Cox       v2.0 (community fork, level99/Hubitat-VeSync)
+*                              - Added descriptionTextEnable preference (default true) and gated logInfo helper
 */
 import java.text.SimpleDateFormat
 import groovy.transform.Field
@@ -44,11 +46,12 @@ static String version()	{  return '2.0.11'  }
 
 metadata {
 	definition (
-			name: "Notification Tile", 
-			namespace: "thebearmay", 
+			name: "Notification Tile",
+			namespace: "thebearmay",
 			description: "Simple driver to act as a destination for notifications, and provide an attribute to display the last 5 on a tile.",
 			author: "Jean P. May, Jr.",
 			importUrl:"https://raw.githubusercontent.com/thebearmay/hubitat/main/notifyTile.groovy",
+			version: "2.0",
             singleThreaded: true
 		) {
 			capability "Notification"
@@ -62,7 +65,8 @@ metadata {
 		}
 
 	preferences {
-		input("debugEnable", "bool", title: "Enable debug logging?")
+		input("descriptionTextEnable", "bool", title: "Enable descriptive (info-level) logging?", defaultValue: true)
+		input("debugOutput", "bool", title: "Enable debug logging?")
 		input("sdfPref", "enum", title: "Date/Time Format", options:sdfList, defaultValue:"ddMMMyyyy HH:mm")
 		input("leadingDate", "bool", title:"Use leading date instead of trailing")
 		input("msgLimit", "number", title:"Number of messages from 5 to 20",defaultValue:5, range:5..20)
@@ -71,14 +75,14 @@ metadata {
 	}
 
 	void installed() {
-		if (debugEnable) log.trace "installed()"
+		logDebug "installed()"
 		state.lastLimit=0
 		configure()
 	}
 
 	void updated(){
-        if (debugEnable) log.trace "updated()"
-		if(debugEnable) runIn(1800,logsOff)
+        logDebug "updated()"
+		if(settings?.debugOutput) runIn(1800,logsOff)
 
 	// V2.0.2 When converting from original version set state variables, adjust html in last5 to make it work with V2.0.0+	
 		if (state?.msgCount == null)
@@ -90,22 +94,22 @@ metadata {
 				{
 				msgFilled=5
 				int i = wkTile.lastIndexOf('<br /> </span>');	
-				if (debugEnable) log.debug "at While i: ${i} ${msgFilled}"
+				logDebug "at While i: ${i} ${msgFilled}"
 				while (i>0 && msgFilled>0)
 					{
-					if (debugEnable) log.debug "in loop i: ${i} ${msgFilled}"
+					logDebug "in loop i: ${i} ${msgFilled}"
 					msgFilled--
 					wkTile = wkTile.substring(0, i) + '</span>'
 					i = wkTile.lastIndexOf('<br /> </span>');
-					if (debugEnable) log.debug "out loop i: ${i} ${msgFilled}"
+					logDebug "out loop i: ${i} ${msgFilled}"
 					}
-				if (debugEnable) log.debug "done While i: ${i} ${msgFilled}"
+				logDebug "done While i: ${i} ${msgFilled}"
 				sendEvent(name:"last5", value:wkTile)
 				state.msgCount=msgFilled
 				}
 			else
 				{												//process empty tile
-				if (debugEnable) log.debug "Initialize an empty tile" 
+				logDebug "Initialize an empty tile"
 				state.msgCount=0
 				configure()
 				}
@@ -117,14 +121,14 @@ metadata {
 			{
 			wkTile=device.currentValue("last5")
 			msgFilled=state.msgCount.toInteger()
-			if (debugEnable) log.debug "Shinking tile count lastLimit ${state.lastLimit} newLimit ${settings.msgLimit} msgCount ${msgFilled}"
+			logDebug "Shinking tile count lastLimit ${state.lastLimit} newLimit ${settings.msgLimit} msgCount ${msgFilled}"
 			int i = wkTile.lastIndexOf('<br />');
 			while (i != -1 && msgFilled > settings.msgLimit.toInteger())
 				{
 				wkTile = wkTile.substring(0, i) + '</span>';
 				msgFilled--
 				i = wkTile.lastIndexOf('<br />');
-				if (debugEnable) log.debug "looping on shrink msgCount ${msgFilled}"
+				logDebug "looping on shrink msgCount ${msgFilled}"
 				}
 			state.msgCount=msgFilled
 			sendEvent(name:"last5", value:wkTile)
@@ -136,7 +140,7 @@ metadata {
 	}
 
 	void configure() {
-		log.trace "configure()"
+		logDebug "configure()"
         if(msgLimit == null) device.updateSetting("msgLimit",[value:5,type:"number"])
 		sendEvent(name:"last5", value:'<span class="last5"></span>')
 		sendEvent(name:"last5H", value:'<span class="last5"></span>')
@@ -153,7 +157,14 @@ metadata {
 	}
 
 void deviceNotification(notification){
-	if (debugEnable) log.debug "deviceNotification entered: ${notification}" 
+	logDebug "deviceNotification entered: ${notification}"
+    // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
+    if (!state.prefsSeeded) {
+        if (settings?.descriptionTextEnable == null) {
+            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
+        }
+        state.prefsSeeded = true
+    }
 	dateNow = new Date()
     if(sdfPref == null) device.updateSetting("sdfPref",[value:"ddMMMyyyy HH:mm",type:"enum"])
     if(sdfPref != "None") {
@@ -177,7 +188,7 @@ void deviceNotification(notification){
 			wkTile=device.currentValue("last5").replace('<span class="last5">','<span class="last5">' + notification)
 
 	//	when msg count exceeds limit, purge last message
-		if (debugEnable) log.debug "deviceNotification2 msgFilled: ${msgFilled} msgLimit: ${settings.msgLimit}" 
+		logDebug "deviceNotification2 msgFilled: ${msgFilled} msgLimit: ${settings.msgLimit}"
 		if (msgFilled < settings.msgLimit.toInteger())
 			msgFilled++
 		else
@@ -191,7 +202,7 @@ void deviceNotification(notification){
 		int wkLen=wkTile.length()	
 		while (wkLen > 1024 && msgFilled > 0)
 			{
-			if (debugEnable) log.debug "wkTile length ${wkLen}> 1024 truncating msgCount: ${msgFilled}"
+			logDebug "wkTile length ${wkLen}> 1024 truncating msgCount: ${msgFilled}"
 			int i = wkTile.lastIndexOf('<br />');
 			if (i != -1) 
 				{
@@ -204,7 +215,7 @@ void deviceNotification(notification){
 				msgFilled=0
 				}
 			wkLen=wkTile.length()
-			if (debugEnable) log.debug "Truncated wkTile length ${wkLen}, msgCount: ${msgFilled}"
+			logDebug "Truncated wkTile length ${wkLen}, msgCount: ${msgFilled}"
 			}
 
 	//	Update attributes and state
@@ -216,7 +227,15 @@ void deviceNotification(notification){
 	}    
 
 	void logsOff(){
-		device.updateSetting("debugEnable",[value:"false",type:"bool"])
+		device.updateSetting("debugOutput",[value:"false",type:"bool"])
+	}
+
+	def logDebug(msg) {
+		if (settings?.debugOutput) log.debug msg
+	}
+
+	def logInfo(msg) {
+		if (settings?.descriptionTextEnable) log.info msg
 	}
 
 	void push() {

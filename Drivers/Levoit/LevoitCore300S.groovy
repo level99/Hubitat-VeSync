@@ -24,7 +24,13 @@ SOFTWARE.
 */
 
 // History:
-// 
+//
+// 2026-04-25: v2.0 (community fork, level99/Hubitat-VeSync, by Dan Cox)
+//                  - Added descriptionTextEnable preference (default true) and gated logInfo helper
+//                  - Added INFO logging at state-change transitions (power, mode, speed, filter alerts)
+//                  - debugOutput consistently defaults to false
+//                  - Removed legacy SmartThings icon URLs and "My Apps" category from metadata
+//                  - Updated documentationLink to fork repo
 // 2023-02-05: v1.6 Fixed the heartbeat logic.
 // 2023-02-04: v1.5 Adding heartbeat event
 // 2023-02-03: v1.4 Logging errors properly.
@@ -43,11 +49,8 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson and elfege (contributor)",
         description: "Supports controlling the Levoit 300S air purifier",
-        category: "My Apps",
-        iconUrl: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",
-        iconX2Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png",
-        iconX3Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png",
-        documentationLink: "https://github.com/dcmeglio/hubitat-bond/blob/master/README.md")
+        version: "2.0",
+        documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
             capability "FanControl"
@@ -74,6 +77,7 @@ metadata {
         }
 
     preferences {
+        input("descriptionTextEnable", "bool", title: "Enable descriptive (info-level) logging?", defaultValue: true)
         input("debugOutput", "bool", title: "Enable debug logging?", defaultValue: false, required: false)
     }
 }
@@ -105,29 +109,45 @@ def initialize() {
 
 def on() {
     logDebug "on()"
-	handlePower(true)
-    handleEvent("switch", "on")
 
-	if (state.speed != null) {
-        setSpeed(state.speed)
-	}
-    else {
-        setSpeed("low")
-    }
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        handlePower(true)
+        logInfo "Power on"
+        handleEvent("switch", "on")
 
-    if (state.mode != null) {
-        setMode(state.mode)
-    }
-    else {
-        update()
+        if (state.speed != null) {
+            setSpeed(state.speed)
+        }
+        else {
+            setSpeed("low")
+        }
+
+        if (state.mode != null) {
+            setMode(state.mode)
+        }
+        else {
+            update()
+        }
+    } finally {
+        state.remove('turningOn')
     }
 }
 
 def off() {
     logDebug "off()"
-	handlePower(false)
-    handleEvent("switch", "off")
-    handleEvent("speed", "off")
+
+    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
+    state.turningOff = true
+    try {
+        handlePower(false)
+        logInfo "Power off"
+        handleEvent("switch", "off")
+        handleEvent("speed", "off")
+    } finally {
+        state.remove('turningOff')
+    }
 }
 
 def toggle() {
@@ -194,22 +214,25 @@ def setSpeed(speed) {
         handleSpeed(speed)
         state.speed = speed
         handleEvent("speed", speed)
+        logInfo "Speed: ${speed}"
     }
     else if (state.mode == "sleep") {
         setMode("manual")
         handleSpeed(speed)
         state.speed = speed
         device.sendEvent(name: "speed", value: speed)
+        logInfo "Speed: ${speed}"
     }
 }
 
 def setMode(mode) {
     logDebug "setMode(${mode})"
-    
+
     handleMode(mode)
     state.mode = mode
 	handleEvent("mode", mode)
-    
+    logInfo "Mode: ${mode}"
+
     switch(mode)
     {
         case "manual":
@@ -292,6 +315,10 @@ def logDebug(msg) {
     if (settings?.debugOutput) {
 		log.debug msg
 	}
+}
+
+def logInfo(msg) {
+    if (settings?.descriptionTextEnable) log.info msg
 }
 
 def logError(msg) {
@@ -422,19 +449,32 @@ def update() {
 def update(status, nightLight)
 {
     logDebug "update(status, nightLight)"
+    // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
+    if (!state.prefsSeeded) {
+        if (settings?.descriptionTextEnable == null) {
+            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
+        }
+        state.prefsSeeded = true
+    }
 
     logDebug status
 
     def speed = mapIntegerToSpeed(status.result.level)
     def mode = status.result.mode
-    def auto_mode = status.result.configuration.auto_preference.type
-    def room_size = status.result.configuration.auto_preference.room_size
+    def auto_mode = status?.result?.configuration?.auto_preference?.type
+    def room_size = status?.result?.configuration?.auto_preference?.room_size
 
     handleEvent("switch", status.result.enabled ? "on" : "off")
-    if (state.mode == null || mode != state.mode) 
+    if (state.mode == null || mode != state.mode)
         handleEvent("mode",   status.result.mode)
-    if (state.auto_mode == null || auto_mode != state.auto_mode) 
-        handleEvent("auto_mode", status.result.configuration.auto_preference.type)
+    if (state.auto_mode == null || auto_mode != state.auto_mode)
+        handleEvent("auto_mode", auto_mode)
+
+    // state.mode must be set BEFORE switch evaluates — see Core 200S line 336/355 for canonical ordering
+    state.speed = speed
+    state.mode = status.result.mode
+    state.auto_mode = auto_mode
+    state.room_size = room_size
 
     switch(state.mode)
     {
@@ -448,11 +488,6 @@ def update(status, nightLight)
             handleEvent("speed",  "on")
             break;
     }
-
-    state.speed = speed
-    state.mode = status.result.mode
-    state.auto_mode = auto_mode
-    state.room_size = room_size
 
     updateAQIandFilter(status.result.air_quality_value.toString(),status.result.filter_life)
 }
@@ -500,12 +535,29 @@ private void updateAQIandFilter(String val, filter) {
         else if (aqi < 401) { danger = "Hazardous";                      color = "7e0023"; }
         else {                danger = "Hazardous";                      color = "7e0023"; }
 
+        if (state.lastAqiDanger != danger) logInfo "Air quality: ${danger}"
+        state.lastAqiDanger = danger
+
         handleEvent("aqiColor", color)
         handleEvent("aqiDanger", danger)
+
+        // Filter life threshold alerts
+        if (filter != null) {
+            Integer flInt = filter as Integer
+            Integer lastFl = state.lastFilterLife as Integer
+            if (lastFl == null || lastFl >= 20) {
+                if (flInt < 10) logInfo "Filter life critically low at ${flInt}%"
+                else if (flInt < 20) logInfo "Filter life at ${flInt}% — consider replacement"
+            } else if (lastFl >= 10 && flInt < 10) {
+                logInfo "Filter life critically low at ${flInt}%"
+            }
+            state.lastFilterLife = flInt
+        }
 
         def html = "AQI: ${aqi}<br>PM2.5: ${pm} &micro;g/m&sup3;<br>Filter: ${filter}%"
 
         handleEvent("info", html)
+        handleEvent("filter", filter)
     }
 }
 

@@ -1,0 +1,318 @@
+# pyvesync canonical API fixtures for LEH-S601S (Levoit Superior 6000S Humidifier)
+# Source: https://github.com/webdjoe/pyvesync
+# Commit: c98729c45860cc765d63d49a9a02bbc18de090c4 (2026-04-16)
+# Retrieved: 2026-04-25
+#
+# REQUEST payloads sourced from src/tests/api/vesynchumidifier/LEH-S601S.yaml
+# RESPONSE data for device_on_manual_canonical sourced from src/tests/call_json_humidifiers.py
+#   HUMIDIFIER_DETAILS["LEH-S601S"] with HumidifierDefaults constants resolved:
+#     humidity=50, targetHumidity=60, virtualLevel=3, mistLevel=3, workMode="manual"
+#     waterLacksState=0, waterTankLifted=0, autoStopSwitch=0, autoStopState=0
+#     screenSwitch=1, screenState=1, autoPreference=1, childLockSwitch=0
+#     filterLifePercent=85, temperature=700
+#     dryingMode: {dryingLevel=1, autoDryingSwitch=1, dryingState=0 (DryingModes.DONE=0), dryingRemain=7200}
+# Field gap surfaces:
+#   - dryingRemain=7200 even in DONE state is surprising; live devices may differ
+#   - autoPreference=1 (integer) vs purifier autoPreference (object) — different types
+#   - temperature=700 = 70.0°F (×10) per pyvesync VeSyncSuperior6000S class
+# All other response scenarios are synthesized from driver code field names.
+#
+# REQUEST payloads — as sent to /cloud/v2/deviceManaged/bypassV2
+
+requests:
+  turn_on:
+    payload:
+      data:
+        powerSwitch: 1
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        powerSwitch: 0
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  set_auto_mode:
+    payload:
+      data:
+        workMode: autoPro
+      method: setHumidityMode
+      source: APP
+
+  set_manual_mode:
+    payload:
+      data:
+        workMode: manual
+      method: setHumidityMode
+      source: APP
+
+  set_mist_level:
+    payload:
+      data:
+        levelIdx: 0
+        levelType: mist
+        virtualLevel: 2
+      method: setVirtualLevel
+      source: APP
+
+  set_humidity:
+    payload:
+      data:
+        targetHumidity: 50
+      method: setTargetHumidity
+      source: APP
+
+  turn_on_display:
+    payload:
+      data:
+        screenSwitch: 1
+      method: setDisplay
+      source: APP
+
+  turn_off_display:
+    payload:
+      data:
+        screenSwitch: 0
+      method: setDisplay
+      source: APP
+
+  turn_on_automatic_stop:
+    payload:
+      data:
+        autoStopSwitch: 1
+      method: setAutoStopSwitch
+      source: APP
+
+  turn_off_automatic_stop:
+    payload:
+      data:
+        autoStopSwitch: 0
+      method: setAutoStopSwitch
+      source: APP
+
+  turn_off_drying_mode:
+    payload:
+      data:
+        autoDryingSwitch: 0
+      method: setDryingMode
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getHumidifierStatus
+      source: APP
+
+# RESPONSE device data — what the humidifier returns after envelope peel.
+# Note: Superior 6000S responses are DOUBLE-WRAPPED. The parent passes
+# resp.data.result to child.update(), which is:
+#   { code:0, result: { code:0, result: { <device fields> } } }
+# The peel-while-loop in applyStatus() strips both layers.
+#
+# Field reference: pyvesync VeSyncSuperior6000S class + vesync-driver-developer agent definition (Superior 6000S section).
+
+responses:
+  # Canonical: from call_json_humidifiers.py HUMIDIFIER_DETAILS["LEH-S601S"]
+  # HumidifierDefaults: humidity=50, targetHumidity=60, virtualLevel=3, mistLevel=3,
+  #   workMode=HumidifierModes.MANUAL.value="manual", waterLacksState=0, waterTankLifted=0,
+  #   autoStopSwitch=0, autoStopState=0, screenSwitch=1, screenState=1, scheduleCount=0,
+  #   timerRemain=0, errorCode=0, autoPreference=1, childLockSwitch=0, filterLifePercent=85,
+  #   temperature=700 (70.0°F × 10), dryingMode.dryingState=0 (DryingModes.DONE), dryingRemain=7200
+  device_on_manual_canonical:
+    powerSwitch: 1
+    workMode: manual
+    humidity: 50
+    targetHumidity: 60
+    virtualLevel: 3
+    mistLevel: 3
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 0
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+    scheduleCount: 0
+    timerRemain: 0
+    errorCode: 0
+    dryingMode:
+      dryingLevel: 1
+      autoDryingSwitch: 1
+      dryingState: 0
+      dryingRemain: 7200
+    autoPreference: 1
+    childLockSwitch: 0
+    filterLifePercent: 85
+    temperature: 700
+
+  # Synthesized scenarios below
+  device_on_auto:
+    powerSwitch: 1
+    workMode: autoPro
+    humidity: 45
+    targetHumidity: 55
+    mistLevel: 3
+    virtualLevel: 3
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenState: 1
+    screenSwitch: 1
+    autoPreference: 0
+    filterLifePercent: 75
+    childLockSwitch: 0
+    temperature: 683
+    timerRemain: 0
+    dryingMode:
+      dryingState: 0
+      autoDryingSwitch: 1
+      dryingLevel: 1
+      dryingRemain: 0
+    waterPump:
+      cleanStatus: 0
+      remainTime: 0
+      totalTime: 3600
+
+  device_on_manual:
+    powerSwitch: 1
+    workMode: manual
+    humidity: 40
+    targetHumidity: 60
+    mistLevel: 5
+    virtualLevel: 5
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 0
+    autoStopState: 0
+    screenState: 1
+    screenSwitch: 1
+    autoPreference: 0
+    filterLifePercent: 90
+    childLockSwitch: 0
+    temperature: 720
+    timerRemain: 0
+    dryingMode:
+      dryingState: 0
+      autoDryingSwitch: 0
+      dryingLevel: 1
+      dryingRemain: 0
+    waterPump:
+      cleanStatus: 0
+      remainTime: 0
+      totalTime: 3600
+
+  device_off:
+    powerSwitch: 0
+    workMode: manual
+    humidity: 38
+    targetHumidity: 55
+    mistLevel: 0
+    virtualLevel: 3
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenState: 0
+    screenSwitch: 0
+    autoPreference: 0
+    filterLifePercent: 80
+    childLockSwitch: 0
+    temperature: 700
+    timerRemain: 0
+    dryingMode:
+      dryingState: 0
+      autoDryingSwitch: 1
+      dryingLevel: 1
+      dryingRemain: 0
+    waterPump:
+      cleanStatus: 0
+      remainTime: 0
+      totalTime: 3600
+
+  device_water_empty:
+    powerSwitch: 1
+    workMode: autoPro
+    humidity: 30
+    targetHumidity: 50
+    mistLevel: 0
+    virtualLevel: 2
+    waterLacksState: 1
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 1
+    screenState: 1
+    screenSwitch: 1
+    autoPreference: 0
+    filterLifePercent: 65
+    childLockSwitch: 0
+    temperature: 680
+    timerRemain: 0
+    dryingMode:
+      dryingState: 0
+      autoDryingSwitch: 1
+      dryingLevel: 1
+      dryingRemain: 0
+    waterPump:
+      cleanStatus: 0
+      remainTime: 0
+      totalTime: 3600
+
+  device_drying_active:
+    powerSwitch: 0
+    workMode: manual
+    humidity: 50
+    targetHumidity: 55
+    mistLevel: 0
+    virtualLevel: 3
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenState: 1
+    screenSwitch: 1
+    autoPreference: 0
+    filterLifePercent: 80
+    childLockSwitch: 0
+    temperature: 750
+    timerRemain: 0
+    dryingMode:
+      dryingState: 1
+      autoDryingSwitch: 1
+      dryingLevel: 1
+      dryingRemain: 3600
+    waterPump:
+      cleanStatus: 0
+      remainTime: 0
+      totalTime: 3600
+
+  device_drying_complete:
+    powerSwitch: 0
+    workMode: manual
+    humidity: 50
+    targetHumidity: 55
+    mistLevel: 0
+    virtualLevel: 3
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenState: 1
+    screenSwitch: 1
+    autoPreference: 0
+    filterLifePercent: 80
+    childLockSwitch: 0
+    temperature: 750
+    timerRemain: 0
+    dryingMode:
+      dryingState: 2
+      autoDryingSwitch: 1
+      dryingLevel: 1
+      dryingRemain: 0
+    waterPump:
+      cleanStatus: 0
+      remainTime: 0
+      totalTime: 3600
