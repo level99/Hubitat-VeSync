@@ -253,7 +253,7 @@ See QA agent definition's catalog entry for #12 for full symptom signature + cri
 
 ## Bug-pattern catalog
 
-The QA agent's definition contains a numbered catalog of 12 bug patterns from the v2.0 community-fork debugging. Reference them by number when flagging issues:
+The QA agent's definition contains a numbered catalog of bug patterns from the v2.0 community-fork debugging. Reference them by number when flagging issues:
 
 1. Missing 2-arg `update(status, nightLight)` signature on a child
 2. Hardcoded `getPurifierStatus` for all device types in parent
@@ -267,6 +267,7 @@ The QA agent's definition contains a numbered catalog of 12 bug patterns from th
 10. SmartThings icon URL leftovers in metadata
 11. `documentationLink` pointing to unrelated project
 12. Type-change leaves new pref defaults uncommitted (silent INFO suppression)
+13. Token-expiry silent failure (no re-auth on HTTP 401 or inner auth codes)
 
 When the developer or QA recognizes one of these patterns in a diff, name it explicitly: *"Bug Pattern #1 — missing 2-arg signature."* The other agent recognizes the name and applies the canonical fix.
 

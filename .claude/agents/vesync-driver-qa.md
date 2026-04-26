@@ -332,6 +332,42 @@ Critical properties:
 
 **Live-verified 2026-04-25:** all 9 fork driver files instrumented; all 3 migrated devices on maintainer hub healed automatically on first poll cycle after deploy.
 
+### 13. Token-expiry silent failure (no re-auth on HTTP 401 or auth-class inner codes)
+
+**Symptom:** Devices silently stop updating after weeks/months. No clear error in logs other than possibly a `code:-11001000` or HTTP 401 entry. Recovery requires manual user intervention (Save Preferences on parent → re-init → re-login). Install-and-forget users most exposed because VeSync token TTL is weeks-to-months.
+
+**Why it happens:** VeSync's typical token-expiry signal is HTTP 200 with an inner `code: -11001000` (TOKEN_EXPIRED) or `-11201000` (PASSWORD_ERROR / INVALID_CREDENTIALS) — NOT HTTP 401. Pre-fix `checkHttpResponse` only inspected HTTP status: HTTP 200 + inner -11001000 → returns true → `resp.data.result` is null → `dev.update(null, ...)` → silent no-op. Even HTTP 401 just logged an error without retry. `login()` was only called from `initialize()`, never proactively.
+
+**Fix:** Wrap the response handler in `sendBypassRequest` with an auth-aware closure that:
+- Detects auth failure via `isAuthFailure(resp)` predicate (HTTP 401 OR inner code in `{-11001000, -11201000, -11001, -11201}`; the 8-digit codes are pyvesync canonical, the 4-digit are defensive variants for older firmware)
+- Calls `login()` to refresh the token
+- Refreshes `params.body.token` + `params.headers.tk` with the new token
+- Retries the original `httpPost` ONCE, passing through to the existing tracing/caller closure chain
+- Uses `state.reAuthInProgress` flag (set before login, cleared in `finally`) to prevent infinite loops
+
+```groovy
+private boolean isAuthFailure(resp) {
+    try {
+        Integer http = resp?.status as Integer
+        if (http == 401) return true
+        def outerCode = resp?.data?.code as Integer
+        def innerCode = resp?.data?.result?.code as Integer
+        return outerCode in [-11001000, -11201000, -11001, -11201] ||
+               innerCode in [-11001000, -11201000, -11001, -11201]
+    } catch (ignored) {
+        return false  // malformed response = not an auth failure
+    }
+}
+```
+
+Critical:
+- `login()` MUST NOT be `private` — Groovy `private` compiles to INVOKESPECIAL bytecode, bypassing MetaObject Protocol; tests can't mock it. Keep it package-default visibility.
+- `login()` itself must NOT call `sendBypassRequest` (would create infinite recursion). It uses `httpPost` directly via `retryableHttp`.
+- Codes `-11003000` (REQUEST_HIGH / RATE_LIMIT) and `-11202000` (ACCOUNT_NOT_EXIST) are NOT auth failures — re-auth on either is wasteful. Verified against pyvesync `src/pyvesync/utils/errors.py`.
+- New log calls go through `logInfo` / `logError` (sanitize-wrapped). NO direct `log.X` calls.
+
+**Live-verified 2026-04-25:** Implementation tested against 8 Spock specs covering HTTP 401, both inner codes, negative control (-1 doesn't trigger), login-fail graceful degrade, finally semantics with login() throwing, and refreshed-token-in-retry assertion. All passing.
+
 ---
 
 ## Report format

@@ -26,6 +26,13 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-25: v2.0+ Token-expiry re-auth fix (Bug Pattern #13).
+//                  - isAuthFailure() detects HTTP 401 and inner code -11001000 (token expired)
+//                    and -11201000 (invalid credentials); also handles rare 4-digit variants
+//                    -11001 and -11201 defensively
+//                  - sendBypassRequest() now wraps response in effectiveClosure that auto-retries
+//                    once after calling login() to refresh the token
+//                  - state.reAuthInProgress flag (cleared in finally) prevents infinite loops
 // 2026-04-25: v2.0 Community fork release (Dan Cox, level99/Hubitat-VeSync). Squashed:
 //                  - Branch poll method by device type — humidifiers now use getHumidifierStatus
 //                    (was using getPurifierStatus for all devices, silently failing for humidifiers)
@@ -156,7 +163,7 @@ private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCal
     return false
 }
 
-private Boolean login() {
+Boolean login() {
     return retryableHttp("login", 3) {
         def logmd5 = MD5(password)
 
@@ -514,13 +521,65 @@ private Boolean getDevices() {
     }
 }
 
+/**
+ * Detect VeSync auth-failure responses (Bug Pattern #13).
+ *
+ * Two failure modes:
+ *   1. HTTP 401 — transport-level auth rejection (rare for VeSync, but handle defensively)
+ *   2. HTTP 200 with inner error code in the JSON body — the typical VeSync signal:
+ *        -11001000 (normalized from VeSync API) = TOKEN_EXPIRED
+ *        -11201000                               = PASSWORD_ERROR / invalid credentials
+ *      We also accept the 4-digit shorthand forms (-11001, -11201) defensively,
+ *      in case older firmware or regional variants use abbreviated codes.
+ *
+ * pyvesync cross-check (c98729c, src/pyvesync/utils/errors.py):
+ *   '-11001000' -> TOKEN_EXPIRED (ErrorTypes.TOKEN_ERROR)   [only TOKEN_ERROR class entry]
+ *   '-11201000' -> PASSWORD_ERROR (ErrorTypes.AUTHENTICATION)
+ *   '-11003000' -> REQUEST_HIGH (ErrorTypes.RATE_LIMIT)     [NOT auth — do NOT include]
+ *   '-11202000' -> ACCOUNT_NOT_EXIST (ErrorTypes.AUTHENTICATION)
+ *
+ * Inner code -1 is NOT an auth failure (Bug Pattern #2 humidifier wrong-method, etc.).
+ * Do NOT include -1 in this predicate.
+ *
+ * The VeSync API returns inner codes at resp.data.code (bypassV2 transport level),
+ * NOT at resp.data.result.code (device level). We inspect both because the exact
+ * placement of auth-failure codes may depend on which endpoint rejected the request.
+ */
+private boolean isAuthFailure(resp) {
+    try {
+        Integer httpStatus = resp?.status as Integer
+        if (httpStatus == 401) return true
+
+        // Check the top-level JSON code (bypassV2 transport rejection)
+        def outerCode = resp?.data?.code
+        if (outerCode != null) {
+            long c = outerCode as long
+            // 8-digit canonical codes
+            if (c == -11001000L || c == -11201000L) return true
+            // 4-digit defensive variants (older firmware / regional variants)
+            if (c == -11001L || c == -11201L) return true
+        }
+
+        // Also check result-level code in case some devices nest it there
+        def resultCode = resp?.data?.result?.code
+        if (resultCode != null) {
+            long c = resultCode as long
+            if (c == -11001000L || c == -11201000L) return true
+            if (c == -11001L || c == -11201L) return true
+        }
+    } catch (ignored) {
+        // Null-safe: malformed response is not an auth failure
+    }
+    return false
+}
+
 def Boolean sendBypassRequest(equipment, payload, Closure closure) {
     // Stop if driver is reloading
     if (state.driverReloading) {
         logDebug "Skipping sendBypassRequest - driver reloading"
         return false
     }
-    
+
     logDebug "sendBypassRequest(${payload})"
 
     def params = [
@@ -552,10 +611,10 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
             "accept-language": "en",
             "appVersion": "2.5.1",
             "accountID": getAccountID(),
-            "tk": getAccountToken() 
+            "tk": getAccountToken()
         ]
     ]
-    
+
     // Wrap the caller's closure with centralized API-trace logging.
     // - debugOutput on  → 1-line summary per API call (method/cid/status/inner)
     // - verboseDebug on → full response body dump (useful when VeSync changes a field name)
@@ -578,8 +637,41 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
         }
     }
 
+    // Outermost closure: detect auth failure and retry once with a fresh token.
+    // Must be the outer wrapper so it can intercept the response before the
+    // tracing closure or the caller's closure processes it.
+    //
+    // Re-entrance guard: state.reAuthInProgress prevents infinite loops if
+    // login() itself somehow triggers sendBypassRequest (it does NOT — login()
+    // uses httpPost directly via retryableHttp — but we guard defensively).
+    Closure effectiveClosure = { resp ->
+        if (isAuthFailure(resp) && !state.reAuthInProgress) {
+            logInfo "VeSync token expired or invalid -- re-authenticating"
+            state.reAuthInProgress = true
+            try {
+                if (login()) {
+                    // Refresh both body and header tokens with the new values
+                    params.body.token     = getAccountToken()
+                    params.body.accountID = getAccountID()
+                    params.headers.tk     = getAccountToken()
+                    params.headers.accountID = getAccountID()
+                    logDebug "Re-auth succeeded -- retrying ${payload?.method}"
+                    // Retry once; pass the retry's response to the inner (tracing) closure
+                    httpPost(params, tracingClosure)
+                    return
+                } else {
+                    logError "Re-auth failed -- VeSync credentials may need to be updated in driver settings"
+                }
+            } finally {
+                state.remove('reAuthInProgress')
+            }
+        }
+        // Not an auth failure (or re-auth failed): pass through to inner closure
+        tracingClosure(resp)
+    }
+
     try {
-        httpPost(params, tracingClosure)
+        httpPost(params, effectiveClosure)
         return true
     }
     catch (IllegalStateException e) {
