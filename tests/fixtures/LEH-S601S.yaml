@@ -14,7 +14,7 @@
 # Field gap surfaces:
 #   - dryingRemain=7200 even in DONE state is surprising; live devices may differ
 #   - autoPreference=1 (integer) vs purifier autoPreference (object) — different types
-#   - temperature=700 = 70.0°F (×10) per PROJECT_CONTEXT.md section 3
+#   - temperature=700 = 70.0°F (×10) per pyvesync VeSyncSuperior6000S class
 # All other response scenarios are synthesized from driver code field names.
 #
 # REQUEST payloads — as sent to /cloud/v2/deviceManaged/bypassV2
@@ -113,7 +113,7 @@ requests:
 #   { code:0, result: { code:0, result: { <device fields> } } }
 # The peel-while-loop in applyStatus() strips both layers.
 #
-# Field reference: PROJECT_CONTEXT.md section 3 + pyvesync VeSyncSuperior6000S class.
+# Field reference: pyvesync VeSyncSuperior6000S class + vesync-driver-developer agent definition (Superior 6000S section).
 
 responses:
   # Canonical: from call_json_humidifiers.py HUMIDIFIER_DETAILS["LEH-S601S"]

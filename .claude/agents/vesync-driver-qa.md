@@ -151,9 +151,9 @@ The driver fork's threat surface is small (single-cloud-endpoint integration wit
 
 1. **Sanitize bypass.** Any direct `log.info` / `log.debug` / `log.error` call in the parent driver that doesn't route through the parent's helper functions (`logInfo`/`logDebug`/`logError`) bypasses `sanitize()` and can leak `state.token`, `state.accountID`, account email, or hashed password. All log calls in the parent MUST go through the helpers. Direct `log.X` calls in *children* are acceptable because children don't hold credentials, but flag any direct call in the parent as BLOCKING.
 
-2. **Hardcoded credentials.** Search the diff for any of: hardcoded passwords, API keys, OAuth tokens, MAC addresses of personal devices, hub IPs (any 10.x.x.x / 192.168.x.x / 172.16-31.x.x), email addresses, hostnames in `*.wep.net` or other personal domains. The fork is published to a public GitHub repo — even a single hit is BLOCKING. This applies to ALL committed files including agent definitions in `.claude/`, `PROJECT_CONTEXT.md`, fixture files, comments, debug logs left in.
+2. **Hardcoded credentials.** Search the diff for any of: hardcoded passwords, API keys, OAuth tokens, MAC addresses of personal devices, hub IPs (any 10.x.x.x / 192.168.x.x / 172.16-31.x.x), email addresses, hostnames in `*.wep.net` or other personal domains. The fork is published to a public GitHub repo — even a single hit is BLOCKING. This applies to ALL committed files including agent definitions in `.claude/`, fixture files, comments, debug logs left in.
 
-3. **PII in committed AI-context files.** `.claude/agents/*.md`, `.claude/PROJECT_CONTEXT.md`, `CLAUDE.md`, `TODO.md`, `README.md`, `Drivers/Levoit/readme.md`, `levoitManifest.json` — none of these should contain real device IDs, real driver IDs, real hub IPs, or real personal usernames/emails. Conceptual references ("user's account email", "the parent driver's accountID") are fine; concrete values are not. Flag concrete leakage as BLOCKING.
+3. **PII in committed AI-context files.** `.claude/agents/*.md`, `CLAUDE.md`, `TODO.md`, `README.md`, `Drivers/Levoit/readme.md`, `levoitManifest.json` — none of these should contain real device IDs, real driver IDs, real hub IPs, or real personal usernames/emails. Conceptual references ("user's account email", "the parent driver's accountID") are fine; concrete values are not. Flag concrete leakage as BLOCKING.
 
 4. **No expansion of attack surface.** The parent's existing outbound surface is one URL: `https://smartapt.vesync.com/cloud/v2/...`. Adding new outbound endpoints (analytics, telemetry, secondary auth servers) requires explicit justification + sanitize coverage for new credential fields. Flag any new outbound HTTP target without justification.
 
@@ -303,6 +303,34 @@ switch (dState) {
 **Symptom:** Driver's documentation link in Hubitat UI points to `dcmeglio/hubitat-bond` or another unrelated repo.
 
 **Fix:** Update to fork's repo: `https://github.com/level99/Hubitat-VeSync` or sub-page.
+
+### 12. Type-change leaves new pref defaults uncommitted (silent INFO suppression)
+
+**Symptom:** Driver has been Type-changed or HPM-updated. Device attributes ARE populating correctly (parser works). Zero INFO log entries even on state-change events that should fire `logInfo`. `settings?.descriptionTextEnable` returns null when probed.
+
+**Why it happens:** When a Hubitat user changes a device's Type (or HPM-updates a driver to a new version that adds new pref names), the new driver's `defaultValue` declarations are NOT auto-applied to settings — they only commit when the user clicks **Save Preferences**. Until that click, `settings?.<newPref>` returns `null` (falsy). For drivers with conditional logging (`if (settings?.descriptionTextEnable) log.info msg`), this silently suppresses INFO output for migrating users — bad UX because the driver appears non-functional.
+
+**Fix:** One-time, idempotent self-healing seed at the top of the canonical "first method to run on parent poll":
+
+```groovy
+// One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
+if (!state.prefsSeeded) {
+    if (settings?.descriptionTextEnable == null) {
+        device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
+    }
+    state.prefsSeeded = true
+}
+```
+
+Insertion point varies by driver shape — see CLAUDE.md "Logging conventions" pref-seed insertion-point table.
+
+Critical properties:
+- The `null` guard preserves user choice — if user has explicitly set `descriptionTextEnable = false`, the seed leaves it.
+- The `state.prefsSeeded` flag bounds writes to exactly ONE per device lifecycle.
+- Heals on first poll without requiring user Save action.
+- Settings commit by next applyStatus call (Hubitat caches settings between method invocations); state-change INFO logs start firing on the second poll if not the first.
+
+**Live-verified 2026-04-25:** all 9 fork driver files instrumented; all 3 migrated devices on maintainer hub healed automatically on first poll cycle after deploy.
 
 ---
 

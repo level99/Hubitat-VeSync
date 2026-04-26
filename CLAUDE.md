@@ -30,6 +30,7 @@ Hubitat-VeSync/
 └── .claude/agents/
     ├── vesync-driver-developer.md         ← writer agent (Sonnet)
     ├── vesync-driver-qa.md                ← reviewer agent (Opus)
+    ├── vesync-driver-tester.md            ← Spock harness runner (Haiku, local-only)
     └── vesync-driver-operations.md        ← deploy + verify agent (Haiku, requires Hubitat MCP)
 ```
 
@@ -75,18 +76,29 @@ A single **parent driver** (`VeSyncIntegration.groovy`) holds the user's VeSync 
        │            │
        │            ▼
        │     ┌──────────────────┐
-       │     │ With MCP:        │
-       │     │ Agent({          │
-       │     │  subagent_type:  │
-       │     │  'vesync-driver- │
-       │     │  operations',    │
-       │     │  name: 'ops'})   │
-       │     │                  │
-       │     │ Without MCP:     │
-       │     │ commit + return  │
-       │     │ manual deploy    │
-       │     │ steps to user    │
-       │     └──────────────────┘
+       │     │ vesync-driver-   │ ← runs ./gradlew test (Spock harness)
+       │     │ tester (Haiku)   │   returns PASS / FAIL / UNCERTAIN
+       │     └─────────┬────────┘
+       │               │ 4b. Verdict returned to main
+       │               ▼
+       │         ┌─────┴─────┐
+       │       FAIL/        PASS
+       │       UNCERTAIN      │
+       │         │            ▼
+       │         │     ┌──────────────────┐
+       │         │     │ With MCP:        │
+       │         │     │ vesync-driver-   │
+       │         │     │ operations       │
+       │         │     │ (Haiku) — deploy │
+       │         │     │ + verify on hub  │
+       │         │     │                  │
+       │         │     │ Without MCP:     │
+       │         │     │ commit + return  │
+       │         │     │ manual deploy    │
+       │         │     │ steps to user    │
+       │         │     └──────────────────┘
+       │         │
+       │         └─→ same loop as ISSUES path below
        │
        │ 5. Main relays issues briefly:
        │    "QA found N issues:
@@ -101,24 +113,44 @@ A single **parent driver** (`VeSyncIntegration.groovy`) holds the user's VeSync 
    └─────────┬────────┘
              │ 7. Updated diff → return to step 3
              ▼
-       (loop until APPROVE)
+       (loop until APPROVE → tester PASS)
 ```
 
 ### Rules
 
-1. **Always dispatch the developer first**, never edit driver code directly from the main session. The agent has the bug-pattern catalog and canonical-payload references in its context; you don't.
+1. **Always dispatch the developer first**, never edit driver code directly from the main session. The agent has the bug-pattern catalog and canonical-payload references in its context; you don't. (Exceptions: editorial doc work, agent-definition tweaks, and similar non-driver-code changes — those can be done in main session since they're outside the bug-pattern catalog the pipeline catches.)
 
-2. **Always run QA before deploy or commit.** Even for "trivial" changes — many bugs in this codebase were "trivial" until they shipped.
+2. **Always run QA before tester or deploy.** Even for "trivial" changes — many bugs in this codebase were "trivial" until they shipped. After QA APPROVE, run tester (Spock harness) before deploy/commit. Tester catches regressions QA can't (compile errors, runtime sandbox gaps, behavior assertions).
 
-3. **Resume via SendMessage, don't re-dispatch fresh.** Subagent cache contains the driver source, the diff in flight, and the prior round's context. A fresh dispatch reloads everything (~60–70% input token waste).
+3. **Always try resume first; fall back to fresh Agent only on failure.** For every handoff after the very first dispatch of a role, the protocol is:
+   - `SendMessage({to: 'dev' | 'qa' | 'tester' | 'ops', message: "..."})` — addresses by role name
+   - If the recipient's prior run has already exited (subagents terminate after returning their final result; the runtime evicts the addressable session after some window — no fixed TTL exposed to the orchestrator), the message lands in a dead inbox and `SendMessage` returns `success: false` with `"No agent named '<name>' is currently addressable"`
+   - **Only then** dispatch a fresh `Agent({name: ..., ...})` with full re-briefing context
 
-4. **The developer doesn't deploy on its own.** It returns a diff summary. Deploy/commit happens from the main session.
+   **Detection heuristic:** if you sent a SendMessage and want to know whether the agent is alive, wait for the completion notification. If `SendMessage` itself returns `success: false`, the session is gone — fresh dispatch immediately. If `SendMessage` succeeded but no completion notification arrives in a reasonable window (~60s for trivial follow-ups, ~3min for code edits), assume the agent exited and re-dispatch fresh.
 
-5. **The QA doesn't write code.** It returns suggestions; the developer applies them.
+   **Re-dispatch must re-supply context:** a fresh agent has no memory of prior rounds. The re-briefing prompt MUST include: the file paths, the task recap, all prior QA/tester findings the agent needs, and the specific delta being asked for. Copy-paste from the SendMessage body you were about to send, plus enough preamble to orient cold.
 
-6. **Iteration cap: 3 rounds.** If QA flags BLOCKING three rounds in a row, escalate to human. Usually means the spec is wrong, not the code.
+   Why this matters: resume preserves ~60–70% input tokens via warm cache. Fresh dispatches reload everything. Never default to fresh just because it's easier to compose.
 
-7. **Honest pushback on disagreements.** If the developer thinks QA's feedback would cause a regression, surface the disagreement to the human user; don't rubber-stamp.
+4. **Brief human-readable summary between rounds — but don't block on user response.** When QA or tester returns findings, output a concise summary to the main chat BEFORE forwarding to the developer. Then proceed directly to the SendMessage handoff. The user reads the summary and can interrupt if they want to redirect; otherwise the pipeline keeps flowing. Example:
+
+   > QA found 3 issues on the V201S diff:
+   > - BLOCKING: Bug Pattern #4 — setLevel uses `switchIdx` instead of `levelIdx` (line 234)
+   > - BLOCKING: missing 2-arg update signature (line 412)
+   > - NIT: log message leaks full token (line 78) — suggest `.take(8) + "..."`
+   >
+   > Resuming developer with fixes.
+
+5. **The developer doesn't deploy or test on its own.** It returns a diff summary. Tester runs `./gradlew test`. Deploy/commit happens from the main session.
+
+6. **The QA and tester don't write code.** QA returns suggestions; tester returns PASS/FAIL/UNCERTAIN with verbatim quotes. The developer applies fixes.
+
+7. **Tester UNCERTAIN handling.** If the tester reports UNCERTAIN (test output it couldn't classify — flaky-looking spec, unfamiliar Spock error, transient environment issue), main reviews the verbatim output and decides: benign (tell tester to tag and continue), concerning (feed back to dev or escalate). Don't let UNCERTAIN sit — it blocks PASS. For benign patterns the tester confirmed once, those stay benign across rounds (cache discipline).
+
+8. **Iteration cap: 3 rounds.** If QA flags BLOCKING three rounds in a row OR tester returns FAIL after 2 rounds of dev fixes on the same specs, escalate to human. Usually means the spec is wrong, not the code.
+
+9. **Honest pushback on disagreements.** If the developer thinks QA's feedback would cause a regression, surface the disagreement to the human user; don't rubber-stamp.
 
 ---
 
@@ -189,15 +221,39 @@ private logError(msg) { log.error msg }
 
 The **parent driver's** `logInfo`, `logDebug`, `logError` route through a `sanitize()` helper that auto-redacts `email`, `state.accountID`, `state.token`, and `settings.password`. **Always preserve this** when modifying parent — direct `log.X` calls bypass sanitize.
 
-Auto-disable: every driver's `updated()` includes `if (settings?.debugOutput) runIn(1800, logDebugOff)` to flip debug off after 30 minutes.
+Auto-disable: every driver's `updated()` includes `if (settings?.debugOutput) runIn(1800, "logDebugOff")` to flip debug off after 30 minutes. (Use string-literal handler form for `runIn` — bare-identifier form depends on Hubitat sandbox binding magic that doesn't replicate in the Spock harness's test classloader.)
 
 INFO logs go at state-change points only (use `state.lastFoo` comparison gates) — not on every poll cycle.
+
+### Pref-seed pattern (Bug Pattern #12)
+
+Every driver's first-method-on-parent-poll has a one-time `state.prefsSeeded` block that auto-applies `descriptionTextEnable=true` if null. This heals migration paths (Type-change, HPM update with new pref names) where Hubitat doesn't auto-commit `defaultValue`. Insertion points by driver shape:
+
+| Driver shape | Insertion point |
+|---|---|
+| V2-API (Vital, Superior) | top of `applyStatus()` |
+| Core 200S/300S/400S/600S | top of `update(status, nightLight)` |
+| Core 200S Light | top of `update(status)` (1-arg only) |
+| Notification Tile (event-driven) | top of `deviceNotification(notification)` |
+| Parent (VeSyncIntegration) | top of `updateDevices()` (before `driverReloading` guard) |
+
+Implementation pattern (preserves user choice via null guard, bounded to one write per device lifecycle via `state.prefsSeeded`):
+```groovy
+if (!state.prefsSeeded) {
+    if (settings?.descriptionTextEnable == null) {
+        device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
+    }
+    state.prefsSeeded = true
+}
+```
+
+See QA agent definition's catalog entry for #12 for full symptom signature + critical properties.
 
 ---
 
 ## Bug-pattern catalog
 
-The QA agent's definition contains a numbered catalog of 11 bug patterns from the v2.0 community-fork debugging. Reference them by number when flagging issues:
+The QA agent's definition contains a numbered catalog of 12 bug patterns from the v2.0 community-fork debugging. Reference them by number when flagging issues:
 
 1. Missing 2-arg `update(status, nightLight)` signature on a child
 2. Hardcoded `getPurifierStatus` for all device types in parent
@@ -210,6 +266,7 @@ The QA agent's definition contains a numbered catalog of 11 bug patterns from th
 9. Driver name change breaks device association
 10. SmartThings icon URL leftovers in metadata
 11. `documentationLink` pointing to unrelated project
+12. Type-change leaves new pref defaults uncommitted (silent INFO suppression)
 
 When the developer or QA recognizes one of these patterns in a diff, name it explicitly: *"Bug Pattern #1 — missing 2-arg signature."* The other agent recognizes the name and applies the canonical fix.
 
@@ -269,6 +326,22 @@ Step 4-5 should always be done by `vesync-driver-developer`. Don't write driver 
   ```
 
 These patterns are load-bearing. Don't break them in a refactor without explicit reason.
+
+---
+
+## Cost optimization notes
+
+The 4-agent pipeline (developer Sonnet / qa Opus / tester Haiku / operations Haiku) is shaped around model-cost asymmetry:
+
+- **Resume pattern (SendMessage, not fresh Agent)** preserves ~60–70% of input tokens on iterative rounds because each agent's cache stays warm on the driver source file + prior findings. Fresh dispatches reload everything.
+- **Sonnet for dev** is ~5× cheaper per token than Opus on underlying pricing; on Claude Max plan, consumes cap at roughly ⅕ the rate of Opus.
+- **Haiku for tester** is ~19× cheaper than Opus; test-output-dominated work (Gradle logs, JUnit XML, Spock failure traces) is where the savings stack up most.
+- **Haiku for operations** — same ratio; log-fetch + structured tool calls are mechanical work.
+- **QA reads diffs** (small payloads), not whole files, on review rounds after the first.
+- **Test/log output containment via tester + ops** keeps main + dev + QA contexts lean — they never see raw 100KB Gradle output or 60KB log dumps, only ~1KB structured summaries with verbatim failure quotes.
+- **Total**: iterative driver work through this pipeline runs at roughly **30–40% of the cost of doing everything in the main Opus session**.
+
+This is why the "always try resume first; fall back to fresh only on failure" rule is load-bearing for cost discipline, not just convenience. Default to fresh and the pipeline's cost-optimization promise evaporates.
 
 ---
 
