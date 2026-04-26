@@ -4,12 +4,11 @@ If you're currently running Levoit drivers from [NiklasGustafsson/Hubitat](https
 
 ## TL;DR
 
-- **Existing Core 200S / 300S / 400S / 600S devices:** keep working with no Type change required. The fork preserves Niklas's driver names so device-to-driver association stays intact. Just update the driver source.
-- **Existing Vital 200S devices that show "discovered but no data":** finally fixed in v2.0. Re-pick the Type after install (see [Vital 200S section](#scenario-b-vital-200s--finally-works) below).
+- **Core 200S/300S/400S/600S users:** install our HPM package. HPM matches drivers by `(namespace, name)` and updates the source in place. Existing devices keep working. No manual steps. Done.
+- **Vital 200S users (previously "discovered but no data"):** install + re-pick Type once (the fork has a new `Levoit Vital 200S Air Purifier` driver that didn't exist upstream).
+- **Superior 6000S users (previously "discovered but no data"):** install + re-pick Type once (new `Levoit Superior 6000S Humidifier` driver).
 - **Existing humidifier devices that silently stopped updating:** finally fixed in v2.0 — parent now routes per-device-type method correctly. No user action beyond updating the parent driver.
-- **Already-working setups:** the parent driver also gets connection-pool retry logic and auto-sanitizing logging — both transparent improvements with no user action.
-
-The fork is HPM-installable; the migration is mostly "update via HPM, save preferences once, verify logs."
+- **Already-working setups:** parent gets connection-pool retry, token-expiry auto-recovery, and PII-redacting logs — all transparent improvements with no user action.
 
 ## Prerequisites
 

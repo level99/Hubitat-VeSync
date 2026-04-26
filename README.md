@@ -13,10 +13,32 @@ See [`Drivers/Levoit/readme.md`](Drivers/Levoit/readme.md) for full details, sup
 
 ## Install via Hubitat Package Manager
 
-Manifest URL:
-```
-https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/levoitManifest.json
-```
+### First-time install (no Levoit drivers yet)
+
+The fork is HPM-installable. Two install paths depending on whether the fork is in HPM's master index yet:
+
+1. **HPM keyword search** *(preferred — once the master-index PR merges)*: open HPM → Install → Search by Keywords → search `Levoit` or `VeSync` → install.
+2. **HPM manifest URL** *(works today)*: open HPM → Install → From a URL → paste:
+   ```
+   https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/levoitManifest.json
+   ```
+   HPM downloads and installs the parent app + per-model drivers.
+
+After install:
+
+1. Apps → Add User App → select **VeSync Integration**
+2. Enter your VeSync mobile-app credentials (same email + password)
+3. Click Done. The parent logs in, discovers your Levoit devices, and creates one Hubitat child per device. Default refresh interval: 30s.
+
+### Already running NiklasGustafsson/Hubitat upstream?
+
+You can install the HPM package the same way as a first-time install. HPM matches our drivers to your existing Niklas-installed drivers by `(namespace, name)` and updates the source in place — existing devices keep working with no re-pairing.
+
+If you had Vital 200S or Superior 6000S devices that previously showed "discovered but no data" on Niklas, you'll need to re-pick the device Type once after install (those drivers didn't exist upstream). See [`docs/migration-from-niklas-upstream.md`](docs/migration-from-niklas-upstream.md) for that step plus optional verification.
+
+### Manual install (no HPM)
+
+Paste each driver from `Drivers/Levoit/*.groovy` into Hubitat's **Drivers Code** page, then add the VeSync Integration app per the steps above. HPM is strongly recommended over manual paste — it handles updates automatically.
 
 Reference for canonical VeSync API payloads: [pyvesync](https://github.com/webdjoe/pyvesync).
 
