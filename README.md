@@ -2,6 +2,9 @@
 
 [![Lint](https://github.com/level99/Hubitat-VeSync/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/level99/Hubitat-VeSync/actions/workflows/lint.yml)
 [![Spock](https://github.com/level99/Hubitat-VeSync/actions/workflows/spock.yml/badge.svg?branch=main)](https://github.com/level99/Hubitat-VeSync/actions/workflows/spock.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/level99/Hubitat-VeSync?label=version)](https://github.com/level99/Hubitat-VeSync/releases)
+[![Last commit](https://img.shields.io/github/last-commit/level99/Hubitat-VeSync)](https://github.com/level99/Hubitat-VeSync/commits/main)
 
 A Hubitat Elevation driver pack for **Levoit smart home devices** (air purifiers and humidifiers), communicating with the VeSync cloud API. Discover and control your Levoit hardware from Hubitat — fan speeds, modes, schedules, AQ + PM2.5 sensors, target humidity, water level, drying — alongside everything else on your hub.
 
