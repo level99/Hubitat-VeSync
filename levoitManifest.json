@@ -5,7 +5,7 @@
   "version": "2.1",
   "minimumHEVersion": "2.3.2",
   "dateReleased": "2026-04-26",
-  "releaseNotes": "v2.1 release. Adds five new drivers: Levoit Vital 100S Air Purifier (LAP-V102S), Levoit Classic 300S Humidifier (LUH-A601S), Levoit OasisMist 450S Smart Humidifier (LUH-O451S/O601S), Levoit Tower Fan (LTF-F422S), and Levoit Pedestal Fan (LPF-A511S). Existing v2.0 users upgrade in place via HPM; no device re-pairing required.",
+  "releaseNotes": "v2.1 release. Adds five new drivers: Levoit Vital 100S Air Purifier (LAP-V102S), Levoit Classic 300S Humidifier (LUH-A601S), Levoit OasisMist 450S Smart Humidifier (LUH-O451S/O601S), Levoit Tower Fan (LTF-F422S), and Levoit Pedestal Fan (LPF-R432S). Existing v2.0 users upgrade in place via HPM; no device re-pairing required.",
   "documentationLink": "https://github.com/level99/Hubitat-VeSync/blob/main/Drivers/Levoit/readme.md",
   "communityLink": "https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816",
   "licenseFile": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/LICENSE",
