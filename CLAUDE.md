@@ -344,6 +344,44 @@ Step 4-5 should always be done by `vesync-driver-developer`. Don't write driver 
 
 ---
 
+## GitHub workflow (fork conventions)
+
+This fork has two git remotes:
+
+- `origin` → `https://github.com/level99/Hubitat-VeSync.git` (the fork — where PRs target)
+- `upstream` → `https://github.com/NiklasGustafsson/Hubitat.git` (Niklas's original — read-only, never PR here)
+
+The `gh` CLI does **not** infer the right repo from these remotes. By default it walks the remotes, finds `upstream`, and uses that as `--repo` for every PR/issue/check command. This causes `gh pr create` to fail with the cryptic error:
+
+```
+GraphQL: Head sha can't be blank, Base sha can't be blank,
+No commits between main and release/v2.1, Head ref must be a branch,
+Base ref must be a branch (createPullRequest)
+```
+
+— because it's trying to open a PR in `NiklasGustafsson/Hubitat` (which has no `release/v2.1` branch and a different `master` default).
+
+**Fix this once per clone** with:
+
+```bash
+gh repo set-default level99/Hubitat-VeSync
+```
+
+This writes `gh-resolved` to `.git/config` so all future `gh` commands target the fork. Verify with `gh repo view --json nameWithOwner` — should print `"nameWithOwner":"level99/Hubitat-VeSync"`.
+
+**If you can't / don't want to set the default**, every `gh` command needs `--repo level99/Hubitat-VeSync` explicitly. That includes:
+
+- `gh pr create --repo level99/Hubitat-VeSync ...`
+- `gh pr view N --repo level99/Hubitat-VeSync`
+- `gh pr checks N --repo level99/Hubitat-VeSync --watch`
+- `gh pr comment N --repo level99/Hubitat-VeSync ...`
+- `gh pr review N --repo level99/Hubitat-VeSync ...`
+- `gh issue create --repo level99/Hubitat-VeSync ...`
+
+Forgetting `--repo` is the most common preventable failure when working with this clone. If `gh repo view` shows `nameWithOwner: NiklasGustafsson/...`, run `gh repo set-default level99/Hubitat-VeSync` BEFORE any other `gh` work.
+
+---
+
 ## Source references in this codebase
 
 - The **VeSync API trace logging** wrapper closure in parent's `sendBypassRequest` — gives every call a 1-line summary at debug level, full body dump at verboseDebug level.
