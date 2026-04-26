@@ -9,9 +9,9 @@ You are cutting a new release of the level99/Hubitat-VeSync fork. Run the proced
 Run these in parallel and report any failure:
 
 - `git status --short` — working tree should be clean (only `TODO.md` may be untracked; any other uncommitted change blocks the release).
-- `JAVA_HOME=~/.gradle/jdks/jdk-17.0.18+8 ./gradlew test --no-daemon` — Spock harness must PASS.
-- `/c/Users/dcox.WEP.original/.local/bin/uv run --python 3.12 tests/lint.py --strict` — lint must PASS clean.
-- `git rev-parse --abbrev-ref HEAD` — confirm the branch (typically `release/v<version>` or `master`).
+- `./gradlew test --no-daemon` — Spock harness must PASS. (If `JAVA_HOME` isn't set on the host, set it to a JDK 17 install or rely on the Gradle wrapper's toolchain auto-provisioning.)
+- `uv run --python 3.12 tests/lint.py --strict` — lint must PASS clean. (Requires `uv` on PATH — install via [astral.sh/uv](https://docs.astral.sh/uv/) if not already present.)
+- `git rev-parse --abbrev-ref HEAD` — confirm the branch (typically `release/v<version>` or `main`).
 
 If any pre-flight fails, stop and report. Do not proceed.
 
