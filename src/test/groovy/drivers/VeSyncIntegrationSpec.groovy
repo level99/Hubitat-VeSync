@@ -265,9 +265,13 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         driver.deviceType("LEH-S602S-WUS") == "V601S"
     }
 
-    def "deviceType() returns N/A for unknown codes"() {
+    def "deviceType() returns GENERIC for unknown codes (fall-through to LevoitGeneric driver)"() {
+        // Unknown model codes route to the Generic Levoit Diagnostic Driver per the v2.0+
+        // fall-through behavior. Was "N/A" pre-Generic; now "GENERIC" so unknown devices
+        // get a working Hubitat presence + captureDiagnostics() self-service instead of
+        // silent skip. See LevoitGeneric.groovy + the new-device-support issue template.
         expect:
-        driver.deviceType("UnknownModel-XYZ") == "N/A"
+        driver.deviceType("UnknownModel-XYZ") == "GENERIC"
     }
 
     // -------------------------------------------------------------------------

@@ -28,6 +28,7 @@ frozen_driver_names:
   LevoitCore600S.groovy:           "Levoit Core600S Air Purifier"
   LevoitVital200S.groovy:          "Levoit Vital 200S Air Purifier"
   LevoitSuperior6000S.groovy:      "Levoit Superior 6000S Humidifier"
+  LevoitGeneric.groovy:            "Levoit Generic Device"
   "Notification Tile.groovy":      "Notification Tile"
 
 

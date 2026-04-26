@@ -37,6 +37,7 @@ Copy the relevant `.groovy` files from the `Drivers/Levoit/` directory into Hubi
 | `LevoitCore600S.groovy` | Levoit Core 600S air purifier |
 | `LevoitVital200S.groovy` | Levoit Vital 200S / 200S-P air purifier |
 | `LevoitSuperior6000S.groovy` | Levoit Superior 6000S evaporative humidifier |
+| `LevoitGeneric.groovy` | **Fall-through diagnostic driver** — any unrecognized Levoit model code. Best-effort power control + `captureDiagnostics()` for filing new-device-support requests. |
 
 ### Setup
 
@@ -146,6 +147,52 @@ Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize
 | info | HTML | Tile summary |
 
 Commands: `setMode`, `setMistLevel`, `setTargetHumidity`, `setDisplay`, `setChildLock`, `setAutoStop`, `setDryingMode`, `toggle`.
+
+### Generic Device (any unrecognized model)
+
+When a Levoit device is discovered whose model code is not recognized (not in the Core/Vital/Superior families), it is automatically assigned the **Levoit Generic Device** driver instead of being silently skipped.
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power state (best-effort) |
+| compat | string | Detected API shape ("v2-api purifier (N fields)", "v2-api humidifier (N fields)", "unknown shape") |
+| diagnostics | markdown | Copy-paste block for new-device-support issue filing |
+| humidity | % | Current humidity, if humidifier-shape response |
+| airQualityIndex | number | Levoit AQ index (1-4) or PM2.5 ug/m3 proxy, if purifier-shape response. Required by Hubitat AirQuality capability. |
+| airQuality | good, moderate, poor, very poor, unknown | Categorical label derived from AQLevel, if present. Not emitted for PM25-only devices. |
+| level | 0-100 | Speed/mist level mapped to %, if present in response |
+| mode | string | Current mode if present in response |
+| filter | 0-100 | Filter/wick life %, if present in response |
+| info | HTML | Tile summary |
+
+Commands: `captureDiagnostics`, `toggle`, `on`, `off`.
+
+**Humidifier auto-poll limitation:** The parent driver's polling logic branches on the child driver's type name — it sends `getPurifierStatus` for purifier children and `getHumidifierStatus` for humidifier children. The Generic driver's type name (`Levoit Generic Device`) does not contain "Humidifier", so the parent always polls it with `getPurifierStatus`. Devices that respond to `getHumidifierStatus` (not `getPurifierStatus`) will therefore show `compat="unknown shape"` on every background poll cycle.
+
+This does not affect manual operation:
+
+- The `captureDiagnostics()` command probes **both** `getPurifierStatus` and `getHumidifierStatus` and gives an accurate compat reading regardless of the poll path.
+- The `refresh` button (and the `update()` self-fetch) also tries both methods, so it will find the right shape.
+
+The background-poll limitation is intentional for this v2.0 release — the Generic driver is a diagnostic aid, not a production control driver. For reliable ongoing control of a humidifier-shape device, [file a new-device-support issue](https://github.com/level99/Hubitat-VeSync/issues/new?template=new_device_support.yml) with your `captureDiagnostics` output so a proper humidifier-aware driver can be authored. Once that driver ships, you can re-assign the device to it without losing your automations.
+
+## Filing a new-device-support request
+
+If your device was discovered but placed in the Generic driver, it can often be fully supported with a single community contribution. Here's how to file a useful request:
+
+1. On the **Generic Device** child device page, click **captureDiagnostics**.
+2. Wait a few seconds, then find the `diagnostics` attribute (it updates after the fetch completes).
+3. Copy the entire `diagnostics` attribute value.
+4. Open a [new-device-support issue](https://github.com/level99/Hubitat-VeSync/issues/new?template=new_device_support.yml) and paste the diagnostics block into the provided field.
+
+The diagnostics block includes:
+- Your device's VeSync model code
+- The results of both `getPurifierStatus` and `getHumidifierStatus` probe calls (inner codes + field lists)
+- The detected API shape
+
+This gives a driver developer everything they need to add full support without needing physical access to your device.
+
+Note: the diagnostics block does NOT include your account credentials, token, or email — those are never recorded.
 
 ## Reporting issues
 

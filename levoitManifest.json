@@ -4,7 +4,7 @@
   "version": "2.0",
   "minimumHEVersion": "2.3.2",
   "dateReleased": "2026-04-25",
-  "releaseNotes": "v2.0 community fork release. Adds Levoit Vital 200S (LAP-V201S) and Levoit Superior 6000S Humidifier (LEH-S601S) support. Fixes parent driver bug where humidifier polling silently failed (was sending getPurifierStatus to humidifier devices). Adds connection-pool retry logic. Both new drivers built from canonical pyvesync payloads with diagnostic raw-response logging gated by debugOutput preference.",
+  "releaseNotes": "v2.0 community fork release. Adds Levoit Vital 200S (LAP-V201S), Levoit Superior 6000S Humidifier (LEH-S601S), and Levoit Generic Device (fall-through diagnostic driver for unsupported models). Fixes parent driver bug where humidifier polling silently failed (was sending getPurifierStatus to humidifier devices). Adds connection-pool retry logic. New drivers built from canonical pyvesync payloads with diagnostic raw-response logging gated by debugOutput preference.",
   "documentationLink": "https://github.com/level99/Hubitat-VeSync/blob/main/Drivers/Levoit/readme.md",
   "communityLink": "https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816",
   "licenseFile": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/LICENSE",
@@ -63,6 +63,13 @@
       "name": "Levoit Superior 6000S Humidifier",
       "namespace": "NiklasGustafsson",
       "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitSuperior6000S.groovy",
+      "required": false
+    },
+    {
+      "id": "f3a7c1d2-8e4b-4f9a-b2c6-1d5e8a3f9c7b",
+      "name": "Levoit Generic Device",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitGeneric.groovy",
       "required": false
     }
   ]

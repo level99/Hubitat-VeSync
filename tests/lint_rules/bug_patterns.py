@@ -41,12 +41,14 @@ POLLED_CHILD_DRIVERS = {
     "LevoitCore600S.groovy",
     "LevoitVital200S.groovy",
     "LevoitSuperior6000S.groovy",
+    "LevoitGeneric.groovy",
 }
 
 # V2-line drivers that must have the envelope-peel while loop
 V2_LINE_DRIVERS = {
     "LevoitVital200S.groovy",
     "LevoitSuperior6000S.groovy",
+    "LevoitGeneric.groovy",
 }
 
 # V2-line drivers where setLevel field names are enforced (Vital line, not Core)
@@ -508,6 +510,7 @@ BP12_INSERTION_POINTS = {
 BP12_APPLY_STATUS_DRIVERS = {
     "LevoitVital200S.groovy",
     "LevoitSuperior6000S.groovy",
+    "LevoitGeneric.groovy",
 }
 # Core drivers use update(status, nightLight) as insertion point
 BP12_CORE_DRIVERS = {

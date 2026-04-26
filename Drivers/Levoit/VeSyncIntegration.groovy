@@ -316,9 +316,12 @@ private deviceType(code) {
         // Superior 6000S — pyvesync VeSyncSuperior6000S supports LEH-S601S-WUS/-WUSR/-WEUR and LEH-S602S-WUS
         case ~/LEH-S60[12]S-(WUS|WUSR|WEUR)/:
             return "V601S";
+        default:
+            // Unknown model code — fall through to Generic diagnostic driver.
+            // The Generic driver provides best-effort power control and captureDiagnostics()
+            // to accelerate new-model support filing (new-device-support issue template).
+            return "GENERIC";
     }
-
-    return "N/A";
 }
 
 private Boolean getDevices() {
@@ -381,7 +384,7 @@ private Boolean getDevices() {
                         newList[device.cid] = device.configModule;
                         newList[device.cid+"-nl"] = device.configModule;
                     }
-                    else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S") {
+                    else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S" || dtype == "GENERIC") {
                         newList[device.cid] = device.configModule;
                     }
                 }
@@ -508,7 +511,23 @@ private Boolean getDevices() {
                             equip1.label = device.deviceName;
                         }
                     }
-                }                
+                    else if (dtype == "GENERIC") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName} (unrecognized model ${device.deviceType} — using Generic driver)"
+                            equip1 = addChildDevice("Levoit Generic Device", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                            logInfo "Added child device: ${device.deviceName} (Levoit Generic Device — model ${device.deviceType} not yet supported; run captureDiagnostics to file a new-device-support request)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                        }
+                    }
+                }
 
                 state.deviceList = newList
                 runIn(5 * (int)settings.refreshInterval, "timeOutLevoit")
