@@ -1,0 +1,117 @@
+# lint_config.yaml — static linter configuration for level99/Hubitat-VeSync
+#
+# This file configures the structural lint rules. Edit it when:
+#   - A driver file is renamed (update frozen_driver_names — but see Bug Pattern #9 first)
+#   - A new driver is added (add to frozen_driver_names after it ships and has a stable name)
+#   - PII allow-patterns need updating (e.g. a readme example uses a placeholder IP)
+#   - A personal domain needs to be added to or removed from the block list
+#   - A known design exception needs to be recorded (use exemptions below — never silent)
+
+
+# ---------------------------------------------------------------------------
+# BP9: Frozen driver names
+# ---------------------------------------------------------------------------
+# Maps filename -> expected metadata name field value.
+# The linter checks that definition(name: "...") in each file matches this list.
+# NEVER change a name here without reading Bug Pattern #9 first — doing so
+# confirms a name change that will orphan existing user installs.
+#
+# To add a new driver: add its entry here AFTER it ships to main with a stable name.
+# Until it ships, the lint config does not know about it (new files with no entry are skipped).
+
+frozen_driver_names:
+  VeSyncIntegration.groovy:        "VeSync Integration"
+  LevoitCore200S.groovy:           "Levoit Core200S Air Purifier"
+  "LevoitCore200S Light.groovy":   "Levoit Core200S Air Purifier Light"
+  LevoitCore300S.groovy:           "Levoit Core300S Air Purifier"
+  LevoitCore400S.groovy:           "Levoit Core400S Air Purifier"
+  LevoitCore600S.groovy:           "Levoit Core600S Air Purifier"
+  LevoitVital200S.groovy:          "Levoit Vital 200S Air Purifier"
+  LevoitSuperior6000S.groovy:      "Levoit Superior 6000S Humidifier"
+  "Notification Tile.groovy":      "Notification Tile"
+
+
+# ---------------------------------------------------------------------------
+# Rule 16: PII scan — allow patterns
+# ---------------------------------------------------------------------------
+# Lines matching any of these regex patterns are exempt from PII findings.
+# Use this for documentation that DESCRIBES PII patterns with placeholder values.
+# Be conservative: if in doubt, don't add an exemption.
+
+pii_allow_patterns:
+  # Readme / docs that describe the API placeholder pattern conceptually
+  - "your@email\\.com"
+  - "example@example\\.com"
+  - "user@example\\.com"
+  # The parent driver's sanitize() function contains the regex patterns it redacts —
+  # those pattern-strings aren't real PII
+  - "sanitize"
+  # noreply commit co-author email (in CLAUDE.md / commit messages)
+  - "noreply@anthropic\\.com"
+  # Fixture source attribution comments (upstream pyvesync maintainer email if present)
+  - "SOURCE\\.md"
+
+
+# ---------------------------------------------------------------------------
+# Rule 16: PII scan — blocked personal domains
+# ---------------------------------------------------------------------------
+# Domains on this list are flagged as personal domain references if found in
+# any committed file. Add domains that belong to the maintainer's personal
+# network or other private infrastructure.
+#
+# Format: exact domain or wildcard subdomain prefix (*.example.com matches
+# anything.example.com). Case-insensitive.
+
+blocked_domains: []
+# Example (add if needed):
+#   - "*.wep.net"
+#   - "myhub.local"
+
+
+# ---------------------------------------------------------------------------
+# Rule 16: PII scan — token string allow-list
+# ---------------------------------------------------------------------------
+# Specific 32-64 char alphanumeric strings that are known-safe (e.g., test
+# fixture UUIDs, pyvesync canonical trace IDs). Add carefully.
+
+pii_token_allowlist:
+  # pyvesync canonical traceId placeholder used in fixtures
+  - "1634265366"
+
+
+# ---------------------------------------------------------------------------
+# Manifest consistency: files excluded from manifest check
+# ---------------------------------------------------------------------------
+# Filenames (basename only) that intentionally have no manifest entry.
+
+manifest_excluded_files:
+  - "Notification Tile.groovy"
+
+
+# ---------------------------------------------------------------------------
+# Per-rule exemptions (design exceptions — never silent)
+# ---------------------------------------------------------------------------
+# Each entry suppresses a specific (rule_id, file) finding in lint output.
+# ALL fields are required:
+#   rule_id  — the exact rule identifier (e.g. BP1_missing_2arg_update)
+#   file     — repo-root-relative path using forward slashes
+#   reason   — REQUIRED free-text justification; empty string is an error
+#
+# Exemptions are NOT a blanket "ignore this file" escape hatch. They apply
+# only to the named rule for the named file. Adding one here without a
+# substantive reason string will cause lint to exit with an error.
+#
+# When adding an exemption: document why the design intentionally differs
+# from the rule, and what prevents the exception from masking real bugs.
+
+exemptions:
+  - rule_id: "BP1_missing_2arg_update"
+    file: "Drivers/Levoit/LevoitCore200S Light.groovy"
+    reason: >
+      Light child intentionally declares only def update(status) (1-arg).
+      The parent invokes the night-light child explicitly via
+      nightLight.update(status) in LevoitCore200S.groovy's own update()
+      method, NOT through the generic 2-arg poll callback path.
+      Adding a 2-arg signature would be misleading and would mask the
+      intentional design. See LevoitCore200S.groovy update() for the
+      explicit dispatch pattern.

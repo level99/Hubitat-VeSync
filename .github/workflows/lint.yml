@@ -1,0 +1,42 @@
+name: Lint
+
+on:
+  pull_request:
+    paths:
+      - 'Drivers/**'
+      - 'tests/**'
+      - 'levoitManifest.json'
+      - 'README.md'
+      - 'CLAUDE.md'
+      - 'TODO.md'
+      - '.claude/**'
+      - '.github/workflows/lint.yml'
+  push:
+    branches:
+      - main
+      - master
+      - 'release/**'
+
+jobs:
+  lint:
+    name: Static lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Run lint (strict mode)
+        run: uv run --python 3.12 tests/lint.py --strict --json | tee lint-output.json
+        # --strict: treats WARN as FAIL in CI; any finding blocks the PR
+        # --json: structured output for potential future annotations step
+
+      - name: Upload lint output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-output
+          path: lint-output.json
+          retention-days: 7

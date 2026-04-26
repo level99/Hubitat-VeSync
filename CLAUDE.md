@@ -148,9 +148,11 @@ A single **parent driver** (`VeSyncIntegration.groovy`) holds the user's VeSync 
 
 7. **Tester UNCERTAIN handling.** If the tester reports UNCERTAIN (test output it couldn't classify — flaky-looking spec, unfamiliar Spock error, transient environment issue), main reviews the verbatim output and decides: benign (tell tester to tag and continue), concerning (feed back to dev or escalate). Don't let UNCERTAIN sit — it blocks PASS. For benign patterns the tester confirmed once, those stay benign across rounds (cache discipline).
 
-8. **Iteration cap: 3 rounds.** If QA flags BLOCKING three rounds in a row OR tester returns FAIL after 2 rounds of dev fixes on the same specs, escalate to human. Usually means the spec is wrong, not the code.
+8. **Tester runs lint first (fast static check) then Spock harness.** If lint FAILs, tester returns immediately with lint findings; Spock skipped (would produce noisy results on top of structural bugs). Run `uv run --python 3.12 tests/lint.py` to invoke lint standalone.
 
-9. **Honest pushback on disagreements.** If the developer thinks QA's feedback would cause a regression, surface the disagreement to the human user; don't rubber-stamp.
+9. **Iteration cap: 3 rounds.** If QA flags BLOCKING three rounds in a row OR tester returns FAIL after 2 rounds of dev fixes on the same specs, escalate to human. Usually means the spec is wrong, not the code.
+
+10. **Honest pushback on disagreements.** If the developer thinks QA's feedback would cause a regression, surface the disagreement to the human user; don't rubber-stamp.
 
 ---
 
@@ -255,7 +257,7 @@ See QA agent definition's catalog entry for #12 for full symptom signature + cri
 
 The QA agent's definition contains a numbered catalog of bug patterns from the v2.0 community-fork debugging. Reference them by number when flagging issues:
 
-1. Missing 2-arg `update(status, nightLight)` signature on a child
+1. Missing 2-arg `update(status, nightLight)` signature on a child — exception: `LevoitCore200S Light.groovy` intentionally uses only 1-arg (parent calls it explicitly, not through generic poll path); lint config exempts it
 2. Hardcoded `getPurifierStatus` for all device types in parent
 3. Response envelope peel missing or wrong depth
 4. V201S `setLevel` payload field-name mismatch

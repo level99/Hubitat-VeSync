@@ -384,8 +384,17 @@ def applyStatus(status){
         state.prefsSeeded = true
     }
     def r = status?.result ?: [:]
+    // Defensive envelope peel: V2-line bypassV2 responses can be double-wrapped.
+    // Peel through any [code, result, traceId] envelope layers until device data is reached.
+    // Single-wrapped (normal purifier) exits immediately (peelGuard stays 0).
+    // Double-wrapped (humidifier shape applied to purifier) peels once.
+    int peelGuard = 0
+    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
+        r = r.result
+        peelGuard++
+    }
     // Diagnostic: gated by debugOutput pref — quiet in production, easy to triage when needed.
-    if (settings?.debugOutput) log.debug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
+    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     def powerOn = r.powerSwitch == 1
     device.sendEvent(name:"switch", value: powerOn ? "on" : "off")

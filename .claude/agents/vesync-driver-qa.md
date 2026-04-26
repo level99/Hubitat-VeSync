@@ -165,6 +165,33 @@ The driver fork's threat surface is small (single-cloud-endpoint integration wit
 
 If the change touches authentication (`state.token` / `state.accountID` / login flow) or the `sanitize()` helper itself, the security review should be deeper — read those code paths in full before issuing the verdict, not just the diff context.
 
+### J. Cross-platform portability
+
+The fork is consumed on Windows, macOS, and Linux. Contributor environments differ in home directories, install paths, and toolchain locations. Committed files MUST NOT bake in machine-specific paths or single-OS assumptions, or the fork breaks on a clean clone for anyone not on the maintainer's exact setup.
+
+1. **No absolute machine-specific paths in committed files.** Search the diff for any of:
+   - Contributor home directories: `/c/Users/<name>/...`, `/home/<name>/...`, `/Users/<name>/...`
+   - Hardcoded toolchain install paths: `/c/tools/jdk-*`, `/opt/...`, `/usr/local/...`, `~/.local/bin/uv` references with explicit user
+   - Windows drive letters in committed strings: `C:\\...`, `D:\\...` (except inside `gradlew.bat` and other Windows-specific scripts that legitimately need them)
+   - Hardcoded JDK paths (`-Porg.gradle.java.installations.paths=...`), hardcoded `uv` paths, hardcoded `python` paths
+   
+   Flag any hit as BLOCKING. Especially scrutinize: agent definitions (`.claude/agents/*.md`), `tests/README.md`, `CLAUDE.md`, `.github/workflows/*.yml`, build scripts, lint config.
+
+2. **Tooling invocations should be self-locating.** Patterns to prefer:
+   - `./gradlew test` (relative; works on any OS via the wrapper script)
+   - `uv run --python 3.12 tests/lint.py` (uv on PATH, contributor installs uv themselves cross-OS)
+   - NOT: `/c/tools/jdk-17/bin/java -jar ...`, NOT: `/c/Users/<name>/.local/bin/uv run ...`
+
+3. **Toolchain auto-provisioning where the tool supports it.** This fork uses Gradle's foojay-resolver-convention plugin to auto-provision JDK 17 on first build, and `uv` to auto-provision Python 3.12 on first run. New tooling additions should follow the same self-provisioning pattern, not "contributor must pre-install X at path /Y/Z". If a tool requires manual install, link to the tool's official cross-OS install docs (e.g. https://docs.astral.sh/uv/getting-started/installation/) rather than embedding install commands.
+
+4. **Documentation that shows commands MUST use cross-OS-portable forms.** README, agent definitions, CLAUDE.md, tests/README.md, etc. should never include absolute paths in example commands. If a tool absolutely needs to be installed, link to the tool's install docs.
+
+5. **Escalation pattern for missing tools.** Agent definitions (especially the tester) should escalate when a required tool isn't on PATH — they should NOT try to find or install it themselves. The existing pattern in `vesync-driver-tester.md` (escalation trigger #2 for missing JDK auto-provisioning) is the model.
+
+This applies to ALL committed files: driver source, specs, fixtures, agent definitions, docs, config files (`build.gradle`, `settings.gradle`, `.gitattributes`, `.gemini/config.yaml`), CI workflows, lint config, lint rules, and lint output messages. Not driver runtime code only.
+
+**Why this matters:** the fork is published to GitHub for cross-OS contributors. A leaked maintainer-specific path doesn't expose credentials but it does break the build for everyone else and creates support friction ("works on my machine"). Catching these in QA is much cheaper than catching them after a contributor files an issue.
+
 ---
 
 ## Known bug patterns (catalog from v2.0 community-fork debugging)
@@ -178,6 +205,8 @@ When reviewing changes, scan for these specific anti-patterns. Each is a real bu
 **Root cause:** Parent's `updateDevices()` calls `child.update(status, nightLight)` with two args (the second is for Core 200S nightlight; null for everyone else). Children that only declare `update()` and `update(status)` don't match.
 
 **Fix:** Always declare all three signatures. The 2-arg version delegates to `applyStatus(status)`, ignoring the nightLight arg.
+
+**Exception: `LevoitCore200S Light.groovy`** intentionally declares only `def update(status)` (1-arg). The parent invokes the night-light child explicitly via `nightLight.update(status)` in `LevoitCore200S.groovy`'s own `update()` method, NOT through the generic 2-arg poll callback path. Adding a 2-arg signature would be misleading and would mask the intentional design. The lint config exempts this file from BP1 per `tests/lint_config.yaml`. Do not flag BP1 against this file.
 
 ### 2. Hardcoded `getPurifierStatus` for all device types in parent
 

@@ -6,6 +6,12 @@ gradle-app.setting
 **/build/
 out/
 
+# Python (linter + future Python tooling — uv runs Python via tests/lint.py)
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
 # IntelliJ IDEA
 .idea/
 *.iml

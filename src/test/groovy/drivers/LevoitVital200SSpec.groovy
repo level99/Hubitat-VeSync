@@ -8,8 +8,8 @@ import support.TestParent
  *
  * Covers:
  *   Bug Pattern #1  — 2-arg update(status, nightLight) signature exists and is callable
- *   Envelope        — single-level status.result dereference to reach device fields
- *   DOCUMENTED GAP  — Vital200S lacks defensive peel-loop; double-wrap silently breaks parsing
+ *   Envelope        — defensive peel-loop in applyStatus handles both single-wrap and double-wrap
+ *   Bug Pattern #3  — double-wrapped envelope is correctly peeled; device fields reached via loop
  *   Bug Pattern #4  — setLevel uses {levelIdx, levelType, manualSpeedLevel}, NOT {level, id, type}
  *   Bug Pattern #5  — manual mode is set via setLevel, NOT via setPurifierMode(workMode:"manual")
  *   Bug Pattern #6  — speed reports "off" when powerSwitch=0, even if manualSpeedLevel != 255
@@ -84,31 +84,28 @@ class LevoitVital200SSpec extends HubitatSpec {
         lastEventValue("pm25") == 3
     }
 
-    def "DOCUMENTED GAP: Vital200S lacks defensive envelope peel -- double-wrap silently breaks parsing (TODO: harden driver to match Superior6000S)"() {
-        // LevoitVital200S.groovy does NOT have a while-loop defensive peel like
-        // LevoitSuperior6000S.groovy does. It assumes status.result is device data.
-        // If the API ever double-wraps purifier responses (as it does for humidifiers),
-        // parsing will silently fail: status.result = {code, result:{device data}} instead
-        // of {device data}.
+    def "applyStatus envelope peel handles double-wrapped responses (Bug Pattern #3)"() {
+        // LevoitVital200S.groovy has a defensive while-loop peel matching LevoitSuperior6000S.groovy.
+        // This test passes a double-wrapped envelope (humidifier shape applied to purifier data)
+        // and asserts that the driver correctly reaches the device fields via the peel loop.
         //
-        // This test documents that gap behaviorally: passing a double-wrapped envelope
-        // causes device fields to NOT be reached, so switch remains "off".
-        // When the driver is hardened to add the defensive peel, this test should
-        // FAIL (switch will become "on") — that failure is the signal to update this test.
+        // Double-wrap shape: status = {code, result: {code, result: {device fields}, traceId}}
+        // Before the fix, r = status?.result yielded {code, result:{device fields}} — the inner
+        // envelope — so powerSwitch was not found and switch stayed "off".
+        // After the fix, the peel loop unwraps one more level and device fields ARE reached.
         given: "a double-wrapped envelope (humidifier shape applied to purifier data)"
         def fixture = loadYamlFixture("LAP-V201S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
-        // Double-wrap: status = {code, result: {code, result: {device fields}}}
-        // The driver does r = status?.result which gives {code, result:{device fields}},
-        // not the device fields themselves. powerSwitch is not found => switch stays "off".
+        // humidifierStatusEnvelope wraps as: {code:0, result:{code:0, result:{device fields}}}
         def doubleWrapped = humidifierStatusEnvelope(deviceData)
 
         when: "applyStatus receives a double-wrapped envelope"
         driver.applyStatus(doubleWrapped)
 
-        then: "device fields are NOT correctly parsed (switch stays off -- gap confirmed)"
-        // If this assertion fails after a driver hardening PR, update to expect "on"
-        lastEventValue("switch") == "off"
+        then: "device fields ARE correctly reached via peel loop -- switch=on, pm25 reached"
+        lastEventValue("switch") == "on"
+        // PM2.5 is a device-level field; reaching it confirms the peel worked (canonical value is 3)
+        lastEventValue("pm25") == 3
     }
 
     def "applyStatus handles null status gracefully without throwing"() {

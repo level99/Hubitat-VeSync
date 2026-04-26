@@ -82,21 +82,22 @@ def installed() {
     runIn(15, "initialize")
 }
 
-def updated() { 
+def updated() {
 	logDebug "Updated with settings: ${settings}"
 
     // Set flag to stop any running tasks from old driver instance
     state.driverReloading = true
-    
-    // Clear any existing schedules
-    unschedule()
-    
-    // Brief pause to let old tasks see the flag
-    pauseExecution(500)
+    try {
+        // Clear any existing schedules
+        unschedule()
 
-    // Clear reload flag and start initialization
-    state.remove('driverReloading')
-    
+        // Brief pause to let old tasks see the flag
+        pauseExecution(500)
+    } finally {
+        // Always clear reload flag — even if unschedule() or pauseExecution() throws
+        state.remove('driverReloading')
+    }
+
     // Delay initialization to allow HTTP connection pool to stabilize (15s for reliability)
 	runIn(15, "initialize")
 
