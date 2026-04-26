@@ -50,3 +50,6 @@ desktop.ini
 
 # Maintainer-local working notes. Public roadmap lives in ROADMAP.md.
 TODO.md
+
+# Scratch caches from research agents (HA cross-check, etc.)
+.tmp/
