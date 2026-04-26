@@ -1,0 +1,134 @@
+name: Bug report
+description: Report a defect in an existing driver — wrong behavior, error in logs, attribute not updating, etc.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Filling out the fields below helps the maintainer reproduce and fix the issue faster.
+
+        Before submitting:
+        - Check the [migration guide](https://github.com/level99/Hubitat-VeSync/blob/main/docs/migration-from-niklas-upstream.md) if you just upgraded — most post-migration symptoms are covered there.
+        - Search [existing issues](https://github.com/level99/Hubitat-VeSync/issues?q=is%3Aissue) for duplicates.
+        - For general questions or "is this a bug?" uncertainty, the [Hubitat community thread](https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816) is faster.
+
+  - type: dropdown
+    id: driver
+    attributes:
+      label: Affected driver
+      description: Which driver shows the problem? Pick the closest match.
+      options:
+        - Parent (VeSync Integration)
+        - Levoit Vital 200S Air Purifier
+        - Levoit Superior 6000S Humidifier
+        - Levoit Core 200S
+        - Levoit Core 200S Light (night-light child)
+        - Levoit Core 300S
+        - Levoit Core 400S
+        - Levoit Core 600S
+        - Notification Tile
+        - Other / Multiple / Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: model_code
+    attributes:
+      label: Device model code
+      description: The exact model code of the affected hardware (visible in VeSync app device info, or on the device label).
+      placeholder: "e.g. LAP-V201S-WUS, LEH-S601S-WUSR, Core400S"
+    validations:
+      required: true
+
+  - type: input
+    id: driver_version
+    attributes:
+      label: Driver version
+      description: From `levoitManifest.json` or the driver header History block.
+      placeholder: "e.g. 2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: hub_firmware
+    attributes:
+      label: Hubitat hub firmware version
+      description: Hubitat → Settings → Hub Details → Platform Version.
+      placeholder: "e.g. 2.3.8.140"
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Bug summary
+      description: One paragraph describing what's wrong.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Numbered list. Be specific — "every time I trigger setSpeed('high') from a rule" is more useful than "sometimes the speed doesn't change."
+      placeholder: |
+        1. Set device mode to manual
+        2. Call setSpeed("high") from rule machine
+        3. Observe that speed attribute stays at "low"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What actually happens.
+    validations:
+      required: true
+
+  - type: textarea
+    id: debug_log
+    attributes:
+      label: Debug log
+      description: |
+        Required for any bug involving HTTP, polling, command failures, or attribute issues.
+
+        How to capture:
+        1. On the **VeSync Integration** parent device, set **Enable debug logging** to **true**, click **Save Preferences**.
+        2. Trigger the bug.
+        3. In Hubitat → **Logs**, copy the lines mentioning the affected device (and any error lines).
+        4. Paste below.
+
+        **Account credentials are auto-redacted** by the parent's `sanitize()` helper, so debug captures are safe to share without scrubbing.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots (optional)
+      description: Drag-drop images here if a UI symptom is easier to show than describe.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: prereqs
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched [existing issues](https://github.com/level99/Hubitat-VeSync/issues?q=is%3Aissue) and didn't find a duplicate.
+          required: true
+        - label: I checked the [migration guide](https://github.com/level99/Hubitat-VeSync/blob/main/docs/migration-from-niklas-upstream.md) if this issue appeared after a v2.0 upgrade.
+          required: true
+        - label: My debug log above does not contain my real VeSync email or password (the auto-sanitize covers tokens/accountID, but please double-check the email field).
+          required: true

@@ -1,0 +1,96 @@
+name: Feature request
+description: Request an enhancement to an existing driver — new command, new attribute, new behavior, etc.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Suggest a new feature for the fork. The maintainer evaluates feature requests against scope (Levoit/VeSync surface only), implementation cost, and likely user demand.
+
+        **Before submitting:**
+        - For "I want support for a new device", use the [New device support template](https://github.com/level99/Hubitat-VeSync/issues/new?template=new_device_support.yml) instead.
+        - Search [existing feature requests](https://github.com/level99/Hubitat-VeSync/issues?q=is%3Aissue+label%3Aenhancement) for duplicates.
+        - For "wouldn't it be cool if..." brainstorming, the [Hubitat community thread](https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816) is a better venue.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Feature summary
+      description: One sentence describing what you want.
+      placeholder: "e.g. Expose the Vital 200S sleep-mode preference as a configurable attribute."
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: |
+        Why do you want this? What does it enable that's currently impossible or painful?
+
+        Concrete use cases ("I want to automate switching to sleep mode at 10pm based on bedroom occupancy") are more compelling than abstract ones ("more configuration would be nice").
+    validations:
+      required: true
+
+  - type: dropdown
+    id: affected_drivers
+    attributes:
+      label: Affected driver(s)
+      description: Which driver(s) would this change?
+      multiple: true
+      options:
+        - Parent (VeSync Integration)
+        - Levoit Vital 200S Air Purifier
+        - Levoit Superior 6000S Humidifier
+        - Levoit Core 200S
+        - Levoit Core 200S Light (night-light child)
+        - Levoit Core 300S
+        - Levoit Core 400S
+        - Levoit Core 600S
+        - Notification Tile
+        - All / Cross-cutting
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope_check
+    attributes:
+      label: Scope check
+      description: |
+        Help the maintainer assess scope:
+
+        - **Does this fit Levoit/VeSync specifically**, or is it a general Hubitat feature better requested upstream?
+        - **Have you considered alternatives** like Rule Machine automations, dashboard tiles, virtual devices, or HE Device Mirror that could achieve the same outcome without driver changes?
+        - **Is this in the VeSync API at all** (i.e. exposed via the bypassV2 endpoint), or would the driver have to derive/synthesize it?
+        - **Are you willing to test** a draft implementation?
+      placeholder: |
+        Fits Levoit/VeSync: yes — Vital 200S has a sleepPreference field in its API response.
+        Alternatives considered: I tried using Rule Machine to switch modes on a schedule, but I want adaptive behavior based on hub Mode rather than time-of-day.
+        In VeSync API: yes — pyvesync exposes setAutoPreference; should be similar for sleep mode.
+        Willing to test: yes.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority / impact (optional)
+      description: How would you characterize the impact?
+      options:
+        - "Nice-to-have — minor convenience"
+        - "Blocking my use case — I can't accomplish what I'm trying to do without it"
+        - "Likely useful to many users — I see this asked in the community thread frequently"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: prereqs
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched [existing feature requests](https://github.com/level99/Hubitat-VeSync/issues?q=is%3Aissue+label%3Aenhancement) and confirmed this isn't already requested.
+          required: true
+        - label: This is a feature for an existing driver, not a request to support a new device model. (For new devices, use the [New device support template](https://github.com/level99/Hubitat-VeSync/issues/new?template=new_device_support.yml).)
+          required: true

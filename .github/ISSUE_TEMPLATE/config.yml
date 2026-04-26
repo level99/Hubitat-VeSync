@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Quick question or general discussion
+    url: https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816
+    about: For "is this a bug or expected behavior?", install help, configuration questions, and general discussion, post in the Hubitat community thread first. Faster response than GitHub issues, and other users may have hit the same situation.
+  - name: Migrating from NiklasGustafsson/Hubitat upstream?
+    url: https://github.com/level99/Hubitat-VeSync/blob/main/docs/migration-from-niklas-upstream.md
+    about: If you just installed v2.0 and something stopped working, check the migration guide first. Most "device discovered but no data" reports are covered there.
