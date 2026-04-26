@@ -1122,6 +1122,144 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         ]
     }
 
+    // -------------------------------------------------------------------------
+    // E: Defensive addChildDevice validation + self-heal pass
+    //
+    // Live-test finding: addChildDevice may return a non-null phantom handle if
+    // the DNI was recently deleted and Hubitat's platform purge has not yet
+    // completed. The parent now re-fetches via getChildDevice to confirm the
+    // device is actually queryable before calling updateDataValue.
+    //
+    // updateDevices() now runs a self-heal pass early in its body that removes
+    // state.deviceList entries whose getChildDevice returns null, so orphaned
+    // polls clean themselves up between forceReinitialize calls.
+    //
+    // Architecture note for wireSandbox:
+    //   addChildDevice is wired in wireSandbox to return a TestDevice AND register
+    //   it in childDevices[dni] so getChildDevice can find it. For the phantom test
+    //   (E1) we need addChildDevice to return a TestDevice but getChildDevice to
+    //   return null for that same DNI — simulating a phantom handle. We override
+    //   both inside each spec's given: block.
+    // -------------------------------------------------------------------------
+
+    def "getDevices() phantom addChildDevice: logError emitted and updateDataValue skipped (E1)"() {
+        // E1: addChildDevice returns a non-null TestDevice (phantom), but getChildDevice
+        // subsequently returns null for the same cid. The parent must log an error
+        // and skip updateDataValue (the phantom handle must not be written to).
+        given: "VeSync account returns one V601S device"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-e1"
+        state.accountID = "acc-e1"
+        state.prefsSeeded = true
+        def phantomDevice = new TestDevice()
+        int updateDataValueCallCount = 0
+        phantomDevice.metaClass.updateDataValue = { String k, String v -> updateDataValueCallCount++ }
+
+        // addChildDevice: returns the phantom but does NOT register it in childDevices.
+        // getChildDevice will therefore return null for this cid (simulating a phantom).
+        driver.metaClass.addChildDevice = { String typeName, String dni, Map props ->
+            // Deliberately do NOT put it in childDevices[dni] -- platform phantom
+            phantomDevice
+        }
+        // getChildDevice: returns null for the phantom cid, real device for any other
+        driver.metaClass.getChildDevice = { String dni ->
+            childDevices[dni]  // phantomDevice is not in childDevices, so returns null
+        }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    list: [
+                        [
+                            deviceType  : "LEH-S601S-WUS",
+                            deviceName  : "My Humidifier",
+                            cid         : "phantom-cid-001",
+                            configModule: "LEH-S601S-configModule",
+                            uuid        : "uuid-phantom-001",
+                            macID       : "AA:BB:CC:DD:EE:01"
+                        ]
+                    ],
+                    total: 1
+                ],
+                traceId: "test-trace"
+            ]
+            callback(r)
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "logError was called mentioning the phantom cid"
+        testLog.errors.any { it =~ /addChildDevice for My Humidifier .* appeared to succeed but the device is not queryable/ }
+
+        and: "updateDataValue was NOT called on the phantom handle"
+        updateDataValueCallCount == 0
+    }
+
+    def "updateDevices() self-heal removes stale cid from state.deviceList (E2)"() {
+        // E2: state.deviceList contains two entries — one has a live child device, one is
+        // a ghost (getChildDevice returns null). updateDevices() should remove the ghost
+        // and log an INFO message. The live entry must remain intact.
+        given: "state.deviceList has one ghost cid and one real cid"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = true
+        state.prefsSeeded = true
+        state.deviceList = [
+            "vsaqGhost": "config-ghost",
+            "vsaqReal":  "config-real"
+        ]
+
+        // Wire a real child device for vsaqReal, null for vsaqGhost
+        def realDevice = new TestDevice()
+        realDevice.typeName = "Levoit Vital 200S Air Purifier"
+        realDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["vsaqReal"] = realDevice
+        // vsaqGhost intentionally absent from childDevices -> getChildDevice returns null
+
+        when:
+        driver.updateDevices()
+
+        then: "the ghost cid is removed from state.deviceList"
+        !state.deviceList.containsKey("vsaqGhost")
+
+        and: "the real cid is still present in state.deviceList"
+        state.deviceList.containsKey("vsaqReal")
+
+        and: "an INFO log was emitted identifying the stale entry"
+        testLog.infos.any { it.contains("Removing stale device tracking entry for vsaqGhost") }
+    }
+
+    def "updateDevices() self-heal also removes the paired -nl entry for a stale cid (E3)"() {
+        // E3: when a ghost cid has a paired night-light (-nl) entry in state.deviceList,
+        // both must be removed by the self-heal pass.
+        given: "state.deviceList has a ghost cid plus its -nl companion"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = true
+        state.prefsSeeded = true
+        state.deviceList = [
+            "vsaqGhost":     "config-ghost",
+            "vsaqGhost-nl":  "config-ghost-nl"
+        ]
+        // Neither vsaqGhost nor vsaqGhost-nl is in childDevices (both ghosts)
+        // The self-heal loop only iterates non-nl keys, but on finding vsaqGhost null
+        // it must also remove vsaqGhost-nl.
+
+        when:
+        driver.updateDevices()
+
+        then: "the ghost cid is removed"
+        !state.deviceList.containsKey("vsaqGhost")
+
+        and: "the paired -nl entry is also removed"
+        !state.deviceList.containsKey("vsaqGhost-nl")
+    }
+
     def "getDevices() skips non-Levoit device -- no addChildDevice call, INFO log emitted, cid absent from deviceList (D4)"() {
         // D4: integration test — a non-Levoit device on the VeSync account (here an
         // Etekcity smart switch) must not trigger addChildDevice and must not appear

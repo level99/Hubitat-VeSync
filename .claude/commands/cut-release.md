@@ -84,6 +84,24 @@ Skip bullets that are pure churn (CI tweaks, agent-config edits, lint exemption 
 
 Currently, driver source files do **not** carry per-driver version constants — the package version lives only in `levoitManifest.json`. If this changes in the future, scan for `DRIVER_VERSION` or top-of-file `// vX.Y` comments in `Drivers/Levoit/*.groovy` and propose updates here. For now, this artifact is empty for most cuts. Note it explicitly: *"No driver-version surfaces to update."*
 
+### Artifact C.5 — Manifest `drivers` array reconciliation
+
+Reconcile `levoitManifest.json`'s `drivers` array against the actual files in `Drivers/Levoit/*.groovy`:
+
+1. Glob `Drivers/Levoit/*.groovy` to get the actual driver-file list.
+2. Parse `levoitManifest.json` and extract the `drivers` array entries (each has `name`, `location` ending in a `.groovy` filename).
+3. Compare:
+   - **In files but NOT in manifest** → contributor added a driver file but forgot the manifest entry. Propose a new entry per file:
+     - `id`: fresh UUID v4 (generate via Python: `python -c "import uuid; print(uuid.uuid4())"` if `uv` available, or `[guid]::NewGuid()` via PowerShell, or any UUID generator).
+     - `name`: parse from the driver source's `definition(name: "...", ...)` block.
+     - `namespace`: parse from the same block (must match — Bug Pattern #9 protection).
+     - `location`: `https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/<filename>` (URL-encode spaces as `%20`; the parent + `Notification Tile.groovy` + `LevoitCore200S Light.groovy` use this).
+     - `required`: default `false` for new drivers (only the parent `VeSync Integration` is `required: true`).
+   - **In manifest but NOT in files** → contributor removed a driver file. **DO NOT auto-remove the manifest entry.** Removing a driver from a published package orphans every user's existing devices using that driver (Bug Pattern #9). Surface as a WARNING in the proposal output: *"Driver `<name>` is in the manifest but its source file is missing. This is highly likely a mistake — do NOT proceed with removal unless you've confirmed no users have devices on this driver. If intentional, the user must manually edit the manifest after applying the rest of the release."*
+   - **In both, but `name` or `namespace` mismatched** → driver file's `definition()` was edited in a way that drifts from the manifest. Surface as a WARNING — driver-name changes orphan devices (Bug Pattern #9). Suggest reverting the source-side edit OR explicitly accepting the drift if intentional.
+
+Show the proposed additions in the approval round so the user can see what's being added. The user should confirm UUIDs are sensible and the `required: false` default is right (most drivers are optional; only the parent integration is required).
+
 ### Artifact D — `ROADMAP.md` update
 
 Read `ROADMAP.md`. Determine whether items that just shipped were tracked there (typically the "v<X.Y> — next release" section). Two cases:
@@ -142,6 +160,10 @@ Output a single message structured as:
 
 <list, or "None">
 
+### Artifact C.5 — manifest drivers-array reconciliation
+
+<list of additions / WARNINGs / "No drift detected">
+
 ### Artifact D — ROADMAP.md updates
 
 <unified diff or proposed-section snippet, or "No roadmap content advanced this release">
@@ -161,7 +183,7 @@ Wait for explicit approval. If the user redirects on any artifact, redraft that 
 
 After explicit approval (e.g., "approved", "go", "ship it"):
 
-- Edit `levoitManifest.json`: update `version`, `dateReleased`, `releaseNotes` only. Leave the `drivers` array untouched.
+- Edit `levoitManifest.json`: update `version`, `dateReleased`, `releaseNotes`. Apply any Artifact C.5 drivers-array additions (do NOT remove entries on `WARNING:` cases — those need human-only review per the spec). Leave `packageName`, `author`, `documentationLink`, `communityLink`, `licenseFile` untouched (those are stable fields changed manually outside of release cuts).
 - Edit (or create) `CHANGELOG.md`: prepend the new entry per Step 4 Artifact B.
 - Apply any Artifact C edits if applicable.
 - Apply Artifact D `ROADMAP.md` edits if any were proposed.

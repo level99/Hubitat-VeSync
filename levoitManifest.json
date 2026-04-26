@@ -1,6 +1,6 @@
 {
   "packageName": "Levoit Air Purifiers and Humidifiers",
-  "author": "Niklas Gustafsson (original); Dan Cox (community fork)",
+  "author": "Dan Cox (level99 fork); Niklas Gustafsson (original upstream)",
   "version": "2.0",
   "minimumHEVersion": "2.3.2",
   "dateReleased": "2026-04-25",

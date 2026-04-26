@@ -26,6 +26,17 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-26: v2.0+ Defensive addChildDevice validation + state.deviceList
+//                  self-heal pass. Live-test discovered that when a child
+//                  device is deleted and forceReinitialize triggered shortly
+//                  after, Hubitat's platform may return a non-null phantom
+//                  handle from addChildDevice (DNI mapping not fully purged
+//                  yet). Parent now re-fetches via getChildDevice to verify
+//                  the add succeeded; on failure logs an actionable error and
+//                  skips updateDataValue. Also: updateDevices() now runs a
+//                  self-heal pass at startup that removes state.deviceList
+//                  entries with no corresponding child, so orphaned polls
+//                  clean themselves up over time.
 // 2026-04-26: v2.0+ Generic-driver dispatch filter -- only Levoit climate-class
 //                  devices (LAP-/LEH-/LV- prefixes + literal Core200S/300S/400S/
 //                  600S/Vital200S names) attach to the Generic driver. Non-Levoit
@@ -261,6 +272,31 @@ def Boolean updateDevices()
         return false
     }
 
+    // Self-heal: remove cids from state.deviceList that have no corresponding child device.
+    // This handles the case where addChildDevice silently returned a phantom handle during
+    // discovery (Hubitat platform race after a recent DNI deletion). Once the platform fully
+    // purges the deleted device, getChildDevice returns null and these entries become
+    // orphaned polls. Removing them stops the orphan and lets the next forceReinitialize
+    // attempt a clean re-add.
+    def staleCids = []
+    state.deviceList?.each { dni, configModule ->
+        if (dni.endsWith("-nl")) return  // light children are tied to their parent's cid entry
+        if (getChildDevice(dni) == null) {
+            staleCids << dni
+        }
+    }
+    if (staleCids) {
+        staleCids.each { dni ->
+            logInfo "Removing stale device tracking entry for ${dni} (no corresponding child device)"
+            state.deviceList.remove(dni)
+            // Also remove the paired night-light DNI if present
+            if (state.deviceList?.containsKey(dni + "-nl")) {
+                state.deviceList.remove(dni + "-nl")
+            }
+        }
+        logInfo "Self-heal: removed ${staleCids.size()} stale device tracking entries. Run forceReinitialize to retry discovery."
+    }
+
     // Immediately schedule the next update -- this will keep the
     // referesh interval as close to constant as possible.
     runIn((int)settings.refreshInterval, "updateDevices")
@@ -466,7 +502,7 @@ private Boolean getDevices() {
                 logInfo "Discovered ${resp.data.result.list.size()} VeSync device(s)"
 
                 // Remove devices that are no longer present.
-                List<com.hubitat.app.ChildDeviceWrapper> list = getChildDevices();
+                def list = getChildDevices();
                 if (list) list.each {
                     String dni = it.getDeviceNetworkId();
                     if (newList.containsKey(dni) == false) {
@@ -478,13 +514,21 @@ private Boolean getDevices() {
 
                 for (device in resp.data.result.list) {
                     def dtype = deviceType(device.deviceType);
-                    com.hubitat.app.ChildDeviceWrapper equip1 = getChildDevice(device.cid)
+                    def equip1 = getChildDevice(device.cid)
 
                     if (dtype == "200S") {
-                        com.hubitat.app.ChildDeviceWrapper equip2 = getChildDevice(device.cid+"-nl")
+                        def equip2 = getChildDevice(device.cid+"-nl")
 
                         if (equip2 == null) {
                             equip2 = addChildDevice("Levoit Core200S Air Purifier Light", device.cid+"-nl", [name: device.deviceName + " Light", label: device.deviceName + " Light", isComponent: false]);
+                            // Defensive validation: addChildDevice may return a phantom handle if the DNI was
+                            // recently deleted and Hubitat's purge has not completed (platform race condition).
+                            def verifyLight = getChildDevice(device.cid + "-nl")
+                            if (verifyLight == null) {
+                                logError "addChildDevice for ${device.deviceName} Light (${device.cid}-nl) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip2 = verifyLight
                             equip2.updateDataValue("configModule", device.configModule);
                             equip2.updateDataValue("cid", device.cid);
                             equip2.updateDataValue("uuid", device.uuid);
@@ -499,6 +543,13 @@ private Boolean getDevices() {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
                             equip1 = addChildDevice("Levoit Core200S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            // Defensive validation: confirm the device is queryable (guards against DNI-purge phantom)
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
@@ -514,6 +565,12 @@ private Boolean getDevices() {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
                             equip1 = addChildDevice("Levoit Core300S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
@@ -529,6 +586,12 @@ private Boolean getDevices() {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
                             equip1 = addChildDevice("Levoit Core400S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
@@ -544,6 +607,12 @@ private Boolean getDevices() {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
                             equip1 = addChildDevice("Levoit Core600S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
@@ -559,6 +628,12 @@ private Boolean getDevices() {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
                             equip1 = addChildDevice("Levoit Vital 200S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
@@ -574,6 +649,12 @@ private Boolean getDevices() {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
                             equip1 = addChildDevice("Levoit Superior 6000S Humidifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
@@ -590,6 +671,12 @@ private Boolean getDevices() {
                             if (equip1 == null) {
                                 logDebug "Adding ${device.deviceName} (unrecognized model ${device.deviceType} -- using Generic driver)"
                                 equip1 = addChildDevice("Levoit Generic Device", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                                def verify1 = getChildDevice(device.cid)
+                                if (verify1 == null) {
+                                    logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                    continue
+                                }
+                                equip1 = verify1
                                 equip1.updateDataValue("configModule", device.configModule);
                                 equip1.updateDataValue("cid", device.cid);
                                 equip1.updateDataValue("uuid", device.uuid);
