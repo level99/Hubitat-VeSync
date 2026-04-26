@@ -40,6 +40,36 @@ A single **parent driver** (`VeSyncIntegration.groovy`) holds the user's VeSync 
 
 ---
 
+## Project documentation files — when to load
+
+Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read them on-demand** when their content is relevant to the user's question — don't preemptively load them all.
+
+| File | Purpose | When to read |
+|---|---|---|
+| `README.md` | Top-level repo overview, install instructions, supported-device matrix | User asks about install, what the fork does, repo overview |
+| `Drivers/Levoit/readme.md` | Per-driver feature/event tables, capabilities, preferences | User asks about a specific driver's features, events, or how a model behaves |
+| `ROADMAP.md` | Public roadmap — future releases, device-support tiers, speculative API questions, naming traps | Trigger phrases: *"roadmap"*, *"future release"*, *"next version"*, *"v2.X"* (where X is unshipped), *"upcoming"*, *"planned"*, *"any plans for &lt;model&gt;"*, *"what's coming"* |
+| `CHANGELOG.md` | Release-by-release change history (Keep-a-Changelog format) | Trigger phrases: *"changelog"*, *"release notes"*, *"what changed"*, *"what shipped in v2.X"* |
+| `docs/migration-from-niklas-upstream.md` | Step-by-step migration guide for users coming from the original NiklasGustafsson/Hubitat upstream | Trigger phrases: *"migration"*, *"upgrade from upstream"*, *"moving from Niklas"*, *"v1 to v2"*, *"existing devices break after install"* |
+| `CONTRIBUTING.md` (when present, post-v2.0) | Human-contributor onboarding — translates the dev/QA/tester pipeline to a non-AI audience | Trigger phrases: *"contributing"*, *"how do I open a PR"*, *"contributor guide"* |
+| `CODE_OF_CONDUCT.md` (when present, post-v2.0) | Community-conduct standard | Trigger phrases: *"code of conduct"*, *"community rules"* |
+| `levoitManifest.json` | HPM package manifest | Trigger phrases: *"HPM"*, *"package manifest"*, *"manifest"*, *"Hubitat Package Manager"*, anything about install via HPM |
+| `.gemini/config.yaml` (when present) | Gemini Code Assist auto-review configuration for this repo | Trigger phrases: *"gemini"*, *"auto-review"*, *"PR review bot"* |
+
+### Maintainer-local files (NOT in clones)
+
+| File | Purpose | When to read |
+|---|---|---|
+| `TODO.md` | **Maintainer-private working notes** — gitignored. Only present in the maintainer's local checkout. Holds in-flight scope decisions, sequencing detail, community-thread tag lists, and other content not appropriate for public repos. | **Read only if the file exists locally.** Check via `[ -f TODO.md ]` first. Trigger phrases (when present): *"todo"*, *"what's in flight"*, *"in-flight work"*, *"next steps for &lt;current release&gt;"*. |
+
+### Loading discipline
+
+- **Never assume a file exists.** When a trigger phrase fires, glob/check first. `ROADMAP.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, etc. may not exist in older clones or branches.
+- **Don't dump file contents into chat.** Read the file, extract what's relevant, paraphrase for the user. Quote verbatim only when correctness depends on it.
+- **`TODO.md` discipline:** if it doesn't exist, treat the user's "todo" question as a request about `ROADMAP.md` (public-facing) instead. Don't suggest creating `TODO.md` from scratch — it's a maintainer-personal artifact.
+
+---
+
 ## The pipeline (HARD rule)
 
 **Every code change goes through this pipeline. Do not skip steps.**

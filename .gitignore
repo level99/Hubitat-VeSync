@@ -47,3 +47,6 @@ desktop.ini
 # Local env files (in case anyone adds CI secrets locally)
 .env
 .env.local
+
+# Maintainer-local working notes. Public roadmap lives in ROADMAP.md.
+TODO.md
