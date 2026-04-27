@@ -1578,4 +1578,42 @@ class VeSyncIntegrationSpec extends HubitatSpec {
             "Classic300S",          // Added alongside LUH-* gap fix; some firmware reports this literal
         ]
     }
+
+    // -------------------------------------------------------------------------
+    // H7: TYPENAME_TO_METHOD map default fallback
+    //
+    // Any child whose typeName does not contain "Tower Fan", "Pedestal Fan", or
+    // "Humidifier" must fall through to DEFAULT_POLL_METHOD ("getPurifierStatus").
+    // The Generic Levoit Diagnostic Driver ("Levoit Generic Device") is the
+    // canonical example: it contains none of the routing substrings, so the
+    // parent polls it with getPurifierStatus. This is documented in the driver
+    // readme as a known limitation for humidifier-shape Generic devices.
+    // -------------------------------------------------------------------------
+
+    def "updateDevices() falls back to getPurifierStatus for Generic Levoit Device (H7 -- map default)"() {
+        // H7: TYPENAME_TO_METHOD.find returns null for "Levoit Generic Device" (no matching
+        // key substring) → Elvis operator picks DEFAULT_POLL_METHOD = "getPurifierStatus".
+        // Bit-identical to the old if-chain's else branch for the same typeName.
+        given: "state has a Generic Levoit device"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.deviceList = ["GENERIC-CID": "test-config-module"]
+
+        def genericDevice = new TestDevice()
+        genericDevice.typeName = "Levoit Generic Device"
+        genericDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["GENERIC-CID"] = genericDevice
+
+        when:
+        driver.updateDevices()
+
+        then: "the bypass request body used getPurifierStatus (DEFAULT_POLL_METHOD fallback)"
+        capturedBypassBodies.any { it.payload?.method == "getPurifierStatus" }
+
+        and: "no other poll method was used"
+        !capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
+        !capturedBypassBodies.any { it.payload?.method == "getTowerFanStatus" }
+        !capturedBypassBodies.any { it.payload?.method == "getFanStatus" }
+    }
 }

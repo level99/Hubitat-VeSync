@@ -115,6 +115,19 @@ import groovy.transform.Field
 // (per pyvesync const.py). Full support requires switching the endpoint host — parked for v2.1+.
 @Field static final String DEVICE_REGION     = "US"
 
+// updateDevices() poll-method routing map (GitHub issue #3 / Gemini PR #2 suggestion).
+// Maps a typeName substring to the VeSync API method that returns device status for that family.
+// Iteration order (LinkedHashMap insertion order) is preserved; most-specific keys listed first.
+// Keys are frozen by Bug Pattern #9 / RULE19 — driver typeName substrings are frozen once shipped
+// because Hubitat associates devices to drivers by name. Adding a new driver family requires a new
+// map entry here AND a matching driver whose definition(name:) contains the same substring.
+@Field static final Map<String,String> TYPENAME_TO_METHOD = [
+    "Tower Fan":    "getTowerFanStatus",
+    "Pedestal Fan": "getFanStatus",
+    "Humidifier":   "getHumidifierStatus"
+]
+@Field static final String DEFAULT_POLL_METHOD = "getPurifierStatus"
+
 metadata {
     definition(
         name: "VeSync Integration",
@@ -342,24 +355,12 @@ def Boolean updateDevices()
 
             // Branch the API method by device type. The VeSync API uses different read methods
             // for each device family; calling the wrong method returns code:-1 with empty result.
-            //   Tower Fan   -> getTowerFanStatus  (per pyvesync VeSyncTowerFan.get_details)
-            //   Pedestal Fan -> getFanStatus       (per pyvesync VeSyncPedestalFan.get_details)
-            //   Humidifier  -> getHumidifierStatus
-            //   All others  -> getPurifierStatus   (air purifiers)
-            // Order: most-specific fan checks first; "Humidifier" is not a substring of either
-            // fan typeName so the humidifier check is safe in any order, but most-specific
-            // first is the canonical style here.
+            // Routing is driven by TYPENAME_TO_METHOD (defined near the top of this file alongside
+            // the other @Field constants). Keys are typeName substrings; iteration order (insertion
+            // order, most-specific first) is preserved by Groovy's LinkedHashMap default.
+            // DEFAULT_POLL_METHOD ("getPurifierStatus") covers all purifiers and any unrecognized type.
             String typeName = dev.typeName ?: dev.name ?: ""
-            String method
-            if (typeName.contains("Tower Fan")) {
-                method = "getTowerFanStatus"
-            } else if (typeName.contains("Pedestal Fan")) {
-                method = "getFanStatus"
-            } else if (typeName.contains("Humidifier")) {
-                method = "getHumidifierStatus"
-            } else {
-                method = "getPurifierStatus"
-            }
+            String method = TYPENAME_TO_METHOD.find { typeName.contains(it.key) }?.value ?: DEFAULT_POLL_METHOD
             def command = [
                 "method": method,
                 "source": "APP",
