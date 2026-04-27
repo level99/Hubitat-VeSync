@@ -97,7 +97,9 @@ For new-device-support requests, install the **Generic Levoit Diagnostic** drive
 
 ## Contributing
 
-Pull requests welcome. See [`CLAUDE.md`](CLAUDE.md) for the development pipeline, code conventions, and bug-pattern catalog. The Spock unit-test harness + static lint run on every PR via GitHub Actions.
+Pull requests welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) — it covers the codebase tour, dev environment, conventions enforced by lint/tests, test runners, and PR flow. AI-assisted contributors should also read [`CLAUDE.md`](CLAUDE.md) for the dev/QA/tester agent-pipeline overlay. The Spock unit-test harness + static lint run on every PR via GitHub Actions.
+
+Community conduct: [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 Roadmap and unscheduled future work: [`ROADMAP.md`](ROADMAP.md).
 
@@ -108,7 +110,7 @@ Roadmap and unscheduled future work: [`ROADMAP.md`](ROADMAP.md).
 
 ## Credits
 
-- **Niklas Gustafsson** — original VeSyncIntegration framework, Core 200S/300S/400S/600S drivers
+- **[Niklas Gustafsson](https://github.com/NiklasGustafsson)** — original VeSyncIntegration framework, Core 200S/300S/400S/600S drivers
 - **Dan Cox** — community fork maintainer (v2.0+); Vital 100S/200S, Classic 300S, Superior 6000S, OasisMist 450S, Tower Fan, Pedestal Fan, parent humidifier-method fix, Generic diagnostic driver, token-expiry auto-recovery, infrastructure
 - **elfege** — `setLevel()` support, Core 600S 'max' speed
 - **[pyvesync](https://github.com/webdjoe/pyvesync)** — canonical VeSync API payload reference; HA `vesync` integration, SmartThings + Homebridge community drivers used as v2.1 cross-check sources

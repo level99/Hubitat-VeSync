@@ -16,7 +16,7 @@ Thanks for considering a contribution. This is a community-maintained fork of th
 
 - **Code PRs** — open against `main` at https://github.com/level99/Hubitat-VeSync. Branch off latest `main`; squash-merge is the default.
 - **Bug reports / new-device requests / feature requests** — GitHub issues with the matching template. The [community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) is fine for casual questions, but issues are the durable record.
-- **Sensitive incident reports** — direct message to the maintainer at https://github.com/level99.
+- **Sensitive incident reports** — direct message to the maintainer at https://github.com/level99. See [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for the formal escalation framework.
 
 ## Codebase orientation
 
