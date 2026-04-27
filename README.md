@@ -21,6 +21,7 @@ A Hubitat Elevation driver pack for **Levoit smart home devices** (air purifiers
 | **Levoit Classic 300S** Humidifier *(v2.1 preview)* | `LUH-A601S-WUSB/-AUSW` (`Classic300S`) | Switch, MistLevel (1-9), TargetHumidity (30-80), Mode (auto/sleep/manual), AutoStop, NightLight (off/dim/bright), Display, Humidity sensor |
 | **Levoit Superior 6000S** Humidifier | `LEH-S601S-WUS/-WUSR/-WEUR`, `LEH-S602S-WUS` | Switch, MistLevel (1-9), TargetHumidity, Mode (auto/sleep/manual), DryingMode, AutoStop, ChildLock, Display, WickFilterLife, Water level, Pump cleaning, Temperature |
 | **Levoit OasisMist 450S Humidifier** (US Smart variant) *(v2.1 preview)* | `LUH-O451S-WUS/-WUSR`, `LUH-O601S-WUS/-KUS` | Switch, MistLevel (1-9), WarmMistLevel (0-3), TargetHumidity (40-80), Mode (auto/sleep/manual), AutoStop, Display, Humidity sensor. **No night light** (hardware lacks it). |
+| **Levoit LV600S Humidifier** *(v2.2 preview)* | `LUH-A602S-WUSR/-WUS/-WEUR/-WEU/-WJP/-WUSC` | Switch, MistLevel (1-9), WarmMistLevel (0-3), TargetHumidity (30-80), Mode (auto/sleep/manual), AutoStop, Display, Humidity sensor. **No night light** (hardware lacks it). Same VeSyncHumid200300S class as Classic 300S + OasisMist 450S. **Note:** auto mode may require `humidity` payload on some EU firmware variants (see [pyvesync PR #505](https://github.com/webdjoe/pyvesync/pull/505)); driver follows canonical pyvesync fixture (`mode:"auto"`). |
 | **Levoit Tower Fan** *(v2.1 preview)* | `LTF-F422S-WUS/-WUSR/-KEU/-WJP` | Switch, FanControl (1-12), SwitchLevel, Mode (normal/turbo/auto/sleep), Oscillation (single-axis), Mute, Timer, Display, Temperature, ErrorCode |
 | **Levoit Pedestal Fan** *(v2.1 preview)* | `LPF-R432S-AEU/-AUS` | Switch, FanControl (1-12), SwitchLevel, Mode (normal/turbo/eco/sleep), 2-axis Oscillation with range control, Mute, Display, Temperature, ChildLock (read-only) |
 | **Levoit Generic Device** | Fall-through for unsupported `LAP-` / `LEH-` / `LV-` Levoit models | Best-effort Switch + SwitchLevel + AirQuality + Humidity, plus `captureDiagnostics()` for filing new-device-support issues |
@@ -85,11 +86,22 @@ Three preference toggles per driver gate log verbosity:
 
 The parent driver auto-redacts email, account ID, token, and password from every log line.
 
+## Configuration
+
+### VeSync API region (EU users)
+
+The parent driver's **VeSync API region** preference (default: `US`) controls which VeSync cloud host is used:
+
+- **US** (default) — `smartapi.vesync.com`. Correct for North America, Australia, and most other regions.
+- **EU** — `smartapi.vesync.eu`. Select this if your VeSync account was registered in the EU and US-region login fails.
+
+Changing region clears the stored auth token and forces a fresh login. **EU support is preview** — the maintainer does not have EU hardware for live verification. If you're an EU user, please report your experience on the [Hubitat community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499).
+
 ## Troubleshooting
 
 - **"Discovered but no data"** on a child device — the device's Type may not match the new fork driver. Open the device → Type dropdown → pick the matching `Levoit ...` driver → Save → Refresh.
 - **Devices unresponsive after weeks/months** — VeSync token expired. The fork's parent (v2.0+) auto-recovers; first poll after expiry may show a 5-10s delay while re-auth runs.
-- **Parent never finds devices** — verify VeSync credentials in the parent preferences; same email + password as the Levoit/VeSync mobile app.
+- **Parent never finds devices** — verify VeSync credentials in the parent preferences; same email + password as the Levoit/VeSync mobile app. EU users: confirm the **VeSync API region** preference is set to `EU`.
 - **Devices show up but attribute polling lags** — refresh interval may be too aggressive. Increase to 60-120s.
 - **Non-Levoit devices on your VeSync account** (Etekcity smart plugs, Cosori air fryers, etc.) — these are skipped at discovery with an INFO log. They don't get a Hubitat child created.
 

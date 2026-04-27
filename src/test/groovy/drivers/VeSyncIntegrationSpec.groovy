@@ -17,8 +17,12 @@ import support.TestDevice
  *   deviceType()    — switch recognizes V201S regional variants
  *   Issue 2         — updateDevices() no longer throws MissingPropertyException
  *                     (removed unused `result =` assignment)
- *   Pattern 2       — sendBypassRequest uses DEVICE_REGION @Field constant ("US");
- *                     regional host-switching parked for v2.1+
+ *   Pattern 2       — sendBypassRequest body.deviceRegion reads from getDeviceRegion()
+ *                     (preference-backed, Elvis fallback "US" for backwards compat; v2.2)
+ *   Section J       — EU region support (v2.2 preview):
+ *                     getDeviceRegion() default, EU setting, getApiHost() routing,
+ *                     updated() region-change clears token, no-op on same-region save,
+ *                     bypassV2 body reflects preference value
  *
  * ARCHITECTURE NOTE: The parent driver is NOT a child — it runs differently.
  * It calls httpPost (for login/getDevices), not parent.sendBypassRequest.
@@ -941,15 +945,18 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Pattern 2 — DEVICE_REGION constant in sendBypassRequest
-    // Regional routing is binary (US/EU host-switching) and is parked for v2.1+.
-    // The @Field constant DEVICE_REGION = "US" is used directly in the body;
-    // no settings preference is wired.
+    // Pattern 2 — deviceRegion in sendBypassRequest body (v2.2: preference-backed)
+    // Regional routing is binary (US/EU). getDeviceRegion() reads settings?.deviceRegion
+    // with "US" as the Elvis-fallback for backwards compatibility on existing installs.
+    // The @Field DEVICE_REGION constant was removed in v2.2 -- this spec validates the
+    // new preference-backed path still supplies "US" when preference is absent.
     // -------------------------------------------------------------------------
 
-    def "sendBypassRequest uses DEVICE_REGION constant ('US') in body -- regional routing parked for future PR (Pattern 2)"() {
-        // B: DEVICE_REGION is a @Field constant; body.deviceRegion == "US" unconditionally.
-        given: "no deviceRegion preference (removed); DEVICE_REGION @Field constant supplies the value"
+    def "sendBypassRequest body carries deviceRegion 'US' when preference is unset (Pattern 2 -- backwards compat)"() {
+        // B: deviceRegion preference absent → getDeviceRegion() returns "US" via Elvis fallback.
+        // Verifies backwards-compatibility for existing installs that were upgraded without
+        // explicitly setting the new preference.
+        given: "deviceRegion preference is absent (simulates pre-v2.2 install)"
         settings.remove('deviceRegion')
         settings.descriptionTextEnable = false
         settings.debugOutput = false
@@ -961,7 +968,7 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         when:
         driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
 
-        then: "the request body carries deviceRegion 'US' from the DEVICE_REGION constant"
+        then: "the request body carries deviceRegion 'US' (Elvis fallback -- no preference set)"
         capturedBypassBodies.size() == 1
         capturedBypassBodies[0].deviceRegion == "US"
     }
@@ -1797,5 +1804,183 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         and: "no exception thrown (no subscribe() call hit the fail-fast mock)"
         noExceptionThrown()
+    }
+
+    // =========================================================================
+    // Section J — EU region support (v2.2 preview)
+    //
+    // Validates the getDeviceRegion() / getApiHost() helpers, the deviceRegion
+    // preference, the updated() region-change handler, and the bypassV2 body
+    // field reflection.
+    //
+    // EU support ships as preview -- no EU hardware live-verified.
+    // These specs exercise the code paths without real network calls.
+    // =========================================================================
+
+    def "getDeviceRegion() returns 'US' when deviceRegion preference is unset (J1 -- default)"() {
+        // J1: Elvis fallback -- when the deviceRegion preference has not been set (e.g. fresh
+        // install or pre-v2.2 upgrade where the pref didn't exist), getDeviceRegion() must
+        // return "US" so existing installs are unaffected.
+        given: "deviceRegion preference is absent"
+        settings.remove('deviceRegion')
+
+        expect: "getDeviceRegion() returns 'US'"
+        driver.getDeviceRegion() == "US"
+    }
+
+    def "getDeviceRegion() reads 'EU' from settings when preference is set (J2 -- EU setting)"() {
+        // J2: preference read path -- when the user has set deviceRegion to "EU" in the
+        // driver preferences, getDeviceRegion() must return that value.
+        given: "deviceRegion preference is set to EU"
+        settings.deviceRegion = "EU"
+
+        expect: "getDeviceRegion() returns 'EU'"
+        driver.getDeviceRegion() == "EU"
+    }
+
+    def "getApiHost() returns correct host for each region (J3 -- routing)"(String region, String expectedHost) {
+        // J3: routing helper -- getApiHost() maps "US" to smartapi.vesync.com and
+        // "EU" to smartapi.vesync.eu per pyvesync const.py. Any value other than
+        // "EU" falls through to the US host (safe default).
+        given: "deviceRegion preference is set"
+        settings.deviceRegion = region
+
+        expect: "getApiHost() returns the correct VeSync cloud host"
+        driver.getApiHost() == expectedHost
+
+        where:
+        region | expectedHost
+        "US"   | "smartapi.vesync.com"
+        "EU"   | "smartapi.vesync.eu"
+        null   | "smartapi.vesync.com"    // null → Elvis → "US" → US host
+    }
+
+    def "updated() clears state.token and state.accountID when region changes (J4 -- region-change handler)"(String fromRegion, String toRegion) {
+        // J4: region-change handler -- when the user switches regions in either direction
+        // (US→EU or EU→US), the stored token and accountID are invalid (cross-region tokens
+        // are rejected by the VeSync API). updated() must clear both and log an INFO message.
+        // initialize() is called via runIn(15) and is not exercised here (mocked to no-op).
+        // Both directions are tested via the where: table to guard against asymmetric logic.
+        given: "driver was previously using fromRegion, now switching to toRegion"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.deviceRegion = toRegion
+        settings.refreshInterval = 30
+        state.lastRegion  = fromRegion
+        state.token       = "${fromRegion.toLowerCase()}-region-token"
+        state.accountID   = "acc-${fromRegion.toLowerCase()}-001"
+
+        // Stub out runIn and unschedule to prevent real scheduling side-effects
+        driver.metaClass.runIn   = { int delay, String handler -> /* no-op */ }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+        driver.metaClass.pauseExecution = { Long ms -> /* no-op */ }
+
+        when:
+        driver.updated()
+
+        then: "state.token is cleared"
+        !state.containsKey('token')
+
+        and: "state.accountID is cleared"
+        !state.containsKey('accountID')
+
+        and: "state.lastRegion is updated to the new region"
+        state.lastRegion == toRegion
+
+        and: "an INFO log was emitted naming both the old and new region"
+        testLog.infos.any { it.contains("region changed") && it.contains(fromRegion) && it.contains(toRegion) }
+
+        where:
+        fromRegion | toRegion
+        "US"       | "EU"
+        "EU"       | "US"
+    }
+
+    def "updated() does NOT clear state.token when region is unchanged (J5 -- no-op for same-region save)"() {
+        // J5: no-op path -- when the user clicks Save Preferences without changing the region,
+        // updated() must NOT clear the stored token. Clearing the token on every save would
+        // force an unnecessary re-login on every preference change.
+        given: "driver region is already US, no region change"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        settings.deviceRegion = "US"
+        settings.refreshInterval = 30
+        state.lastRegion  = "US"
+        state.token       = "valid-us-token"
+        state.accountID   = "acc-us-002"
+
+        driver.metaClass.runIn   = { int delay, String handler -> /* no-op */ }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+        driver.metaClass.pauseExecution = { Long ms -> /* no-op */ }
+
+        when:
+        driver.updated()
+
+        then: "state.token is preserved (no region change, no re-login needed)"
+        state.token == "valid-us-token"
+
+        and: "state.accountID is preserved"
+        state.accountID == "acc-us-002"
+
+        and: "no region-change INFO log was emitted"
+        !testLog.infos.any { it.contains("region changed") }
+    }
+
+    def "updated() does NOT clear token on first-ever save when state.lastRegion is null (J7 -- first-save guard)"() {
+        // J7: null-lastRegion guard -- on a fresh install or the very first updated() call
+        // after a hub restore, state.lastRegion is null (no prior region recorded).
+        // The guard `if (state.lastRegion != null && ...)` must skip the clear-and-relogin
+        // path so users aren't forced to re-authenticate on first setup.
+        // state.lastRegion must be set to the current preference value afterwards so that
+        // subsequent region changes are detected correctly.
+        given: "fresh install: state.lastRegion absent, token already populated (e.g. from a prior session)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.deviceRegion = "EU"
+        settings.refreshInterval = 30
+        state.remove('lastRegion')          // simulate first-ever save
+        state.token     = "pre-existing-token"
+        state.accountID = "pre-existing-acc"
+
+        driver.metaClass.runIn   = { int delay, String handler -> /* no-op */ }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+        driver.metaClass.pauseExecution = { Long ms -> /* no-op */ }
+
+        when:
+        driver.updated()
+
+        then: "token is NOT cleared (first-save guard skips the clear)"
+        state.token == "pre-existing-token"
+
+        and: "accountID is NOT cleared"
+        state.accountID == "pre-existing-acc"
+
+        and: "state.lastRegion is now seeded with the current preference value"
+        state.lastRegion == "EU"
+
+        and: "no region-change INFO log was emitted"
+        !testLog.infos.any { it.contains("region changed") }
+    }
+
+    def "sendBypassRequest body.deviceRegion reflects the configured preference value (J6 -- body field)"() {
+        // J6: bypassV2 body field -- the body sent to sendBypassRequest must carry the
+        // getDeviceRegion() value in body.deviceRegion. Tested for both US (default/explicit)
+        // and EU.
+        given: "deviceRegion preference is set to EU"
+        settings.deviceRegion = "EU"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.token     = "tok-j6"
+        state.accountID = "acc-j6"
+        state.scheduleVersion = "2.2"   // skip watchdog migration in this test
+        def equip = new TestDevice()
+        capturedBypassBodies.clear()
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "the request body carries deviceRegion 'EU' matching the preference"
+        capturedBypassBodies.size() == 1
+        capturedBypassBodies[0].deviceRegion == "EU"
     }
 }

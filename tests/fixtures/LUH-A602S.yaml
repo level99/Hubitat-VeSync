@@ -1,0 +1,304 @@
+# pyvesync canonical API fixtures for LV600S (LUH-A602S-*) humidifier
+# Source: https://github.com/webdjoe/pyvesync
+# Commit: c98729c45860cc765d63d49a9a02bbc18de090c4 (2026-04-16)
+# Retrieved: 2026-04-27
+#
+# Upstream fixture: src/tests/api/vesynchumidifier/LUH-A602S-WUS.yaml
+# RESPONSE data synthesized from pyvesync HUMIDIFIER_DETAILS and
+#   device_map.py LUH-A602S entry (VeSyncHumid200300S class).
+#
+# Device: VeSyncHumid200300S class (same base class as Classic 300S + OasisMist 450S)
+# Model codes:
+#   LUH-A602S-WUSR, LUH-A602S-WUS, LUH-A602S-WEUR, LUH-A602S-WEU,
+#   LUH-A602S-WJP, LUH-A602S-WUSC
+#   (all 6 route to the Levoit LV600S Humidifier driver)
+#
+# CRITICAL: pyvesync PR #505 context
+#   PR #505 ("fix: set correct auto mode for LV600S") opened by owner of LUH-A602S-WEU
+#   reporting that mode:"auto" had no effect and mode:"humidity" actually switched to auto.
+#   PR status: OPEN and pending pyvesync maintainer review (as of 2026-04-27).
+#   Canonical fixture (this file and upstream LUH-A602S-WUS.yaml) uses "mode: auto".
+#   pyvesync maintainer requested device JSON before merging.
+#   Decision: use "mode: auto" per canonical fixture. See CROSS-CHECK in driver source.
+#
+# Key differences from Classic 300S (LUH-A601S):
+#   - warm_enabled and warm_level are POPULATED (LV600S has warm-mist hardware)
+#   - warm mist range: 0-3 (0=off, 1-3=warm intensity)
+#   - NO night_light_brightness (LV600S hardware does not have night light)
+#   - All other payload shapes identical to Classic 300S (same VeSyncHumid200300S class)
+#
+# Key differences from OasisMist 450S (LUH-O451S-WUS):
+#   - Target humidity range 30-80 (pyvesync device_map.py LUH-A602S entry has
+#     no humidity_min override, so inherits VeSyncHumid200300S base of 30)
+#   - LV600S has NO humidity_high indicator in response (different from Classic 300S)
+#     CROSS-CHECK: pyvesync VeSyncHumid200300S.ClassicLVHumidResult omits humidity_high
+#     for LUH-A602S per call_json_humidifiers.py field set. Using a fallback/null-guard
+#     in applyStatus to handle its potential presence or absence defensively.
+#   - Like OasisMist 450S: has warm mist; no night light
+#
+# Payload shape (same as Classic 300S and OasisMist 450S):
+#   - Switch: {enabled: bool, id: 0}      NOT {powerSwitch, switchIdx}
+#   - Mode: {mode: <value>}               NOT {workMode}
+#   - setVirtualLevel mist: {id:0, level:N, type:'mist'}
+#   - setVirtualLevel warm: {id:0, level:N, type:'warm'}
+#   - Display: {state: bool}              NOT {screenSwitch}
+#   - Auto-stop: {enabled: bool}          NOT {autoStopSwitch}
+#   - Status query: getHumidifierStatus
+#   - targetHumidity lives under configuration.auto_target_humidity
+#
+# REQUEST payloads -- as sent to /cloud/v2/deviceManaged/bypassV2
+# Sourced from upstream LUH-A602S-WUS.yaml (commit c98729c)
+
+requests:
+  turn_on:
+    payload:
+      data:
+        enabled: true
+        id: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        enabled: false
+        id: 0
+      method: setSwitch
+      source: APP
+
+  # CROSS-CHECK: auto mode payload is "mode: auto" per pyvesync canonical fixture
+  # (LUH-A602S-WUS.yaml commit c98729c). pyvesync PR #505 (OPEN, 2026-04-27) reports
+  # LUH-A602S-WEU requires "mode: humidity" instead, but this is unmerged/unconfirmed.
+  # Our driver uses "auto" and documents the conflict with a CROSS-CHECK comment.
+  set_auto_mode:
+    payload:
+      data:
+        mode: auto
+      method: setHumidityMode
+      source: APP
+
+  set_sleep_mode:
+    payload:
+      data:
+        mode: sleep
+      method: setHumidityMode
+      source: APP
+
+  set_manual_mode:
+    payload:
+      data:
+        mode: manual
+      method: setHumidityMode
+      source: APP
+
+  set_mist_level:
+    payload:
+      data:
+        id: 0
+        level: 2
+        type: mist
+      method: setVirtualLevel
+      source: APP
+
+  # LV600S-specific: warm mist level (type: 'warm', same method, different discriminator)
+  set_warm_level:
+    payload:
+      data:
+        id: 0
+        level: 3
+        type: warm
+      method: setVirtualLevel
+      source: APP
+
+  # LV600S-specific: warm mist off (level=0)
+  set_warm_off:
+    payload:
+      data:
+        id: 0
+        level: 0
+        type: warm
+      method: setVirtualLevel
+      source: APP
+
+  set_humidity:
+    payload:
+      data:
+        target_humidity: 50
+      method: setTargetHumidity
+      source: APP
+
+  turn_on_display:
+    payload:
+      data:
+        state: true
+      method: setDisplay
+      source: APP
+
+  turn_off_display:
+    payload:
+      data:
+        state: false
+      method: setDisplay
+      source: APP
+
+  turn_on_automatic_stop:
+    payload:
+      data:
+        enabled: true
+      method: setAutomaticStop
+      source: APP
+
+  turn_off_automatic_stop:
+    payload:
+      data:
+        enabled: false
+      method: setAutomaticStop
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getHumidifierStatus
+      source: APP
+
+# RESPONSE device data -- what the LV600S returns after envelope peel.
+# Shape matches ClassicLVHumidResult (same as Classic 300S) with warm fields populated.
+# Response is SINGLE-WRAPPED (one envelope layer), same as Classic 300S and OasisMist 450S.
+#
+# Fields (snake_case throughout, per pyvesync model):
+#   enabled, mist_virtual_level, mist_level, mode, display, water_lacks,
+#   humidity, automatic_stop_reach_target, water_tank_lifted,
+#   warm_enabled (bool), warm_level (int 0-3)
+# plus nested: configuration.auto_target_humidity, configuration.display,
+#              configuration.automatic_stop
+#
+# NOTE: night_light_brightness is intentionally absent -- LV600S has no nightlight hardware
+# NOTE: humidity_high may be absent or false (synthesized with defensive null-guard in driver)
+
+responses:
+  # Canonical: device on, manual mode, mist=5, warm mist level=2 (enabled)
+  # Primary test fixture for happy-path assertions
+  device_on_warm_mist_level2:
+    enabled: true
+    humidity: 52
+    mist_virtual_level: 5
+    mist_level: 5
+    mode: manual
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: true
+    warm_level: 2
+    display: true
+    automatic_stop_reach_target: false
+    configuration:
+      auto_target_humidity: 55
+      display: true
+      automatic_stop: false
+
+  # Device off -- mist_virtual_level=0, warm_enabled=false, warm_level=0
+  device_off:
+    enabled: false
+    humidity: 48
+    mist_virtual_level: 0
+    mist_level: 3
+    mode: manual
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: 0
+    display: false
+    automatic_stop_reach_target: false
+    configuration:
+      auto_target_humidity: 55
+      display: false
+      automatic_stop: true
+
+  # Auto mode: verifies setMode("auto") + applyStatus mode="auto" roundtrip
+  # NOTE: mode field will be "auto" in normal responses; "humidity" in PR #505 variant
+  # (see CROSS-CHECK in driver source and fixture header above)
+  device_on_auto_mode:
+    enabled: true
+    humidity: 60
+    mist_virtual_level: 4
+    mist_level: 4
+    mode: auto
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: 0
+    display: true
+    automatic_stop_reach_target: false
+    configuration:
+      auto_target_humidity: 65
+      display: true
+      automatic_stop: true
+
+  # Warm mist OFF state -- warm_level=0, warm_enabled=false
+  # Verifies correct level=0 semantics (LV600S-correct logic, NOT pyvesync 200300S bug)
+  # pyvesync bug: VeSyncHumid200300S.set_warm_level(0) sets warm_mist_enabled=True (wrong)
+  # Our driver: level=0 => warmMistEnabled="off" regardless of warm_enabled field
+  device_warm_off:
+    enabled: true
+    humidity: 55
+    mist_virtual_level: 3
+    mist_level: 3
+    mode: manual
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: 0
+    display: true
+    automatic_stop_reach_target: false
+    configuration:
+      auto_target_humidity: 55
+      display: true
+      automatic_stop: false
+
+  # Water reservoir empty -- warm mist still active at level=1
+  device_water_lacks:
+    enabled: true
+    humidity: 30
+    mist_virtual_level: 3
+    mist_level: 3
+    mode: auto
+    water_lacks: true
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: true
+    warm_level: 1
+    display: true
+    automatic_stop_reach_target: false
+    configuration:
+      auto_target_humidity: 55
+      display: true
+      automatic_stop: true
+
+  # Synthetic: legacy firmware -- uses indicator_light_switch instead of display (HA finding #8)
+  # This scenario specifically exercises the FALLBACK path in applyStatus:
+  #   top-level 'display' key is intentionally ABSENT (triggering the fallback)
+  #   'indicator_light_switch' is present (the legacy-firmware alias used instead)
+  # Note: configuration.display:true is realistic API response shape and is a tertiary
+  #   fallback only; the test validates the SECONDARY fallback (indicator_light_switch)
+  #   because the top-level 'display' key is absent. The spec asserts this via:
+  #   assert !deviceData.containsKey("display") and assert deviceData.containsKey("indicator_light_switch")
+  device_legacy_display_alias:
+    enabled: true
+    humidity: 50
+    mist_virtual_level: 4
+    mist_level: 4
+    mode: sleep
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: true
+    warm_level: 2
+    indicator_light_switch: true   # secondary fallback key -- top-level 'display' intentionally absent
+    automatic_stop_reach_target: false
+    configuration:
+      auto_target_humidity: 55
+      display: true    # tertiary fallback; not reached in this scenario (indicator_light_switch wins)
+      automatic_stop: false

@@ -45,6 +45,7 @@ Copy the relevant `.groovy` files from the `Drivers/Levoit/` directory into Hubi
 | `LevoitClassic300S.groovy` | Levoit Classic 300S humidifier *(v2.1 preview)* |
 | `LevoitSuperior6000S.groovy` | Levoit Superior 6000S evaporative humidifier |
 | `LevoitOasisMist450S.groovy` | Levoit OasisMist 450S Smart Humidifier (US) *(v2.1 preview)* |
+| `LevoitLV600S.groovy` | Levoit LV600S Humidifier *(v2.2 preview)* |
 | `LevoitTowerFan.groovy` | Levoit Tower Fan *(v2.1 preview)* |
 | `LevoitPedestalFan.groovy` | Levoit Pedestal Fan *(v2.1 preview)* |
 | `LevoitGeneric.groovy` | **Fall-through diagnostic driver** — any unrecognized Levoit model code. Best-effort power control + `captureDiagnostics()` for filing new-device-support requests. |
@@ -58,6 +59,18 @@ After installing the drivers:
 3. Hit **Save Preferences**, then press **Resync Equipment**. Child devices come online within a few seconds.
 
 The refresh interval (default 30 s) determines how often the drivers poll device status. For mostly-automated use, 60–120 s is plenty and reduces total API load.
+
+### VeSync Integration parent preferences
+
+| Preference | Default | Description |
+| --- | --- | --- |
+| Email Address | — | VeSync account email |
+| Password | — | VeSync account password |
+| Refresh Interval | 30 s | How often to poll device status |
+| VeSync API region | US | `US` → `smartapi.vesync.com`; `EU` → `smartapi.vesync.eu`. EU is **preview** — no EU hardware live-verified. Changing region clears stored auth and forces re-login. |
+| Enable descriptive logging | true | INFO-level user events (power, mode, etc.) |
+| Enable debug logging | false | Internal trace + raw API response dump. Auto-disables after 30 min. |
+| Verbose API response logging | false | Full request/response body on every call. Use only when triaging API drift. |
 
 ## Migration from legacy hand-installed drivers
 
@@ -224,6 +237,31 @@ Covers all 4 model codes: LUH-O451S-WUS, LUH-O451S-WUSR, LUH-O601S-WUS, LUH-O601
 | info | HTML | Tile summary |
 
 Commands: `setMode`, `setMistLevel` (1-9), `setHumidity` (40-80), `setWarmMistLevel` (0-3), `setDisplay`, `setAutoStop`, `toggle`.
+
+### LV600S Humidifier (LUH-A602S-*) *— v2.2 preview*
+
+Same VeSyncHumid200300S API class as Classic 300S + OasisMist 450S. Adds warm-mist (0-3 levels). Humidity range 30-80 (base class default; differs from OasisMist 450S 40-80). No night-light hardware. **Important:** auto mode may report as `humidity` mode in status on some EU firmware variants — see [pyvesync PR #505](https://github.com/webdjoe/pyvesync/pull/505) and inline CROSS-CHECK in driver source.
+
+Covers all 6 model codes: LUH-A602S-WUSR, LUH-A602S-WUS, LUH-A602S-WEUR, LUH-A602S-WEU, LUH-A602S-WJP, LUH-A602S-WUSC.
+
+**Naming trap:** LUH-A602S (this driver) uses class VeSyncHumid200300S. LUH-A603S (NOT covered here) uses a different class VeSyncLV600S with different API conventions. Both are marketed as "LV600S" by Levoit.
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| mode | auto, sleep, manual | Current mode (may show `humidity` on some EU firmware in auto state — see PR #505) |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 30-80 | Auto-mode target humidity |
+| mistLevel | 0-9 | Reported mist level (0 = inactive) |
+| warmMistLevel | 0-3 | Warm-mist level (0 = warm-mist off) |
+| warmMistEnabled | on, off | Boolean derived from warmMistLevel (on if 1-3, off if 0) |
+| waterLacks | yes, no | Water-tank low/empty indicator |
+| displayOn | on, off | Front-panel display state |
+| autoStopEnabled | on, off | Auto-stop-when-target-reached config |
+| autoStopReached | yes, no | Whether auto-stop is currently active |
+| info | HTML | Tile summary |
+
+Commands: `setMode`, `setMistLevel` (1-9), `setHumidity` (30-80), `setWarmMistLevel` (0-3), `setDisplay`, `setAutoStop`, `toggle`. (No `setNightLight` — hardware absent.)
 
 ### Tower Fan (LTF-F422S) *— v2.1 preview*
 

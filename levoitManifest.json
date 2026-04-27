@@ -95,6 +95,13 @@
       "required": false
     },
     {
+      "id": "db1e032d-cadd-4346-b5fd-5aff254bff96",
+      "name": "Levoit LV600S Humidifier",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitLV600S.groovy",
+      "required": false
+    },
+    {
       "id": "ca33c74b-ac89-44d5-b9f1-10044c8a520f",
       "name": "Levoit Tower Fan",
       "namespace": "NiklasGustafsson",

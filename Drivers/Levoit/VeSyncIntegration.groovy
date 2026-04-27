@@ -26,6 +26,16 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-27: v2.2+ EU region support (preview). Added deviceRegion preference (US/EU).
+//                  - New getDeviceRegion() getter reads settings?.deviceRegion ?: "US".
+//                  - New getApiHost() helper: EU -> smartapi.vesync.eu, US -> smartapi.vesync.com.
+//                  - All three hardcoded API URLs now use getApiHost() dynamically.
+//                  - Removed @Field static DEVICE_REGION constant; body field "deviceRegion"
+//                    now reads from getDeviceRegion().
+//                  - updated() detects region change (state.lastRegion diff), clears token +
+//                    accountID, and forces re-login when region is switched.
+//                  NOTE: EU support ships as preview -- no EU hardware live-verified.
+//                  Community validation welcome on Hubitat thread.
 // 2026-04-27: v2.2+ Hub-reboot poll-chain recovery (Bug Pattern #14).
 //                  - Replaced recursive runIn() chain with schedule()-based cron job.
 //                    schedule() persists across hub reboots; runIn() does not, causing
@@ -95,12 +105,11 @@ SOFTWARE.
 //                  - Issue 3: getDevices() now retries with re-auth on token expiry
 //                    (same effectiveClosure pattern as sendBypassRequest)
 //                  - Pattern 2: extracted hardcoded API metadata to @Field constants
-//                    (APP_VERSION, DEFAULT_TRACE_ID, DEFAULT_TIME_ZONE, DEVICE_REGION);
+//                    (APP_VERSION, DEFAULT_TRACE_ID, DEFAULT_TIME_ZONE);
 //                    timeZone now derived from hub location with fallback to DEFAULT_TIME_ZONE.
-//                    NOTE: regional API routing is binary (US→smartapi.vesync.com,
-//                    EU→smartapi.vesync.eu per pyvesync const.py); a full implementation
-//                    requires switching the endpoint host, not just the body field. Parked
-//                    for v2.1+ — DEVICE_REGION constant left as breadcrumb.
+//                    NOTE: regional API routing (US→smartapi.vesync.com / EU→smartapi.vesync.eu)
+//                    implemented in v2.2 via getApiHost() + deviceRegion preference.
+//                    DEVICE_REGION @Field constant was removed in favour of getDeviceRegion().
 // 2026-04-25: v2.0+ Token-expiry re-auth fix (Bug Pattern #13).
 //                  - isAuthFailure() detects HTTP 401 and inner code -11001000 (token expired)
 //                    and -11201000 (invalid credentials); also handles rare 4-digit variants
@@ -133,8 +142,7 @@ import groovy.transform.Field
 @Field static final String DEFAULT_TRACE_ID  = "1634265366"
 @Field static final String DEFAULT_TIME_ZONE = "America/Los_Angeles"
 // Regional routing is binary: US → smartapi.vesync.com, EU → smartapi.vesync.eu
-// (per pyvesync const.py). Full support requires switching the endpoint host — parked for v2.1+.
-@Field static final String DEVICE_REGION     = "US"
+// (per pyvesync const.py). Implemented in v2.2 via deviceRegion preference + getApiHost() helper.
 
 // updateDevices() poll-method routing map (GitHub issue #3 / Gemini PR #2 suggestion).
 // Maps a typeName substring to the VeSync API method that returns device status for that family.
@@ -166,6 +174,9 @@ metadata {
         input(name: "email", type: "string", title: "<font style='font-size:12px; color:#1a77c9'>Email Address</font>", description: "<font style='font-size:12px; font-style: italic'>VeSync Account Email Address</font>", defaultValue: "", required: true);
         input(name: "password", type: "password", title: "<font style='font-size:12px; color:#1a77c9'>Password</font>", description: "<font style='font-size:12px; font-style: italic'>VeSync Account Password</font>", defaultValue: "");
 		input("refreshInterval", "number", title: "<font style='font-size:12px; color:#1a77c9'>Refresh Interval</font>", description: "<font style='font-size:12px; font-style: italic'>Poll VeSync status every N seconds</font>", required: true, defaultValue: 30)
+        input("deviceRegion", "enum", title: "<font style='font-size:12px; color:#1a77c9'>VeSync API region</font>",
+              description: "<font style='font-size:12px; font-style: italic'>US: smartapi.vesync.com (default). EU: smartapi.vesync.eu. Changing region clears stored auth token and forces re-login. EU support is preview — community validation welcome.</font>",
+              options: ["US", "EU"], defaultValue: "US", required: true)
         input("descriptionTextEnable", "bool", title: "Enable descriptive (info-level) logging?", defaultValue: true, required: false)
         input("debugOutput", "bool", title: "Enable debug logging?", defaultValue: false, required: false)
         input("verboseDebug", "bool", title: "Verbose API response logging? (Logs full response body of every VeSync API call. Useful for diagnosing 'VeSync changed an API field' issues. Sanitized automatically. Heavy on log buffer — leave off unless triaging.)", defaultValue: false, required: false)
@@ -184,6 +195,16 @@ def installed() {
 
 def updated() {
 	logDebug "Updated with settings: ${settings}"
+
+    // Region-change detection: if the user switched US <-> EU, cross-region tokens are invalid.
+    // Clear stored auth credentials and force re-login via initialize() below.
+    String newRegion = settings?.deviceRegion ?: "US"
+    if (state.lastRegion != null && state.lastRegion != newRegion) {
+        logInfo "VeSync API region changed from ${state.lastRegion} to ${newRegion} -- clearing stored token and forcing re-login"
+        state.remove('token')
+        state.remove('accountID')
+    }
+    state.lastRegion = newRegion
 
     // Set flag to stop any running tasks from old driver instance
     state.driverReloading = true
@@ -275,6 +296,26 @@ private ensurePollWatchdog() {
     }
 }
 
+/**
+ * Returns the configured API region ("US" or "EU").
+ * Reads from settings?.deviceRegion; defaults to "US" when preference is unset
+ * (preserves backwards compatibility for existing installs).
+ */
+private String getDeviceRegion() {
+    settings?.deviceRegion ?: "US"
+}
+
+/**
+ * Returns the VeSync API host for the configured region.
+ * Regional routing is binary per pyvesync const.py:
+ *   US → smartapi.vesync.com
+ *   EU → smartapi.vesync.eu
+ * Used in all three API call sites: login, getDevices, and sendBypassRequest.
+ */
+private String getApiHost() {
+    getDeviceRegion() == "EU" ? "smartapi.vesync.eu" : "smartapi.vesync.com"
+}
+
 private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCall) {
     // Handles transient "Connection pool shut down" errors
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -314,7 +355,7 @@ Boolean login() {
         def logmd5 = MD5(password)
 
         def params = [
-            uri: "https://smartapi.vesync.com/cloud/v1/user/login",
+            uri: "https://${getApiHost()}/cloud/v1/user/login",
             contentType: "application/json",
             requestContentType: "application/json",
             body: [
@@ -348,7 +389,7 @@ Boolean login() {
             if (checkHttpResponse("login", resp)) {
                 state.token = resp.data.result.token
                 state.accountID = resp.data.result.accountID
-                logInfo "Logged in to VeSync"
+                logInfo "Logged in to VeSync (${getDeviceRegion()} region: ${getApiHost()})"
                 result = true
             }
         }
@@ -528,6 +569,17 @@ private deviceType(code) {
         case "LPF-R432S-AEU":
         case "LPF-R432S-AUS":
             return "PEDESTALFAN";
+        // LV600S Humidifier — pyvesync VeSyncHumid200300S (same class as Classic 300S + OasisMist 450S)
+        // NAMING TRAP: LUH-A602S (this block) uses VeSyncHumid200300S; LUH-A603S uses VeSyncLV600S.
+        // Both are branded "LV600S" by Levoit but have different API behaviors. Only A602S here.
+        // All 6 regional variants route to the same driver (pyvesync device_map.py LUH-A602S entry).
+        case "LUH-A602S-WUSR":
+        case "LUH-A602S-WUS":
+        case "LUH-A602S-WEUR":
+        case "LUH-A602S-WEU":
+        case "LUH-A602S-WJP":
+        case "LUH-A602S-WUSC":
+            return "A602S";
         default:
             // Unknown model code — fall through to Generic diagnostic driver.
             // The Generic driver provides best-effort power control and captureDiagnostics()
@@ -575,7 +627,7 @@ private Boolean isLevoitClimateDevice(String code) {
 private Boolean getDevices() {
     return retryableHttp("getDevices", 3) {
         def params = [
-            uri: "https://smartapi.vesync.com/cloud/v1/deviceManaged/devices",
+            uri: "https://${getApiHost()}/cloud/v1/deviceManaged/devices",
             contentType: "application/json",
             requestContentType: "application/json",
             body: [
@@ -639,7 +691,8 @@ private Boolean getDevices() {
                         newList[device.cid+"-nl"] = device.configModule;
                     }
                     else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S" ||
-                             dtype == "V100S" || dtype == "A601S" || dtype == "O451S" || dtype == "TOWERFAN" || dtype == "PEDESTALFAN") {
+                             dtype == "V100S" || dtype == "A601S" || dtype == "O451S" || dtype == "TOWERFAN" || dtype == "PEDESTALFAN" ||
+                             dtype == "A602S") {
                         newList[device.cid] = device.configModule;
                     }
                     else if (dtype == "GENERIC" && isLevoitClimateDevice(device.deviceType)) {
@@ -877,6 +930,27 @@ private Boolean getDevices() {
                             equip1.label = device.deviceName;
                         }
                     }
+                    else if (dtype == "A602S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = addChildDevice("Levoit LV600S Humidifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            logInfo "Added child device: ${device.deviceName} (Levoit LV600S Humidifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                        }
+                    }
                     else if (dtype == "TOWERFAN") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
@@ -1056,7 +1130,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
     logDebug "sendBypassRequest(${payload})"
 
     def params = [
-        uri: "https://smartapi.vesync.com/cloud/v2/deviceManaged/bypassV2",
+        uri: "https://${getApiHost()}/cloud/v2/deviceManaged/bypassV2",
         contentType: "application/json; charset=UTF-8",
         requestContentType: "application/json; charset=UTF-8",
         body: [
@@ -1073,7 +1147,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
             "token": getAccountToken(),
             "method": "bypassV2",
             "debugMode": false,
-            "deviceRegion": DEVICE_REGION
+            "deviceRegion": getDeviceRegion()
         ],
         headers: [
             "tz": getLocationTimeZone(),

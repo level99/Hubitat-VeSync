@@ -149,6 +149,16 @@ If you don't have the device yourself but pyvesync covers it cleanly, you can sh
 
 Hardware reports refuting blind decisions are then tracked back to the `CROSS-CHECK` source citation, validated, and the prefix gets stripped in the next release cut.
 
+### EU region support (v2.2 preview)
+
+The parent driver's `VeSync API region` preference (added in v2.2) routes all API calls to `smartapi.vesync.eu` when set to `EU`. This ships as **preview** — the maintainer has no EU hardware. If you're an EU contributor:
+
+- Set the preference to `EU` and verify login succeeds (check Hubitat Logs for `Logged in to VeSync (EU region: smartapi.vesync.eu)`).
+- Run device discovery and confirm child devices appear.
+- Report your findings on the [Hubitat community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) — positive confirmation or failure mode both help.
+
+No driver code changes are needed for EU-specific device-code variants (e.g. `LUH-A602S-WEUR`); the parent's `deviceType()` switch already covers these. The region preference only affects the API host, not device routing.
+
 ### Don't change driver names once shipped
 
 Bug Pattern #9: Hubitat associates devices to drivers by `(namespace, name)`. Renaming a driver after release orphans every existing user's device. Lint rule 19 (`frozen_driver_names`) catches this statically. If you genuinely need a new name, ship it as a separate driver file and document a migration path in `docs/migration-from-niklas-upstream.md`.
@@ -314,6 +324,25 @@ The repo has a PR template (`.github/PULL_REQUEST_TEMPLATE.md`) that prompts for
 - Linked issues (`Closes #N`)
 
 Fill it out — reviewers (human + bot) read it before the diff.
+
+### Fork remotes (`gh` CLI gotcha)
+
+This fork has two git remotes:
+
+- `origin` → `https://github.com/level99/Hubitat-VeSync.git` (the fork — where PRs target)
+- `upstream` → `https://github.com/NiklasGustafsson/Hubitat.git` (Niklas's original — read-only, never PR here)
+
+The `gh` CLI does **NOT** infer the right repo from these remotes. By default it walks the remotes, finds `upstream`, and uses that as `--repo` for every PR/issue/check command — so `gh pr create` fails with a cryptic GraphQL error about missing branches (it's trying to open a PR in `NiklasGustafsson/Hubitat`, which has no `release/v2.X` branches and a different default branch).
+
+**Fix once per clone:**
+
+```bash
+gh repo set-default level99/Hubitat-VeSync
+```
+
+This writes `gh-resolved` to `.git/config` so all future `gh` commands target the fork. Verify with `gh repo view --json nameWithOwner` — should print `"nameWithOwner":"level99/Hubitat-VeSync"`.
+
+If you can't set the default, every `gh` command needs `--repo level99/Hubitat-VeSync` explicitly: `gh pr create`, `gh pr view`, `gh pr checks`, `gh pr comment`, `gh pr review`, `gh issue create`. Forgetting `--repo` is the most common preventable failure when working with this clone.
 
 ### CI gates
 

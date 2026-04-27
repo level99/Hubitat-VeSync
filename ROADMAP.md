@@ -8,9 +8,13 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 ## v2.2 — next release (TBD)
 
-Open for proposals. v2.1 shipped 5 new drivers (Vital 100S, Classic 300S, OasisMist 450S, Tower Fan, Pedestal Fan); see [`CHANGELOG.md`](CHANGELOG.md) for what landed.
+### Preview drivers added in v2.2
 
-The cheapest immediate follow-on now that v2.1 has shipped is **LV600S Humidifier** (`LUH-A602S-*`) — same `VeSyncHumid200300S` class as Classic 300S with warm-mist extension, so most of the work is already templated. See Tier 2 below.
+- **LV600S Humidifier** (`LUH-A602S-*`, all 6 regional variants) — same `VeSyncHumid200300S` class as Classic 300S, extended with warm-mist (0-3 levels). Ships as `[PREVIEW v2.2]`. **Known open question:** [pyvesync PR #505](https://github.com/webdjoe/pyvesync/pull/505) reports EU firmware variants (LUH-A602S-WEU/-WEUR) may need `mode:"humidity"` instead of `mode:"auto"` to switch auto mode; PR is unmerged pending clarification. Community hardware reports welcome.
+
+### Fixed in v2.2
+
+- **Poll cycle survives hub reboots (Bug Pattern #14)** — parent driver switched from recursive `runIn()` chain to persistent `schedule()` cron job.
 
 Items below remain unscheduled until prioritized into a release.
 
@@ -26,7 +30,7 @@ Items below are not yet locked to a release. They're available for community pic
 
 | Driver | Model codes | Notes |
 |---|---|---|
-| **LV600S** (`VeSyncHumid200300S`) | `LUH-A602S-*` | Cheap follow-on after Classic 300S (shipped v2.1) — same class with warm-mist extension. OasisMist 450S already implements warm-mist payloads we can borrow. |
+| ~~**LV600S** (`VeSyncHumid200300S`)~~ | ~~`LUH-A602S-*`~~ | **Shipped v2.2 as preview.** |
 | **OasisMist 1000S US** | `LUH-M101S-WUS`, `-WUSR` | Different humidifier class (`VeSyncHumid1000S`) — new payload conventions; pull pyvesync's class in full before drafting |
 
 #### Tier 3 (broad coverage, lower individual demand)
@@ -63,7 +67,7 @@ Open questions about VeSync API behavior that we haven't fully resolved. If you 
 2. **Whether VeSync rate-limits per-account or per-IP.** Empty-result polls are common (~10-30% on healthy installs). We assume rate-limiting; could also be transient cloud failures. Real cap is unknown.
 3. **Whether older firmware on Vital 200S returns the same fields.** Our diagnostic-confirmed field set is from one user's device. Older units might have different fields; the V102S fixture in pyvesync suggests the field set has evolved over firmware versions.
 4. **The `traceId` field's significance.** The parent driver currently sends a hardcoded value (inherited from upstream and ultimately from pyvesync). If VeSync ever validates this, the integration breaks.
-5. **Whether the `deviceRegion` field in the parent's request body matters.** Currently hardcoded to `"US"` for all installs. Non-US users may need region-specific handling — not yet tested. Regional API host routing (US vs. EU) is also a binary that's not yet implemented; see the `DEVICE_REGION` constant in the parent driver for context.
+5. ~~**Whether the `deviceRegion` field in the parent's request body matters.** Currently hardcoded to `"US"` for all installs.~~ **Shipped in v2.2 preview.** EU host routing (`smartapi.vesync.eu`) is now implemented via the `VeSync API region` preference on the parent device. The `deviceRegion` body field is now preference-backed via `getDeviceRegion()`. Open question: whether EU VeSync accounts require the EU host for initial login, or only for device commands. Community EU-hardware reports welcome on the [Hubitat thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499).
 
 ### Adjacent product directions
 
