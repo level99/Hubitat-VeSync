@@ -205,7 +205,7 @@ Pass `model: "opus"` in the `Agent({...})` dispatch (or `model: "opus"` override
 The QA agent's self-analysis after the v2.1 review cycles attributed token cost as approximately:
 - ~48% accumulated transcript carryover from prior rounds (stale content from earlier reviews)
 - ~29% additional carryover from rounds further back
-- ~15% static priming (agent definition + tool schemas + auto-injected CLAUDE.md / CONTRIBUTING.md)
+- ~15% static priming (agent definition + tool schemas + auto-injected CLAUDE.md; CONTRIBUTING.md is lazy-loaded on-demand)
 - ~3% output verdict
 - ~5% genuinely fresh content for the current review
 
