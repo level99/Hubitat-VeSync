@@ -469,6 +469,9 @@ private deviceType(code) {
  * Whitelist (v2.1):
  *   LAP-*  — Levoit Air Purifier (Core, Vital, and future variants)
  *   LEH-*  — Levoit Evaporative Humidifier (Superior, OasisMist, and future)
+ *   LUH-*  — Levoit Ultrasonic Humidifier (Classic 300S LUH-A601S-*, OasisMist 450S
+ *             LUH-O451S-*, LUH-O601S-*, and future humidifier follow-ons).
+ *             Added alongside the LUH-* gap fix; lint rule 22 enforces parity with deviceType().
  *   LV-*   — Older Levoit purifiers/humidifiers (LV-PUR131S, LV-RH131S, etc.)
  *   LTF-*  — Levoit Tower Fan (added v2.1 alongside proper Tower Fan driver).
  *             Future unknown LTF-X-Y codes fall through to the Generic driver
@@ -477,6 +480,7 @@ private deviceType(code) {
  *             Same rationale as LTF-*.
  *   Literal names recognized by deviceType() — included for completeness so
  *     this method can also be used as a standalone classifier if needed.
+ *     "Classic300S" added alongside LUH-* (some firmware reports this literal).
  *
  * Everything else (Etekcity WS-, ESW-, ESO-, Cosori CS-, thermostats, etc.)
  * is not a Levoit climate device and returns false.
@@ -485,11 +489,12 @@ private Boolean isLevoitClimateDevice(String code) {
     if (!code) return false
     if (code.startsWith("LAP-")) return true
     if (code.startsWith("LEH-")) return true
+    if (code.startsWith("LUH-")) return true   // Classic 300S, OasisMist 450S, Superior 6000S, future humidifiers
     if (code.startsWith("LV-"))  return true
     // v2.1: fan prefixes added alongside proper Tower Fan and Pedestal Fan drivers
     if (code.startsWith("LTF-")) return true
     if (code.startsWith("LPF-")) return true
-    if (code in ["Core200S", "Core300S", "Core400S", "Core600S", "Vital200S"]) return true
+    if (code in ["Core200S", "Core300S", "Core400S", "Core600S", "Vital200S", "Classic300S"]) return true
     return false
 }
 

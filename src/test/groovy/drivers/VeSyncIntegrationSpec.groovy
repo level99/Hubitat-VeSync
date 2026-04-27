@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestDevice
 
@@ -1534,5 +1535,47 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         and: "the device's cid is absent from state.deviceList"
         !(state.deviceList?.containsKey("etk-001"))
+    }
+
+    // -------------------------------------------------------------------------
+    // RULE22 parity: every code recognized by deviceType() is also whitelisted
+    // by isLevoitClimateDevice(). One canonical exemplar per deviceType() branch.
+    // If this fails, either isLevoitClimateDevice() is missing an entry or
+    // deviceType() added a new branch without updating the whitelist.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "isLevoitClimateDevice covers every code recognized by deviceType: #code (RULE22 parity)"() {
+        expect: "both methods agree: code is Levoit AND deviceType returns a non-null type"
+        driver.isLevoitClimateDevice(code) == true
+        driver.deviceType(code) != null
+
+        where:
+        code << [
+            // LAP-* purifiers — Core and Vital lines
+            "LAP-C201S-AUSR",       // Core 200S
+            "LAP-C301S-WJP",        // Core 300S
+            "LAP-C401S-WUSR",       // Core 400S
+            "LAP-C601S-WUS",        // Core 600S
+            "LAP-V201S-WUS",        // Vital 200S
+            "LAP-V102S-WUS",        // Vital 100S
+            // LEH-* humidifiers — Superior 6000S (regex branch)
+            "LEH-S601S-WUS",        // Superior 6000S
+            // LUH-* humidifiers — Classic 300S + OasisMist 450S
+            "LUH-A601S-WUSB",       // Classic 300S (LUH-* literal)
+            "LUH-O451S-WUS",        // OasisMist 450S
+            "LUH-O601S-WUS",        // OasisMist 450S variant
+            // LTF-* fans
+            "LTF-F422S-WUS",        // Tower Fan
+            // LPF-* fans
+            "LPF-R432S-AEU",        // Pedestal Fan
+            // Literal device names (older firmware)
+            "Core200S",
+            "Core300S",
+            "Core400S",
+            "Core600S",
+            "Vital200S",
+            "Classic300S",          // Added alongside LUH-* gap fix; some firmware reports this literal
+        ]
     }
 }

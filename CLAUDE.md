@@ -321,7 +321,7 @@ When the developer or QA recognizes one of these patterns in a diff, name it exp
    - Newer humidifier (LEH-...) → use `LevoitSuperior6000S.groovy`
    - Core line (older API conventions) → use `LevoitCore400S.groovy`
 5. Replace metadata, methods, field parsing.
-6. Update parent's `deviceType()` switch + `getDevices()` `addChildDevice` branch to recognize the new model code.
+6. Update parent's `deviceType()` switch + `getDevices()` `addChildDevice` branch + **`isLevoitClimateDevice()` whitelist** to recognize the new model code. Add the new model's prefix (e.g. `code.startsWith("LUH-")`) or literal name (e.g. `"Classic300S"`) to `isLevoitClimateDevice()` so the device is not silently skipped by the Generic-driver filter. Lint rule RULE22 enforces parity between `deviceType()` and `isLevoitClimateDevice()` — it will FAIL if you add to one without the other.
 7. Update `levoitManifest.json` (new entry with fresh UUID + version bump + dateReleased + releaseNotes).
 8. Update `Drivers/Levoit/readme.md` (driver list table + per-device events table).
 9. Run dev + QA pipeline.
