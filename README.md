@@ -35,10 +35,10 @@ For upcoming devices beyond v2.1: [`ROADMAP.md`](ROADMAP.md).
 
 ### First-time install (no Levoit drivers yet)
 
-Two install paths depending on whether the fork is in HPM's master index yet:
+Two install paths:
 
-1. **HPM keyword search** *(preferred — once the master-index PR merges)*: open HPM → Install → Search by Keywords → search `Levoit` or `VeSync` → install.
-2. **HPM manifest URL** *(works today)*: open HPM → Install → From a URL → paste:
+1. **HPM keyword search** *(preferred)*: open HPM → Install → Search by Keywords → search `Levoit` or `VeSync` → install.
+2. **HPM manifest URL** *(equivalent, no search needed)*: open HPM → Install → From a URL → paste:
    ```
    https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/levoitManifest.json
    ```
@@ -73,7 +73,7 @@ Install the HPM package the same way as a first-time install — Hubitat matches
 
 ## Architecture
 
-A single **parent driver** (`VeSyncIntegration.groovy`) holds your VeSync credentials, logs in, discovers devices, schedules periodic polling, and routes API calls. Per-model **child drivers** (one for Core 200S, one for Vital 200S, one for Tower Fan, etc.) expose Hubitat capabilities and parse status responses. All API traffic uses VeSync's `bypassV2` cloud endpoint with model-specific method names + payloads. Token auto-refresh on expiry; PII redaction in all log paths; connection-pool retry on transient failures.
+A single **parent driver** (`VeSyncIntegration.groovy`) holds the VeSync account credentials, logs in, discovers devices, schedules periodic polling, and routes API calls. Per-model **child drivers** (one for Core 200S, one for Vital 200S, one for Tower Fan, etc.) expose Hubitat capabilities and parse status responses. All API traffic uses VeSync's `bypassV2` cloud endpoint with model-specific method names + payloads. Token auto-refresh on expiry; PII redaction in all log paths; connection-pool retry on transient failures.
 
 ## Logging
 
@@ -109,7 +109,7 @@ Roadmap and unscheduled future work: [`ROADMAP.md`](ROADMAP.md).
 ## Credits
 
 - **Niklas Gustafsson** — original VeSyncIntegration framework, Core 200S/300S/400S/600S drivers
-- **Dan Cox** — community fork maintainer, v1.6+ contributions, Vital 100S/200S, Classic 300S, Superior 6000S, OasisMist 450S, Tower Fan, Pedestal Fan, parent humidifier-method fix, Generic diagnostic driver, token-expiry auto-recovery, infrastructure
+- **Dan Cox** — community fork maintainer (v2.0+); Vital 100S/200S, Classic 300S, Superior 6000S, OasisMist 450S, Tower Fan, Pedestal Fan, parent humidifier-method fix, Generic diagnostic driver, token-expiry auto-recovery, infrastructure
 - **elfege** — `setLevel()` support, Core 600S 'max' speed
 - **[pyvesync](https://github.com/webdjoe/pyvesync)** — canonical VeSync API payload reference; HA `vesync` integration, SmartThings + Homebridge community drivers used as v2.1 cross-check sources
 
