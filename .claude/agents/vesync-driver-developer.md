@@ -340,4 +340,4 @@ If QA's fix would introduce a regression, push back once with reasoning. Don't c
 - Original upstream: https://github.com/NiklasGustafsson/Hubitat
 - Hubitat developer docs: https://docs.hubitat.com/index.php?title=Developer_Documentation
 - Hubitat capability reference: https://docs.hubitat.com/index.php?title=Driver_Capability_List
-- Hubitat community thread: https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816
+- Hubitat community thread: https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499

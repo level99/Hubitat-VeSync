@@ -11,7 +11,7 @@ body:
         Before submitting:
         - Check the [migration guide](https://github.com/level99/Hubitat-VeSync/blob/main/docs/migration-from-niklas-upstream.md) if you just upgraded — most post-migration symptoms are covered there.
         - Search [existing issues](https://github.com/level99/Hubitat-VeSync/issues?q=is%3Aissue) for duplicates.
-        - For general questions or "is this a bug?" uncertainty, the [Hubitat community thread](https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816) is faster.
+        - For general questions or "is this a bug?" uncertainty, the [Hubitat community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) is faster.
 
   - type: dropdown
     id: driver

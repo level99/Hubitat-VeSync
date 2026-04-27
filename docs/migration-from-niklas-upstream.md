@@ -137,7 +137,7 @@ The fork's changes are additive on the Core line side and surgical on the parent
 
 If migration surfaces a problem not covered here:
 
-- **Quick questions:** [Hubitat community thread](https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816) — fastest response, other users may have hit the same issue.
+- **Quick questions:** [Hubitat community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) — fastest response, other users may have hit the same issue.
 - **Bug reports / feature requests:** [GitHub issues](https://github.com/level99/Hubitat-VeSync/issues) — better for issues that need code-level investigation.
 
 When reporting, capture a debug log (parent device → enable Debug logging → trigger the issue → grab the relevant lines). Account credentials are auto-redacted by the parent's `sanitize()` helper, so debug captures are safe to share.

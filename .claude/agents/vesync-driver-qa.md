@@ -461,4 +461,4 @@ If you're satisfied with previous concerns resolved, APPROVE with brief acknowle
 - pyvesync model registry: `src/pyvesync/device_map.py`
 - Original upstream: https://github.com/NiklasGustafsson/Hubitat
 - Hubitat capability reference: https://docs.hubitat.com/index.php?title=Driver_Capability_List
-- Hubitat community thread: https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816
+- Hubitat community thread: https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499

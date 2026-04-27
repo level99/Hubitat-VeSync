@@ -103,7 +103,7 @@ Roadmap and unscheduled future work: [`ROADMAP.md`](ROADMAP.md).
 
 ## Support / community
 
-- **Hubitat community thread:** [Levoit Air Purifiers Drivers](https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816) — active discussion for both this fork and Niklas's original drivers.
+- **Hubitat community thread:** [Levoit Air Purifiers, Humidifiers, and Fans](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) — active discussion for this fork.
 - **GitHub issues:** [level99/Hubitat-VeSync/issues](https://github.com/level99/Hubitat-VeSync/issues) — bug reports + new-device-support requests via issue templates.
 
 ## Credits

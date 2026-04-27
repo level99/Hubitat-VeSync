@@ -11,7 +11,7 @@ body:
         **Before submitting:**
         - For "I want support for a new device", use the [New device support template](https://github.com/level99/Hubitat-VeSync/issues/new?template=new_device_support.yml) instead.
         - Search [existing feature requests](https://github.com/level99/Hubitat-VeSync/issues?q=is%3Aissue+label%3Aenhancement) for duplicates.
-        - For "wouldn't it be cool if..." brainstorming, the [Hubitat community thread](https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816) is a better venue.
+        - For "wouldn't it be cool if..." brainstorming, the [Hubitat community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) is a better venue.
 
   - type: textarea
     id: summary

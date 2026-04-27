@@ -11,7 +11,7 @@ body:
         **Before submitting:**
         - Check the [supported models list](https://github.com/level99/Hubitat-VeSync/blob/main/Drivers/Levoit/readme.md) — your device may already work under a regional variant.
         - Search [existing new-device requests](https://github.com/level99/Hubitat-VeSync/issues?q=is%3Aissue+label%3Anew-device-support) — someone may have already requested it.
-        - For initial discussion or "is anyone else asking for this?", the [Hubitat community thread](https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816) is a good first stop.
+        - For initial discussion or "is anyone else asking for this?", the [Hubitat community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) is a good first stop.
 
   - type: input
     id: marketing_name
@@ -94,7 +94,7 @@ body:
     id: community_thread
     attributes:
       label: Community thread context (optional)
-      description: If you've discussed this device in the [Hubitat community thread](https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816), link to your post(s) so the maintainer can correlate.
+      description: If you've discussed this device in the [Hubitat community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499), link to your post(s) so the maintainer can correlate.
     validations:
       required: false
 

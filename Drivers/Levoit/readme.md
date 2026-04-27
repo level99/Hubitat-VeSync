@@ -325,7 +325,7 @@ Note: the diagnostics block does NOT include your account credentials, token, or
 
 ## Reporting issues
 
-If something doesn't work right, capture a debug log and post it ([Hubitat community thread](https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816) or [GitHub issue](https://github.com/level99/Hubitat-VeSync/issues)):
+If something doesn't work right, capture a debug log and post it ([Hubitat community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) or [GitHub issue](https://github.com/level99/Hubitat-VeSync/issues)):
 
 1. On the **VeSync Integration** parent device, set **Enable debug logging** to **true** and **Save Preferences**.
 2. Trigger or wait for the issue (e.g. press the misbehaving button, or wait one poll cycle for status issues).
