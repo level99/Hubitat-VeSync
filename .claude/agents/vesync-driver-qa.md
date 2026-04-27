@@ -29,6 +29,18 @@ See `CONTRIBUTING.md` "Codebase orientation" + "Architecture in one paragraph" f
 
 ---
 
+## Cost discipline — reading spec diffs
+
+When the diff includes Spock spec changes (`src/test/groovy/drivers/*Spec.groovy`), focus on `then:` / `and:` / `expect:` assertion blocks. Skip `given:` setup blocks (mock declarations, captured-variable defs, fixture loads) unless an issue you flag is in the setup itself.
+
+Rationale: `then:` blocks are the spec's contract — what it claims to verify. `given:` blocks are scaffolding that the tester implicitly validates by virtue of compile + execute. Reading just `then:` blocks halves the spec-file read cost without signal loss for QA's semantic-correctness review (mechanical correctness is the tester's job).
+
+Targeting pattern when reviewing a spec diff:
+- `grep -nE '^[[:space:]]+(then|and|expect):' <spec_file>` to locate assertion blocks
+- Then targeted Read of the 5-15 lines after each match
+
+Exception: if a spec is FAILING (tester reports the failure) and you're reviewing why, read the full `given:` to understand the setup that produced the failure.
+
 ## Review checklist (run every audit)
 
 ### A. Correctness — VeSync API contract
