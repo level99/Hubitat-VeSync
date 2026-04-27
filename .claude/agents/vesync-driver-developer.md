@@ -23,32 +23,9 @@ You pair with the `vesync-driver-qa` agent. The orchestrator dispatches you for 
 
 ## Codebase context
 
-### Repo layout
+### Repo layout & architecture
 
-```
-Hubitat-VeSync/
-├── Drivers/
-│   └── Levoit/
-│       ├── VeSyncIntegration.groovy          ← parent driver (auth, polling, child management)
-│       ├── LevoitCore200S.groovy             ← Core 200S child
-│       ├── LevoitCore200S Light.groovy       ← Core 200S night-light child
-│       ├── LevoitCore300S.groovy             ← Core 300S child
-│       ├── LevoitCore400S.groovy             ← Core 400S child
-│       ├── LevoitCore600S.groovy             ← Core 600S child
-│       ├── LevoitVital200S.groovy            ← Vital 200S air purifier child
-│       ├── LevoitSuperior6000S.groovy        ← Superior 6000S humidifier child
-│       ├── Notification Tile.groovy          ← unrelated tile renderer
-│       └── readme.md                          ← user-facing docs
-├── levoitManifest.json                        ← HPM manifest
-└── README.md                                  ← top-level repo readme
-```
-
-### Architecture
-
-- The **parent** (`VeSyncIntegration.groovy`) handles VeSync account login, device discovery, periodic polling, and method-routing. It owns `state.token`, `state.accountID`, `state.deviceList`.
-- **Children** are per-model drivers (Core 200S, Vital 200S, Superior 6000S, etc.). They expose Hubitat capabilities + commands and parse incoming status updates.
-- Polling: parent's `updateDevices()` fires every `refreshInterval` seconds (default 30s). For each child, the parent sends a `getPurifierStatus` (purifiers) or `getHumidifierStatus` (humidifiers) bypassV2 call, then invokes `child.update(status, nightLight)` with the response.
-- Direct command flow: child calls `parent.sendBypassRequest(device, payload, closure)` with the appropriate API method.
+See `CONTRIBUTING.md` "Codebase orientation" + "Architecture in one paragraph" for the canonical repo tree (kept current as drivers ship) and the parent-child overview. The Hubitat-specific gotchas below are the dev's operational expertise on top of that orientation.
 
 ### Hubitat-specific gotchas in this codebase
 
@@ -164,23 +141,7 @@ Don't confuse Core conventions with V2 conventions. The driver-name scheme is th
 
 ### Logging discipline
 
-Three preferences gate logging:
-| Pref | Default | Purpose |
-|---|---|---|
-| `descriptionTextEnable` | `true` | INFO-level user-meaningful events (power, mode, state transitions) |
-| `debugOutput` | `false` | DEBUG internal trace + diagnostic raw-response dump |
-| `verboseDebug` (parent only) | `false` | Full API response body dump on every call |
-
-Helper pattern (every driver file):
-```groovy
-private logInfo(msg)  { if (settings?.descriptionTextEnable) log.info  msg }
-private logDebug(msg) { if (settings?.debugOutput)            log.debug msg }
-private logError(msg) { log.error msg }
-```
-
-The **parent driver** routes `logInfo`/`logDebug`/`logError` through a `sanitize()` helper that auto-redacts the account email, `state.accountID`, `state.token`, and `settings.password` from any log message. This protects users sharing debug captures.
-
-When you add new INFO calls in children, log at state-change points only — not on every poll cycle. Use `state.lastFoo` comparisons if needed.
+See `CLAUDE.md` "Logging conventions" for the canonical preference table, helper pattern, and parent-driver sanitize-helper rules. When adding new INFO calls in children, log at state-change points only (use `state.lastFoo` comparison gates) — not every poll cycle.
 
 ### Diagnostic raw-response line (children)
 

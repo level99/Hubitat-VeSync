@@ -23,30 +23,9 @@ You pair with `vesync-driver-developer`. Your critiques feed back to the develop
 
 ## Codebase context
 
-### Repo layout
+### Repo layout, architecture, logging discipline
 
-```
-Hubitat-VeSync/
-├── Drivers/Levoit/
-│   ├── VeSyncIntegration.groovy          ← parent driver
-│   ├── LevoitCore200S.groovy             ← Core 200S (older API)
-│   ├── LevoitCore200S Light.groovy       ← Core 200S night-light child
-│   ├── LevoitCore300S.groovy             ← Core 300S
-│   ├── LevoitCore400S.groovy             ← Core 400S
-│   ├── LevoitCore600S.groovy             ← Core 600S
-│   ├── LevoitVital200S.groovy            ← Vital 200S (V2 API)
-│   ├── LevoitSuperior6000S.groovy        ← Superior 6000S humidifier (V2 API, double-wrapped responses)
-│   ├── Notification Tile.groovy
-│   └── readme.md
-├── levoitManifest.json
-└── README.md
-```
-
-### Architecture
-
-- **Parent** (`VeSyncIntegration.groovy`): owns `state.token`, `state.accountID`, `state.deviceList`. Polls every `refreshInterval` seconds. Routes per-device API method based on device type (purifier vs humidifier). Wraps caller closures with optional API-trace logging.
-- **Children**: per-model drivers exposing Hubitat capabilities. Three `update()` signatures (no-arg self-fetch, 1-arg, 2-arg parent callback).
-- **Logging discipline**: parent has auto-sanitizing log helpers (redact email, accountID, token, password). All drivers gate INFO behind `descriptionTextEnable` (default true) and DEBUG behind `debugOutput` (default false).
+See `CONTRIBUTING.md` "Codebase orientation" + "Architecture in one paragraph" for the canonical repo tree and parent-child overview. See `CLAUDE.md` "Logging conventions" for the preference table, helper pattern, and sanitize-helper rules. The QA-specific review checks below assume that context.
 
 ---
 
@@ -88,12 +67,7 @@ The 2-arg signature is the failure point for many community-reported "device dis
    - `descriptionTextEnable` default `true` — INFO logs (state changes)
    - `debugOutput` default `false` — DEBUG logs (internal trace)
    - `verboseDebug` default `false` — only on parent — full API response dump
-2. **Helper pattern in every driver file:**
-   ```groovy
-   private logInfo(msg)  { if (settings?.descriptionTextEnable) log.info  msg }
-   private logDebug(msg) { if (settings?.debugOutput)            log.debug msg }
-   private logError(msg) { log.error msg }
-   ```
+2. **Helper pattern in every driver file** matches `CLAUDE.md` "Logging conventions" canonical (`logInfo` / `logDebug` / `logError` private wrappers gated on the `descriptionTextEnable` / `debugOutput` prefs).
 3. **Parent's helpers route through `sanitize()`** to auto-redact email/accountID/token/password. Verify `logInfo`, `logDebug`, `logError` all call sanitize.
 4. **Direct `log.error` calls** in parent should be flagged — they bypass sanitize. Only acceptable if explicitly wrapped with `sanitize()` inline.
 5. **30-min auto-disable for debug**: `runIn(1800, logDebugOff)` in `updated()` when debugOutput is true. Helper: `void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }`.

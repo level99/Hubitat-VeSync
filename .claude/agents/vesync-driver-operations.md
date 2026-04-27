@@ -42,19 +42,7 @@ Don't attempt partial work. Either you have the full toolkit or this agent is th
 
 ### Files this agent typically deploys
 
-```
-Drivers/Levoit/
-├── VeSyncIntegration.groovy          ← parent driver (auth, polling)
-├── LevoitVital200S.groovy            ← Vital 200S child
-├── LevoitSuperior6000S.groovy        ← Superior 6000S humidifier child
-├── LevoitCore200S.groovy             ← Core 200S child
-├── LevoitCore200S Light.groovy       ← Core 200S night-light child
-├── LevoitCore300S.groovy             ← Core 300S child
-├── LevoitCore400S.groovy             ← Core 400S child
-└── LevoitCore600S.groovy             ← Core 600S child
-```
-
-The orchestrator gives you, per dispatch:
+Driver files under `Drivers/Levoit/` — see `CONTRIBUTING.md` "Codebase orientation" for the current per-driver list. The orchestrator gives you, per dispatch:
 - Source file path on local disk
 - `driverId` on the hub (from `mcp__hubitat__manage_apps_drivers list_hub_drivers`)
 - `deviceId`(s) of children that use this driver (for test exercises)
