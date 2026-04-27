@@ -234,34 +234,10 @@ def input(Object... a)    { /* no-op */  }
             // no-op: don't schedule real timer
         }
 
-        // --- unschedule (0-arg: clear all schedules) ---
-        // NOTE: Groovy ExpandoMetaClass does not support true method overloading via property
-        // assignment (mc.foo = { ... } replaces any prior assignment of the same name).
-        // Because both the 0-arg form (unschedule()) and the 1-arg form (unschedule("method"))
-        // must work, we use a single varargs-accepting closure that handles both signatures.
-        mc.unschedule = { Object[] args ->
-            // no-op: both `unschedule()` (args.length==0) and `unschedule("updateDevices")`
-            // (args.length==1) are handled here. No actual timer cancellation in unit tests.
-        }
-
-        // --- schedule (Hubitat cron-based recurring timer, persists across reboots) ---
-        // Used by setupPollSchedule() (Bug Pattern #14 fix).
-        // No-op base implementation; VeSyncIntegrationSpec overrides this per-test where needed.
-        mc.schedule = { String cronExpression, String handlerMethodName ->
-            // no-op: don't schedule real timers in unit tests
-        }
-
-        // --- subscribe (location event subscription, used by initialize() and ensurePollWatchdog) ---
-        // subscribe(location, "eventName", handlerMethod) — Hubitat location-event subscription.
-        // No-op in unit tests; VeSyncIntegrationSpec can verify via state.systemStartSubscribed.
-        mc.subscribe = { Object source, String eventName, Object handler ->
+        // --- unschedule ---
+        mc.unschedule = { ->
             // no-op
         }
-
-        // --- unsubscribe (removes all location/device event subscriptions for this device) ---
-        // Called by forceReinitialize() before state.clear() to prevent subscription stacking
-        // (BP14 NIT1). No-op base; VeSyncIntegrationSpec overrides with a call-counter per test.
-        mc.unsubscribe = { -> /* no-op */ }
 
         // --- pauseExecution ---
         mc.pauseExecution = { int ms ->
