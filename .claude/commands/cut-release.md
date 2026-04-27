@@ -46,14 +46,25 @@ Then collect, in parallel:
 
 - `version`: target version (string, e.g. `"2.0"` — match prior format).
 - `dateReleased`: today's date in `YYYY-MM-DD` (use `date +%Y-%m-%d` via bash).
-- `releaseNotes`: **single paragraph, ~3-5 sentences, user-facing prose, no bullets, no implementation jargon**. This is what pops up in HPM when a user clicks Update — write it for a Hubitat user, not a developer. Match the tone of the prior `releaseNotes` (read it for reference).
+- `releaseNotes`: **PREPEND a new line for this release to the existing string — do NOT overwrite.** The convention is a single string accumulating all versions, newest-first, one line per release, separated by literal `\n` escape sequences. Format per line:
+  ```
+  <version> - <author> - <user-facing description, ~2-4 sentences, no bullets>.
+  ```
+  Example after a 2.1 cut on a manifest that previously had only 2.0:
+  ```
+  "releaseNotes": "2.1 - Dan Cox - Adds five new drivers: ...\n2.0 - Dan Cox - First community-fork release after Niklas's repo went idle. Adds ..."
+  ```
 
-  Content guidance:
+  Reference: this matches the convention used by well-maintained Hubitat HPM packages (e.g. [tomwpublic/hubitat_SmartHQ](https://github.com/tomwpublic/hubitat_SmartHQ/blob/main/packageManifest.json) — accumulates ~15 versions back to 0.9.0). HPM displays the entire string verbatim in the update popup; cumulative notes give users updating from a stale install (e.g. v0.0 manual paste, or skipping several versions) the full context of what changed in their jump.
+
+  Content guidance for the new line you're adding:
   - Lead with what's new from the user's perspective (new device support, fixed bugs they'd notice).
   - Mention any breaking change or migration step prominently if applicable.
   - Skip refactors, internal cleanup, test additions, doc-only changes.
   - Skip implementation details (e.g., don't say "auth-aware closure pattern" — say "fixes session expiry causing devices to go unresponsive").
   - **Skip development methodology and contributor process.** The HPM popup is for end-users clicking Update, not for developers. Don't explain how the drivers were built (e.g., "cross-referenced pyvesync, Home Assistant, SmartThings, and Homebridge community drivers"), don't mention QA / cross-check / citation policies, don't describe contributor workflow. If a user wonders *how* a feature was built, the commit history and `CHANGELOG.md` are where they look — not the HPM update popup.
+
+  When applying: read the current `releaseNotes` value, prepend the new line + `\n`, preserve all existing lines verbatim. Do not edit historical entries.
 
 ### Artifact B — `CHANGELOG.md` entry
 
