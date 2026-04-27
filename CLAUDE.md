@@ -121,37 +121,17 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
 
 2. **Always run QA before tester or deploy.** Even for "trivial" changes — many bugs in this codebase were "trivial" until they shipped. After QA APPROVE, run tester (Spock harness) before deploy/commit. Tester catches regressions QA can't (compile errors, runtime sandbox gaps, behavior assertions).
 
-3. **Resume vs fresh dispatch — observe cache state.** This applies to all 4 agents: `vesync-driver-developer`, `vesync-driver-qa`, `vesync-driver-tester`, and `vesync-driver-operations`. Anthropic's prompt cache TTL is 5 minutes default, up to 1 hour with explicit cache breakpoints. On cache miss, the agent's accumulated transcript re-prices as fresh input — which blows up cost on long-gap resumes that pile up unrelated content. Cost impact varies by model (Opus QA most affected; Haiku tester/ops least), but the dynamics apply uniformly.
-
-   **Orchestrator discipline (per agent ID being dispatched):**
-
-   a. **Capture the agent ID** from each `Agent({...})` dispatch result (the response includes `agentId: <id>` — e.g., `a745afcdc2e7112d6`).
-
-   b. **At each dispatch, capture the timestamp via `date -Iseconds` and note it in conversation context, scoped to the agent role:**
-      ```
-      Last dev dispatch: 2026-04-27T15:30:00-06:00 — agent ID <id> — topic <brief>
-      Last qa dispatch: 2026-04-27T15:35:12-06:00 — agent ID <id> — topic <brief>
-      Last tester dispatch: 2026-04-27T15:40:08-06:00 — agent ID <id> — topic <brief>
-      Last ops dispatch: <none yet this session>
-      ```
-
-   c. **On next dispatch need, run `date -Iseconds` again, compute delta against the *same agent role's* last timestamp, and decide:**
+3. **Resume vs fresh dispatch — observe cache state.** Anthropic's prompt cache TTL is 5 min default, up to 1 hr with explicit breakpoints. On cache miss, the agent's accumulated transcript re-prices as fresh input. Capture `agentId` from each dispatch result + `date -Iseconds` per-role; on next dispatch need, compute time delta against same role's last timestamp and decide:
 
    | Time since same-role last dispatch | Topic relevance | Action |
    |---|---|---|
    | <5 min | Same topic family | `SendMessage` resume (cache likely warm) |
    | 5-30 min | Same topic family | Resume if accumulated transcript is small; fresh if large |
    | 5-30 min | Unrelated topic | Fresh `Agent({...})` dispatch |
-   | >30 min | Any | Fresh dispatch (cache definitely expired; resume re-prices everything) |
-   | New Claude Code session | Any | Fresh dispatch (no prior timestamp; agent ID may be stale) |
+   | >30 min | Any | Fresh dispatch (cache definitely expired) |
+   | New Claude Code session | Any | Fresh dispatch |
 
-   d. **Resume protocol when cache is warm:** `SendMessage({to: '<agentId>', message: "..."})` — **addresses by agent ID, NOT by the descriptive `name:` parameter**. Per [code.claude.com/docs/en/sub-agents#resume-subagents](https://code.claude.com/docs/en/sub-agents#resume-subagents): *"When a subagent completes, Claude receives its agent ID. Claude uses the SendMessage tool with the agent's ID as the `to` field to resume it."* If `SendMessage` returns `success: false`, the session is gone — fresh dispatch immediately.
-
-   e. **Note on the name parameter:** the `name:` field in `Agent({name: 'dev', ...})` is a human-readable label for the dispatch (visible in transcripts/UI), but it does NOT make the agent addressable by that name in `SendMessage`. For subagent resume, ALWAYS use the agent ID.
-
-   f. **Re-dispatch must re-supply context:** a fresh agent has no memory of prior rounds. The re-briefing prompt MUST include: the file paths, the task recap, all prior QA/tester findings the agent needs, and the specific delta being asked for. Copy-paste from the SendMessage body you were about to send, plus enough preamble to orient cold.
-
-   This inverts the spirit of the prior "always try resume first" rule for medium-to-long gaps where the cache-warmth assumption breaks down. Resume remains the right call when warmth is observable; fresh dispatch is the right call when it isn't. Using the **wrong** addressing (name instead of ID) on resume always fails — every name-based send returns `"No agent named '...' is currently addressable"` and forces a fresh dispatch anyway.
+   **Resume protocol:** `SendMessage({to: '<agentId>', ...})` — addresses by **agent ID, NOT** the `name:` parameter (which is just a UI label). If `SendMessage` returns `success: false`, fresh-dispatch immediately. **Fresh re-dispatch must re-supply context** — file paths, task recap, prior findings, specific delta — since the new agent has no memory of prior rounds.
 
 4. **Brief human-readable summary between rounds — but don't block on user response.** When QA or tester returns findings, output a concise summary to the main chat BEFORE forwarding to the developer. Then proceed directly to the SendMessage handoff. The user reads the summary and can interrupt if they want to redirect; otherwise the pipeline keeps flowing. Within a warm-cache pipeline, iterate without prompting unless an architectural decision, failure, or outbound action is involved. Example:
 
@@ -306,47 +286,8 @@ The QA agent's definition contains a numbered catalog of bug patterns from the v
 11. `documentationLink` pointing to unrelated project
 12. Type-change leaves new pref defaults uncommitted (silent INFO suppression)
 13. Token-expiry silent failure (no re-auth on HTTP 401 or inner auth codes)
-14. Hub-reboot drops runIn-based poll cycle — polling stops permanently after reboot until `updated()` fires
-
-    **Symptom:** child devices show stale values for hours/days after a hub reboot. Heartbeat stuck at `not synced`. `getHubJobs` confirms zero `updateDevices` entries in scheduledJobs. Often misattributed to token expiry — but re-auth (BP13) is fine; the cron chain itself is gone.
-
-    **Root cause:** the pre-v2.2 poll cycle used recursive `runIn()` — each `updateDevices()` call scheduled the next. When the hub reboots between two consecutive calls, the chain breaks permanently. `runIn()` jobs are not persisted; `schedule()` cron jobs are.
-
-    **Fix (v2.2):**
-    ```groovy
-    // Replace the runIn() chain with a schedule()-based cron.
-    // schedule() persists across hub reboots; runIn() does not.
-    private setupPollSchedule() {
-        Integer interval = Math.max(1, (settings?.refreshInterval ?: 30) as Integer)
-        unschedule("updateDevices")
-        schedule("0/${interval} * * * * ?", "updateDevices")
-        state.scheduleVersion = "2.2"
-    }
-    // Self-heal for pre-v2.2 installs. Call from updateDevices() and sendBypassRequest().
-    private ensurePollWatchdog() {
-        if (state.scheduleVersion != "2.2") {
-            logInfo "BP14 migration: switching from runIn-based to schedule()-based poll cycle"
-            setupPollSchedule()
-        }
-    }
-    ```
-
-    **Critical properties:**
-    - `ensurePollWatchdog()` is called at the top of `updateDevices()` (after BP12 pref-seed) AND at the top of `sendBypassRequest()` (before HTTP). This means any device interaction from a Rule resurrects polling without user action.
-    - The guard `state.scheduleVersion != "2.2"` makes the watchdog idempotent — O(1) overhead on every subsequent call once migrated.
-    - Remove the `runIn((int)settings.refreshInterval, "updateDevices")` from inside `updateDevices()` — that was the broken chain. Do not add it back.
-    - Do NOT add `subscribe(location, "systemStart", ...)` as a belt-and-braces layer — `subscribe()` is app-only API (Bug Pattern #15) and crashes in driver context.
-    - "Zero user action" case: polling stays dead until a command fires or the user clicks Save Preferences. This is a Hubitat platform limitation — no driver lifecycle method auto-fires on idle hubs. Document in release notes.
-
-    **Live-verified:** 2026-04-27 on maintainer hub `dev1064` — round-4 deploy passed Phase 1-4 including reboot recovery; `schedule()`-based cron auto-resumed post-reboot with no user action; zero `MissingMethodException` for the deleted `subscribe`/`unsubscribe`/`reschedulePoll` APIs.
-
-15. Driver code uses app-only API (`subscribe`, `unsubscribe` to location events)
-
-    **Symptom:** `groovy.lang.MissingMethodException: No signature of method: user_driver_...subscribe() is applicable for argument types: (Location, String, String)` at runtime, typically on every poll tick. Tests pass silently if the test mock is a no-op instead of fail-fast.
-
-    **Root cause:** Hubitat distinguishes the *app sandbox* (SmartApps / installed apps) from the *driver sandbox*. `subscribe(location, "eventName", handler)` and `unsubscribe()` for location events are only wired into the app sandbox's metaclass. The driver sandbox does not expose them; calling them produces `MissingMethodException` at ~2.75Hz (every poll).
-
-    **Fix:** do not use `subscribe` or `unsubscribe` in driver code. For periodic work, use `schedule()`. For cross-device coordination, use parent→child method calls or `sendEvent`. The HubitatSpec mock for these should throw `MissingMethodException` (fail-fast), not no-op, so the unit test harness catches the mistake before production deployment.
+14. Hub-reboot drops `runIn`-based poll cycle — `runIn()` is in-memory only; use `schedule()` cron for periodic work (persists across reboots). See `vesync-driver-qa.md` BP14 entry for canonical `setupPollSchedule()` + `ensurePollWatchdog()` design and live-verification footer.
+15. Driver code uses app-only API (`subscribe`/`unsubscribe` to location events) — drivers cannot subscribe to location events; use `schedule()` for periodic work, parent→child calls for cross-device. HubitatSpec mock must fail-fast (not no-op). See `vesync-driver-qa.md` BP15 entry for full root-cause + fix.
 
 When the developer or QA recognizes one of these patterns in a diff, name it explicitly: *"Bug Pattern #1 — missing 2-arg signature."* The other agent recognizes the name and applies the canonical fix.
 
@@ -367,77 +308,25 @@ When the developer or QA recognizes one of these patterns in a diff, name it exp
 
 ## Source references in this codebase
 
-These patterns are load-bearing. Don't break them in a refactor without explicit reason.
+Load-bearing patterns (don't break in refactors). Each is canonicalized in the relevant agent def — see those for full pattern + code.
 
-- The **diagnostic raw-response line** in every child's `applyStatus`: `if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=...) keys=..., values=..."` — shows the parsed device data after envelope peel.
-- The **VeSync API trace logging** wrapper closure in parent's `sendBypassRequest` — gives every API call a 1-line summary at debug level (method name + HTTP status + inner code) and a full request/response body dump at verboseDebug level. The summary is the primary debugging signal for "did this command actually go through?"
-- The **sanitize() helper** in parent — auto-redacts auth-sensitive values from any log line. Direct `log.X` calls in the parent bypass it; always route through the helpers.
-- The **envelope-peel while loop** in every V2-line child's `applyStatus`:
-  ```groovy
-  while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-      r = r.result; peelGuard++
-  }
-  ```
-- The **3-signature update pattern** in every child:
-  ```groovy
-  def update()                       // self-fetch
-  def update(status)                 // 1-arg parent callback
-  def update(status, nightLight)     // 2-arg parent callback (REQUIRED)
-  ```
+- **Diagnostic raw-response line** in every child's `applyStatus` (debug-gated `log.debug "applyStatus raw r ..."`).
+- **VeSync API trace logging** wrapper in parent's `sendBypassRequest` (1-line summary at debug; full body at verboseDebug).
+- **`sanitize()` helper** in parent — direct `log.X` bypasses it; always route through `logInfo`/`logDebug`/`logError`.
+- **Envelope-peel while loop** in V2-line children's `applyStatus` (peels up to 4 layers of `{code, result, traceId}`).
+- **3-signature update pattern** in every child: `update()`, `update(status)`, `update(status, nightLight)` — last one REQUIRED (BP1).
 
 ---
 
 ## GitHub workflow (fork conventions)
 
-This fork has two git remotes:
-
-- `origin` → `https://github.com/level99/Hubitat-VeSync.git` (the fork — where PRs target)
-- `upstream` → `https://github.com/NiklasGustafsson/Hubitat.git` (Niklas's original — read-only, never PR here)
-
-The `gh` CLI does **not** infer the right repo from these remotes. By default it walks the remotes, finds `upstream`, and uses that as `--repo` for every PR/issue/check command. This causes `gh pr create` to fail with the cryptic error:
-
-```
-GraphQL: Head sha can't be blank, Base sha can't be blank,
-No commits between main and release/v2.1, Head ref must be a branch,
-Base ref must be a branch (createPullRequest)
-```
-
-— because it's trying to open a PR in `NiklasGustafsson/Hubitat` (which has no `release/v2.1` branch and a different `master` default).
-
-**Fix this once per clone** with:
-
-```bash
-gh repo set-default level99/Hubitat-VeSync
-```
-
-This writes `gh-resolved` to `.git/config` so all future `gh` commands target the fork. Verify with `gh repo view --json nameWithOwner` — should print `"nameWithOwner":"level99/Hubitat-VeSync"`.
-
-**If you can't / don't want to set the default**, every `gh` command needs `--repo level99/Hubitat-VeSync` explicitly. That includes:
-
-- `gh pr create --repo level99/Hubitat-VeSync ...`
-- `gh pr view N --repo level99/Hubitat-VeSync`
-- `gh pr checks N --repo level99/Hubitat-VeSync --watch`
-- `gh pr comment N --repo level99/Hubitat-VeSync ...`
-- `gh pr review N --repo level99/Hubitat-VeSync ...`
-- `gh issue create --repo level99/Hubitat-VeSync ...`
-
-Forgetting `--repo` is the most common preventable failure when working with this clone. If `gh repo view` shows `nameWithOwner: NiklasGustafsson/...`, run `gh repo set-default level99/Hubitat-VeSync` BEFORE any other `gh` work.
+See `CONTRIBUTING.md` "Fork remotes (`gh` CLI gotcha)" — this fork has two remotes (`origin` = fork, `upstream` = Niklas's original); `gh` defaults to upstream and fails. Run `gh repo set-default level99/Hubitat-VeSync` once per clone, otherwise prefix every `gh` command with `--repo level99/Hubitat-VeSync`.
 
 ---
 
 ## Cost optimization notes
 
-The 4-agent pipeline (developer Sonnet / qa Sonnet by default — Opus on elevation per the "QA dispatch: model selection" section / tester Haiku / operations Haiku) is shaped around model-cost asymmetry:
-
-- **Resume pattern (SendMessage, not fresh Agent)** preserves ~60–70% of input tokens on iterative rounds because each agent's cache stays warm on the driver source file + prior findings. Fresh dispatches reload everything.
-- **Sonnet for dev** is ~5× cheaper per token than Opus on underlying pricing; on Claude Max plan, consumes cap at roughly ⅕ the rate of Opus.
-- **Haiku for tester** is ~19× cheaper than Opus; test-output-dominated work (Gradle logs, JUnit XML, Spock failure traces) is where the savings stack up most.
-- **Haiku for operations** — same ratio; log-fetch + structured tool calls are mechanical work.
-- **QA reads diffs** (small payloads), not whole files, on review rounds after the first.
-- **Test/log output containment via tester + ops** keeps main + dev + QA contexts lean — they never see raw 100KB Gradle output or 60KB log dumps, only ~1KB structured summaries with verbatim failure quotes.
-- **Total**: iterative driver work through this pipeline runs at roughly **30–40% of the cost of doing everything in the main Opus session**.
-
-This is why the "always try resume first; fall back to fresh only on failure" rule is load-bearing for cost discipline, not just convenience. Default to fresh and the pipeline's cost-optimization promise evaporates.
+The 4-agent pipeline is shaped around model-cost asymmetry: dev/QA Sonnet (~5× cheaper than Opus per token), tester/ops Haiku (~19× cheaper than Opus). Resume via `SendMessage` on warm cache preserves ~60-70% of input tokens (driver source + prior findings stay cached). Tester/ops contain raw output (100KB Gradle / 60KB logs) into ~1KB structured summaries — main + dev + QA contexts stay lean. Cumulative effect: iterative driver work runs at **~30-40% of all-Opus-main-session cost**. See "QA dispatch: model selection" above for QA cost-attribution detail (48/29/15/3/5).
 
 ---
 
