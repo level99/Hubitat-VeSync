@@ -42,7 +42,7 @@ Two install paths depending on whether the fork is in HPM's master index yet:
    ```
    https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/levoitManifest.json
    ```
-   HPM downloads and installs the parent app + per-model drivers.
+   HPM downloads and installs the parent driver + per-model drivers.
 
 ### Manual install (no HPM)
 
@@ -50,10 +50,10 @@ Paste each driver from `Drivers/Levoit/*.groovy` into Hubitat's **Drivers Code**
 
 ## After install — first-time setup
 
-1. Apps → **Add User App** → select **VeSync Integration**.
-2. Enter your VeSync mobile-app email + password (same credentials you use in the Levoit/VeSync mobile app).
+1. **Devices** → **Add Device** → **Virtual**. Pick any name; for **Type**, scroll down to the User Devices section and select **VeSync Integration**. Save.
+2. On the new device's detail page, enter your VeSync mobile-app email + password (same credentials you use in the Levoit/VeSync mobile app).
 3. Set **Refresh Interval** (default 30s — how often Hubitat polls VeSync for device state). 60-120s is plenty for most use and reduces API load.
-4. Click Done. Within ~5 seconds the parent logs in, discovers your Levoit devices, and creates one Hubitat child per device, named to match your VeSync app labels.
+4. Click **Save Preferences**. Within ~5 seconds the parent logs in, discovers your Levoit devices, and creates one Hubitat child per device, named to match your VeSync app labels.
 
 To re-scan after adding a new device in the VeSync app: open the parent device → **Resync Equipment**.
 
