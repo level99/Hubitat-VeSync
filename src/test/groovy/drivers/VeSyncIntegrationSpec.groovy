@@ -1616,4 +1616,186 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         !capturedBypassBodies.any { it.payload?.method == "getTowerFanStatus" }
         !capturedBypassBodies.any { it.payload?.method == "getFanStatus" }
     }
+
+    // =========================================================================
+    // Section I — Bug Pattern #14: schedule()-based poll-cycle recovery
+    //
+    // Validates that the BP14 fix (replacing recursive runIn() with schedule()
+    // cron) correctly arms persistent polling, self-heals pre-v2.2 installs,
+    // and is idempotent once migrated.
+    //
+    // NOTE: subscribe() and unsubscribe() are NOT used in the corrected BP14
+    // implementation (they are app-only APIs; Bug Pattern #15). The HubitatSpec
+    // base mock throws MissingMethodException for both. Any driver code that
+    // accidentally re-introduces subscribe() calls will fail these specs.
+    // =========================================================================
+
+    def "setupPollSchedule() arms cron with correct interval and sets scheduleVersion (I1 -- golden path)"() {
+        // I1: normal operation -- setupPollSchedule() must register a cron via schedule()
+        // with the configured refreshInterval and set state.scheduleVersion = "2.2".
+        given: "refreshInterval is 60 seconds"
+        settings.refreshInterval = 60
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with the correct cron and handler"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0/60 * * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() defaults to 30s when refreshInterval is null (I2 -- null interval)"() {
+        // I2: null-guard -- when refreshInterval is absent (first install before settings commit),
+        // setupPollSchedule() must default to 30s rather than NPE.
+        given: "refreshInterval is not configured"
+        settings.remove('refreshInterval')
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with the 30-second default cron"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0/30 * * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "ensurePollWatchdog() migrates pre-v2.2 install on first call (I3 -- migration)"() {
+        // I3: pre-v2.2 install -- state.scheduleVersion is absent.
+        // ensurePollWatchdog() must call setupPollSchedule() and log a migration message.
+        // After migration, state.scheduleVersion == "2.2".
+        // No subscribe() call must be made (Bug Pattern #15 -- app-only API).
+        given: "state has no scheduleVersion (simulates pre-v2.2 install)"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = true
+        state.remove('scheduleVersion')
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.ensurePollWatchdog()
+
+        then: "schedule() was called (setupPollSchedule ran)"
+        !scheduleCalls.isEmpty()
+        scheduleCalls.any { it[1] == "updateDevices" }
+
+        and: "state.scheduleVersion is now '2.2'"
+        state.scheduleVersion == "2.2"
+
+        and: "a migration INFO log was emitted"
+        testLog.infos.any { it.contains("BP14 migration") }
+
+        and: "no exception was thrown (no subscribe() call hit the fail-fast mock)"
+        noExceptionThrown()
+    }
+
+    def "ensurePollWatchdog() is idempotent when scheduleVersion is already '2.2' (I4 -- idempotency)"() {
+        // I4: already-migrated install -- ensurePollWatchdog() must be a no-op on second call.
+        // schedule() must NOT be called again; a double schedule() would create a second
+        // concurrent cron chain on top of the existing one.
+        given: "state.scheduleVersion already set to '2.2' (already migrated)"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.scheduleVersion = "2.2"
+
+        int scheduleCallCount = 0
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCallCount++
+        }
+
+        when: "ensurePollWatchdog called twice"
+        driver.ensurePollWatchdog()
+        driver.ensurePollWatchdog()
+
+        then: "schedule() was not called (no migration needed)"
+        scheduleCallCount == 0
+
+        and: "no migration log was emitted"
+        !testLog.infos.any { it.contains("BP14 migration") }
+    }
+
+    def "updateDevices() calls ensurePollWatchdog() after pref-seed (I7 -- integration)"() {
+        // I7: integration test -- verifies that updateDevices() triggers the migration
+        // path when state.scheduleVersion is absent (pre-v2.2 install scenario).
+        // pref-seed fires first (state.prefsSeeded set), watchdog fires second.
+        given: "pre-v2.2 state: scheduleVersion absent, deviceList empty (no HTTP calls)"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.remove('scheduleVersion')
+        state.deviceList = [:]
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.updateDevices()
+
+        then: "schedule() was called by ensurePollWatchdog()"
+        scheduleCalls.any { it[1] == "updateDevices" }
+
+        and: "state.scheduleVersion is now '2.2' (migrated)"
+        state.scheduleVersion == "2.2"
+
+        and: "no exception thrown (no subscribe() call hit the fail-fast mock)"
+        noExceptionThrown()
+    }
+
+    def "sendBypassRequest() calls ensurePollWatchdog() and migrates pre-v2.2 installs (I8 -- direct-command migration)"() {
+        // I8: direct-command migration path -- a user or Rule sends a device command while
+        // polling is dead (post-reboot, pre-v2.2 cron). sendBypassRequest must call
+        // ensurePollWatchdog() so polling is resurrected without user clicking Save Preferences.
+        given: "pre-v2.2 state: scheduleVersion absent, driverReloading cleared"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.remove('scheduleVersion')
+        state.remove('driverReloading')
+        state.token     = "tok-i8"
+        state.accountID = "acc-i8"
+        def equip = new TestDevice()
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "schedule() was called by ensurePollWatchdog() inside sendBypassRequest()"
+        scheduleCalls.any { it[1] == "updateDevices" }
+
+        and: "state.scheduleVersion is now '2.2' (migrated)"
+        state.scheduleVersion == "2.2"
+
+        and: "no exception thrown (no subscribe() call hit the fail-fast mock)"
+        noExceptionThrown()
+    }
 }

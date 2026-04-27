@@ -383,6 +383,44 @@ Critical:
 
 **Live-verified 2026-04-25:** Implementation tested against 8 Spock specs covering HTTP 401, both inner codes, negative control (-1 doesn't trigger), login-fail graceful degrade, finally semantics with login() throwing, and refreshed-token-in-retry assertion. All passing.
 
+### 14. Hub-reboot drops runIn-based poll cycle
+
+**Symptom:** child devices show stale values for hours/days after a hub reboot. Heartbeat stuck at `not synced`. `getHubJobs` confirms zero `updateDevices` entries in scheduledJobs after reboot. Often misattributed to token expiry — but re-auth (BP13) is fine; the cron chain itself is gone.
+
+**Root cause:** the pre-v2.2 poll cycle used recursive `runIn()` — each `updateDevices()` call scheduled the next. When the hub reboots between two consecutive calls, the chain breaks permanently. `runIn()` jobs are not persisted across reboots; `schedule()` cron jobs are.
+
+**Fix (v2.2):**
+```groovy
+private setupPollSchedule() {
+    Integer interval = Math.max(1, (settings?.refreshInterval ?: 30) as Integer)
+    unschedule("updateDevices")
+    schedule("0/${interval} * * * * ?", "updateDevices")
+    state.scheduleVersion = "2.2"
+}
+private ensurePollWatchdog() {
+    if (state.scheduleVersion != "2.2") {
+        logInfo "BP14 migration: switching from runIn-based to schedule()-based poll cycle"
+        setupPollSchedule()
+    }
+}
+```
+
+`ensurePollWatchdog()` is called at the top of `updateDevices()` (after BP12 pref-seed) AND at the top of `sendBypassRequest()` (before HTTP). `state.scheduleVersion != "2.2"` guard makes it idempotent. The `runIn((int)settings.refreshInterval, "updateDevices")` call inside `updateDevices()` must be removed — that was the broken chain.
+
+**Critical: do NOT add `subscribe(location, ...)` as a belt-and-braces layer.** `subscribe()` is app-only API (Bug Pattern #15) — it crashes in driver context with `MissingMethodException` at every poll tick. `schedule()` alone is sufficient; the platform persists `schedule()` cron jobs across reboots.
+
+**Live-verified 2026-04-27:** round-4 deploy on maintainer hub passed Phase 1-4 including reboot recovery; `schedule()`-based cron auto-resumed post-reboot with no user action.
+
+### 15. Driver code uses app-only API (`subscribe`/`unsubscribe` to location events)
+
+**Symptom:** `MissingMethodException: No signature of method: subscribe() is applicable for argument types: (Location, String, String)` at runtime, crashing repeatedly. Unit tests pass silently if the mock is a no-op rather than fail-fast.
+
+**Root cause:** `subscribe(location, "eventName", handler)` and `unsubscribe()` for location events are only wired into the Hubitat *app sandbox*. They are NOT available in the *driver sandbox*. The driver sandbox simply doesn't expose these methods; calling them produces `MissingMethodException`.
+
+**Fix:** remove any `subscribe()`/`unsubscribe()` calls from driver code entirely. Use `schedule()` for periodic work. The `HubitatSpec` base mock should throw `MissingMethodException` for `subscribe` and `unsubscribe` (fail-fast), not no-op — so the unit test harness catches this mistake before production.
+
+**Flag this pattern** whenever you see `subscribe(location, ...)` or `unsubscribe()` in a driver diff. It is always BLOCKING.
+
 ---
 
 ## Report format

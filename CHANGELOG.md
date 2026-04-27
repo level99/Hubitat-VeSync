@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v2.2
+
+### Fixed
+
+- **Poll cycle survives hub reboots (Bug Pattern #14).** The parent driver previously used a recursive `runIn()` chain to schedule the next poll — `runIn()` jobs are in-memory only and are not persisted across hub reboots. After any hub reboot, polling would stop permanently until the user clicked Save Preferences (or a device command fired). Fixed by replacing the `runIn()` chain with `schedule()` cron, which the Hubitat platform persists across reboots. A self-heal watchdog (`ensurePollWatchdog()`) auto-migrates pre-v2.2 installs to `schedule()`-based polling on the first poll tick or device command — no user action required for most users. **Known limitation:** on pre-v2.2 installs that have not yet polled or received a device command since upgrading, polling will not auto-resume after a hub reboot until the user clicks Save Preferences or fires a device command. Post-migration (after the first poll or command on v2.2), polling auto-resumes after every future reboot with no user action.
+
 ## [2.1] - 2026-04-26
 
 Adds five new drivers — two air purifiers, two humidifiers, and two fans (the first non-purifier/non-humidifier devices in this fork). All v2.1 drivers ship as **preview** — built without maintainer hardware via cross-referencing pyvesync canonical fixtures + Home Assistant `vesync` integration + SmartThings/Homebridge community drivers. Each carries inline `CROSS-CHECK` comment blocks at every contentious decision point so users can refute blind decisions with hardware reports.

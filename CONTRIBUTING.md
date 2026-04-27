@@ -195,6 +195,8 @@ The Spock harness + 22 lint rules catch a long tail of regressions. Most of thes
 | **PII scan** | RULE16 | No real email addresses, account IDs, tokens, or passwords in committed files. Test fixtures use placeholder values; allow-patterns for common placeholders are in `tests/lint_config.yaml`. |
 | **3-signature `update()` pattern** | BP1 | Every child driver exposes `update()` (self-fetch), `update(status)` (1-arg parent callback), `update(status, nightLight)` (2-arg parent callback — the one the parent's poll cycle uses). |
 | **Pref-seed at first poll method** | BP12 | Every driver has a `state.prefsSeeded` block at the top of its first parent-callback method that auto-applies `descriptionTextEnable=true` if null. Heals migration paths where Hubitat doesn't auto-commit `defaultValue`. |
+| **Persistent poll scheduling** | BP14 | Parent driver uses `schedule()` cron (not recursive `runIn()`) for the poll cycle. `schedule()` persists across hub reboots; `runIn()` does not. `ensurePollWatchdog()` auto-migrates pre-v2.2 installs on first poll or command. |
+| **No app-only API in drivers** | BP15 | `subscribe(location, ...)` and `unsubscribe()` are app-sandbox-only. They throw `MissingMethodException` in driver context. Use `schedule()` for recurring work instead. |
 | **V2-API field discipline** | BP4 | V2-API drivers (Vital, Tower Fan, Pedestal Fan, Superior 6000S) must use `levelIdx` / `levelType` / `manualSpeedLevel` field names — NOT the legacy Core-line `id` / `type` / `level`. |
 | **Logging gates** | Convention | INFO logs gate on `descriptionTextEnable`; DEBUG logs gate on `debugOutput`; both default to user choice (`descriptionTextEnable` on, `debugOutput` off with 30-min auto-disable). PII auto-redacts via parent's `sanitize()`. |
 

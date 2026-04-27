@@ -234,9 +234,39 @@ def input(Object... a)    { /* no-op */  }
             // no-op: don't schedule real timer
         }
 
-        // --- unschedule ---
-        mc.unschedule = { ->
-            // no-op
+        // --- unschedule (0-arg: clear all schedules; 1-arg: clear named method) ---
+        // NOTE: Groovy ExpandoMetaClass does not support true method overloading via property
+        // assignment (mc.foo = { ... } replaces any prior assignment of the same name).
+        // Both the 0-arg form (unschedule()) and the 1-arg form (unschedule("method"))
+        // must work, so we use a single varargs-accepting closure that handles both.
+        mc.unschedule = { Object[] args ->
+            // no-op: both `unschedule()` (args.length==0) and `unschedule("updateDevices")`
+            // (args.length==1) are handled here. No actual timer cancellation in unit tests.
+        }
+
+        // --- schedule (Hubitat cron-based recurring timer, persists across reboots) ---
+        // Used by setupPollSchedule() (Bug Pattern #14 fix).
+        // No-op base implementation; VeSyncIntegrationSpec overrides this per-test where needed.
+        mc.schedule = { String cronExpression, String handlerMethodName ->
+            // no-op: don't schedule real timers in unit tests
+        }
+
+        // ---------------------------------------------------------------------------
+        // App-only APIs -- FAIL FAST in driver context (Bug Pattern #15)
+        //
+        // subscribe(location, ...) and unsubscribe() are only available to Hubitat
+        // *apps* (SmartApps / installed-app sandboxes). They are NOT available to
+        // drivers. The Hubitat platform throws MissingMethodException at runtime if
+        // driver code calls them. These mocks replicate that production behavior so
+        // tests catch driver code that accidentally uses app-only APIs.
+        //
+        // If you see a test fail here, the driver code (not the test) is wrong.
+        // ---------------------------------------------------------------------------
+        mc.subscribe = { Object[] args ->
+            throw new MissingMethodException("subscribe", this.class, args, false)
+        }
+        mc.unsubscribe = { Object[] args ->
+            throw new MissingMethodException("unsubscribe", this.class, args, false)
         }
 
         // --- pauseExecution ---

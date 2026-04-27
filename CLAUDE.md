@@ -153,7 +153,7 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
 
    This inverts the spirit of the prior "always try resume first" rule for medium-to-long gaps where the cache-warmth assumption breaks down. Resume remains the right call when warmth is observable; fresh dispatch is the right call when it isn't. Using the **wrong** addressing (name instead of ID) on resume always fails — every name-based send returns `"No agent named '...' is currently addressable"` and forces a fresh dispatch anyway.
 
-4. **Brief human-readable summary between rounds — but don't block on user response.** When QA or tester returns findings, output a concise summary to the main chat BEFORE forwarding to the developer. Then proceed directly to the SendMessage handoff. The user reads the summary and can interrupt if they want to redirect; otherwise the pipeline keeps flowing. Example:
+4. **Brief human-readable summary between rounds — but don't block on user response.** When QA or tester returns findings, output a concise summary to the main chat BEFORE forwarding to the developer. Then proceed directly to the SendMessage handoff. The user reads the summary and can interrupt if they want to redirect; otherwise the pipeline keeps flowing. Within a warm-cache pipeline, iterate without prompting unless an architectural decision, failure, or outbound action is involved. Example:
 
    > QA found 3 issues on the V201S diff:
    > - BLOCKING: Bug Pattern #4 — setLevel uses `switchIdx` instead of `levelIdx` (line 234)
@@ -306,6 +306,47 @@ The QA agent's definition contains a numbered catalog of bug patterns from the v
 11. `documentationLink` pointing to unrelated project
 12. Type-change leaves new pref defaults uncommitted (silent INFO suppression)
 13. Token-expiry silent failure (no re-auth on HTTP 401 or inner auth codes)
+14. Hub-reboot drops runIn-based poll cycle — polling stops permanently after reboot until `updated()` fires
+
+    **Symptom:** child devices show stale values for hours/days after a hub reboot. Heartbeat stuck at `not synced`. `getHubJobs` confirms zero `updateDevices` entries in scheduledJobs. Often misattributed to token expiry — but re-auth (BP13) is fine; the cron chain itself is gone.
+
+    **Root cause:** the pre-v2.2 poll cycle used recursive `runIn()` — each `updateDevices()` call scheduled the next. When the hub reboots between two consecutive calls, the chain breaks permanently. `runIn()` jobs are not persisted; `schedule()` cron jobs are.
+
+    **Fix (v2.2):**
+    ```groovy
+    // Replace the runIn() chain with a schedule()-based cron.
+    // schedule() persists across hub reboots; runIn() does not.
+    private setupPollSchedule() {
+        Integer interval = Math.max(1, (settings?.refreshInterval ?: 30) as Integer)
+        unschedule("updateDevices")
+        schedule("0/${interval} * * * * ?", "updateDevices")
+        state.scheduleVersion = "2.2"
+    }
+    // Self-heal for pre-v2.2 installs. Call from updateDevices() and sendBypassRequest().
+    private ensurePollWatchdog() {
+        if (state.scheduleVersion != "2.2") {
+            logInfo "BP14 migration: switching from runIn-based to schedule()-based poll cycle"
+            setupPollSchedule()
+        }
+    }
+    ```
+
+    **Critical properties:**
+    - `ensurePollWatchdog()` is called at the top of `updateDevices()` (after BP12 pref-seed) AND at the top of `sendBypassRequest()` (before HTTP). This means any device interaction from a Rule resurrects polling without user action.
+    - The guard `state.scheduleVersion != "2.2"` makes the watchdog idempotent — O(1) overhead on every subsequent call once migrated.
+    - Remove the `runIn((int)settings.refreshInterval, "updateDevices")` from inside `updateDevices()` — that was the broken chain. Do not add it back.
+    - Do NOT add `subscribe(location, "systemStart", ...)` as a belt-and-braces layer — `subscribe()` is app-only API (Bug Pattern #15) and crashes in driver context.
+    - "Zero user action" case: polling stays dead until a command fires or the user clicks Save Preferences. This is a Hubitat platform limitation — no driver lifecycle method auto-fires on idle hubs. Document in release notes.
+
+    **Live-verified:** 2026-04-27 on maintainer hub `dev1064` — round-4 deploy passed Phase 1-4 including reboot recovery; `schedule()`-based cron auto-resumed post-reboot with no user action; zero `MissingMethodException` for the deleted `subscribe`/`unsubscribe`/`reschedulePoll` APIs.
+
+15. Driver code uses app-only API (`subscribe`, `unsubscribe` to location events)
+
+    **Symptom:** `groovy.lang.MissingMethodException: No signature of method: user_driver_...subscribe() is applicable for argument types: (Location, String, String)` at runtime, typically on every poll tick. Tests pass silently if the test mock is a no-op instead of fail-fast.
+
+    **Root cause:** Hubitat distinguishes the *app sandbox* (SmartApps / installed apps) from the *driver sandbox*. `subscribe(location, "eventName", handler)` and `unsubscribe()` for location events are only wired into the app sandbox's metaclass. The driver sandbox does not expose them; calling them produces `MissingMethodException` at ~2.75Hz (every poll).
+
+    **Fix:** do not use `subscribe` or `unsubscribe` in driver code. For periodic work, use `schedule()`. For cross-device coordination, use parent→child method calls or `sendEvent`. The HubitatSpec mock for these should throw `MissingMethodException` (fail-fast), not no-op, so the unit test harness catches the mistake before production deployment.
 
 When the developer or QA recognizes one of these patterns in a diff, name it explicitly: *"Bug Pattern #1 — missing 2-arg signature."* The other agent recognizes the name and applies the canonical fix.
 
