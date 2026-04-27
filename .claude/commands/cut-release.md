@@ -258,6 +258,7 @@ v<version> release prepared. Files staged-ready (uncommitted):
   - Drivers/Levoit/*.groovy   (version: field lockstep — all N files updated)
   - ROADMAP.md         (if advanced)
   - TODO.md            (if present locally and swept)
+  - CONTRIBUTING.md    (if drift detected and approved)
 
 Next steps for you:
   1. Review with: git diff
