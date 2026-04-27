@@ -26,6 +26,26 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-27: v2.2+ Hub-reboot poll-chain recovery (Bug Pattern #14).
+//                  - Replaced recursive runIn() chain with schedule()-based cron job.
+//                    schedule() persists across hub reboots; runIn() does not, causing
+//                    polling to die permanently after every reboot until the user
+//                    clicks Save Preferences.
+//                  - Added setupPollSchedule() — arms the cron, clears any prior
+//                    runIn chain with unschedule("updateDevices").
+//                  - Added ensurePollWatchdog() — called at top of updateDevices()
+//                    and sendBypassRequest(); detects pre-v2.2 installs that still
+//                    have the runIn-based chain, migrates them to schedule()-based
+//                    automatically on first call, and subscribes the systemStart
+//                    location event as a defensive secondary re-arm.
+//                  - Added reschedulePoll() — systemStart handler that re-arms the
+//                    schedule and kicks updateDevices() 15s after boot (connection-pool
+//                    stabilization window before first poll).
+//                  - Removed the runIn((int)settings.refreshInterval, "updateDevices")
+//                    call from inside updateDevices() (was the entire chain that broke
+//                    on reboot). schedule() now drives the recurring tick.
+//                  - initialize() now calls setupPollSchedule() and subscribes
+//                    systemStart so fresh installs start reboot-resilient.
 // 2026-04-26: v2.1+ Phase 3 — parent driver wiring for 5 new v2.1 drivers.
 //                  - deviceType() switch: added V100S (LAP-V102S-* family),
 //                    A601S (Classic300S / LUH-A601S-*), O451S (LUH-O451S-* /
@@ -198,7 +218,16 @@ def uninstalled() {
 
 def initialize() {
 	logDebug "initializing"
-    
+
+    // Arm the persistent cron schedule and subscribe the systemStart location event
+    // before login so that even a failed login attempt still establishes the poll
+    // timer for when credentials are next corrected.
+    setupPollSchedule()
+    if (!state.systemStartSubscribed) {
+        subscribe(location, "systemStart", "reschedulePoll")
+        state.systemStartSubscribed = true
+    }
+
     // Start the initialization chain: login → getDevices → updateDevices
     def loginSuccess = login()
     if (loginSuccess) {
@@ -207,6 +236,62 @@ def initialize() {
     } else {
         logError "Login failed - check credentials and retry"
     }
+}
+
+/**
+ * Arm (or re-arm) the persistent schedule()-based poll cron (Bug Pattern #14).
+ *
+ * schedule() registers a platform-level cron job that survives hub reboots.
+ * unschedule("updateDevices") first clears any prior schedule() OR runIn() chain
+ * registered for updateDevices — this is the migration step that kills the legacy
+ * runIn-based chain on pre-v2.2 installs.
+ *
+ * Cron syntax: "0/N * * * * ?" — every N seconds (Hubitat quartz-cron subset).
+ * Minimum granularity is 1 second; any interval < 1 is clamped to 1.
+ *
+ * state.scheduleVersion is set to "2.2" after arming so ensurePollWatchdog()
+ * can distinguish schedule()-armed installs from legacy runIn()-only installs.
+ */
+private setupPollSchedule() {
+    Integer interval = Math.max(1, (settings?.refreshInterval ?: 30) as Integer)
+    unschedule("updateDevices")
+    schedule("0/${interval} * * * * ?", "updateDevices")
+    state.scheduleVersion = "2.2"
+    logDebug "Poll schedule armed: every ${interval}s (schedule()-based, persists across reboots)"
+}
+
+/**
+ * Self-heal watchdog — detects pre-v2.2 installs and migrates them (Bug Pattern #14).
+ *
+ * Called at the top of updateDevices() (after BP12 pref-seed, before driverReloading guard)
+ * and at the top of sendBypassRequest() (before HTTP — catches the case where polling died
+ * but a direct command is still sent, e.g. from a Rule that fires the device).
+ *
+ * Idempotent: once state.scheduleVersion == "2.2" the body is skipped in O(1).
+ */
+private ensurePollWatchdog() {
+    if (state.scheduleVersion != "2.2") {
+        logInfo "BP14 migration: switching from runIn-based to schedule()-based poll cycle"
+        setupPollSchedule()
+        if (!state.systemStartSubscribed) {
+            subscribe(location, "systemStart", "reschedulePoll")
+            state.systemStartSubscribed = true
+        }
+    }
+}
+
+/**
+ * systemStart event handler — re-arms poll schedule after a hub reboot (Bug Pattern #14).
+ *
+ * schedule() jobs should auto-resume after a reboot, but this handler provides a
+ * defensive secondary re-arm for edge cases (firmware bug, partial state corruption).
+ * Kicking updateDevices() after a 15s delay gives the connection pool time to
+ * stabilise before the first VeSync API call.
+ */
+def reschedulePoll(event) {
+    logInfo "Hub restart detected — re-establishing poll cycle"
+    setupPollSchedule()
+    runIn(15, "updateDevices")
 }
 
 private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCall) {
@@ -299,6 +384,11 @@ def Boolean updateDevices()
         }
         state.prefsSeeded = true
     }
+
+    // BP14 migration watchdog — detects runIn-based installs (pre-v2.2) and converts them
+    // to schedule()-based on first call. Idempotent once state.scheduleVersion == "2.2".
+    ensurePollWatchdog()
+
     // Stop if driver is reloading
     if (state.driverReloading) {
         logDebug "Skipping updateDevices - driver reloading"
@@ -330,9 +420,11 @@ def Boolean updateDevices()
         logInfo "Self-heal: removed ${staleCids.size()} stale device tracking entries. Run forceReinitialize to retry discovery."
     }
 
-    // Immediately schedule the next update -- this will keep the
-    // referesh interval as close to constant as possible.
-    runIn((int)settings.refreshInterval, "updateDevices")
+    // NOTE (BP14): the schedule()-based cron (set up in setupPollSchedule()) drives the
+    // recurring poll tick automatically. There is NO runIn() call here for the next
+    // updateDevices() invocation — the legacy runIn chain was removed as part of the BP14
+    // fix. Adding a runIn() back here would create a second concurrent chain on top of the
+    // schedule() cron and is incorrect.
 
     sendEvent(name: "heartbeat", value: "syncing", isStateChange: true, descriptionText: "Waiting on update from VeSync servers.")
     logInfo "Heartbeat: syncing"
@@ -975,6 +1067,11 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
         return false
     }
 
+    // BP14 migration watchdog — catches installs where polling died after a reboot but
+    // the user (or a Rule) still sends a direct command. The direct command re-arms the
+    // cron so future polls resume from this point forward.
+    ensurePollWatchdog()
+
     logDebug "sendBypassRequest(${payload})"
 
     def params = [
@@ -1110,6 +1207,13 @@ def forceReinitialize() {
     logDebug "forceReinitialize()"
     logInfo "Force reinitializing VeSync integration"
     
+    // BP14: clear event subscriptions before state.clear() wipes the tracking flag.
+    // unsubscribe() with no args removes all subscriptions for this device (only
+    // systemStart is registered). Without this, state.clear() would zero
+    // state.systemStartSubscribed while the platform still holds a live subscription,
+    // causing initialize() to subscribe again — stacking one extra handler per
+    // forceReinitialize() invocation.
+    unsubscribe()
     // Clear state and reschedule
     state.clear()
     unschedule()

@@ -1616,4 +1616,316 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         !capturedBypassBodies.any { it.payload?.method == "getTowerFanStatus" }
         !capturedBypassBodies.any { it.payload?.method == "getFanStatus" }
     }
+
+    // -------------------------------------------------------------------------
+    // I: Bug Pattern #14 — hub-reboot drops runIn-based poll cycle
+    //
+    // Root cause: the pre-v2.2 poll cycle used recursive runIn() — each
+    // updateDevices() call scheduled the next. When the hub rebooted, the
+    // chain broke permanently. schedule() persists across reboots; runIn() does not.
+    //
+    // Fix (v2.2): setupPollSchedule() arms a schedule()-based cron; initialize()
+    // and forceReinitialize() call it; ensurePollWatchdog() migrates pre-v2.2
+    // installs on first updateDevices() or sendBypassRequest() call.
+    // -------------------------------------------------------------------------
+
+    def "setupPollSchedule() arms cron with correct interval and sets scheduleVersion (I1)"() {
+        // I1: golden path — setupPollSchedule() called with refreshInterval=45.
+        // Verifies: schedule() called with "0/45 * * * * ?" + "updateDevices",
+        //           state.scheduleVersion set to "2.2".
+        given: "settings.refreshInterval = 45"
+        settings.refreshInterval = 45
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        List<String> unscheduleCalls = []
+        driver.metaClass.unschedule = { String methodName ->
+            unscheduleCalls << methodName
+        }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "unschedule('updateDevices') was called first (clears any prior chain)"
+        unscheduleCalls.contains("updateDevices")
+
+        and: "schedule() was called with the correct 45-second cron expression"
+        scheduleCalls.any { it[0] == "0/45 * * * * ?" && it[1] == "updateDevices" }
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() uses refreshInterval from settings, defaults to 30 when null (I2)"() {
+        // I2: null-safe default — settings.refreshInterval is null (fresh install before user saves).
+        // The interval must default to 30 rather than throwing NullPointerException or casting null.
+        given: "settings.refreshInterval is null"
+        settings.refreshInterval = null
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { String methodName -> }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with the 30-second default cron expression"
+        scheduleCalls.any { it[0] == "0/30 * * * * ?" && it[1] == "updateDevices" }
+
+        and: "no exception was thrown"
+        noExceptionThrown()
+    }
+
+    def "ensurePollWatchdog() migrates when scheduleVersion is absent (I3 -- pre-v2.2 install)"() {
+        // I3: pre-v2.2 install — state.scheduleVersion not set (null/absent).
+        // ensurePollWatchdog() must call setupPollSchedule() and subscribe systemStart.
+        // After migration, state.scheduleVersion == "2.2" and state.systemStartSubscribed == true.
+        given: "state has no scheduleVersion (simulates pre-v2.2 install)"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = true
+        state.remove('scheduleVersion')
+        state.remove('systemStartSubscribed')
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { String methodName -> }
+        List<List<Object>> subscribeCalls = []
+        driver.metaClass.subscribe = { Object source, String event, Object handler ->
+            subscribeCalls << [source, event, handler]
+        }
+
+        when:
+        driver.ensurePollWatchdog()
+
+        then: "schedule() was called (setupPollSchedule ran)"
+        !scheduleCalls.isEmpty()
+
+        and: "state.scheduleVersion is now '2.2'"
+        state.scheduleVersion == "2.2"
+
+        and: "subscribe was called for systemStart"
+        subscribeCalls.any { it[1] == "systemStart" }
+
+        and: "state.systemStartSubscribed is true"
+        state.systemStartSubscribed == true
+
+        and: "a migration INFO log was emitted"
+        testLog.infos.any { it.contains("BP14 migration") }
+    }
+
+    def "ensurePollWatchdog() is idempotent when scheduleVersion is already '2.2' (I4)"() {
+        // I4: already-migrated install — ensurePollWatchdog() must be a no-op on second call.
+        // schedule() must NOT be called again; subscribe must NOT be called again.
+        // This is critical — a double schedule() would create a second concurrent cron chain.
+        given: "state.scheduleVersion already set to '2.2' (already migrated)"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.scheduleVersion = "2.2"
+        state.systemStartSubscribed = true
+
+        int scheduleCallCount = 0
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCallCount++
+        }
+        int subscribeCallCount = 0
+        driver.metaClass.subscribe = { Object source, String event, Object handler ->
+            subscribeCallCount++
+        }
+
+        when:
+        driver.ensurePollWatchdog()
+        driver.ensurePollWatchdog()  // second call -- must also be no-op
+
+        then: "schedule() was not called (no migration needed)"
+        scheduleCallCount == 0
+
+        and: "subscribe was not called"
+        subscribeCallCount == 0
+
+        and: "no migration log was emitted"
+        !testLog.infos.any { it.contains("BP14 migration") }
+    }
+
+    def "ensurePollWatchdog() subscribes systemStart only once even when called multiple times during migration (I5)"() {
+        // I5: concurrent-call safety — if ensurePollWatchdog() is called multiple times
+        // before state.systemStartSubscribed is set, subscribe should still only fire once.
+        // This is guarded by the `if (!state.systemStartSubscribed)` check inside
+        // ensurePollWatchdog() — the second call sees the flag and skips.
+        given: "first call: no scheduleVersion, no systemStartSubscribed"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = true
+        state.remove('scheduleVersion')
+        state.remove('systemStartSubscribed')
+
+        int subscribeCallCount = 0
+        driver.metaClass.schedule = { String cronExpr, String handler -> }
+        driver.metaClass.unschedule = { String methodName -> }
+        driver.metaClass.subscribe = { Object source, String event, Object handler ->
+            subscribeCallCount++
+        }
+
+        when: "ensurePollWatchdog called twice"
+        driver.ensurePollWatchdog()  // migrates, subscribes
+        driver.ensurePollWatchdog()  // already "2.2" after first call — skipped entirely
+
+        then: "subscribe was called exactly once"
+        subscribeCallCount == 1
+    }
+
+    def "reschedulePoll() re-arms schedule and kicks updateDevices via runIn(15) (I6)"() {
+        // I6: systemStart handler path — reschedulePoll() must call setupPollSchedule()
+        // to re-arm the cron AND schedule a 15-second delayed kick of updateDevices().
+        // The 15s delay is the connection-pool stabilisation window after reboot.
+        given: "hub just rebooted; state has valid scheduleVersion from before reboot"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = true
+        state.scheduleVersion = "2.2"  // was set pre-reboot
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { String methodName -> }
+
+        List<List<Object>> runInCalls = []
+        driver.metaClass.runIn = { int delay, String method ->
+            runInCalls << [delay, method]
+        }
+
+        when: "reschedulePoll fires (simulates location.systemStart event)"
+        driver.reschedulePoll([:])  // event arg not used by the handler body
+
+        then: "setupPollSchedule was called (schedule() re-armed)"
+        scheduleCalls.any { it[1] == "updateDevices" }
+
+        and: "runIn(15, 'updateDevices') was called for the immediate post-boot kick"
+        runInCalls.any { it[0] == 15 && it[1] == "updateDevices" }
+
+        and: "an INFO log was emitted about hub restart"
+        testLog.infos.any { it.contains("Hub restart detected") }
+    }
+
+    def "updateDevices() calls ensurePollWatchdog() after pref-seed and before driverReloading guard (I7)"() {
+        // I7: integration test — verifies that updateDevices() triggers the migration
+        // path when state.scheduleVersion is absent (pre-v2.2 install scenario).
+        // Also confirms the call order: pref-seed fires first, watchdog fires second.
+        // We do NOT test that driverReloading short-circuits the watchdog (watchdog is
+        // before the guard) — that's irrelevant to BP14 correctness.
+        given: "pre-v2.2 state: scheduleVersion absent, real device in deviceList"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.remove('scheduleVersion')
+        state.deviceList = [:]  // empty — no HTTP calls needed
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { String methodName -> }
+        driver.metaClass.subscribe = { Object source, String event, Object handler -> }
+
+        when:
+        driver.updateDevices()
+
+        then: "schedule() was called by ensurePollWatchdog()"
+        scheduleCalls.any { it[1] == "updateDevices" }
+
+        and: "state.scheduleVersion is now '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "sendBypassRequest() calls ensurePollWatchdog() and migrates pre-v2.2 installs (I8)"() {
+        // I8: direct-command migration path — a user or Rule sends a device command
+        // while polling is dead (post-reboot, pre-v2.2 cron). sendBypassRequest must
+        // call ensurePollWatchdog() so polling is resurrected without user having to
+        // manually click Save Preferences.
+        given: "pre-v2.2 state: scheduleVersion absent, driverReloading cleared"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.remove('scheduleVersion')
+        state.remove('driverReloading')
+        state.token     = "tok-i8"
+        state.accountID = "acc-i8"
+        def equip = new TestDevice()
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { String methodName -> }
+        driver.metaClass.subscribe = { Object source, String event, Object handler -> }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "schedule() was called by ensurePollWatchdog() inside sendBypassRequest()"
+        scheduleCalls.any { it[1] == "updateDevices" }
+
+        and: "state.scheduleVersion is now '2.2' (migrated)"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "forceReinitialize() calls unsubscribe() before state.clear() to prevent subscription stacking (I9)"() {
+        // I9: BP14 NIT1 regression guard.
+        //
+        // forceReinitialize() must call unsubscribe() BEFORE state.clear() so that the
+        // live systemStart subscription is torn down before the tracking flag is wiped.
+        // Without this ordering, state.clear() zeros state.systemStartSubscribed while
+        // the platform still holds the prior subscription; the subsequent initialize()
+        // call then sees the flag as absent and subscribes again, stacking one extra
+        // handler per forceReinitialize() invocation.
+        //
+        // Verified properties:
+        //   (a) unsubscribe() was called
+        //   (b) it was called before state.systemStartSubscribed was wiped (ordering)
+        //   (c) subscribe() fires exactly once after re-init (not twice)
+        //
+        // We verify (b) via a side-effect flag: unsubscribeCalled is set in the mock,
+        // and we capture state.systemStartSubscribed at that moment. If clear() ran first,
+        // it would already be null/false by the time unsubscribe() fires.
+        given: "driver has been previously initialized (state tracks the subscription)"
+        state.systemStartSubscribed = true
+        state.scheduleVersion = "2.2"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+
+        int unsubscribeCallCount = 0
+        boolean systemStartFlagAtUnsubscribeTime = false
+        int subscribeCallCount = 0
+
+        driver.metaClass.unsubscribe = { ->
+            unsubscribeCallCount++
+            // Capture the flag value at unsubscribe time — if clear() ran first this will be false/null
+            systemStartFlagAtUnsubscribeTime = (state.systemStartSubscribed == true)
+        }
+        driver.metaClass.subscribe = { Object source, String eventName, Object handler ->
+            subscribeCallCount++
+        }
+        driver.metaClass.schedule = { String cronExpr, String handler -> }
+        driver.metaClass.unschedule = { String methodName -> }
+        driver.metaClass.pauseExecution = { int ms -> /* no-op */ }
+        // Short-circuit initialize() after subscription setup — we don't need login for this test
+        driver.metaClass.login = { -> false }
+
+        when: "forceReinitialize() is invoked"
+        driver.forceReinitialize()
+
+        then: "(a) unsubscribe() was called"
+        unsubscribeCallCount == 1
+
+        and: "(b) state.systemStartSubscribed was still true when unsubscribe() fired (clear() had not run yet)"
+        systemStartFlagAtUnsubscribeTime == true
+
+        and: "(c) subscribe() was called exactly once (no stacking)"
+        subscribeCallCount == 1
+    }
 }

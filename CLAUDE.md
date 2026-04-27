@@ -306,6 +306,48 @@ The QA agent's definition contains a numbered catalog of bug patterns from the v
 11. `documentationLink` pointing to unrelated project
 12. Type-change leaves new pref defaults uncommitted (silent INFO suppression)
 13. Token-expiry silent failure (no re-auth on HTTP 401 or inner auth codes)
+14. Hub-reboot drops runIn-based poll cycle — polling stops permanently after reboot until `updated()` fires
+
+    **Symptom:** child devices show stale values for hours/days after a hub reboot. Heartbeat stuck at `not synced`. `getHubJobs` confirms zero `updateDevices` entries in scheduledJobs. Often misattributed to token expiry — but re-auth (BP13) is fine; the cron chain itself is gone.
+
+    **Root cause:** the pre-v2.2 poll cycle used recursive `runIn()` — each `updateDevices()` call scheduled the next. When the hub reboots between two consecutive calls, the chain breaks permanently. `runIn()` jobs are not persisted; `schedule()` cron jobs are.
+
+    **Fix (v2.2):**
+    ```groovy
+    // Replace the runIn() chain with a schedule()-based cron.
+    // schedule() persists across hub reboots; runIn() does not.
+    private setupPollSchedule() {
+        Integer interval = Math.max(1, (settings?.refreshInterval ?: 30) as Integer)
+        unschedule("updateDevices")
+        schedule("0/${interval} * * * * ?", "updateDevices")
+        state.scheduleVersion = "2.2"
+    }
+    // Self-heal for pre-v2.2 installs. Call from updateDevices() and sendBypassRequest().
+    private ensurePollWatchdog() {
+        if (state.scheduleVersion != "2.2") {
+            logInfo "BP14 migration: switching from runIn-based to schedule()-based poll cycle"
+            setupPollSchedule()
+            if (!state.systemStartSubscribed) {
+                subscribe(location, "systemStart", reschedulePoll)
+                state.systemStartSubscribed = true
+            }
+        }
+    }
+    // Defensive secondary re-arm on hub reboot event.
+    def reschedulePoll(event) {
+        logInfo "Hub restart detected -- re-establishing poll cycle"
+        setupPollSchedule()
+        runIn(15, "updateDevices")
+    }
+    ```
+
+    **Critical properties:**
+    - `ensurePollWatchdog()` is called at the top of `updateDevices()` (after BP12 pref-seed) AND at the top of `sendBypassRequest()` (before HTTP). This means any device interaction from a Rule resurrects polling without user action.
+    - The guard `state.scheduleVersion != "2.2"` makes the watchdog idempotent — O(1) overhead on every subsequent call once migrated.
+    - Remove the `runIn((int)settings.refreshInterval, "updateDevices")` from inside `updateDevices()` — that was the broken chain. Do not add it back.
+    - "Zero user action" case: polling stays dead until a command fires or the user clicks Save Preferences. This is a Hubitat platform limitation — no driver lifecycle method auto-fires on idle hubs. Document in release notes.
+
+    **Live-verified:** 2026-04-27 on maintainer hub — `getHubJobs` confirmed zero `updateDevices` scheduled entries after reboot; `setupPollSchedule()` restored polling; first `reschedulePoll` event fired at boot+15s.
 
 When the developer or QA recognizes one of these patterns in a diff, name it explicitly: *"Bug Pattern #1 — missing 2-arg signature."* The other agent recognizes the name and applies the canonical fix.
 

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v2.2
+
+### Fixed
+
+- **Polling stops after hub reboot (Bug Pattern #14).** The pre-v2.2 poll cycle used a recursive `runIn()` chain — each `updateDevices()` call scheduled the next. When the hub rebooted between two calls, the chain broke permanently and devices showed stale values indefinitely. Fixed by switching to `schedule()`-based cron, which persists across reboots. Once installed, the fix activates automatically on next device interaction (any command, automation rule firing, or Save Preferences). After activation, future reboots auto-recover with no action needed. **If your heartbeat reads `not synced` and your automations don't currently fire commands on Levoit devices, click Save Preferences once on the VeSync Integration parent after updating.**
+
 ## [2.1] - 2026-04-26
 
 Adds five new drivers — two air purifiers, two humidifiers, and two fans (the first non-purifier/non-humidifier devices in this fork). All v2.1 drivers ship as **preview** — built without maintainer hardware via cross-referencing pyvesync canonical fixtures + Home Assistant `vesync` integration + SmartThings/Homebridge community drivers. Each carries inline `CROSS-CHECK` comment blocks at every contentious decision point so users can refute blind decisions with hardware reports.
