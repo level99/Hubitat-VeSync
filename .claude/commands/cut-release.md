@@ -156,6 +156,25 @@ Run `[ -f TODO.md ] && echo "present" || echo "absent"` to check. `TODO.md` is g
 
 - **If absent:** skip silently. Do not create `TODO.md` from scratch — it's a maintainer-personal artifact, not something to seed automatically.
 
+### Artifact F — `CONTRIBUTING.md` drift check (only if file exists)
+
+Run `[ -f CONTRIBUTING.md ] && echo "present" || echo "absent"` to check.
+
+- **If absent:** skip silently. (Older clones / branches may not have it.)
+
+- **If present:** scan the sections that drift release-over-release and propose edits where they no longer match current state:
+
+  | CONTRIBUTING.md section | Drift source | Check |
+  |---|---|---|
+  | `## Codebase orientation` (repo tree) | new/renamed driver files | glob `Drivers/Levoit/*.groovy` and compare to the tree's listed files |
+  | `## Adding a new device driver` (closest-existing-driver-as-template hints) | new device families | scan for hardcoded references to existing driver classes; flag if a v2.X+ family (e.g. fans added in v2.1) isn't represented |
+  | `## Conventions enforced by lint/tests` (rule IDs + BP refs) | new lint rules / new bug patterns | glob `tests/lint_rules/*.py` for rule IDs and cross-check against the listed rules. Cross-check BP catalog references against `CLAUDE.md` "Bug-pattern catalog" entries |
+  | `### What's still gappy in shipped previews` | preview drivers losing/gaining gaps | grep `Drivers/Levoit/*.groovy` for `[PREVIEW vX.Y]` in `definition(description: ...)` and cross-check against the listed gaps |
+
+  Surface drift as **proposed edits** in the approval round (unified diff or proposed-section snippet). **Do not apply automatically** — content drift in a contributor-facing doc deserves a human eyeball.
+
+  If no drift detected: report *"No CONTRIBUTING.md drift detected this release."*
+
 ## Step 5 — Present for approval
 
 Output a single message structured as:
@@ -203,6 +222,10 @@ Output a single message structured as:
 
 <unified diff or proposed-section snippet, or "TODO.md not present locally — skipping">
 
+### Artifact F — CONTRIBUTING.md drift check
+
+<unified diff or proposed-section snippet, or "No CONTRIBUTING.md drift detected this release" or "CONTRIBUTING.md not present — skipping">
+
 ---
 
 Approve to apply, or tell me what to change.
@@ -220,6 +243,7 @@ After explicit approval (e.g., "approved", "go", "ship it"):
 - Apply Artifact C.7 edits: for each `.groovy` file in `Drivers/Levoit/`, update or add the `version:` field inside `definition()` to match the new package version.
 - Apply Artifact D `ROADMAP.md` edits if any were proposed.
 - Apply Artifact E `TODO.md` edits if `TODO.md` exists locally and edits were proposed.
+- Apply any Artifact F `CONTRIBUTING.md` edits if proposed and approved.
 
 Do NOT commit. Do NOT tag. Do NOT push.
 
