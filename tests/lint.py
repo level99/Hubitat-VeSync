@@ -145,12 +145,13 @@ def _collect_per_file_rules():
 
 def _collect_repo_level_rules():
     """Return list of (check_fn, needs_repo_root) for repo-wide checks."""
-    from lint_rules import manifest_consistency, doc_sync, version_lockstep, readme_devices_sync
+    from lint_rules import manifest_consistency, doc_sync, version_lockstep, readme_devices_sync, whitelist_parity
     return [
         manifest_consistency.check_rule18_manifest_consistency,
         doc_sync.check_rule19_doc_sync,
         version_lockstep.check_rule20_version_lockstep,
         readme_devices_sync.check_rule21_readme_devices_sync,
+        whitelist_parity.check_rule22_whitelist_parity,
     ]
 
 

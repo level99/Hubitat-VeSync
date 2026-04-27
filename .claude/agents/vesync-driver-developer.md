@@ -248,6 +248,7 @@ When adding a new driver:
 When adding a new device-code (e.g. a regional variant of an existing model):
 1. Add the code to the parent driver's `deviceType()` switch
 2. Confirm pyvesync's `device_map.py` lists it under the same class
+3. Add the code (or its prefix) to `isLevoitClimateDevice()` if the prefix is not already covered — lint rule RULE22 will FAIL if parity breaks between `deviceType()` and `isLevoitClimateDevice()`
 
 ---
 
@@ -271,7 +272,7 @@ When adding a new device-code (e.g. a regional variant of an existing model):
 3. Pull pyvesync class implementation for response field semantics + reverse-mappings.
 4. Copy the closest-existing driver as a template (Vital 200S for purifier-like, Superior 6000S for humidifier-like).
 5. Replace metadata, methods, and field parsing. Preserve the logging conventions, diagnostic line, and update-signature pattern.
-6. Update parent's `deviceType()` switch + `getDevices()` `addChildDevice` branch.
+6. Update parent's `deviceType()` switch + `getDevices()` `addChildDevice` branch + `isLevoitClimateDevice()` whitelist (add the prefix or literal name; lint rule RULE22 enforces parity between the two functions — adding to one without the other will FAIL lint).
 7. Update HPM manifest (new entry + version bump).
 8. Update readme.md (driver table + events table for the new model).
 9. Test live before requesting QA review — verify power, status, and at least one configurable command work end-to-end.

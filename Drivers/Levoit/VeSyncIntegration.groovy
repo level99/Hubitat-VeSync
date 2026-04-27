@@ -26,6 +26,20 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-26: v2.1+ Phase 3 — parent driver wiring for 5 new v2.1 drivers.
+//                  - deviceType() switch: added V100S (LAP-V102S-* family),
+//                    A601S (Classic300S / LUH-A601S-*), O451S (LUH-O451S-* /
+//                    LUH-O601S-* overlap), TOWERFAN (LTF-F422S-*), PEDESTALFAN
+//                    (LPF-R432S-*) branches.
+//                  - getDevices() addChildDevice loop: 5 new else-if branches
+//                    with verify1 defensive validation pattern.
+//                  - getDevices() newList tracking: extended the cid-tracking
+//                    conditional to include the 5 new dtype strings.
+//                  - updateDevices() method routing: Tower Fan -> getTowerFanStatus,
+//                    Pedestal Fan -> getFanStatus; prior logic (Humidifier ->
+//                    getHumidifierStatus, else -> getPurifierStatus) unchanged.
+//                  - isLevoitClimateDevice() whitelist: added LTF- and LPF-
+//                    prefixes; updated Javadoc comment to reflect v2.1 change.
 // 2026-04-26: v2.0+ Added version field to every driver's definition() block.
 //                  Hubitat UI now displays driver version in the device detail
 //                  panel. /cut-release keeps this lockstep with the package
@@ -107,7 +121,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson (original); Dan Cox (fork: Vital 200S, Superior 6000S, parent fixes); elfege (contributor)",
         description: "Integrates Levoit air purifiers and humidifiers with Hubitat Elevation via VeSync cloud API",
-        version: "2.0",
+        version: "2.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"
@@ -326,11 +340,26 @@ def Boolean updateDevices()
                 continue
             }
 
-            // Branch the API method by device type. The VeSync API uses different methods
-            // for different device families: getPurifierStatus for air purifiers, getHumidifierStatus
-            // for humidifiers. Calling the wrong one returns code:-1 with empty result.
+            // Branch the API method by device type. The VeSync API uses different read methods
+            // for each device family; calling the wrong method returns code:-1 with empty result.
+            //   Tower Fan   -> getTowerFanStatus  (per pyvesync VeSyncTowerFan.get_details)
+            //   Pedestal Fan -> getFanStatus       (per pyvesync VeSyncPedestalFan.get_details)
+            //   Humidifier  -> getHumidifierStatus
+            //   All others  -> getPurifierStatus   (air purifiers)
+            // Order: most-specific fan checks first; "Humidifier" is not a substring of either
+            // fan typeName so the humidifier check is safe in any order, but most-specific
+            // first is the canonical style here.
             String typeName = dev.typeName ?: dev.name ?: ""
-            String method = typeName.contains("Humidifier") ? "getHumidifierStatus" : "getPurifierStatus"
+            String method
+            if (typeName.contains("Tower Fan")) {
+                method = "getTowerFanStatus"
+            } else if (typeName.contains("Pedestal Fan")) {
+                method = "getFanStatus"
+            } else if (typeName.contains("Humidifier")) {
+                method = "getHumidifierStatus"
+            } else {
+                method = "getPurifierStatus"
+            }
             def command = [
                 "method": method,
                 "source": "APP",
@@ -390,9 +419,41 @@ private deviceType(code) {
         case "LAP-V201S-AASR":
         case "LAP-V201S-AUSR":
             return "V200S";
+        // Vital 100S — pyvesync VeSyncAirBaseV2, dev_types LAP-V102S-* family
+        case "LAP-V102S-AASR":
+        case "LAP-V102S-WUS":
+        case "LAP-V102S-WEU":
+        case "LAP-V102S-AUSR":
+        case "LAP-V102S-WJP":
+        case "LAP-V102S-AJPR":
+        case "LAP-V102S-AEUR":
+            return "V100S";
         // Superior 6000S — pyvesync VeSyncSuperior6000S supports LEH-S601S-WUS/-WUSR/-WEUR and LEH-S602S-WUS
         case ~/LEH-S60[12]S-(WUS|WUSR|WEUR)/:
             return "V601S";
+        // Classic 300S Humidifier — pyvesync VeSyncHumid200300S, dev_types Classic300S + LUH-A601S-*
+        case "Classic300S":
+        case "LUH-A601S-WUSB":
+        case "LUH-A601S-AUSW":
+            return "A601S";
+        // OasisMist 450S US — same pyvesync class as Classic 300S; LUH-O601S-* shares this map entry
+        // per SmartThings + Homebridge cross-check (4 model codes confirmed in device_map.py)
+        case "LUH-O451S-WUS":
+        case "LUH-O451S-WUSR":
+        case "LUH-O601S-WUS":
+        case "LUH-O601S-KUS":
+            return "O451S";
+        // Levoit Tower Fan — pyvesync VeSyncTowerFan
+        case "LTF-F422S-KEU":
+        case "LTF-F422S-WUSR":
+        case "LTF-F422S-WJP":
+        case "LTF-F422S-WUS":
+            return "TOWERFAN";
+        // Levoit Pedestal Fan — pyvesync VeSyncPedestalFan
+        // Note: pyvesync fixture filename has a typo (LPF-R423S) but real device codes are LPF-R432S
+        case "LPF-R432S-AEU":
+        case "LPF-R432S-AUS":
+            return "PEDESTALFAN";
         default:
             // Unknown model code — fall through to Generic diagnostic driver.
             // The Generic driver provides best-effort power control and captureDiagnostics()
@@ -403,21 +464,23 @@ private deviceType(code) {
 
 /**
  * Returns true if the raw VeSync model code looks like a Levoit climate-class device
- * (air purifier or humidifier) that should be attached to a Levoit driver.
+ * (air purifier, humidifier, or fan) that should be attached to a Levoit driver.
  *
- * Whitelist (v2.0):
+ * Whitelist (v2.1):
  *   LAP-*  — Levoit Air Purifier (Core, Vital, and future variants)
  *   LEH-*  — Levoit Evaporative Humidifier (Superior, OasisMist, and future)
+ *   LUH-*  — Levoit Ultrasonic Humidifier (Classic 300S LUH-A601S-*, OasisMist 450S
+ *             LUH-O451S-*, LUH-O601S-*, and future humidifier follow-ons).
+ *             Added alongside the LUH-* gap fix; lint rule 22 enforces parity with deviceType().
  *   LV-*   — Older Levoit purifiers/humidifiers (LV-PUR131S, LV-RH131S, etc.)
+ *   LTF-*  — Levoit Tower Fan (added v2.1 alongside proper Tower Fan driver).
+ *             Future unknown LTF-X-Y codes fall through to the Generic driver
+ *             rather than being skipped as non-Levoit.
+ *   LPF-*  — Levoit Pedestal Fan (added v2.1 alongside proper Pedestal Fan driver).
+ *             Same rationale as LTF-*.
  *   Literal names recognized by deviceType() — included for completeness so
  *     this method can also be used as a standalone classifier if needed.
- *
- * Deliberately excluded from v2.0:
- *   LTF-*  — Tower Fan (Levoit) — locked for v2.1, where a proper fan driver
- *             will be added alongside this prefix.
- *   LPF-*  — Pedestal Fan (Levoit) — same rationale as LTF-*.
- *   Adding fan prefixes now would create Generic children that users would
- *   need to manually remove before v2.1's proper fan drivers can attach.
+ *     "Classic300S" added alongside LUH-* (some firmware reports this literal).
  *
  * Everything else (Etekcity WS-, ESW-, ESO-, Cosori CS-, thermostats, etc.)
  * is not a Levoit climate device and returns false.
@@ -426,8 +489,12 @@ private Boolean isLevoitClimateDevice(String code) {
     if (!code) return false
     if (code.startsWith("LAP-")) return true
     if (code.startsWith("LEH-")) return true
+    if (code.startsWith("LUH-")) return true   // Classic 300S, OasisMist 450S, Superior 6000S, future humidifiers
     if (code.startsWith("LV-"))  return true
-    if (code in ["Core200S", "Core300S", "Core400S", "Core600S", "Vital200S"]) return true
+    // v2.1: fan prefixes added alongside proper Tower Fan and Pedestal Fan drivers
+    if (code.startsWith("LTF-")) return true
+    if (code.startsWith("LPF-")) return true
+    if (code in ["Core200S", "Core300S", "Core400S", "Core600S", "Vital200S", "Classic300S"]) return true
     return false
 }
 
@@ -497,7 +564,8 @@ private Boolean getDevices() {
                         newList[device.cid] = device.configModule;
                         newList[device.cid+"-nl"] = device.configModule;
                     }
-                    else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S") {
+                    else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S" ||
+                             dtype == "V100S" || dtype == "A601S" || dtype == "O451S" || dtype == "TOWERFAN" || dtype == "PEDESTALFAN") {
                         newList[device.cid] = device.configModule;
                     }
                     else if (dtype == "GENERIC" && isLevoitClimateDevice(device.deviceType)) {
@@ -665,6 +733,111 @@ private Boolean getDevices() {
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
                             logInfo "Added child device: ${device.deviceName} (Levoit Superior 6000S Humidifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                        }
+                    }
+                    else if (dtype == "V100S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = addChildDevice("Levoit Vital 100S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            logInfo "Added child device: ${device.deviceName} (Levoit Vital 100S Air Purifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                        }
+                    }
+                    else if (dtype == "A601S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = addChildDevice("Levoit Classic 300S Humidifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            logInfo "Added child device: ${device.deviceName} (Levoit Classic 300S Humidifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                        }
+                    }
+                    else if (dtype == "O451S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = addChildDevice("Levoit OasisMist 450S Humidifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            logInfo "Added child device: ${device.deviceName} (Levoit OasisMist 450S Humidifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                        }
+                    }
+                    else if (dtype == "TOWERFAN") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = addChildDevice("Levoit Tower Fan", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            logInfo "Added child device: ${device.deviceName} (Levoit Tower Fan)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                        }
+                    }
+                    else if (dtype == "PEDESTALFAN") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = addChildDevice("Levoit Pedestal Fan", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            logInfo "Added child device: ${device.deviceName} (Levoit Pedestal Fan)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;

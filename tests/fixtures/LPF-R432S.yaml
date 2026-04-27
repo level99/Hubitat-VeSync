@@ -1,0 +1,413 @@
+# pyvesync canonical API fixtures for Levoit Pedestal Fan (LPF-R432S) -- AEU and AUS variants
+# Source: https://github.com/webdjoe/pyvesync
+# Retrieved: 2026-04-26
+#
+# REQUEST payloads sourced from src/tests/api/vesyncfan/LPF-R423S.yaml
+# NOTE: pyvesync fixture filename is "LPF-R423S.yaml" -- a number-transposition typo.
+# Real device codes are LPF-R432S-AEU and LPF-R432S-AUS. Fixture content is correct;
+# only the filename has the typo.
+#
+# RESPONSE data synthesized from:
+#   src/tests/call_json_fans.py: FAN_DETAILS["LPF-R423S"]
+#   src/pyvesync/models/fan_models.py: PedestalFanResult dataclass
+#   src/pyvesync/device_map.py: FanMap entry (line ~1038)
+#   src/pyvesync/devices/vesyncfan.py: VeSyncPedestalFan class (temperature /10 confirmed, line 314)
+#   HA cross-check finding #d: sleep mode API literal is "advancedSleep", user label is "sleep"
+#   ST+HB cross-check: setFanMode (NOT setTowerFanMode); setOscillationStatus (NOT setOscillationSwitch);
+#                      getFanStatus (NOT getTowerFanStatus); childLock READ-ONLY; no timer commands
+#
+# Device class: VeSyncPedestalFan (vesyncfan.py)
+# dev_types (both route to LevoitPedestalFan.groovy):
+#   LPF-R432S-AEU, LPF-R432S-AUS
+#
+# Modes (device_map.py FanMap.modes):
+#   normal    -> API workMode "normal"
+#   turbo     -> API workMode "turbo"
+#   eco       -> API workMode "eco"         <- NOTE: ECO not AUTO (Tower Fan has auto)
+#   sleep     -> API workMode "advancedSleep"  <- CRITICAL reverse-mapping
+#
+# Fan levels: 1-12 (FanMap.fan_levels = range(1, 13))
+# Features: SET_OSCILLATION_RANGE, HORIZONTAL_OSCILLATION, VERTICAL_OSCILLATION
+#           (different from Tower Fan: OSCILLATION, DISPLAYING_TYPE, SOUND)
+#
+# Temperature note (pyvesync source vesyncfan.py:314 confirmed):
+#   state.temperature = (res.temperature / 10) if res.temperature else None
+#   Raw 750 -> 75.0°F. Raw 0 -> no event (sanity gate).
+#
+# Switch payload (purifier-style, NOT humidifier-style):
+#   {powerSwitch: 1|0, switchIdx: 0}   NOT {enabled: bool, id: 0}
+#
+# Oscillation note:
+#   Pedestal Fan: 2-axis (horizontal + vertical) via setOscillationStatus
+#   Tower Fan: single-axis via setOscillationSwitch -- these are DIFFERENT methods
+#   Each axis is controlled separately (H and V must not be combined in one payload).
+#   Range payloads: H uses {horizontalOscillationState:1, actType:'default', left:X, right:Y}
+#                   V uses {verticalOscillationState:1, actType:'default', top:X, bottom:Y}
+#
+# childLock: present in PedestalFanResult (read-only); pyvesync has no set_child_lock method.
+# Timer: omitted entirely; no setTimer/clearTimer in pyvesync VeSyncPedestalFan.
+#
+# REQUEST payloads -- as sent to /cloud/v2/deviceManaged/bypassV2
+
+requests:
+  turn_on:
+    payload:
+      data:
+        powerSwitch: 1
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        powerSwitch: 0
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  # setLevel uses V2-API field names: levelIdx, levelType, manualSpeedLevel
+  # NOT legacy Core-line names: id, type, level  (Bug Pattern #4 trap)
+  set_fan_speed:
+    payload:
+      data:
+        levelIdx: 0
+        levelType: wind
+        manualSpeedLevel: 5
+      method: setLevel
+      source: APP
+
+  # setFanMode -- NOT setTowerFanMode (Pedestal Fan-specific method name)
+  set_normal_mode:
+    payload:
+      data:
+        workMode: normal
+      method: setFanMode
+      source: APP
+
+  set_turbo_mode:
+    payload:
+      data:
+        workMode: turbo
+      method: setFanMode
+      source: APP
+
+  # ECO mode (not AUTO -- Pedestal Fan differentiator from Tower Fan)
+  set_eco_mode:
+    payload:
+      data:
+        workMode: eco
+      method: setFanMode
+      source: APP
+
+  # CRITICAL: sleep mode uses "advancedSleep" literal in the API, NOT "sleep"
+  # User-facing label is "sleep"; driver reverse-maps on both send and receive.
+  set_sleep_mode:
+    payload:
+      data:
+        workMode: advancedSleep
+      method: setFanMode
+      source: APP
+
+  # Oscillation -- setOscillationStatus (NOT setOscillationSwitch -- Tower Fan-specific)
+  # Horizontal toggle (no range)
+  turn_on_horizontal_oscillation:
+    payload:
+      data:
+        horizontalOscillationState: 1
+        actType: "default"
+      method: setOscillationStatus
+      source: APP
+
+  turn_off_horizontal_oscillation:
+    payload:
+      data:
+        horizontalOscillationState: 0
+        actType: "default"
+      method: setOscillationStatus
+      source: APP
+
+  # Vertical toggle (no range)
+  turn_on_vertical_oscillation:
+    payload:
+      data:
+        verticalOscillationState: 1
+        actType: "default"
+      method: setOscillationStatus
+      source: APP
+
+  turn_off_vertical_oscillation:
+    payload:
+      data:
+        verticalOscillationState: 0
+        actType: "default"
+      method: setOscillationStatus
+      source: APP
+
+  # Range setters -- always include state:1 (oscillation must be on)
+  set_horizontal_range:
+    payload:
+      data:
+        horizontalOscillationState: 1
+        actType: "default"
+        left: 10
+        right: 80
+      method: setOscillationStatus
+      source: APP
+
+  set_vertical_range:
+    payload:
+      data:
+        verticalOscillationState: 1
+        actType: "default"
+        top: 20
+        bottom: 70
+      method: setOscillationStatus
+      source: APP
+
+  turn_on_mute:
+    payload:
+      data:
+        muteSwitch: 1
+      method: setMuteSwitch
+      source: APP
+
+  turn_off_mute:
+    payload:
+      data:
+        muteSwitch: 0
+      method: setMuteSwitch
+      source: APP
+
+  turn_on_display:
+    payload:
+      data:
+        screenSwitch: 1
+      method: setDisplay
+      source: APP
+
+  turn_off_display:
+    payload:
+      data:
+        screenSwitch: 0
+      method: setDisplay
+      source: APP
+
+  # getFanStatus -- NOT getTowerFanStatus (Pedestal Fan-specific read method)
+  update:
+    payload:
+      data: {}
+      method: getFanStatus
+      source: APP
+
+# RESPONSE device data -- what the Pedestal Fan returns after envelope peel.
+# Fields from PedestalFanResult dataclass (fan_models.py) + FAN_DETAILS["LPF-R423S"].
+# Response is SINGLE-WRAPPED (purifier-style, one envelope layer).
+#
+# Key fields:
+#   powerSwitch:                int (0|1)
+#   workMode:                   str ('normal'|'turbo'|'eco'|'advancedSleep')
+#   fanSpeedLevel:              int (1..12)  -- currently active speed (from PedestalFanResult)
+#   manualSpeedLevel:           int (1..12)  -- last manual setpoint (from fixture)
+#   horizontalOscillationState: int (0|1)
+#   verticalOscillationState:   int (0|1)
+#   muteSwitch:                 int (0|1)    -- configured
+#   muteState:                  int (0|1)    -- actual
+#   screenSwitch:               int (0|1)    -- configured
+#   screenState:                int (0|1)    -- actual
+#   childLock:                  int (0|1)    -- READ-ONLY (no setter)
+#   temperature:                int (raw value / 10 = °F; e.g. 750 = 75.0°F)
+#   errorCode:                  int
+#   oscillationCoordinate:      {yaw: int, pitch: int} | null
+#   oscillationRange:           {left: int, right: int, top: int, bottom: int} | null
+#   sleepPreference:            {sleepPreferenceType, oscillationState, fallAsleepRemain, initFanSpeedLevel} | null
+#
+# Extra fields (from FAN_DETAILS fixture; driver reads but does not emit attributes):
+#   scheduleCount, timerRemain, highTemperatureReminderState, highTemperature,
+#   smartCleaningReminderState, oscillationCalibrationState, oscillationCalibrationProgress,
+#   levelMemory, horizontalOscillationDemo, verticalOscillationDemo,
+#   isSupportSetOnceOscillation, isTimerSupportPowerOn, isSupportSetRelativeCoordinate
+
+responses:
+  # Canonical: device on, normal mode, speed 5, H-oscillation on, V-oscillation off,
+  # mute off, display on, childLock off, temperature=750 (75.0°F)
+  # Primary test fixture for happy-path assertions
+  device_on_normal_speed5:
+    powerSwitch: 1
+    workMode: normal
+    fanSpeedLevel: 5
+    manualSpeedLevel: 5
+    horizontalOscillationState: 1
+    verticalOscillationState: 0
+    muteSwitch: 0
+    muteState: 0
+    screenSwitch: 1
+    screenState: 1
+    childLock: 0
+    temperature: 750
+    errorCode: 0
+    scheduleCount: 0
+    timerRemain: 0
+    oscillationCoordinate:
+      yaw: 45
+      pitch: 10
+    oscillationRange:
+      left: 10
+      right: 80
+      top: 20
+      bottom: 70
+    sleepPreference:
+      sleepPreferenceType: default
+      oscillationState: 1
+      fallAsleepRemain: 0
+      initFanSpeedLevel: 0
+
+  # Device off -- manualSpeedLevel=5 still present (confirms Bug Pattern #6 test)
+  device_off:
+    powerSwitch: 0
+    workMode: normal
+    fanSpeedLevel: 0
+    manualSpeedLevel: 5
+    horizontalOscillationState: 0
+    verticalOscillationState: 0
+    muteSwitch: 0
+    muteState: 0
+    screenSwitch: 1
+    screenState: 0
+    childLock: 0
+    temperature: 750
+    errorCode: 0
+    scheduleCount: 0
+    timerRemain: 0
+    oscillationCoordinate: null
+    oscillationRange: null
+    sleepPreference: null
+
+  # ECO mode -- differentiator from Tower Fan (has "auto" not "eco")
+  device_eco_mode:
+    powerSwitch: 1
+    workMode: eco
+    fanSpeedLevel: 3
+    manualSpeedLevel: 3
+    horizontalOscillationState: 1
+    verticalOscillationState: 0
+    muteSwitch: 0
+    muteState: 0
+    screenSwitch: 1
+    screenState: 1
+    childLock: 0
+    temperature: 720
+    errorCode: 0
+    scheduleCount: 0
+    timerRemain: 0
+    oscillationCoordinate:
+      yaw: 30
+      pitch: 0
+    oscillationRange:
+      left: 0
+      right: 100
+      top: 0
+      bottom: 0
+    sleepPreference: null
+
+  # Sleep mode -- workMode='advancedSleep' in response; driver must emit mode='sleep' (HA #d)
+  device_advanced_sleep:
+    powerSwitch: 1
+    workMode: advancedSleep
+    fanSpeedLevel: 2
+    manualSpeedLevel: 2
+    horizontalOscillationState: 1
+    verticalOscillationState: 0
+    muteSwitch: 1
+    muteState: 1
+    screenSwitch: 0
+    screenState: 0
+    childLock: 0
+    temperature: 730
+    errorCode: 0
+    scheduleCount: 0
+    timerRemain: 0
+    oscillationCoordinate:
+      yaw: 0
+      pitch: 0
+    oscillationRange:
+      left: 20
+      right: 60
+      top: 0
+      bottom: 0
+    sleepPreference:
+      sleepPreferenceType: default
+      oscillationState: 1
+      fallAsleepRemain: 0
+      initFanSpeedLevel: 2
+
+  # High speed, turbo mode -- speed=12
+  device_high_speed_turbo:
+    powerSwitch: 1
+    workMode: turbo
+    fanSpeedLevel: 12
+    manualSpeedLevel: 12
+    horizontalOscillationState: 0
+    verticalOscillationState: 0
+    muteSwitch: 0
+    muteState: 0
+    screenSwitch: 1
+    screenState: 1
+    childLock: 0
+    temperature: 850
+    errorCode: 0
+    scheduleCount: 0
+    timerRemain: 0
+    oscillationCoordinate: null
+    oscillationRange: null
+    sleepPreference: null
+
+  # childLock=1 -- for read-only attribute test
+  # Confirms childLock field is read and emitted as an attribute, no setter
+  device_with_childLock:
+    powerSwitch: 1
+    workMode: normal
+    fanSpeedLevel: 4
+    manualSpeedLevel: 4
+    horizontalOscillationState: 0
+    verticalOscillationState: 0
+    muteSwitch: 0
+    muteState: 0
+    screenSwitch: 1
+    screenState: 1
+    childLock: 1
+    temperature: 740
+    errorCode: 0
+    scheduleCount: 0
+    timerRemain: 0
+    oscillationCoordinate: null
+    oscillationRange: null
+    sleepPreference: null
+
+  # Both axes oscillating, full range data populated
+  # Tests oscillation coordinate + range field extraction
+  device_oscillation_full_range:
+    powerSwitch: 1
+    workMode: normal
+    fanSpeedLevel: 6
+    manualSpeedLevel: 6
+    horizontalOscillationState: 1
+    verticalOscillationState: 1
+    muteSwitch: 0
+    muteState: 0
+    screenSwitch: 1
+    screenState: 1
+    childLock: 0
+    temperature: 760
+    errorCode: 0
+    scheduleCount: 0
+    timerRemain: 0
+    oscillationCoordinate:
+      yaw: 50
+      pitch: 30
+    oscillationRange:
+      left: 5
+      right: 95
+      top: 10
+      bottom: 85
+    sleepPreference: null

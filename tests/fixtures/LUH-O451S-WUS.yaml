@@ -1,0 +1,274 @@
+# pyvesync canonical API fixtures for OasisMist 450S US (LUH-O451S-WUS) humidifier
+# Source: https://github.com/webdjoe/pyvesync
+# Commit: c98729c45860cc765d63d49a9a02bbc18de090c4 (2026-04-16)
+# Retrieved: 2026-04-26
+#
+# REQUEST payloads sourced from src/tests/api/vesynchumidifier/LUH-O451S-WUS.yaml
+# RESPONSE data synthesized from src/tests/call_json_humidifiers.py
+#   HUMIDIFIER_DETAILS["LUH-O451S-WUS"] field list + HumidifierDefaults values
+#   + device_map.py HumidifierMap entry (warm_mist_levels=range(4), mist_modes includes humidity)
+#   + HA issue #138004 warm-mist and mode behavior findings
+#
+# Device: VeSyncHumid200300S class (same as Classic 300S)
+# All 4 model codes share this driver:
+#   LUH-O451S-WUS, LUH-O451S-WUSR, LUH-O601S-WUS, LUH-O601S-KUS
+#
+# Key differences from Classic 300S:
+#   - warm_enabled and warm_level are POPULATED (not always false/null)
+#   - warm mist range: 0-3 (0=off, 1-3=intensity levels)
+#   - 4 modes: auto, sleep, manual, humidity (Classic 300S has 3: auto, sleep, manual)
+#   - NO night_light_brightness (hardware does not have nightlight)
+#   - All other payload shapes are identical to Classic 300S (same class)
+#
+# Payload shape (same as Classic 300S):
+#   - Switch: {enabled: bool, id: 0}    NOT {powerSwitch, switchIdx}
+#   - Mode: {mode: <value>}              NOT {workMode}
+#   - setVirtualLevel mist: {id:0, level:N, type:'mist'}
+#   - setVirtualLevel warm: {id:0, level:N, type:'warm'}  (450S addition)
+#   - Display: {state: bool}             NOT {screenSwitch}
+#   - Auto-stop: {enabled: bool}         NOT {autoStopSwitch}
+#   - targetHumidity lives under configuration.auto_target_humidity
+#
+# Firmware variant note (HA finding #a REFUTED -- pyvesync issue #295):
+#   The earlier claim that some 450S US firmware accepts "humidity" mode was refuted
+#   by user-reported API captures. Device firmware universally returns error 11000000
+#   ("Mode value invalid!") when sent setHumidityMode{mode:'humidity'}.
+#   Only auto/sleep/manual are valid setMode inputs. The device_on_humidity_mode
+#   response scenario is retained for read-path (applyStatus passthrough) tests only.
+#
+# REQUEST payloads -- as sent to /cloud/v2/deviceManaged/bypassV2
+
+requests:
+  turn_on:
+    payload:
+      data:
+        enabled: true
+        id: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        enabled: false
+        id: 0
+      method: setSwitch
+      source: APP
+
+  set_auto_mode:
+    payload:
+      data:
+        mode: auto
+      method: setHumidityMode
+      source: APP
+
+  set_sleep_mode:
+    payload:
+      data:
+        mode: sleep
+      method: setHumidityMode
+      source: APP
+
+  set_manual_mode:
+    payload:
+      data:
+        mode: manual
+      method: setHumidityMode
+      source: APP
+
+  # REFUTED (pyvesync issue #295): 'humidity' mode is rejected by device firmware with
+  # error 11000000. This payload is retained as a documentary artifact only -- the driver
+  # does NOT produce it. Real devices return "Mode value invalid!" if sent this payload.
+  set_humidity_mode_REJECTED:
+    payload:
+      data:
+        mode: humidity
+      method: setHumidityMode
+      source: APP
+
+  set_mist_level:
+    payload:
+      data:
+        id: 0
+        level: 2
+        type: mist
+      method: setVirtualLevel
+      source: APP
+
+  # 450S-specific: warm mist level (type: 'warm', same method, different discriminator)
+  set_warm_level:
+    payload:
+      data:
+        id: 0
+        level: 2
+        type: warm
+      method: setVirtualLevel
+      source: APP
+
+  # 450S-specific: warm mist off (level=0)
+  set_warm_off:
+    payload:
+      data:
+        id: 0
+        level: 0
+        type: warm
+      method: setVirtualLevel
+      source: APP
+
+  set_humidity:
+    payload:
+      data:
+        target_humidity: 50
+      method: setTargetHumidity
+      source: APP
+
+  turn_on_display:
+    payload:
+      data:
+        state: true
+      method: setDisplay
+      source: APP
+
+  turn_off_display:
+    payload:
+      data:
+        state: false
+      method: setDisplay
+      source: APP
+
+  turn_on_automatic_stop:
+    payload:
+      data:
+        enabled: true
+      method: setAutomaticStop
+      source: APP
+
+  turn_off_automatic_stop:
+    payload:
+      data:
+        enabled: false
+      method: setAutomaticStop
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getHumidifierStatus
+      source: APP
+
+# RESPONSE device data -- what the OasisMist 450S returns after envelope peel.
+# Shape matches ClassicLVHumidResult (same as Classic 300S) with warm fields populated.
+# Response is SINGLE-WRAPPED (one envelope layer), same as Classic 300S.
+#
+# Fields (snake_case throughout, per pyvesync model):
+#   enabled, mist_virtual_level, mist_level, mode, display, water_lacks,
+#   humidity, humidity_high, automatic_stop_reach_target, water_tank_lifted,
+#   warm_enabled (bool), warm_level (int 0-3), [NO night_light_brightness]
+# plus nested: configuration.auto_target_humidity, configuration.display,
+#              configuration.automatic_stop
+#
+# NOTE: night_light_brightness is intentionally absent -- 450S has no nightlight hardware
+
+responses:
+  # Canonical: device on, manual mode, mist=5, warm mist level=2 (enabled)
+  # Primary test fixture for happy-path assertions
+  device_on_warm_mist_level2:
+    enabled: true
+    humidity: 42
+    mist_virtual_level: 5
+    mist_level: 5
+    mode: manual
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: true
+    warm_level: 2
+    display: true
+    automatic_stop_reach_target: false
+    configuration:
+      auto_target_humidity: 50
+      display: true
+      automatic_stop: false
+
+  # Device off -- mist_virtual_level=0, warm_enabled=false, warm_level=0
+  device_off:
+    enabled: false
+    humidity: 38
+    mist_virtual_level: 0
+    mist_level: 3
+    mode: manual
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: 0
+    display: false
+    automatic_stop_reach_target: false
+    configuration:
+      auto_target_humidity: 50
+      display: false
+      automatic_stop: true
+
+  # Synthetic: device reporting mode='humidity' in status response.
+  # This is a READ-PATH test only -- the driver does NOT set this mode (pyvesync issue #295
+  # confirms device rejects setHumidityMode{mode:'humidity'} with error 11000000).
+  # Scenario: device was set externally (via app) or is in an unexpected state.
+  # applyStatus should emit mode='humidity' as-received (reality wins over our allow-list).
+  device_on_humidity_mode:
+    enabled: true
+    humidity: 55
+    mist_virtual_level: 3
+    mist_level: 3
+    mode: humidity
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: 0
+    display: true
+    automatic_stop_reach_target: false
+    configuration:
+      auto_target_humidity: 60
+      display: true
+      automatic_stop: true
+
+  # Warm mist OFF state -- warm_level=0, warm_enabled=false
+  # Verifies correct level=0 semantics (our LV600S-correct logic, NOT pyvesync 200300S bug)
+  # pyvesync bug: VeSyncHumid200300S.set_warm_level(0) sets warm_mist_enabled=True (wrong)
+  # Our driver: level=0 => warmMistEnabled="off" regardless of warm_enabled field
+  device_warm_off:
+    enabled: true
+    humidity: 48
+    mist_virtual_level: 4
+    mist_level: 4
+    mode: auto
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: 0
+    display: true
+    automatic_stop_reach_target: false
+    configuration:
+      auto_target_humidity: 50
+      display: true
+      automatic_stop: false
+
+  # Water reservoir empty
+  device_water_lacks:
+    enabled: true
+    humidity: 25
+    mist_virtual_level: 3
+    mist_level: 3
+    mode: auto
+    water_lacks: true
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: true
+    warm_level: 1
+    display: true
+    automatic_stop_reach_target: false
+    configuration:
+      auto_target_humidity: 55
+      display: true
+      automatic_stop: true

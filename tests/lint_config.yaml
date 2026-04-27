@@ -26,8 +26,13 @@ frozen_driver_names:
   LevoitCore300S.groovy:           "Levoit Core300S Air Purifier"
   LevoitCore400S.groovy:           "Levoit Core400S Air Purifier"
   LevoitCore600S.groovy:           "Levoit Core600S Air Purifier"
+  LevoitVital100S.groovy:          "Levoit Vital 100S Air Purifier"
   LevoitVital200S.groovy:          "Levoit Vital 200S Air Purifier"
+  LevoitClassic300S.groovy:        "Levoit Classic 300S Humidifier"
   LevoitSuperior6000S.groovy:      "Levoit Superior 6000S Humidifier"
+  LevoitOasisMist450S.groovy:      "Levoit OasisMist 450S Humidifier"
+  LevoitTowerFan.groovy:           "Levoit Tower Fan"
+  LevoitPedestalFan.groovy:        "Levoit Pedestal Fan"
   LevoitGeneric.groovy:            "Levoit Generic Device"
   "Notification Tile.groovy":      "Notification Tile"
 

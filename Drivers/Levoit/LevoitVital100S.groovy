@@ -18,19 +18,28 @@
  */
 
 /*
- *  Levoit Vital 200S Air Purifier (LAP-V201S) — Hubitat driver
+ *  Levoit Vital 100S Air Purifier (LAP-V102S) — Hubitat driver
  *
- *  Targets:    LAP-V201S-WUS, LAP-V201S-WUSR, LAP-V201S-WEU, LAP-V201S-AASR
- *  Marketing:  Levoit Vital 200S, Vital 200S-P
- *  Reference:  pyvesync VeSyncAirBaseV2 + LAP-V201S.yaml fixture
+ *  Targets:    LAP-V102S-AASR, LAP-V102S-WUS, LAP-V102S-WEU,
+ *              LAP-V102S-AUSR, LAP-V102S-WJP, LAP-V102S-AJPR, LAP-V102S-AEUR
+ *  Marketing:  Levoit Vital 100S
+ *  Reference:  pyvesync VeSyncAirBaseV2 + LAP-V102S.yaml fixture
  *              https://github.com/webdjoe/pyvesync
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
+ *  Delta vs Vital 200S (same VeSyncAirBaseV2 class):
+ *    - NO LIGHT_DETECT feature: lightDetectionSwitch / environmentLightState fields
+ *      ARE present in the response model (shared with V201S) but are intentionally
+ *      ignored — no attribute declarations, no setters, no sendEvent calls.
+ *
  *  History:
- *    2026-04-25: v2.0  Community fork initial release (Dan Cox). Built from canonical pyvesync
- *                      payloads. Capabilities: Switch, SwitchLevel, FanControl, AirQuality.
- *                      Setters: setSpeed (sleep/low/med/high/max), setMode (manual/auto/sleep/
- *                      pet), setPetMode, setAutoPreference, setRoomSize, setLightDetection,
+ *    2026-04-26: v2.0  Community fork initial release (Dan Cox). Preview driver —
+ *                      built from canonical pyvesync LAP-V102S.yaml fixture and
+ *                      VeSyncAirBaseV2 class semantics. Maintainer has no V100S
+ *                      hardware; live-test via community captureDiagnostics() post-merge.
+ *                      Capabilities: Switch, SwitchLevel, FanControl, AirQuality.
+ *                      Setters: setSpeed (sleep/low/med/high/max), setMode (manual/auto/
+ *                      sleep/pet), setPetMode, setAutoPreference, setRoomSize,
  *                      setChildLock, setDisplay, setTimer, cancelTimer, resetFilter, toggle.
  *                      Reads PM2.5, AQ index, filter %, errorCode, timer state.
  *                      Diagnostic raw-response logging gated by debugOutput preference.
@@ -38,10 +47,10 @@
 
 metadata {
     definition(
-        name: "Levoit Vital 200S Air Purifier",
+        name: "Levoit Vital 100S Air Purifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
-        description: "Levoit Vital 200S / 200S-P (LAP-V201S) — power, fan speed, mode, timer, AQ/PM2.5, filter health; canonical pyvesync payloads",
+        description: "[PREVIEW v2.1] Levoit Vital 100S (LAP-V102S) — power, fan speed, mode, timer, AQ/PM2.5, filter health; canonical pyvesync payloads",
         version: "2.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
@@ -58,8 +67,6 @@ metadata {
         attribute "petMode", "string"
         attribute "autoPreference", "string"
         attribute "roomSize", "number"
-        attribute "lightDetection", "string"
-        attribute "lightDetected", "string"
         attribute "childLock", "string"
         attribute "display", "string"
         attribute "info", "string"
@@ -72,7 +79,6 @@ metadata {
         command "setPetMode", [[name:"Pet Mode*", type: "ENUM", constraints: ["on","off"]]]
         command "setAutoPreference", [[name:"Preference*", type: "ENUM", constraints: ["default","efficient","quiet"]]]
         command "setRoomSize", [[name:"Room Size*", type: "NUMBER"]]
-        command "setLightDetection", [[name:"Light Detection*", type: "ENUM", constraints: ["on","off"]]]
         command "setChildLock", [[name:"Child Lock*", type: "ENUM", constraints: ["on","off"]]]
         command "toggle"
         command "resetFilter"
@@ -91,8 +97,8 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
-    runIn(3, update)
-    if (settings?.debugOutput) runIn(1800, logDebugOff)
+    runIn(3, "update")
+    if (settings?.debugOutput) runIn(1800, "logDebugOff")
 }
 def uninstalled(){ logDebug "Uninstalled" }
 def initialize(){ logDebug "Initializing" }
@@ -140,7 +146,7 @@ def configureOnState() {
     // Capture original mode before any writes so we don't read a mutated state.mode
     def origMode = state.mode ?: "manual"
     if (origMode == "manual") {
-        // Single setLevel establishes manual mode + saved speed atomically (V201S quirk)
+        // Single setLevel establishes manual mode + saved speed atomically (V2 quirk)
         def targetSpeed = state.speed && state.speed != "off" ? state.speed : "low"
         def lvl = mapSpeedToInteger(targetSpeed)
         def ok = setSpeedLevel(lvl)
@@ -198,8 +204,10 @@ def cycleSpeed(){
     setSpeed(next)
 }
 
+// SwitchLevel convention: setLevel(0) turns the device off (matches Z-Wave dimmer platform expectation).
 def setLevel(val){
     logDebug "setLevel $val"
+    if (val == 0) { off(); return }
     Integer lvl
     if (val < 20) lvl=1
     else if (val < 40) lvl=2
@@ -208,11 +216,13 @@ def setLevel(val){
     sendEvent(name:"level", value: val)
     def ok = setSpeedLevel(lvl)
     if (ok) {
-        // setLevel establishes manual mode + speed atomically (V201S quirk); emit mode events here
+        // setLevel establishes manual mode + speed atomically (V2 quirk); emit mode events here.
+        // Also write state.speed so configureOnState() replay path re-applies the correct named speed.
+        state.speed = mapIntegerToSpeed(lvl)
         state.mode = "manual"
         device.sendEvent(name:"mode", value: "manual")
         device.sendEvent(name:"petMode", value: "off")
-        logInfo "Level: ${val}% (mist level ${lvl})"
+        logInfo "Level: ${val}% (fan level ${lvl})"
     }
 }
 
@@ -224,7 +234,7 @@ def setSpeed(spd){
     // Only check power if we're not already turning on
     if (!state.turningOn && device.currentValue("switch")!="on") on()
 
-    // setLevel establishes manual mode + speed atomically; no setMode("manual") pre-call needed (V201S quirk)
+    // setLevel establishes manual mode + speed atomically; no setMode("manual") pre-call needed (V2 quirk)
     def lvl = mapSpeedToInteger(spd)
     def ok = setSpeedLevel(lvl)
     if (ok){
@@ -245,7 +255,7 @@ def setSpeedLevel(level){
 }
 
 // ---------- Mode ----------
-// V201S mode-write split (per pyvesync LAP-V201S.yaml fixture):
+// V2-line mode-write split (per pyvesync LAP-V102S.yaml fixture):
 //   manual: there is no separate "set manual mode" command; manual mode is established by
 //           sending a speed via setLevel (levelIdx/levelType/manualSpeedLevel).
 //   auto/sleep/pet: use setPurifierMode with {workMode: <mode>}.
@@ -260,7 +270,7 @@ def setMode(mode){
 
     boolean ok = false
     if (mode == "manual") {
-        // V201S: manual mode is established by sending a speed via setLevel (no separate mode command)
+        // V2-line: manual mode is established by sending a speed via setLevel (no separate mode command)
         int spLevel = mapSpeedToInteger(state.speed ?: "low")
         def resp = hubBypass("setLevel", [levelIdx: 0, levelType: "wind", manualSpeedLevel: spLevel], "setMode->setLevel(${spLevel})")
         ok = httpOk(resp)
@@ -301,12 +311,6 @@ def setRoomSize(sz){
     if (httpOk(resp)){ state.roomSize = sz as Integer; device.sendEvent(name:"roomSize", value: sz as Integer) }
 }
 
-def setLightDetection(onOff){
-    logDebug "setLightDetection(${onOff})"
-    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: onOff=="on" ? 1:0], "setLightDetection")
-    if (httpOk(resp)) device.sendEvent(name:"lightDetection", value: onOff)
-}
-
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
     def resp = hubBypass("setChildLock", [childLockSwitch: onOff=="on" ? 1:0], "setChildLock")
@@ -325,7 +329,7 @@ def resetFilter(){
     if (httpOk(resp)) logDebug "Filter reset requested"
 }
 
-// ---------- Timer (V201S uses addTimerV2 / delTimerV2 — different from older addTimer) ----------
+// ---------- Timer (V2-line uses addTimerV2 / delTimerV2) ----------
 def setTimer(minutes){
     int n = (minutes as Integer) ?: 0
     logDebug "setTimer(${n} min)"
@@ -377,7 +381,8 @@ def update(status) {
     return true
 }
 
-// 2-arg variant — parent driver calls update(status, nightLight); nightLight only applies to Core200S
+// 2-arg variant — parent driver calls update(status, nightLight); nightLight unused on V100S
+// REQUIRED: parent always dispatches with 2 args; missing this causes MissingMethodException.
 def update(status, nightLight) {
     logDebug "update() from parent (2-arg, nightLight ignored)"
     applyStatus(status)
@@ -386,7 +391,8 @@ def update(status, nightLight) {
 
 def applyStatus(status){
     logDebug "applyStatus()"
-    // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
+    // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older
+    // driver type without Save (Bug Pattern #12 — forward-compat migration safety).
     if (!state.prefsSeeded) {
         if (settings?.descriptionTextEnable == null) {
             device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
@@ -416,7 +422,7 @@ def applyStatus(status){
         Integer lastFl = state.lastFilterLife as Integer
         if (lastFl == null || lastFl >= 20) {
             if (fl < 10) logInfo "Filter life critically low at ${fl}%"
-            else if (fl < 20) logInfo "Filter life at ${fl}% — consider replacement"
+            else if (fl < 20) logInfo "Filter life at ${fl}% -- consider replacement"
         } else if (lastFl >= 10 && fl < 10) {
             logInfo "Filter life critically low at ${fl}%"
         }
@@ -429,13 +435,15 @@ def applyStatus(status){
     device.sendEvent(name:"mode", value: workMode=="pet" ? "pet" : workMode)
     device.sendEvent(name:"petMode", value: workMode=="pet" ? "on" : "off")
 
-    // Fan speed reporting: prefer fanSpeedLevel unless 255 (off), else manualSpeedLevel
+    // Fan speed reporting: prefer fanSpeedLevel unless 255 (off/idle sentinel), else manualSpeedLevel
+    // Bug Pattern #6: fanSpeedLevel==255 means "off"; map to 0 before any speed calculation.
     Integer sp = null
     if (r.fanSpeedLevel != null && r.fanSpeedLevel != 255) sp = r.fanSpeedLevel as Integer
     else if (r.manualSpeedLevel != null) sp = r.manualSpeedLevel as Integer
     sp = sp ?: 2
     state.speed = mapIntegerToSpeed(sp)
-    // When device is off, speed reports "off" regardless of last manual setting (avoids "switch=off, speed=high" contradiction)
+    // When device is off, speed reports "off" regardless of last manual setting (avoids
+    // "switch=off, speed=high" contradiction — Bug Pattern #6 sentinel handling).
     if (!powerOn) {
         device.sendEvent(name:"speed", value: "off")
     } else {
@@ -465,8 +473,22 @@ def applyStatus(status){
         device.sendEvent(name:"roomSize", value: rs)
     }
 
-    device.sendEvent(name:"lightDetection", value: r.lightDetectionSwitch == 1 ? "on":"off")
-    device.sendEvent(name:"lightDetected",  value: r.environmentLightState == 1 ? "yes":"no")
+    // CROSS-CHECK [HA cross-check finding #4 / pyvesync device_map.py line ~898]:
+    //   Decision: lightDetectionSwitch and environmentLightState fields ARE present in the
+    //     V102S response (shared PurifierVitalDetailsResult model with V201S) but are
+    //     intentionally ignored here -- no attribute declarations, no sendEvent calls.
+    //   Rationale: pyvesync device_map.py lists V102S with features=[AIR_QUALITY] only; the
+    //     LIGHT_DETECT feature flag is NOT present for V102S (it IS present for V201S). The
+    //     feature flag is pyvesync's authoritative per-model capability gate. The ST+HB cross-
+    //     check claimed lightDetectionSwitch is "live boolean, implement toggle", but that ignored
+    //     the V102S-vs-V201S feature-flag distinction. The HA finding (which correctly checks
+    //     device_map.py) wins.
+    //   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/device_map.py
+    //     (V102S HumidifierMap entry; LIGHT_DETECT absent); HA vesync integration cross-check
+    //     finding #4 (2026-04-26).
+    //   Refutation: community user confirms setLightDetection WORKS on V102S hardware -->
+    //     expose the toggle conditionally (feature-flag check or simple expose).
+
     device.sendEvent(name:"childLock", value: r.childLockSwitch == 1 ? "on":"off")
     device.sendEvent(name:"display",   value: r.screenSwitch == 1 ? "on":"off")
 
@@ -483,7 +505,7 @@ def applyStatus(status){
     // Info HTML — use local variables (sendEvent is async, currentValue may return stale)
     def html = "Filter: ${r.filterLifePercent ?: 0}%"
     if (localAQ)            html += "<br>Air Quality: ${localAQ}"
-    if (r.PM25   != null)   html += "<br>PM2.5: ${r.PM25} \u00b5g/m\u00b3"
+    if (r.PM25   != null)   html += "<br>PM2.5: ${r.PM25} µg/m³"
     device.sendEvent(name:"info", value: html)
 }
 
@@ -540,7 +562,7 @@ private boolean httpOk(resp){
 }
 
 // ---------- Power ----------
-// Canonical V201S payload per pyvesync: {powerSwitch: 0/1, switchIdx: 0}
+// Canonical V102S payload per pyvesync: {powerSwitch: 0/1, switchIdx: 0}
 def handlePower(on){
     logDebug "handlePower: ${on}"
     def resp = hubBypass("setSwitch", [powerSwitch: on ? 1 : 0, switchIdx: 0], "setSwitch(power=${on?1:0})")
@@ -551,11 +573,12 @@ def handlePower(on){
     return false
 }
 
-// ---------- Preferred Vital speed write (canonical pyvesync V201S payload) ----------
-// Canonical V201S payload per pyvesync LAP-V201S.yaml fixture:
+// ---------- Preferred V2-line speed write (canonical pyvesync V102S payload) ----------
+// Canonical V102S payload per pyvesync LAP-V102S.yaml fixture:
 //   method: setLevel
 //   data: { levelIdx: 0, levelType: "wind", manualSpeedLevel: <1..4> }
-// NOTE field names: levelIdx (not switchIdx), levelType (not type)
+// NOTE field names: levelIdx (not switchIdx), levelType (not type), manualSpeedLevel (not level)
+// Bug Pattern #4: using the Core-line names (level/id/type) returns inner code -1 on V2 devices.
 private boolean writeSpeedPreferred(level){
     def resp = hubBypass("setLevel", [ levelIdx: 0, levelType: "wind", manualSpeedLevel: level as Integer ], "setLevel{levelIdx,levelType,manualSpeedLevel}")
     if (httpOk(resp)) return true

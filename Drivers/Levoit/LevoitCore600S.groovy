@@ -48,7 +48,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson and elfege (contributor)",
         description: "Supports controlling the Levoit 600S air purifier",
-        version: "2.0",
+        version: "2.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"

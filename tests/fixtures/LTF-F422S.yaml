@@ -1,0 +1,319 @@
+# pyvesync canonical API fixtures for Levoit Tower Fan (LTF-F422S) — all 4 regional variants
+# Source: https://github.com/webdjoe/pyvesync
+# Retrieved: 2026-04-26
+#
+# REQUEST payloads sourced from src/tests/api/vesyncfan/LTF-F422S.yaml
+# RESPONSE data synthesized from:
+#   src/tests/call_json_fans.py: FAN_DETAILS["LTF-F422S"]
+#   src/pyvesync/models/fan_models.py: TowerFanResult dataclass
+#   src/pyvesync/device_map.py: FanMap entry (line ~1010)
+#   HA cross-check finding #1: temperature field is raw * 10 (717 = 71.7°F for idle device)
+#   HA cross-check finding #5: displayingType is "Unknown functionality" — read-only attribute
+#   HA cross-check finding #d: sleep mode API literal is "advancedSleep", user label is "sleep"
+#
+# Device class: VeSyncTowerFan (vesyncfan.py)
+# dev_types (all 4 route to LevoitTowerFan.groovy):
+#   LTF-F422S-KEU, LTF-F422S-WUSR, LTF-F422S-WJP, LTF-F422S-WUS
+#
+# Modes (device_map.py FanMap.modes):
+#   normal      -> API workMode "normal"
+#   turbo       -> API workMode "turbo"
+#   auto        -> API workMode "auto"
+#   sleep       -> API workMode "advancedSleep"  ← CRITICAL reverse-mapping
+#
+# Fan levels: 1-12 (FanMap.fan_levels = range(1, 13))
+# Features: OSCILLATION, DISPLAYING_TYPE, SOUND (mute)
+#
+# Temperature note (HA finding #1):
+#   pyvesync reads `res.temperature` raw (vesyncfan.py: self.state.temperature = res.temperature)
+#   This is a pyvesync bug. Real-device capture (LTF-F422S-KEU idle) shows temperature=717 = 71.7°F.
+#   Hubitat driver MUST divide by 10. Raw value 717 -> 71.7°F.
+#
+# Switch payload (purifier-style, NOT humidifier-style):
+#   {powerSwitch: 1|0, switchIdx: 0}   NOT {enabled: bool, id: 0}
+#
+# REQUEST payloads -- as sent to /cloud/v2/deviceManaged/bypassV2
+
+requests:
+  turn_on:
+    payload:
+      data:
+        powerSwitch: 1
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        powerSwitch: 0
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  # setLevel uses V2-API field names: levelIdx, levelType, manualSpeedLevel
+  # NOT legacy Core-line names: id, type, level  (Bug Pattern #4 trap)
+  set_fan_speed:
+    payload:
+      data:
+        levelIdx: 0
+        levelType: wind
+        manualSpeedLevel: 5
+      method: setLevel
+      source: APP
+
+  set_normal_mode:
+    payload:
+      data:
+        workMode: normal
+      method: setTowerFanMode
+      source: APP
+
+  set_turbo_mode:
+    payload:
+      data:
+        workMode: turbo
+      method: setTowerFanMode
+      source: APP
+
+  set_auto_mode:
+    payload:
+      data:
+        workMode: auto
+      method: setTowerFanMode
+      source: APP
+
+  # CRITICAL: sleep mode uses "advancedSleep" literal in the API, NOT "sleep"
+  # User-facing label is "sleep"; driver reverse-maps on both send and receive.
+  # Sending "sleep" to the API returns inner code -1 (rejected by device).
+  set_sleep_mode:
+    payload:
+      data:
+        workMode: advancedSleep
+      method: setTowerFanMode
+      source: APP
+
+  turn_on_oscillation:
+    payload:
+      data:
+        oscillationSwitch: 1
+      method: setOscillationSwitch
+      source: APP
+
+  turn_off_oscillation:
+    payload:
+      data:
+        oscillationSwitch: 0
+      method: setOscillationSwitch
+      source: APP
+
+  turn_on_mute:
+    payload:
+      data:
+        muteSwitch: 1
+      method: setMuteSwitch
+      source: APP
+
+  turn_off_mute:
+    payload:
+      data:
+        muteSwitch: 0
+      method: setMuteSwitch
+      source: APP
+
+  turn_on_display:
+    payload:
+      data:
+        screenSwitch: 1
+      method: setDisplay
+      source: APP
+
+  turn_off_display:
+    payload:
+      data:
+        screenSwitch: 0
+      method: setDisplay
+      source: APP
+
+  # Timer uses {action, total} shape -- NOT addTimerV2 {enabled, startAct, tmgEvt} shape
+  # action: 'on' or 'off' (what the device should DO when timer fires)
+  # total: seconds until timer fires
+  set_timer_off:
+    payload:
+      data:
+        action: "off"
+        total: 3600
+      method: setTimer
+      source: APP
+
+  set_timer_on:
+    payload:
+      data:
+        action: "on"
+        total: 1800
+      method: setTimer
+      source: APP
+
+  clear_timer:
+    payload:
+      data:
+        id: 42
+      method: clearTimer
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getTowerFanStatus
+      source: APP
+
+# RESPONSE device data -- what the Tower Fan returns after envelope peel.
+# Fields from TowerFanResult dataclass (fan_models.py) + FAN_DETAILS["LTF-F422S"].
+# Response is SINGLE-WRAPPED (purifier-style, one envelope layer).
+#
+# Key fields:
+#   powerSwitch:        int (0|1)
+#   workMode:           str ('normal'|'turbo'|'auto'|'advancedSleep')
+#   manualSpeedLevel:   int (1..12)  -- last-set level
+#   fanSpeedLevel:      int (1..12)  -- currently active speed
+#   screenState:        int (0|1)    -- display actual state
+#   screenSwitch:       int (0|1)    -- display configured setting
+#   oscillationSwitch:  int (0|1)    -- oscillation configured
+#   oscillationState:   int (0|1)    -- oscillation actual
+#   muteSwitch:         int (0|1)    -- mute configured
+#   muteState:          int (0|1)    -- mute actual
+#   timerRemain:        int (seconds)
+#   temperature:        int (raw value / 10 = °F -- HA finding #1; e.g. 717 = 71.7°F)
+#   errorCode:          int
+#   scheduleCount:      int
+#   displayingType:     int | null  ("Unknown functionality" per pyvesync -- read-only)
+#   sleepPreference:    null | {sleepPreferenceType, oscillationSwitch, ...}
+
+responses:
+  # Canonical: device on, normal mode, speed 5, oscillation on, mute off, display on
+  # temperature=717 confirms real-device scale: 71.7°F (HA finding #1)
+  # Primary test fixture for happy-path assertions
+  device_on_normal_speed5:
+    powerSwitch: 1
+    workMode: normal
+    manualSpeedLevel: 5
+    fanSpeedLevel: 5
+    screenState: 1
+    screenSwitch: 1
+    oscillationSwitch: 1
+    oscillationState: 1
+    muteSwitch: 0
+    muteState: 0
+    timerRemain: 0
+    temperature: 717
+    errorCode: 0
+    scheduleCount: 0
+    displayingType: 0
+    sleepPreference:
+      sleepPreferenceType: default
+      oscillationSwitch: 1
+      initFanSpeedLevel: 0
+      fallAsleepRemain: 0
+      autoChangeFanLevelSwitch: 1
+
+  # Device off -- fanSpeedLevel and manualSpeedLevel still carry last-set values.
+  # powerSwitch=0, manualSpeedLevel=5: confirms Bug Pattern #6 test
+  # (speed must report "off" when powerSwitch=0, NOT the last-set level string)
+  device_off:
+    powerSwitch: 0
+    workMode: normal
+    manualSpeedLevel: 5
+    fanSpeedLevel: 0
+    screenState: 0
+    screenSwitch: 1
+    oscillationSwitch: 1
+    oscillationState: 0
+    muteSwitch: 0
+    muteState: 0
+    timerRemain: 0
+    temperature: 717
+    errorCode: 0
+    scheduleCount: 0
+    displayingType: 0
+    sleepPreference: null
+
+  # Sleep mode -- workMode='advancedSleep' in response; driver must emit mode='sleep' (HA #d)
+  device_advanced_sleep:
+    powerSwitch: 1
+    workMode: advancedSleep
+    manualSpeedLevel: 2
+    fanSpeedLevel: 2
+    screenState: 0
+    screenSwitch: 0
+    oscillationSwitch: 1
+    oscillationState: 1
+    muteSwitch: 1
+    muteState: 1
+    timerRemain: 0
+    temperature: 717
+    errorCode: 0
+    scheduleCount: 0
+    displayingType: 0
+    sleepPreference:
+      sleepPreferenceType: default
+      oscillationSwitch: 1
+      initFanSpeedLevel: 0
+      fallAsleepRemain: 0
+      autoChangeFanLevelSwitch: 1
+
+  # High speed, turbo mode
+  device_high_speed_turbo:
+    powerSwitch: 1
+    workMode: turbo
+    manualSpeedLevel: 12
+    fanSpeedLevel: 12
+    screenState: 1
+    screenSwitch: 1
+    oscillationSwitch: 0
+    oscillationState: 0
+    muteSwitch: 0
+    muteState: 0
+    timerRemain: 0
+    temperature: 850
+    errorCode: 0
+    scheduleCount: 0
+    displayingType: 1
+    sleepPreference: null
+
+  # displayingType=1 -- for HA finding #5 read-only attribute test
+  device_with_displayingType:
+    powerSwitch: 1
+    workMode: normal
+    manualSpeedLevel: 3
+    fanSpeedLevel: 3
+    screenState: 1
+    screenSwitch: 1
+    oscillationSwitch: 1
+    oscillationState: 1
+    muteSwitch: 0
+    muteState: 0
+    timerRemain: 0
+    temperature: 717
+    errorCode: 0
+    scheduleCount: 0
+    displayingType: 1
+    sleepPreference: null
+
+  # temperature=850 = 85.0°F divide-by-10 test
+  device_temperature_high:
+    powerSwitch: 1
+    workMode: auto
+    manualSpeedLevel: 4
+    fanSpeedLevel: 4
+    screenState: 1
+    screenSwitch: 1
+    oscillationSwitch: 1
+    oscillationState: 1
+    muteSwitch: 0
+    muteState: 0
+    timerRemain: 0
+    temperature: 850
+    errorCode: 0
+    scheduleCount: 0
+    displayingType: 0
+    sleepPreference: null

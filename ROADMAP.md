@@ -6,22 +6,17 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 ---
 
-## v2.1 — next release (planned)
+## v2.2 — next release (TBD)
 
-Fast-follow after v2.0. Targets the remaining Tier 1 community asks plus an adjacent product line.
+Open for proposals. v2.1 shipped 5 new drivers (Vital 100S, Classic 300S, OasisMist 450S, Tower Fan, Pedestal Fan); see [`CHANGELOG.md`](CHANGELOG.md) for what landed.
 
-- **Vital 100S** — `LAP-V102S` family. Same V2 API as the Vital 200S we ship in v2.0, with `LIGHT_DETECT` capability dropped. Low effort; copies the Vital 200S template.
-- **Classic 300S** — `LUH-A601S` family. Foundational V1-humidifier base class our fork doesn't have yet. Has nightlight + auto-stop. Unlocks Dual 200S, LV600S, OasisMist 450S as cheap follow-ons.
-- **OasisMist 450S US** — `LUH-O451S-WUS`. Extends the Classic 300S template with warm-mist control + humidity mode (US variant only).
-- **Levoit Tower Fan** — `LTF-F422S` family. Built from canonical [pyvesync](https://github.com/webdjoe/pyvesync) fixtures + class semantics, ships as a **preview** with explicit caveat asking community fan owners to report issues. No maintainer fan hardware available for live-test.
-- **Levoit Pedestal Fan** — `LPF-R432S` family. Same preview caveat as Tower Fan.
-- **Manifest `packageName` rename** to *"Levoit Air Purifiers, Humidifiers, and Fans"* — lands alongside the proper fan drivers.
-- **Generic-driver whitelist extension** to include `LTF-` / `LPF-` prefixes.
-- **Spock specs** for all new drivers (bug-pattern catalog coverage + happy path + state-change gating).
+The cheapest immediate follow-on now that v2.1 has shipped is **LV600S Humidifier** (`LUH-A602S-*`) — same `VeSyncHumid200300S` class as Classic 300S with warm-mist extension, so most of the work is already templated. See Tier 2 below.
+
+Items below remain unscheduled until prioritized into a release.
 
 ---
 
-## Beyond v2.1 — unscheduled
+## Beyond v2.2 — unscheduled
 
 Items below are not yet locked to a release. They're available for community pickup or maintainer prioritization as time permits.
 
@@ -31,7 +26,7 @@ Items below are not yet locked to a release. They're available for community pic
 
 | Driver | Model codes | Notes |
 |---|---|---|
-| **LV600S** (`VeSyncHumid200300S`) | `LUH-A602S-*` | Cheap follow-on after Classic 300S — same class with warm-mist extension |
+| **LV600S** (`VeSyncHumid200300S`) | `LUH-A602S-*` | Cheap follow-on after Classic 300S (shipped v2.1) — same class with warm-mist extension. OasisMist 450S already implements warm-mist payloads we can borrow. |
 | **OasisMist 1000S US** | `LUH-M101S-WUS`, `-WUSR` | Different humidifier class (`VeSyncHumid1000S`) — new payload conventions; pull pyvesync's class in full before drafting |
 
 #### Tier 3 (broad coverage, lower individual demand)
@@ -43,8 +38,8 @@ Items below are not yet locked to a release. They're available for community pic
 | LV600S Hub Connect | `LUH-A603S-WUS` | `VeSyncLV600S` | **Naming trap** — different class than `-A602S` despite both being branded "LV600S" |
 | Sprout Humid | `LEH-B381S-*` | `VeSyncSproutHumid` | Newest humidifier class, less docs |
 | Classic 200S | `Classic200S` | `VeSyncHumid200S` | Different class from `VeSyncHumid200300S` despite the naming similarity |
-| Dual 200S | `Dual200S`, `LUH-D301S-*` | `VeSyncHumid200300S` | Trivial after Classic 300S — same class, mist 1-2 instead of 1-9 |
-| OasisMist 450S EU | `LUH-O451S-WEU` | `VeSyncHumid200300S` | Trivial after 450S US — same class, no humidity mode |
+| Dual 200S | `Dual200S`, `LUH-D301S-*` | `VeSyncHumid200300S` | Trivial after Classic 300S (shipped v2.1) — same class, mist 1-2 instead of 1-9 |
+| OasisMist 450S EU | `LUH-O451S-WEU` | `VeSyncHumid200300S` | Trivial after 450S US (shipped v2.1) — same class, no humidity mode |
 | OasisMist 1000S EU / Vibe Mini | `LUH-M101S-WEUR` | `VeSyncHumid1000S` | Low effort after 1000S US |
 
 #### Tier 4 — out-of-scope unless demand surfaces

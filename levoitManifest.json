@@ -1,11 +1,11 @@
 {
-  "packageName": "Levoit Air Purifiers and Humidifiers",
-  "description": "Drivers for Levoit air purifiers and humidifiers via the VeSync cloud API.",
+  "packageName": "Levoit Air Purifiers, Humidifiers, and Fans",
+  "description": "Drivers for Levoit air purifiers, humidifiers, and fans via the VeSync cloud API.",
   "author": "Dan Cox (level99 fork); Niklas Gustafsson (original upstream)",
-  "version": "2.0",
+  "version": "2.1",
   "minimumHEVersion": "2.3.2",
   "dateReleased": "2026-04-26",
-  "releaseNotes": "v2.0 community fork release. Adds Levoit Vital 200S (LAP-V201S) and Superior 6000S Humidifier (LEH-S601S) drivers, plus a Generic Levoit Diagnostic Driver fall-through for unsupported Levoit models. Fixes a parent-driver bug where humidifier polling silently failed (was sending the wrong API method to humidifier devices). Adds connection-pool retry logic and automatic recovery from VeSync session expiry — devices stay connected across long uptimes. Existing users coming from NiklasGustafsson/Hubitat upstream can install via HPM directly; existing Core devices keep working without re-pairing.",
+  "releaseNotes": "v2.1 release. Adds five new drivers: Levoit Vital 100S Air Purifier (LAP-V102S), Levoit Classic 300S Humidifier (LUH-A601S), Levoit OasisMist 450S Smart Humidifier (LUH-O451S/O601S), Levoit Tower Fan (LTF-F422S), and Levoit Pedestal Fan (LPF-R432S). Existing v2.0 users upgrade in place via HPM; no device re-pairing required.",
   "documentationLink": "https://github.com/level99/Hubitat-VeSync/blob/main/Drivers/Levoit/readme.md",
   "communityLink": "https://community.hubitat.com/t/levoit-air-purifiers-drivers/81816",
   "licenseFile": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/LICENSE",
@@ -71,6 +71,41 @@
       "name": "Levoit Generic Device",
       "namespace": "NiklasGustafsson",
       "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitGeneric.groovy",
+      "required": false
+    },
+    {
+      "id": "3520c1fc-eaf1-484f-bbca-3f69416107ae",
+      "name": "Levoit Vital 100S Air Purifier",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitVital100S.groovy",
+      "required": false
+    },
+    {
+      "id": "8f66a3e2-be30-4780-9673-16f9ae63e72d",
+      "name": "Levoit Classic 300S Humidifier",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitClassic300S.groovy",
+      "required": false
+    },
+    {
+      "id": "274a9cb8-f5e0-4023-9a54-bf02c1701650",
+      "name": "Levoit OasisMist 450S Humidifier",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitOasisMist450S.groovy",
+      "required": false
+    },
+    {
+      "id": "ca33c74b-ac89-44d5-b9f1-10044c8a520f",
+      "name": "Levoit Tower Fan",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitTowerFan.groovy",
+      "required": false
+    },
+    {
+      "id": "c83e6eed-bede-4ca6-b265-6cfc91c53400",
+      "name": "Levoit Pedestal Fan",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitPedestalFan.groovy",
       "required": false
     }
   ]

@@ -4,24 +4,29 @@ import support.HubitatSpec
 import support.TestParent
 
 /**
- * Unit tests for LevoitVital200S.groovy (Levoit Vital 200S Air Purifier).
+ * Unit tests for LevoitVital100S.groovy (Levoit Vital 100S Air Purifier).
+ *
+ * The V100S uses the same VeSyncAirBaseV2 pyvesync class as the V201S with one
+ * behavioral delta: NO LIGHT_DETECT feature. lightDetectionSwitch and
+ * environmentLightState ARE present in the response payload (shared model) but the
+ * driver must NOT emit Hubitat events for them.
  *
  * Covers:
- *   Bug Pattern #1  — 2-arg update(status, nightLight) signature exists and is callable
- *   Envelope        — defensive peel-loop in applyStatus handles both single-wrap and double-wrap
- *   Bug Pattern #3  — double-wrapped envelope is correctly peeled; device fields reached via loop
- *   Bug Pattern #4  — setLevel uses {levelIdx, levelType, manualSpeedLevel}, NOT {level, id, type}
- *   Bug Pattern #5  — manual mode is set via setLevel, NOT via setPurifierMode(workMode:"manual")
- *   Bug Pattern #6  — speed reports "off" when powerSwitch=0, even if manualSpeedLevel != 255
- *   Bug Pattern #7  — info HTML uses local variables, not device.currentValue()
- *   Bug Pattern #12 — pref-seed fires when descriptionTextEnable is null, preserves false
- *   Happy path      — full applyStatus from LAP-V201S.yaml emits expected events (canonical values)
+ *   Bug Pattern #1  -- 2-arg update(status, nightLight) signature exists and is callable
+ *   Bug Pattern #3  -- defensive peel-loop in applyStatus handles both single-wrap and double-wrap
+ *   Bug Pattern #4  -- setLevel uses {levelIdx, levelType, manualSpeedLevel}, NOT {level, id, type}
+ *   Bug Pattern #5  -- setMode("manual") routes through setLevel, NOT setPurifierMode
+ *   Bug Pattern #6  -- speed reports "off" when powerSwitch=0, even if manualSpeedLevel != 255
+ *   Bug Pattern #12 -- pref-seed fires when descriptionTextEnable is null, preserves false
+ *   Happy path      -- full applyStatus from LAP-V102S.yaml emits expected events (canonical values)
+ *   Pet mode        -- setMode("pet") produces setPurifierMode with workMode="pet"
+ *   No LIGHT_DETECT -- lightDetectionSwitch and environmentLightState in response do NOT cause events
  */
-class LevoitVital200SSpec extends HubitatSpec {
+class LevoitVital100SSpec extends HubitatSpec {
 
     @Override
     String driverSourcePath() {
-        "Drivers/Levoit/LevoitVital200S.groovy"
+        "Drivers/Levoit/LevoitVital100S.groovy"
     }
 
     @Override
@@ -37,7 +42,7 @@ class LevoitVital200SSpec extends HubitatSpec {
 
     def "update(status, nightLight) 2-arg signature is callable (Bug Pattern #1)"() {
         given: "a single-wrapped purifier status response (device on, manual, speed 2)"
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
         def status = purifierStatusEnvelope(deviceData)
 
@@ -51,7 +56,7 @@ class LevoitVital200SSpec extends HubitatSpec {
 
     def "update(status) 1-arg signature is also callable"() {
         given: "a single-wrapped purifier status response"
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
         def status = purifierStatusEnvelope(deviceData)
 
@@ -64,15 +69,13 @@ class LevoitVital200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Envelope dereference (single-wrap for Vital 200S purifier)
+    // Bug Pattern #3: envelope dereference
     // -------------------------------------------------------------------------
 
-    def "applyStatus dereferences status.result to reach device fields"() {
+    def "applyStatus dereferences status.result to reach device fields (single-wrap)"() {
         given: "a status map as the parent passes it: {code:0, result:{<device fields>}}"
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
-        // Parent passes resp.data.result to child.update().
-        // For purifiers, resp.data.result = { code:0, result:{device fields}, traceId:... }
         def status = purifierStatusEnvelope(deviceData)
 
         when: "applyStatus is called with the single-wrapped envelope"
@@ -80,23 +83,19 @@ class LevoitVital200SSpec extends HubitatSpec {
 
         then: "device fields were reached and events emitted (switch=on confirms dereference succeeded)"
         lastEventValue("switch") == "on"
-        // PM2.5 is a device-field — reaching it proves the dereference worked (canonical value is 3)
+        // PM2.5 is a device-field -- reaching it proves the dereference worked (canonical value is 3)
         lastEventValue("pm25") == 3
     }
 
     def "applyStatus envelope peel handles double-wrapped responses (Bug Pattern #3)"() {
-        // LevoitVital200S.groovy has a defensive while-loop peel matching LevoitSuperior6000S.groovy.
+        // LevoitVital100S.groovy has a defensive while-loop peel matching LevoitVital200S.groovy.
         // This test passes a double-wrapped envelope (humidifier shape applied to purifier data)
         // and asserts that the driver correctly reaches the device fields via the peel loop.
         //
         // Double-wrap shape: status = {code, result: {code, result: {device fields}, traceId}}
-        // Before the fix, r = status?.result yielded {code, result:{device fields}} — the inner
-        // envelope — so powerSwitch was not found and switch stayed "off".
-        // After the fix, the peel loop unwraps one more level and device fields ARE reached.
         given: "a double-wrapped envelope (humidifier shape applied to purifier data)"
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
-        // humidifierStatusEnvelope wraps as: {code:0, result:{code:0, result:{device fields}}}
         def doubleWrapped = humidifierStatusEnvelope(deviceData)
 
         when: "applyStatus receives a double-wrapped envelope"
@@ -104,7 +103,6 @@ class LevoitVital200SSpec extends HubitatSpec {
 
         then: "device fields ARE correctly reached via peel loop -- switch=on, pm25 reached"
         lastEventValue("switch") == "on"
-        // PM2.5 is a device-level field; reaching it confirms the peel worked (canonical value is 3)
         lastEventValue("pm25") == 3
     }
 
@@ -112,14 +110,14 @@ class LevoitVital200SSpec extends HubitatSpec {
         when: "applyStatus is called with null"
         driver.applyStatus(null)
 
-        then: "no exception thrown -- Elvis-with-safe-navigate guards null status arg"
+        then: "no exception thrown"
         noExceptionThrown()
         // switch still gets emitted as "off" because powerSwitch defaults to 0 (null)
         lastEventValue("switch") == "off"
     }
 
     // -------------------------------------------------------------------------
-    // Bug Pattern #4: setLevel uses correct V201S field names
+    // Bug Pattern #4: setLevel uses correct V2-line field names
     // -------------------------------------------------------------------------
 
     def "setLevel sends {levelIdx, levelType, manualSpeedLevel} field names (Bug Pattern #4)"() {
@@ -127,76 +125,70 @@ class LevoitVital200SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
 
-        when: "setLevel(50) is called — maps to speed level 3"
+        when: "setLevel(50) is called -- maps to speed level 3"
         driver.setLevel(50)
 
-        then: "sendBypassRequest was called with correct V201S field names"
-        // The last setLevel call (not the potential setMode call) should have levelIdx
+        then: "sendBypassRequest was called with correct V102S field names"
         def setLevelReq = testParent.allRequests.find { it.method == "setLevel" }
         setLevelReq != null
         setLevelReq.data.containsKey("levelIdx")
         setLevelReq.data.containsKey("levelType")
         setLevelReq.data.containsKey("manualSpeedLevel")
-        // Verify field name ABSENCE as well — no legacy Core-line names
+        // Verify field name ABSENCE as well -- no legacy Core-line names
         !setLevelReq.data.containsKey("id")
         !setLevelReq.data.containsKey("type")
         !setLevelReq.data.containsKey("level")
     }
 
-    def "setSpeed sends {levelIdx, levelType, manualSpeedLevel} for manual speeds (Bug Pattern #4)"() {
+    def "setSpeed('high') sends {levelIdx:0, levelType:'wind', manualSpeedLevel:4} (Bug Pattern #4)"() {
         given: "device is on"
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
-        // Set mode to manual so setSpeed goes through the setSpeedLevel path
         driver.state.mode = "manual"
 
-        when: "setSpeed('high') is called"
+        when: "setSpeed('high') is called -- maps to manualSpeedLevel 4"
         driver.setSpeed("high")
 
-        then: "setLevel request uses V201S canonical field names"
+        then: "setLevel request uses V102S canonical field names with correct values"
         def req = testParent.allRequests.find { it.method == "setLevel" }
         req != null
         req.data.levelIdx == 0
         req.data.levelType == "wind"
-        req.data.manualSpeedLevel instanceof Integer
-        req.data.manualSpeedLevel >= 1
-        req.data.manualSpeedLevel <= 4
+        req.data.manualSpeedLevel == 4
     }
-
-    // -------------------------------------------------------------------------
-    // Bug Pattern #5: manual mode via setLevel, not setPurifierMode
-    // -------------------------------------------------------------------------
 
     def "setMode('manual') sends a setLevel call, NOT setPurifierMode (Bug Pattern #5)"() {
         given: "device is on"
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
-        driver.state.speed = "low"
 
         when: "setMode('manual') is called"
         driver.setMode("manual")
 
-        then: "only setLevel was sent, not setPurifierMode with workMode=manual"
-        def setPurifierCalls = testParent.allRequests.findAll { it.method == "setPurifierMode" }
-        def setLevelCalls    = testParent.allRequests.findAll { it.method == "setLevel" }
-        setLevelCalls.size() >= 1
-        // No setPurifierMode with workMode:manual — that call returns inner code -1 on V201S
-        def badCall = setPurifierCalls.find { it.data?.workMode == "manual" }
-        badCall == null
+        then: "request was setLevel (manual mode established by sending a speed)"
+        def setLevelReq = testParent.allRequests.find { it.method == "setLevel" }
+        def setPurifierModeReq = testParent.allRequests.find { it.method == "setPurifierMode" }
+        setLevelReq != null
+        setPurifierModeReq == null
     }
 
-    def "setMode('auto') sends setPurifierMode with workMode='auto' (Bug Pattern #5 complement)"() {
+    def "setSpeed(2) sends manualSpeedLevel:2 in setLevel payload (Bug Pattern #4 canonical)"() {
+        // Canonical pyvesync set_fan_speed fixture: manualSpeedLevel:3 for speed=3.
+        // This test uses speed='medium' (also manualSpeedLevel=3) vs 'low' (manualSpeedLevel=2).
         given: "device is on"
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
+        driver.state.mode = "manual"
 
-        when: "setMode('auto') is called"
-        driver.setMode("auto")
+        when: "setSpeed('low') is called -- maps to manualSpeedLevel 2"
+        driver.setSpeed("low")
 
-        then: "setPurifierMode with workMode=auto was sent"
-        def req = testParent.allRequests.find { it.method == "setPurifierMode" }
+        then:
+        def req = testParent.allRequests.find { it.method == "setLevel" }
         req != null
-        req.data.workMode == "auto"
+        req.data.manualSpeedLevel == 2
+        req.data.levelIdx == 0
+        req.data.levelType == "wind"
     }
 
     // -------------------------------------------------------------------------
@@ -205,7 +197,7 @@ class LevoitVital200SSpec extends HubitatSpec {
 
     def "applyStatus emits speed='off' when powerSwitch=0 even if manualSpeedLevel != 255 (Bug Pattern #6)"() {
         given: "device is off but last manual speed was 3 (not 255)"
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         def deviceData = fixture.responses.device_off as Map
         // device_off fixture: powerSwitch=0, fanSpeedLevel=255, manualSpeedLevel=3
         assert deviceData.powerSwitch == 0
@@ -222,7 +214,7 @@ class LevoitVital200SSpec extends HubitatSpec {
 
     def "applyStatus emits actual speed string when powerSwitch=1 and mode=manual (Bug Pattern #6 complement)"() {
         given: "device is on, manual, speed level 2"
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
         assert deviceData.powerSwitch == 1
         def status = purifierStatusEnvelope(deviceData)
@@ -237,31 +229,6 @@ class LevoitVital200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Bug Pattern #7: info HTML uses local variables, not device.currentValue()
-    // -------------------------------------------------------------------------
-
-    def "info HTML is built from local variables not device.currentValue() race (Bug Pattern #7)"() {
-        given: "fresh device with no prior events"
-        // Verify no events pre-exist for 'airQuality' or 'pm25'
-        assert testDevice.events.isEmpty()
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
-        def deviceData = fixture.responses.device_on_manual_speed2 as Map
-        def status = purifierStatusEnvelope(deviceData)
-
-        when: "applyStatus is called — sendEvent fires and info HTML is built"
-        driver.applyStatus(status)
-
-        then: "info HTML contains filter and PM2.5 values (proves local-var path, not currentValue)"
-        def infoVal = lastEventValue("info") as String
-        infoVal != null
-        infoVal.contains("Filter:")
-        // PM2.5 value from canonical fixture is 3
-        infoVal.contains("3")
-        // Air quality label computed locally — canonical AQLevel=2 maps to "moderate"
-        infoVal.contains("moderate") || infoVal.contains("Air Quality")
-    }
-
-    // -------------------------------------------------------------------------
     // Bug Pattern #12: pref-seed
     // -------------------------------------------------------------------------
 
@@ -271,7 +238,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         assert !state.prefsSeeded
 
         when: "applyStatus is called (pref-seed is at the top of applyStatus)"
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         driver.applyStatus(purifierStatusEnvelope(fixture.responses.device_on_manual_speed2 as Map))
 
         then: "updateSetting was called to seed descriptionTextEnable=true"
@@ -287,7 +254,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         assert !state.prefsSeeded
 
         when:
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         driver.applyStatus(purifierStatusEnvelope(fixture.responses.device_on_manual_speed2 as Map))
 
         then: "updateSetting NOT called for descriptionTextEnable (user setting preserved)"
@@ -300,7 +267,7 @@ class LevoitVital200SSpec extends HubitatSpec {
     def "pref-seed only fires once even across multiple applyStatus calls (Bug Pattern #12)"() {
         given: "settings has descriptionTextEnable=null"
         settings.descriptionTextEnable = null
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         def status = purifierStatusEnvelope(fixture.responses.device_on_manual_speed2 as Map)
 
         when: "applyStatus is called twice"
@@ -319,7 +286,7 @@ class LevoitVital200SSpec extends HubitatSpec {
     def "applyStatus happy path from device_on_manual_speed2 fixture emits expected events"() {
         given: "canonical device-on, manual mode, speed 2 fixture"
         settings.descriptionTextEnable = true
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
         def status = purifierStatusEnvelope(deviceData)
 
@@ -347,9 +314,6 @@ class LevoitVital200SSpec extends HubitatSpec {
         and: "airQualityIndex is 2 (canonical PurifierDefaults.air_quality_enum=AirQualityLevel.GOOD=2)"
         lastEventValue("airQualityIndex") == 2
 
-        and: "lightDetection is off (canonical lightDetectionSwitch=0)"
-        lastEventValue("lightDetection") == "off"
-
         and: "display is on (screenSwitch=1)"
         lastEventValue("display") == "on"
 
@@ -366,7 +330,7 @@ class LevoitVital200SSpec extends HubitatSpec {
     def "applyStatus happy path from device_on_auto_mode fixture emits auto-specific events"() {
         given: "canonical device-on, auto mode fixture"
         settings.descriptionTextEnable = true
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         def deviceData = fixture.responses.device_on_auto_mode as Map
         def status = purifierStatusEnvelope(deviceData)
 
@@ -386,10 +350,28 @@ class LevoitVital200SSpec extends HubitatSpec {
         lastEventValue("switch") == "on"
     }
 
-    def "applyStatus with pet mode fixture sets petMode=on"() {
+    // -------------------------------------------------------------------------
+    // Pet mode
+    // -------------------------------------------------------------------------
+
+    def "setMode('pet') sends setPurifierMode with workMode='pet'"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setMode('pet') is called"
+        driver.setMode("pet")
+
+        then: "setPurifierMode request was sent with workMode=pet"
+        def req = testParent.allRequests.find { it.method == "setPurifierMode" }
+        req != null
+        req.data.workMode == "pet"
+    }
+
+    def "applyStatus with pet mode fixture sets petMode=on and mode=pet"() {
         given: "canonical pet mode fixture"
         settings.descriptionTextEnable = true
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         def deviceData = fixture.responses.device_pet_mode as Map
         def status = purifierStatusEnvelope(deviceData)
 
@@ -399,14 +381,74 @@ class LevoitVital200SSpec extends HubitatSpec {
         then:
         lastEventValue("mode") == "pet"
         lastEventValue("petMode") == "on"
+        lastEventValue("switch") == "on"
     }
+
+    def "setPetMode('on') delegates to setMode('pet')"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setPetMode('on') is called"
+        driver.setPetMode("on")
+
+        then: "setPurifierMode request was sent with workMode=pet"
+        def req = testParent.allRequests.find { it.method == "setPurifierMode" }
+        req != null
+        req.data.workMode == "pet"
+    }
+
+    // -------------------------------------------------------------------------
+    // No LIGHT_DETECT exposure
+    // -------------------------------------------------------------------------
+
+    def "applyStatus does NOT emit lightDetection event even when lightDetectionSwitch is in response"() {
+        // V100S has no LIGHT_DETECT feature. The response model (shared with V201S) includes
+        // lightDetectionSwitch and environmentLightState, but the V100S driver must ignore both.
+        given: "canonical fixture with lightDetectionSwitch=0 and environmentLightState=1 present"
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
+        def deviceData = fixture.responses.device_on_manual_speed2 as Map
+        // Verify the fixture actually contains these fields (shared model)
+        assert deviceData.containsKey("lightDetectionSwitch")
+        assert deviceData.containsKey("environmentLightState")
+        def status = purifierStatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "no 'lightDetection' event was emitted"
+        !testDevice.events.any { it.name == "lightDetection" }
+
+        and: "no 'lightDetected' event was emitted"
+        !testDevice.events.any { it.name == "lightDetected" }
+    }
+
+    def "applyStatus does NOT emit lightDetected event even when environmentLightState=1 in response"() {
+        // Additional explicit assertion: environmentLightState=1 (light detected=true) in the
+        // canonical fixture must NOT cause a 'lightDetected' event to be emitted.
+        given: "fixture with environmentLightState=1"
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
+        def deviceData = fixture.responses.device_on_manual_speed2 as Map
+        assert deviceData.environmentLightState == 1 : "fixture must have environmentLightState=1 to make this assertion meaningful"
+        def status = purifierStatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "no event with name 'lightDetected' was emitted"
+        !testDevice.events.any { it.name == "lightDetected" }
+    }
+
+    // -------------------------------------------------------------------------
+    // Additional coverage
+    // -------------------------------------------------------------------------
 
     def "filter life critically low (<10%) logs INFO when transitioning below threshold"() {
         given: "prior filter life was 15% (above critical)"
         settings.descriptionTextEnable = true
         state.lastFilterLife = 15
 
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         def deviceData = fixture.responses.device_filter_low as Map  // filterLifePercent=8
         def status = purifierStatusEnvelope(deviceData)
 
@@ -420,23 +462,69 @@ class LevoitVital200SSpec extends HubitatSpec {
     def "autoPreference fields are populated from nested autoPreference map"() {
         given:
         settings.descriptionTextEnable = false
-        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
         def status = purifierStatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
 
-        then: "autoPreference attribute is set to fixture value 'default'"
+        then: "autoPreference attribute is set to canonical value 'default'"
         lastEventValue("autoPreference") == "default"
-        lastEventValue("roomSize") == 0
+        // V102S canonical autoPreference.roomSize is 600 (differs from V201S which uses 0)
+        lastEventValue("roomSize") == 600
+    }
+
+    def "info HTML is built from local variables not device.currentValue() race (Bug Pattern #7 guard)"() {
+        given: "fresh device with no prior events"
+        assert testDevice.events.isEmpty()
+        settings.descriptionTextEnable = true
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
+        def deviceData = fixture.responses.device_on_manual_speed2 as Map
+        def status = purifierStatusEnvelope(deviceData)
+
+        when: "applyStatus is called"
+        driver.applyStatus(status)
+
+        then: "info HTML contains filter and PM2.5 values"
+        def infoVal = lastEventValue("info") as String
+        infoVal != null
+        infoVal.contains("Filter:")
+        // PM2.5 value from canonical fixture is 3
+        infoVal.contains("3")
+        // Air quality label computed locally -- canonical AQLevel=2 maps to "moderate"
+        infoVal.contains("moderate") || infoVal.contains("Air Quality")
     }
 
     // -------------------------------------------------------------------------
-    // Theme C parity: state.lastSwitchSet consistency (matches Classic 300S / V100S pattern)
+    // Theme B: setLevel(0) -> off() (SwitchLevel convention)
     // -------------------------------------------------------------------------
 
-    def "on() seeds state.lastSwitchSet='on' (Theme C parity)"() {
+    def "setLevel(0) calls off() -- SwitchLevel convention (Theme B)"() {
+        // Hubitat SwitchLevel says setLevel(0) means 'off' (Z-Wave dimmer convention).
+        // Previously 0 mapped to lvl=1 (val < 20 branch) and sent manualSpeedLevel=1.
+        given: "default state"
+
+        when: "setLevel(0) is called"
+        driver.setLevel(0)
+
+        then: "setSwitch with powerSwitch=0 was sent (off() was called)"
+        def req = testParent.allRequests.find { it.method == "setSwitch" }
+        req != null
+        req.data.powerSwitch == 0
+
+        and: "no setLevel API call was made (level 1 must NOT be sent)"
+        testParent.allRequests.findAll { it.method == "setLevel" }.size() == 0
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // Theme C: state.lastSwitchSet consistency + state.speed after setLevel
+    // -------------------------------------------------------------------------
+
+    def "on() seeds state.lastSwitchSet='on' (Theme C)"() {
         when: "on() is called"
         driver.on()
 
@@ -444,7 +532,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         state.lastSwitchSet == "on"
     }
 
-    def "off() seeds state.lastSwitchSet='off' (Theme C parity)"() {
+    def "off() seeds state.lastSwitchSet='off' (Theme C)"() {
         when: "off() is called"
         driver.off()
 
@@ -452,8 +540,8 @@ class LevoitVital200SSpec extends HubitatSpec {
         state.lastSwitchSet == "off"
     }
 
-    def "toggle() uses state.lastSwitchSet to avoid device.currentValue race (Theme C parity)"() {
-        given: "state.lastSwitchSet seeded to 'on'"
+    def "toggle() uses state.lastSwitchSet='on' to call off() (Theme C)"() {
+        given: "state.lastSwitchSet was seeded to 'on'"
         state.lastSwitchSet = "on"
 
         when:
@@ -465,7 +553,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         req.data.powerSwitch == 0
     }
 
-    def "toggle() falls back to device.currentValue('switch') when state not seeded (Theme C parity)"() {
+    def "toggle() falls back to device.currentValue('switch') when state not seeded (Theme C)"() {
         given: "state.lastSwitchSet not set; device.currentValue('switch') returns 'off'"
         assert state.lastSwitchSet == null
         testDevice.events.add([name: "switch", value: "off"])
@@ -477,5 +565,24 @@ class LevoitVital200SSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setSwitch" }
         req != null
         req.data.powerSwitch == 1
+    }
+
+    def "setLevel writes state.speed for configureOnState replay (Theme C)"() {
+        // setLevel establishes manual mode atomically on V2-line. The driver must write
+        // state.speed so configureOnState() can replay the correct named speed on next on().
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel(50) is called -- maps to lvl=3 (val >= 40), which is 'medium' speed"
+        driver.setLevel(50)
+
+        then: "state.speed is set (not null) so configureOnState can replay it"
+        state.speed != null
+        // lvl=3 maps to "medium" via mapIntegerToSpeed
+        state.speed == "medium"
+
+        and: "state.mode is 'manual'"
+        state.mode == "manual"
     }
 }

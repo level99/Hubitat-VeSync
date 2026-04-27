@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestDevice
 
@@ -1105,22 +1106,11 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         ]
     }
 
-    def "isLevoitClimateDevice() returns false for v2.0-excluded Levoit fan prefixes (D3)"(String code) {
-        // D3: fan prefixes (LTF-* Tower Fan, LPF-* Pedestal Fan) are intentionally
-        // excluded from the v2.0 whitelist. They will be added in v2.1 alongside
-        // proper fan drivers. Adding them now would create Generic children that
-        // users would need to manually remove before v2.1 drivers can attach.
-        // NOTE: when v2.1 adds fan drivers, flip these to true and add the prefixes
-        // to isLevoitClimateDevice().
-        expect:
-        driver.isLevoitClimateDevice(code) == false
-
-        where:
-        code << [
-            "LTF-F422S-WUS",    // Tower Fan — locked v2.1
-            "LPF-R432S-AEU"     // Pedestal Fan — locked v2.1
-        ]
-    }
+    // D3 (v2.0): asserted fan prefixes (LTF-/LPF-) returned false from
+    // isLevoitClimateDevice(). SUPERSEDED by G1 in v2.1 which asserts the
+    // opposite (now returns true) since the v2.1 release adds proper fan
+    // drivers and extends the whitelist. D3 deleted to avoid same-input/
+    // opposite-assertion test contradiction.
 
     // -------------------------------------------------------------------------
     // E: Defensive addChildDevice validation + self-heal pass
@@ -1260,6 +1250,231 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         !state.deviceList.containsKey("vsaqGhost-nl")
     }
 
+    // -------------------------------------------------------------------------
+    // F: deviceType() — v2.1 new model codes
+    //
+    // Each new driver introduced in v2.1 has one or more model codes that must
+    // resolve to the correct internal dtype string in the parent's switch block.
+    // -------------------------------------------------------------------------
+
+    def "deviceType() recognizes LAP-V102S-WUS as V100S (Vital 100S, US)"() {
+        expect:
+        driver.deviceType("LAP-V102S-WUS") == "V100S"
+    }
+
+    def "deviceType() recognizes LAP-V102S-AEUR as V100S (Vital 100S, EU regional variant)"() {
+        expect:
+        driver.deviceType("LAP-V102S-AEUR") == "V100S"
+    }
+
+    def "deviceType() recognizes Classic300S string as A601S (Classic 300S Humidifier)"() {
+        expect:
+        driver.deviceType("Classic300S") == "A601S"
+    }
+
+    def "deviceType() recognizes LUH-A601S-WUSB as A601S (Classic 300S Humidifier, US variant)"() {
+        expect:
+        driver.deviceType("LUH-A601S-WUSB") == "A601S"
+    }
+
+    def "deviceType() recognizes LUH-O451S-WUS as O451S (OasisMist 450S, primary US code)"() {
+        expect:
+        driver.deviceType("LUH-O451S-WUS") == "O451S"
+    }
+
+    def "deviceType() recognizes LUH-O601S-WUS as O451S (OasisMist 600S US -- shares driver per device_map overlap)"() {
+        // LUH-O601S-WUS maps to the same pyvesync class (VeSyncHumid200300S) as LUH-O451S-WUS.
+        // Both share the OasisMist 450S driver until a separate 600S driver is warranted.
+        expect:
+        driver.deviceType("LUH-O601S-WUS") == "O451S"
+    }
+
+    def "deviceType() recognizes LTF-F422S-WUS as TOWERFAN (Tower Fan, US)"() {
+        expect:
+        driver.deviceType("LTF-F422S-WUS") == "TOWERFAN"
+    }
+
+    def "deviceType() recognizes LPF-R432S-AEU as PEDESTALFAN (Pedestal Fan, EU)"() {
+        // Note: pyvesync fixture has a typo (LPF-R423S) but the real device code is LPF-R432S.
+        expect:
+        driver.deviceType("LPF-R432S-AEU") == "PEDESTALFAN"
+    }
+
+    // -------------------------------------------------------------------------
+    // G: isLevoitClimateDevice() — v2.1 fan prefix additions
+    //
+    // v2.0 intentionally excluded LTF-* and LPF-* to avoid Generic children
+    // being created before proper fan drivers existed. v2.1 adds proper fan
+    // drivers and enables these prefixes in the whitelist. Spec D3 (which
+    // asserted false for these codes) is now superseded by G1 (asserts true).
+    // -------------------------------------------------------------------------
+
+    def "isLevoitClimateDevice() returns true for LTF- and LPF- fan codes in v2.1 (G1)"(String code) {
+        // G1: v2.1 adds Tower Fan (LTF-*) and Pedestal Fan (LPF-*) to the whitelist.
+        // These were excluded in v2.0 (see spec D3 -- now superseded for these codes).
+        // Any future unknown LTF-/LPF- model code falls through to Generic rather than
+        // being skipped as non-Levoit.
+        expect:
+        driver.isLevoitClimateDevice(code) == true
+
+        where:
+        code << [
+            "LTF-F422S-WUS",    // Tower Fan (US) -- specific known code
+            "LTF-F422S-WUSR",   // Tower Fan (US refurb)
+            "LTF-F999X-WUS",    // hypothetical future Tower Fan -- generic LTF- prefix match
+            "LPF-R432S-AEU",    // Pedestal Fan (EU) -- specific known code
+            "LPF-R432S-AUS",    // Pedestal Fan (AU)
+            "LPF-R999X-WUS"     // hypothetical future Pedestal Fan -- generic LPF- prefix match
+        ]
+    }
+
+    // -------------------------------------------------------------------------
+    // H: updateDevices() method routing — v2.1 fan types
+    //
+    // Tower Fan -> getTowerFanStatus, Pedestal Fan -> getFanStatus.
+    // Existing Humidifier and purifier fallthrough must remain unchanged.
+    // -------------------------------------------------------------------------
+
+    def "updateDevices() uses getTowerFanStatus for Tower Fan device (H1)"() {
+        given: "state has a Tower Fan device"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.deviceList = ["TOWERFAN-CID": "test-config-module"]
+
+        def fanDevice = new TestDevice()
+        fanDevice.typeName = "Levoit Tower Fan"
+        fanDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["TOWERFAN-CID"] = fanDevice
+
+        when:
+        driver.updateDevices()
+
+        then: "the bypass request body used getTowerFanStatus"
+        capturedBypassBodies.any { it.payload?.method == "getTowerFanStatus" }
+    }
+
+    def "updateDevices() uses getFanStatus for Pedestal Fan device (H2)"() {
+        given: "state has a Pedestal Fan device"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.deviceList = ["PEDESTALFAN-CID": "test-config-module"]
+
+        def fanDevice = new TestDevice()
+        fanDevice.typeName = "Levoit Pedestal Fan"
+        fanDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["PEDESTALFAN-CID"] = fanDevice
+
+        when:
+        driver.updateDevices()
+
+        then: "the bypass request body used getFanStatus"
+        capturedBypassBodies.any { it.payload?.method == "getFanStatus" }
+    }
+
+    def "updateDevices() uses getPurifierStatus for Vital 100S device (H3 -- purifier fallthrough)"() {
+        given: "state has a Vital 100S purifier device"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.deviceList = ["V100S-CID": "test-config-module"]
+
+        def purifierDevice = new TestDevice()
+        purifierDevice.typeName = "Levoit Vital 100S Air Purifier"
+        purifierDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["V100S-CID"] = purifierDevice
+
+        when:
+        driver.updateDevices()
+
+        then: "the bypass request body used getPurifierStatus (fallthrough -- no 'Humidifier', 'Tower Fan', or 'Pedestal Fan' in typeName)"
+        capturedBypassBodies.any { it.payload?.method == "getPurifierStatus" }
+    }
+
+    def "updateDevices() uses getHumidifierStatus for Classic 300S device (H4 -- humidifier branch)"() {
+        given: "state has a Classic 300S humidifier device"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.deviceList = ["A601S-CID": "test-config-module"]
+
+        def humDevice = new TestDevice()
+        humDevice.typeName = "Levoit Classic 300S Humidifier"
+        humDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["A601S-CID"] = humDevice
+
+        when:
+        driver.updateDevices()
+
+        then: "the bypass request body used getHumidifierStatus"
+        capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
+    }
+
+    def "updateDevices() uses getHumidifierStatus for OasisMist 450S device (H5 -- humidifier branch)"() {
+        given: "state has an OasisMist 450S humidifier device"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.deviceList = ["O451S-CID": "test-config-module"]
+
+        def humDevice = new TestDevice()
+        humDevice.typeName = "Levoit OasisMist 450S Humidifier"
+        humDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["O451S-CID"] = humDevice
+
+        when:
+        driver.updateDevices()
+
+        then: "the bypass request body used getHumidifierStatus"
+        capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
+    }
+
+    def "updateDevices() routes all 5 v2.1 devices correctly in a single deviceList (H6 -- combined)"() {
+        given: "state has all 5 new v2.1 device types"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.deviceList = [
+            "V100S-CID":      "cm-v100s",
+            "A601S-CID":      "cm-a601s",
+            "O451S-CID":      "cm-o451s",
+            "TOWERFAN-CID":   "cm-towerfan",
+            "PEDESTAL-CID":   "cm-pedestal"
+        ]
+
+        [
+            ["V100S-CID",    "Levoit Vital 100S Air Purifier"],
+            ["A601S-CID",    "Levoit Classic 300S Humidifier"],
+            ["O451S-CID",    "Levoit OasisMist 450S Humidifier"],
+            ["TOWERFAN-CID", "Levoit Tower Fan"],
+            ["PEDESTAL-CID", "Levoit Pedestal Fan"]
+        ].each { cid, typeName ->
+            def dev = new TestDevice()
+            dev.typeName = typeName
+            dev.metaClass.update = { Map st, nl -> true }
+            childDevices[cid] = dev
+        }
+
+        when:
+        driver.updateDevices()
+
+        then: "getPurifierStatus was used for Vital 100S"
+        capturedBypassBodies.any { it.payload?.method == "getPurifierStatus" }
+
+        and: "getHumidifierStatus was used for Classic 300S"
+        capturedBypassBodies.count { it.payload?.method == "getHumidifierStatus" } >= 1
+
+        and: "getTowerFanStatus was used for Tower Fan"
+        capturedBypassBodies.any { it.payload?.method == "getTowerFanStatus" }
+
+        and: "getFanStatus was used for Pedestal Fan"
+        capturedBypassBodies.any { it.payload?.method == "getFanStatus" }
+
+        and: "exactly 5 bypass requests were made"
+        capturedBypassBodies.size() == 5
+    }
+
     def "getDevices() skips non-Levoit device -- no addChildDevice call, INFO log emitted, cid absent from deviceList (D4)"() {
         // D4: integration test — a non-Levoit device on the VeSync account (here an
         // Etekcity smart switch) must not trigger addChildDevice and must not appear
@@ -1320,5 +1535,47 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         and: "the device's cid is absent from state.deviceList"
         !(state.deviceList?.containsKey("etk-001"))
+    }
+
+    // -------------------------------------------------------------------------
+    // RULE22 parity: every code recognized by deviceType() is also whitelisted
+    // by isLevoitClimateDevice(). One canonical exemplar per deviceType() branch.
+    // If this fails, either isLevoitClimateDevice() is missing an entry or
+    // deviceType() added a new branch without updating the whitelist.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "isLevoitClimateDevice covers every code recognized by deviceType: #code (RULE22 parity)"() {
+        expect: "both methods agree: code is Levoit AND deviceType returns a non-null type"
+        driver.isLevoitClimateDevice(code) == true
+        driver.deviceType(code) != null
+
+        where:
+        code << [
+            // LAP-* purifiers — Core and Vital lines
+            "LAP-C201S-AUSR",       // Core 200S
+            "LAP-C301S-WJP",        // Core 300S
+            "LAP-C401S-WUSR",       // Core 400S
+            "LAP-C601S-WUS",        // Core 600S
+            "LAP-V201S-WUS",        // Vital 200S
+            "LAP-V102S-WUS",        // Vital 100S
+            // LEH-* humidifiers — Superior 6000S (regex branch)
+            "LEH-S601S-WUS",        // Superior 6000S
+            // LUH-* humidifiers — Classic 300S + OasisMist 450S
+            "LUH-A601S-WUSB",       // Classic 300S (LUH-* literal)
+            "LUH-O451S-WUS",        // OasisMist 450S
+            "LUH-O601S-WUS",        // OasisMist 450S variant
+            // LTF-* fans
+            "LTF-F422S-WUS",        // Tower Fan
+            // LPF-* fans
+            "LPF-R432S-AEU",        // Pedestal Fan
+            // Literal device names (older firmware)
+            "Core200S",
+            "Core300S",
+            "Core400S",
+            "Core600S",
+            "Vital200S",
+            "Classic300S",          // Added alongside LUH-* gap fix; some firmware reports this literal
+        ]
     }
 }

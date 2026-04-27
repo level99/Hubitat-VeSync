@@ -135,7 +135,8 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
        │     - BLOCKING: [...]
        │     - NIT: [...]"
        │
-       │ 6. SendMessage({to: 'dev', message: 'QA feedback: ...'})
+       │ 6. SendMessage({to: '<dev-agent-id>', message: 'QA feedback: ...'})
+       │    (agent IDs are returned by Agent dispatch — see Rule 3 below)
        ▼
    ┌──────────────────┐
    │ vesync-driver-   │ ← RESUMED — keeps cache of prior context.
@@ -153,15 +154,18 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
 2. **Always run QA before tester or deploy.** Even for "trivial" changes — many bugs in this codebase were "trivial" until they shipped. After QA APPROVE, run tester (Spock harness) before deploy/commit. Tester catches regressions QA can't (compile errors, runtime sandbox gaps, behavior assertions).
 
 3. **Always try resume first; fall back to fresh Agent only on failure.** For every handoff after the very first dispatch of a role, the protocol is:
-   - `SendMessage({to: 'dev' | 'qa' | 'tester' | 'ops', message: "..."})` — addresses by role name
-   - If the recipient's prior run has already exited (subagents terminate after returning their final result; the runtime evicts the addressable session after some window — no fixed TTL exposed to the orchestrator), the message lands in a dead inbox and `SendMessage` returns `success: false` with `"No agent named '<name>' is currently addressable"`
+   - **Capture the agent ID** from each `Agent({...})` dispatch result (the response includes `agentId: <id>` — e.g., `a745afcdc2e7112d6`)
+   - `SendMessage({to: '<agentId>', message: "..."})` — **addresses by agent ID, NOT by the descriptive `name:` parameter**. Per [code.claude.com/docs/en/sub-agents#resume-subagents](https://code.claude.com/docs/en/sub-agents#resume-subagents): *"When a subagent completes, Claude receives its agent ID. Claude uses the SendMessage tool with the agent's ID as the `to` field to resume it."*
+   - If the recipient's prior run has already exited (subagents terminate after returning their final result; the runtime evicts the addressable session after some window — no fixed TTL exposed to the orchestrator), the message lands in a dead inbox and `SendMessage` returns `success: false`
    - **Only then** dispatch a fresh `Agent({name: ..., ...})` with full re-briefing context
+
+   **Note on the name parameter:** the `name:` field in `Agent({name: 'dev', ...})` is a human-readable label for the dispatch (visible in transcripts/UI), but it does NOT make the agent addressable by that name in `SendMessage`. The local in-environment SendMessage tool description may say *"refer to teammates by name, never by UUID"* — that's correct for **agent teams** (TeamCreate-style coordination) but **not** for single-session subagent resume. For subagent resume, ALWAYS use the agent ID.
 
    **Detection heuristic:** if you sent a SendMessage and want to know whether the agent is alive, wait for the completion notification. If `SendMessage` itself returns `success: false`, the session is gone — fresh dispatch immediately. If `SendMessage` succeeded but no completion notification arrives in a reasonable window (~60s for trivial follow-ups, ~3min for code edits), assume the agent exited and re-dispatch fresh.
 
    **Re-dispatch must re-supply context:** a fresh agent has no memory of prior rounds. The re-briefing prompt MUST include: the file paths, the task recap, all prior QA/tester findings the agent needs, and the specific delta being asked for. Copy-paste from the SendMessage body you were about to send, plus enough preamble to orient cold.
 
-   Why this matters: resume preserves ~60–70% input tokens via warm cache. Fresh dispatches reload everything. Never default to fresh just because it's easier to compose.
+   Why this matters: resume preserves ~60–70% input tokens via warm cache. Fresh dispatches reload everything. Never default to fresh just because it's easier to compose. Using the **wrong** addressing (name instead of ID) consistently fails — every name-based send returns `"No agent named '...' is currently addressable"` and forces a fresh dispatch, defeating the cache-preservation purpose entirely.
 
 4. **Brief human-readable summary between rounds — but don't block on user response.** When QA or tester returns findings, output a concise summary to the main chat BEFORE forwarding to the developer. Then proceed directly to the SendMessage handoff. The user reads the summary and can interrupt if they want to redirect; otherwise the pipeline keeps flowing. Example:
 
@@ -317,7 +321,7 @@ When the developer or QA recognizes one of these patterns in a diff, name it exp
    - Newer humidifier (LEH-...) → use `LevoitSuperior6000S.groovy`
    - Core line (older API conventions) → use `LevoitCore400S.groovy`
 5. Replace metadata, methods, field parsing.
-6. Update parent's `deviceType()` switch + `getDevices()` `addChildDevice` branch to recognize the new model code.
+6. Update parent's `deviceType()` switch + `getDevices()` `addChildDevice` branch + **`isLevoitClimateDevice()` whitelist** to recognize the new model code. Add the new model's prefix (e.g. `code.startsWith("LUH-")`) or literal name (e.g. `"Classic300S"`) to `isLevoitClimateDevice()` so the device is not silently skipped by the Generic-driver filter. Lint rule RULE22 enforces parity between `deviceType()` and `isLevoitClimateDevice()` — it will FAIL if you add to one without the other.
 7. Update `levoitManifest.json` (new entry with fresh UUID + version bump + dateReleased + releaseNotes).
 8. Update `Drivers/Levoit/readme.md` (driver list table + per-device events table).
 9. Run dev + QA pipeline.
@@ -337,6 +341,44 @@ Step 4-5 should always be done by `vesync-driver-developer`. Don't write driver 
 | Logging spam in user reports | Dispatch developer to gate noisy logs behind `descriptionTextEnable`/`debugOutput` per conventions. |
 | HPM users report "driver not found" | Verify `levoitManifest.json` has the entry with correct `location` URL pointing to the fork's `main` branch. |
 | Migrate existing-deployed driver to new name | DON'T (Bug Pattern #9). Add the new name as a separate driver file and document migration in readme. |
+
+---
+
+## GitHub workflow (fork conventions)
+
+This fork has two git remotes:
+
+- `origin` → `https://github.com/level99/Hubitat-VeSync.git` (the fork — where PRs target)
+- `upstream` → `https://github.com/NiklasGustafsson/Hubitat.git` (Niklas's original — read-only, never PR here)
+
+The `gh` CLI does **not** infer the right repo from these remotes. By default it walks the remotes, finds `upstream`, and uses that as `--repo` for every PR/issue/check command. This causes `gh pr create` to fail with the cryptic error:
+
+```
+GraphQL: Head sha can't be blank, Base sha can't be blank,
+No commits between main and release/v2.1, Head ref must be a branch,
+Base ref must be a branch (createPullRequest)
+```
+
+— because it's trying to open a PR in `NiklasGustafsson/Hubitat` (which has no `release/v2.1` branch and a different `master` default).
+
+**Fix this once per clone** with:
+
+```bash
+gh repo set-default level99/Hubitat-VeSync
+```
+
+This writes `gh-resolved` to `.git/config` so all future `gh` commands target the fork. Verify with `gh repo view --json nameWithOwner` — should print `"nameWithOwner":"level99/Hubitat-VeSync"`.
+
+**If you can't / don't want to set the default**, every `gh` command needs `--repo level99/Hubitat-VeSync` explicitly. That includes:
+
+- `gh pr create --repo level99/Hubitat-VeSync ...`
+- `gh pr view N --repo level99/Hubitat-VeSync`
+- `gh pr checks N --repo level99/Hubitat-VeSync --watch`
+- `gh pr comment N --repo level99/Hubitat-VeSync ...`
+- `gh pr review N --repo level99/Hubitat-VeSync ...`
+- `gh issue create --repo level99/Hubitat-VeSync ...`
+
+Forgetting `--repo` is the most common preventable failure when working with this clone. If `gh repo view` shows `nameWithOwner: NiklasGustafsson/...`, run `gh repo set-default level99/Hubitat-VeSync` BEFORE any other `gh` work.
 
 ---
 

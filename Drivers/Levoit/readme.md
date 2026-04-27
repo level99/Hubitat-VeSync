@@ -1,11 +1,16 @@
-## VeSync: Levoit Air Purifier and Humidifier Drivers (Community Fork)
+## VeSync: Levoit Air Purifier, Humidifier, and Fan Drivers (Community Fork)
 
-Hubitat drivers for Levoit air purifiers and humidifiers, controlled via the VeSync cloud API.
+Hubitat drivers for Levoit air purifiers, humidifiers, and fans, controlled via the VeSync cloud API.
 
 This is a **community fork** of [NiklasGustafsson/Hubitat](https://github.com/NiklasGustafsson/Hubitat). It preserves the original Core 200S/300S/400S/600S drivers and adds:
 
 - **Levoit Vital 200S Air Purifier** (LAP-V201S) — full controls, AQ/PM2.5 sensors, timer
+- **Levoit Vital 100S Air Purifier** (LAP-V102S) — same V2 platform as Vital 200S, no light-detection feature *(v2.1)*
 - **Levoit Superior 6000S Humidifier** (LEH-S601S) — mist control, drying mode, auto-stop, water-pump cleaning, ambient temp sensor
+- **Levoit Classic 300S Humidifier** (LUH-A601S) — mist 1-9, target humidity, 3-step night light *(v2.1)*
+- **Levoit OasisMist 450S Smart Humidifier** (LUH-O451S, LUH-O601S) — mist 1-9 + warm mist 0-3, auto-stop, no night light *(v2.1)*
+- **Levoit Tower Fan** (LTF-F422S) — 12-speed fan, oscillation, mute, ambient temperature *(v2.1)*
+- **Levoit Pedestal Fan** (LPF-R432S) — 12-speed fan, 2-axis oscillation with range control, ambient temperature *(v2.1)*
 - **Parent driver fix**: humidifier devices were silently failing every poll because the parent always sent `getPurifierStatus`. The parent now branches by device type.
 - **Connection-pool retry logic** for transient HTTP failures.
 
@@ -35,8 +40,13 @@ Copy the relevant `.groovy` files from the `Drivers/Levoit/` directory into Hubi
 | `LevoitCore300S.groovy` | Levoit Core 300S air purifier |
 | `LevoitCore400S.groovy` | Levoit Core 400S air purifier |
 | `LevoitCore600S.groovy` | Levoit Core 600S air purifier |
+| `LevoitVital100S.groovy` | Levoit Vital 100S air purifier *(v2.1 preview)* |
 | `LevoitVital200S.groovy` | Levoit Vital 200S / 200S-P air purifier |
+| `LevoitClassic300S.groovy` | Levoit Classic 300S humidifier *(v2.1 preview)* |
 | `LevoitSuperior6000S.groovy` | Levoit Superior 6000S evaporative humidifier |
+| `LevoitOasisMist450S.groovy` | Levoit OasisMist 450S Smart Humidifier (US) *(v2.1 preview)* |
+| `LevoitTowerFan.groovy` | Levoit Tower Fan *(v2.1 preview)* |
+| `LevoitPedestalFan.groovy` | Levoit Pedestal Fan *(v2.1 preview)* |
 | `LevoitGeneric.groovy` | **Fall-through diagnostic driver** — any unrecognized Levoit model code. Best-effort power control + `captureDiagnostics()` for filing new-device-support requests. |
 
 ### Setup
@@ -121,6 +131,29 @@ Same as 400S; `auto_mode` adds `eco`.
 
 Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize`, `setLightDetection`, `setChildLock`, `setDisplay`, `setTimer` (minutes), `cancelTimer`, `resetFilter`, `toggle`.
 
+### Vital 100S (LAP-V102S) *— v2.1 preview*
+
+Same V2 platform as Vital 200S. Differs in one capability: **no light-detection** (the field is present in the API response but the V100S has no LIGHT_DETECT feature flag in pyvesync; reads are intentionally ignored).
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| speed | off, sleep, low, medium, high, max | Fan speed (off when device is off) |
+| mode | manual, auto, sleep, pet | Current mode |
+| petMode | on, off | True if mode is "pet" |
+| filter | 0-100 | Filter life (%) |
+| pm25 | µg/m³ | Real-time PM2.5 reading |
+| airQualityIndex | 1-4 | Levoit-internal AQ index |
+| autoPreference | default, efficient, quiet | Auto-mode preference |
+| roomSize | sq ft | User-configured room size for auto mode |
+| childLock | on, off | Child-lock state |
+| display | on, off | Front-panel display state |
+| errorCode | int | Device error code (0 = healthy) |
+| timerRemain | seconds | Auto-off timer remaining |
+| info | HTML | Tile summary |
+
+Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize`, `setChildLock`, `setDisplay`, `setTimer` (minutes), `cancelTimer`, `resetFilter`, `toggle`.
+
 ### Superior 6000S Humidifier (LEH-S601S)
 
 | event | Values | Description |
@@ -147,6 +180,102 @@ Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize
 | info | HTML | Tile summary |
 
 Commands: `setMode`, `setMistLevel`, `setTargetHumidity`, `setDisplay`, `setChildLock`, `setAutoStop`, `setDryingMode`, `toggle`.
+
+### Classic 300S Humidifier (LUH-A601S) *— v2.1 preview*
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| mode | auto, sleep, manual | Current mode |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 30-80 | Auto-mode target humidity |
+| mistLevel | 0-9 | Reported mist level (0 = inactive) |
+| waterLacks | yes, no | Water-tank low/empty indicator |
+| nightLight | off, dim, bright | Discrete 3-step night light (HA finding #9) |
+| nightLightBrightness | 0, 50, 100 | Raw API value (0 = off, 50 = dim, 100 = bright) |
+| displayOn | on, off | Front-panel display state |
+| autoStopEnabled | on, off | Auto-stop-when-target-reached config |
+| autoStopReached | yes, no | Whether auto-stop is currently active |
+| humidityHigh | yes, no | Whether humidity exceeds the high-alarm threshold |
+| info | HTML | Tile summary |
+
+Commands: `setMode`, `setMistLevel` (1-9), `setHumidity` (30-80), `setNightLight` (off/dim/bright), `setDisplay`, `setAutoStop`, `toggle`.
+
+### OasisMist 450S Smart Humidifier (LUH-O451S, LUH-O601S) *— v2.1 preview*
+
+Builds on the Classic 300S API platform. Adds warm-mist (3 levels). Differs from Classic 300S: **no night-light hardware** (no `setNightLight` command), and `setMode` excludes `humidity` (device firmware universally rejects that mode per pyvesync issue #295). Target humidity range is 40-80 (firmware floor of 40, per pyvesync issue #296).
+
+Covers all 4 model codes: LUH-O451S-WUS, LUH-O451S-WUSR, LUH-O601S-WUS, LUH-O601S-KUS.
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| mode | auto, sleep, manual | Current mode (no `humidity` mode — see CROSS-CHECK in source) |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 40-80 | Auto-mode target humidity (firmware-clamped) |
+| mistLevel | 0-9 | Reported mist level (0 = inactive) |
+| warmMistLevel | 0-3 | Warm-mist level (0 = warm-mist off) |
+| warmMistEnabled | on, off | Boolean derived from warmMistLevel (on if 1-3, off if 0) |
+| waterLacks | yes, no | Water-tank low/empty indicator |
+| displayOn | on, off | Front-panel display state |
+| autoStopEnabled | on, off | Auto-stop-when-target-reached config |
+| autoStopReached | yes, no | Whether auto-stop is currently active |
+| humidityHigh | yes, no | Whether humidity exceeds the high-alarm threshold |
+| info | HTML | Tile summary |
+
+Commands: `setMode`, `setMistLevel` (1-9), `setHumidity` (40-80), `setWarmMistLevel` (0-3), `setDisplay`, `setAutoStop`, `toggle`.
+
+### Tower Fan (LTF-F422S) *— v2.1 preview*
+
+First fan device supported by this fork. Mode `sleep` maps to API literal `advancedSleep` internally; users see/use `sleep`. Temperature is divided by 10 from the raw response (e.g. `717` → `71.7°F`, matching the HA fixture's empirical reading).
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| speed | 1-12 | Fan speed (off when device is off) |
+| level | 0-100 | SwitchLevel mapping (1-12 mapped to %) |
+| mode | normal, turbo, auto, sleep | Current mode |
+| oscillation | on, off | Single-axis oscillation state |
+| mute | on, off | Mute state |
+| displayOn | on, off | Front-panel display state |
+| temperature | °F | Ambient temperature (raw / 10) |
+| timerRemain | seconds | Active timer remaining |
+| errorCode | int | Device error code (0 = healthy) |
+| displayingType | 0, 1 | Read-only diagnostic — pyvesync notes "unknown functionality"; exposed for observation |
+| sleepPreferenceType | string | Read-only nested response field (e.g. `default`, `advanced`) |
+| info | HTML | Tile summary |
+
+Commands: `setMode`, `setSpeed` (1-12), `setOscillation`, `setMute`, `setDisplay`, `setTimer` (seconds + on/off action), `cancelTimer`, `toggle`.
+
+### Pedestal Fan (LPF-R432S) *— v2.1 preview*
+
+2-axis oscillation (horizontal + vertical, controlled separately). Mode `sleep` maps to `advancedSleep` like Tower Fan; mode `eco` is the Pedestal Fan's auto-equivalent (Tower Fan has `auto`; do not confuse). `childLock` is read-only — pyvesync has no setter and ST/HB community drivers also expose no write path. Timer is omitted in v2.1 (no community-confirmed payload).
+
+Covers LPF-R432S-AEU and LPF-R432S-AUS. (pyvesync's fixture filename is a typo — `LPF-R423S.yaml` — but real device codes are `LPF-R432S`.)
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| speed | 1-12 | Fan speed (off when device is off) |
+| level | 0-100 | SwitchLevel mapping (1-12 mapped to %) |
+| mode | normal, turbo, eco, sleep | Current mode |
+| horizontalOscillation | on, off | Horizontal oscillation toggle |
+| verticalOscillation | on, off | Vertical oscillation toggle |
+| oscillationLeft | 0-100 | Horizontal left bound |
+| oscillationRight | 0-100 | Horizontal right bound |
+| oscillationTop | 0-100 | Vertical top bound |
+| oscillationBottom | 0-100 | Vertical bottom bound |
+| oscillationYaw | number | Current head yaw position (read-only) |
+| oscillationPitch | number | Current head pitch position (read-only) |
+| mute | on, off | Mute state |
+| displayOn | on, off | Front-panel display state |
+| temperature | °F | Ambient temperature (raw / 10) |
+| childLock | on, off | **Read-only** — pyvesync has no setter, no command exposed |
+| errorCode | int | Device error code (0 = healthy) |
+| sleepPreferenceType | string | Read-only nested response field |
+| info | HTML | Tile summary |
+
+Commands: `setMode`, `setSpeed` (1-12), `setHorizontalOscillation`, `setVerticalOscillation`, `setHorizontalRange` (left + right), `setVerticalRange` (top + bottom), `setMute`, `setDisplay`, `toggle`. (No `setChildLock`, no timer commands in v2.1.)
 
 ### Generic Device (any unrecognized model)
 
@@ -215,5 +344,7 @@ The original Core 200S/300S/400S/600S drivers and the VeSyncIntegration framewor
 Thank you to **elfege** for adding `setLevel()` and figuring out the 'max' speed was missing on Core 600S.
 
 The Vital 200S, Superior 6000S, parent driver fixes, and v2.0 fork release are by **Dan Cox**, with payload research from pyvesync's test fixtures (`LAP-V201S.yaml`, `LEH-S601S.yaml`).
+
+The v2.1 drivers (Vital 100S, Classic 300S, OasisMist 450S, Tower Fan, Pedestal Fan) are also by **Dan Cox**, and ship as **preview drivers**: the maintainer does not own this hardware. Each driver was built from canonical pyvesync fixtures plus cross-checks against Home Assistant's `vesync` integration and the SmartThings/Homebridge community drivers. Inline `CROSS-CHECK` comment blocks document every contentious decision (decision/rationale/source/refutation criteria) so users reporting hardware behavior contradicting our blind decisions have a clear reference. If your device behaves differently than this driver expects, please [open an issue](https://github.com/level99/Hubitat-VeSync/issues) with a `captureDiagnostics` paste and a debug log — we'll iterate.
 
 If you're a Vital 200S or Superior 6000S user who tried this integration before and hit "device discovered but data retrieval fails" — that's the bug fixed in v2.0.
