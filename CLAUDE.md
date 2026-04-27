@@ -1,42 +1,8 @@
 # CLAUDE.md — contributor workflow for Hubitat-VeSync
 
-This file tells Claude Code (and any AI-assisted contributor session) how to work in this codebase. It establishes the development pipeline, the agents that enforce it, and the canonical references to consult before changing code.
+This file is the **AI-pipeline overlay** for the repo. It assumes you've read [`CONTRIBUTING.md`](CONTRIBUTING.md) — the canonical contributor onboarding (codebase tour, conventions, dev env, test runners, PR flow, preview-driver protocol). Both audiences land at CONTRIBUTING.md for the shared foundation; this file adds AI-specific mechanics on top: the 4-agent dev/QA/tester/operations dispatch protocol, agent resume conventions via SendMessage, cost-optimization rules around fresh-vs-resume dispatches, and the bug-pattern catalog that lint rules and Spock specs reference numerically.
 
-If you're starting a fresh Claude Code session in this repo, this file IS your context. Read it first.
-
----
-
-## Codebase summary
-
-This is a community-maintained Hubitat Elevation driver pack for **Levoit air purifiers and humidifiers**, communicating with the **VeSync cloud API**. It's a fork of [NiklasGustafsson/Hubitat](https://github.com/NiklasGustafsson/Hubitat) with added support for the Vital and Superior product lines, plus assorted parent-driver fixes.
-
-### Layout
-```
-Hubitat-VeSync/
-├── Drivers/Levoit/
-│   ├── VeSyncIntegration.groovy          ← parent driver (auth, polling, child management)
-│   ├── LevoitCore200S.groovy             ← Core 200S (older API conventions)
-│   ├── LevoitCore200S Light.groovy       ← Core 200S night-light child
-│   ├── LevoitCore300S.groovy
-│   ├── LevoitCore400S.groovy
-│   ├── LevoitCore600S.groovy
-│   ├── LevoitVital200S.groovy            ← Vital 200S (V2 API conventions)
-│   ├── LevoitSuperior6000S.groovy        ← Superior 6000S humidifier (V2, double-wrapped responses)
-│   ├── Notification Tile.groovy
-│   └── readme.md                          ← user-facing docs
-├── levoitManifest.json                    ← HPM manifest
-├── README.md                              ← top-level repo readme
-├── CLAUDE.md                              ← THIS FILE — contributor workflow
-└── .claude/agents/
-    ├── vesync-driver-developer.md         ← writer agent (Sonnet)
-    ├── vesync-driver-qa.md                ← reviewer agent (Opus)
-    ├── vesync-driver-tester.md            ← Spock harness runner (Haiku, local-only)
-    └── vesync-driver-operations.md        ← deploy + verify agent (Haiku, requires Hubitat MCP)
-```
-
-### Architecture in one paragraph
-
-A single **parent driver** (`VeSyncIntegration.groovy`) holds the user's VeSync account credentials, logs in, discovers devices, schedules periodic polling, and routes API calls. **Child drivers** are per-model (one for Core 200S, one for Vital 200S, etc.). Each child exposes Hubitat capabilities (Switch, FanControl, etc.) and parses status responses. The parent calls `child.update(status, nightLight)` on every poll; children also self-fetch when the user hits Refresh. All API traffic uses VeSync's `/cloud/v2/deviceManaged/bypassV2` endpoint with model-specific method names + payloads.
+If you're a human contributor, you can stop reading here — `CONTRIBUTING.md` has everything you need. If you're an AI session, continue.
 
 ---
 
@@ -48,11 +14,11 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
 |---|---|---|
 | `README.md` | Top-level repo overview, install instructions, supported-device matrix | User asks about install, what the fork does, repo overview |
 | `Drivers/Levoit/readme.md` | Per-driver feature/event tables, capabilities, preferences | User asks about a specific driver's features, events, or how a model behaves |
+| `CONTRIBUTING.md` | Canonical contributor onboarding — codebase tour, dev env, conventions, test runners, PR flow, preview-driver protocol. Useful for humans and AI sessions both. | **Read first when contributing.** Trigger phrases: *"contributing"*, *"how do I open a PR"*, *"contributor guide"*, *"set up dev environment"*, *"add a new device"*, *"adding a driver"*, *"running tests"*, *"lint rules"*. |
 | `ROADMAP.md` | Public roadmap — future releases, device-support tiers, speculative API questions, naming traps | Trigger phrases: *"roadmap"*, *"future release"*, *"next version"*, *"v2.X"* (where X is unshipped), *"upcoming"*, *"planned"*, *"any plans for &lt;model&gt;"*, *"what's coming"* |
 | `CHANGELOG.md` | Release-by-release change history (Keep-a-Changelog format) | Trigger phrases: *"changelog"*, *"release notes"*, *"what changed"*, *"what shipped in v2.X"* |
 | `docs/migration-from-niklas-upstream.md` | Step-by-step migration guide for users coming from the original NiklasGustafsson/Hubitat upstream | Trigger phrases: *"migration"*, *"upgrade from upstream"*, *"moving from Niklas"*, *"v1 to v2"*, *"existing devices break after install"* |
-| `CONTRIBUTING.md` (when present, post-v2.0) | Human-contributor onboarding — translates the dev/QA/tester pipeline to a non-AI audience | Trigger phrases: *"contributing"*, *"how do I open a PR"*, *"contributor guide"* |
-| `CODE_OF_CONDUCT.md` (when present, post-v2.0) | Community-conduct standard | Trigger phrases: *"code of conduct"*, *"community rules"* |
+| `CODE_OF_CONDUCT.md` (when present) | Community-conduct standard | Trigger phrases: *"code of conduct"*, *"community rules"* |
 | `levoitManifest.json` | HPM package manifest | Trigger phrases: *"HPM"*, *"package manifest"*, *"manifest"*, *"Hubitat Package Manager"*, anything about install via HPM |
 | `.gemini/config.yaml` (when present) | Gemini Code Assist auto-review configuration for this repo | Trigger phrases: *"gemini"*, *"auto-review"*, *"PR review bot"* |
 
@@ -218,26 +184,6 @@ You don't have to deploy to merge — code review + spec-conformance via the dev
 
 ---
 
-## Canonical references
-
-When the developer or QA needs to validate a payload or response shape, these are the sources of truth (in priority order):
-
-1. **pyvesync test fixtures** — `src/tests/api/vesyncpurifier/<MODEL>.yaml` and `src/tests/api/vesynchumidifier/<MODEL>.yaml` in [webdjoe/pyvesync](https://github.com/webdjoe/pyvesync). These are real device captures.
-
-2. **pyvesync class implementations** — `src/pyvesync/devices/vesyncpurifier.py` and `vesynchumidifier.py`. Show response-field interpretation, reverse-mappings (e.g. `"autoPro"` → `"auto"`), and threshold logic.
-
-3. **pyvesync device registry** — `src/pyvesync/device_map.py`. Maps model codes (`LAP-V201S-WUS`, `LEH-S601S-WUSR`, etc.) to device classes. Shows which model codes share a class.
-
-4. **Live-captured response from a real device** — when in doubt, the diagnostic raw-response log line on a child driver shows exactly what the API returned for the user's specific firmware. Pyvesync may lag the live API.
-
-5. **Hubitat Capability reference** — https://docs.hubitat.com/index.php?title=Driver_Capability_List. For deciding which capabilities to declare and what methods/attributes they imply.
-
-6. **Hubitat developer docs** — https://docs.hubitat.com/index.php?title=Developer_Documentation. For sandbox restrictions, async patterns, etc.
-
-The developer agent has a primer on all of these in its agent definition. It will pull from web sources as needed via WebFetch.
-
----
-
 ## Logging conventions (enforce in every change)
 
 Three preferences gate logging in every driver:
@@ -263,7 +209,7 @@ INFO logs go at state-change points only (use `state.lastFoo` comparison gates) 
 
 ### Pref-seed pattern (Bug Pattern #12)
 
-Every driver's first-method-on-parent-poll has a one-time `state.prefsSeeded` block that auto-applies `descriptionTextEnable=true` if null. This heals migration paths (Type-change, HPM update with new pref names) where Hubitat doesn't auto-commit `defaultValue`. Insertion points by driver shape:
+See CONTRIBUTING.md "Pref-seed at first poll method" row in the "Conventions enforced by lint/tests" table for the full pattern and rationale. Insertion points by driver shape (the dev agent uses this table directly):
 
 | Driver shape | Insertion point |
 |---|---|
@@ -274,6 +220,7 @@ Every driver's first-method-on-parent-poll has a one-time `state.prefsSeeded` bl
 | Parent (VeSyncIntegration) | top of `updateDevices()` (before `driverReloading` guard) |
 
 Implementation pattern (preserves user choice via null guard, bounded to one write per device lifecycle via `state.prefsSeeded`):
+
 ```groovy
 if (!state.prefsSeeded) {
     if (settings?.descriptionTextEnable == null) {
@@ -282,8 +229,6 @@ if (!state.prefsSeeded) {
     state.prefsSeeded = true
 }
 ```
-
-See QA agent definition's catalog entry for #12 for full symptom signature + critical properties.
 
 ---
 
@@ -309,38 +254,38 @@ When the developer or QA recognizes one of these patterns in a diff, name it exp
 
 ---
 
-## Adding a new device
-
-**Pyvesync's test fixtures are ground truth for VeSync API behavior.** Always start there. Don't trust Homebridge plugins or random GitHub forks — pyvesync is the de facto community reference and is what Home Assistant's VeSync integration uses internally. Real-device captures by their maintainers feed the fixtures.
-
-1. Confirm pyvesync supports it: check `src/pyvesync/device_map.py` for a class + dev_types entry covering your model code (e.g. `LAP-V102S-WUS`).
-2. Pull the YAML fixture for canonical payloads: `src/tests/api/vesyncpurifier/<MODEL>.yaml` or `vesynchumidifier/<MODEL>.yaml`.
-3. Pull the pyvesync class to understand response field semantics + reverse-mappings.
-4. Copy the closest existing driver as a template:
-   - Vital line / V2 API → use `LevoitVital200S.groovy` as template
-   - Newer humidifier (LEH-...) → use `LevoitSuperior6000S.groovy`
-   - Core line (older API conventions) → use `LevoitCore400S.groovy`
-5. Replace metadata, methods, field parsing.
-6. Update parent's `deviceType()` switch + `getDevices()` `addChildDevice` branch + **`isLevoitClimateDevice()` whitelist** to recognize the new model code. Add the new model's prefix (e.g. `code.startsWith("LUH-")`) or literal name (e.g. `"Classic300S"`) to `isLevoitClimateDevice()` so the device is not silently skipped by the Generic-driver filter. Lint rule RULE22 enforces parity between `deviceType()` and `isLevoitClimateDevice()` — it will FAIL if you add to one without the other.
-7. Update `levoitManifest.json` (new entry with fresh UUID + version bump + dateReleased + releaseNotes).
-8. Update `Drivers/Levoit/readme.md` (driver list table + per-device events table).
-9. Run dev + QA pipeline.
-10. Test live, commit, push, open PR (or merge if you're the maintainer).
-
-Step 4-5 should always be done by `vesync-driver-developer`. Don't write driver code directly from the main session.
-
----
-
 ## Common contributor tasks → which agent
 
 | Task | First step |
 |---|---|
 | User reports "device discovered but no data" | Dispatch QA on the affected driver to identify which bug pattern applies. Often #1 or #3. |
 | VeSync changed a field name | Capture verbose API response → dispatch developer with the new field map. |
-| Add support for new Vital/Superior/Core variant | Follow "Adding a new device" above. |
+| Add support for new Vital/Superior/Core variant | See CONTRIBUTING.md "Adding a new device driver" for the 11-step flow; dispatch `vesync-driver-developer` for steps 4-5 (driver code). |
 | Logging spam in user reports | Dispatch developer to gate noisy logs behind `descriptionTextEnable`/`debugOutput` per conventions. |
 | HPM users report "driver not found" | Verify `levoitManifest.json` has the entry with correct `location` URL pointing to the fork's `main` branch. |
 | Migrate existing-deployed driver to new name | DON'T (Bug Pattern #9). Add the new name as a separate driver file and document migration in readme. |
+
+---
+
+## Source references in this codebase
+
+These patterns are load-bearing. Don't break them in a refactor without explicit reason.
+
+- The **diagnostic raw-response line** in every child's `applyStatus`: `if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=...) keys=..., values=..."` — shows the parsed device data after envelope peel.
+- The **VeSync API trace logging** wrapper closure in parent's `sendBypassRequest` — gives every API call a 1-line summary at debug level (method name + HTTP status + inner code) and a full request/response body dump at verboseDebug level. The summary is the primary debugging signal for "did this command actually go through?"
+- The **sanitize() helper** in parent — auto-redacts auth-sensitive values from any log line. Direct `log.X` calls in the parent bypass it; always route through the helpers.
+- The **envelope-peel while loop** in every V2-line child's `applyStatus`:
+  ```groovy
+  while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
+      r = r.result; peelGuard++
+  }
+  ```
+- The **3-signature update pattern** in every child:
+  ```groovy
+  def update()                       // self-fetch
+  def update(status)                 // 1-arg parent callback
+  def update(status, nightLight)     // 2-arg parent callback (REQUIRED)
+  ```
 
 ---
 
@@ -379,28 +324,6 @@ This writes `gh-resolved` to `.git/config` so all future `gh` commands target th
 - `gh issue create --repo level99/Hubitat-VeSync ...`
 
 Forgetting `--repo` is the most common preventable failure when working with this clone. If `gh repo view` shows `nameWithOwner: NiklasGustafsson/...`, run `gh repo set-default level99/Hubitat-VeSync` BEFORE any other `gh` work.
-
----
-
-## Source references in this codebase
-
-- The **VeSync API trace logging** wrapper closure in parent's `sendBypassRequest` — gives every call a 1-line summary at debug level, full body dump at verboseDebug level.
-- The **diagnostic raw-response line** in every child's `applyStatus`: `if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=...) keys=..., values=..."` — shows the parsed device data after envelope peel.
-- The **sanitize() helper** in parent — auto-redacts auth-sensitive values from any log line.
-- The **envelope-peel while loop** in every V2-line child's `applyStatus`:
-  ```groovy
-  while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-      r = r.result; peelGuard++
-  }
-  ```
-- The **3-signature update pattern** in every child:
-  ```groovy
-  def update()                       // self-fetch
-  def update(status)                 // 1-arg parent callback
-  def update(status, nightLight)     // 2-arg parent callback (REQUIRED)
-  ```
-
-These patterns are load-bearing. Don't break them in a refactor without explicit reason.
 
 ---
 

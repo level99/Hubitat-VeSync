@@ -67,6 +67,8 @@ For any new device support or any "is this payload right?" question, the source 
 
 The fork's drivers are derived from these. Don't trust other reverse-engineered clients (Homebridge plugins, random GitHub forks) as primary references — pyvesync is what Home Assistant's `vesync` integration uses internally and is the de facto community canon.
 
+pyvesync may lag the live API; the diagnostic raw-response log line on a child driver (`applyStatus raw r (after peel=...) keys=..., values=...`) is the ground truth when the two conflict. If you see a field in the log that pyvesync's class doesn't parse, prefer the live response and file an issue upstream at pyvesync after capturing the divergence.
+
 ### Audience
 
 This file is the canonical contributor onboarding for the repo — codebase tour, conventions, dev env, test runners, PR flow, preview-driver protocol. Useful regardless of whether you're a human contributor or an AI-assisted session.
