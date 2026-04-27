@@ -2,7 +2,7 @@
 name: vesync-driver-qa
 description: Reviews Groovy driver/manifest/readme changes in the level99/Hubitat-VeSync codebase. Specialist in the VeSync cloud API (bypassV2 envelope), the Levoit hardware family, the parent-child driver architecture this fork uses, and the bug-pattern catalog accumulated from the v2.0 community-fork release. Pairs with vesync-driver-developer. Returns structured APPROVE / ISSUES report with file:line refs. Use AFTER the developer produces a diff, BEFORE deploying or committing.
 tools: Read, Grep, Glob, Bash, WebFetch
-model: opus
+model: sonnet
 color: yellow
 ---
 

@@ -63,7 +63,9 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
              ▼
    ┌──────────────────┐
    │ vesync-driver-qa │ ← reviews diff against bug-pattern catalog + canonical pyvesync
-   │ (Opus)           │   returns APPROVE or ISSUES (BLOCKING/NIT)
+   │ (Sonnet by       │   returns APPROVE or ISSUES (BLOCKING/NIT)
+   │  default; Opus   │   See "QA dispatch: model selection" below for elevation criteria
+   │  on elevation)   │
    └─────────┬────────┘
              │ 4. Verdict returned to main
              ▼
@@ -119,19 +121,37 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
 
 2. **Always run QA before tester or deploy.** Even for "trivial" changes — many bugs in this codebase were "trivial" until they shipped. After QA APPROVE, run tester (Spock harness) before deploy/commit. Tester catches regressions QA can't (compile errors, runtime sandbox gaps, behavior assertions).
 
-3. **Always try resume first; fall back to fresh Agent only on failure.** For every handoff after the very first dispatch of a role, the protocol is:
-   - **Capture the agent ID** from each `Agent({...})` dispatch result (the response includes `agentId: <id>` — e.g., `a745afcdc2e7112d6`)
-   - `SendMessage({to: '<agentId>', message: "..."})` — **addresses by agent ID, NOT by the descriptive `name:` parameter**. Per [code.claude.com/docs/en/sub-agents#resume-subagents](https://code.claude.com/docs/en/sub-agents#resume-subagents): *"When a subagent completes, Claude receives its agent ID. Claude uses the SendMessage tool with the agent's ID as the `to` field to resume it."*
-   - If the recipient's prior run has already exited (subagents terminate after returning their final result; the runtime evicts the addressable session after some window — no fixed TTL exposed to the orchestrator), the message lands in a dead inbox and `SendMessage` returns `success: false`
-   - **Only then** dispatch a fresh `Agent({name: ..., ...})` with full re-briefing context
+3. **Resume vs fresh dispatch — observe cache state.** This applies to all 4 agents: `vesync-driver-developer`, `vesync-driver-qa`, `vesync-driver-tester`, and `vesync-driver-operations`. Anthropic's prompt cache TTL is 5 minutes default, up to 1 hour with explicit cache breakpoints. On cache miss, the agent's accumulated transcript re-prices as fresh input — which blows up cost on long-gap resumes that pile up unrelated content. Cost impact varies by model (Opus QA most affected; Haiku tester/ops least), but the dynamics apply uniformly.
 
-   **Note on the name parameter:** the `name:` field in `Agent({name: 'dev', ...})` is a human-readable label for the dispatch (visible in transcripts/UI), but it does NOT make the agent addressable by that name in `SendMessage`. The local in-environment SendMessage tool description may say *"refer to teammates by name, never by UUID"* — that's correct for **agent teams** (TeamCreate-style coordination) but **not** for single-session subagent resume. For subagent resume, ALWAYS use the agent ID.
+   **Orchestrator discipline (per agent ID being dispatched):**
 
-   **Detection heuristic:** if you sent a SendMessage and want to know whether the agent is alive, wait for the completion notification. If `SendMessage` itself returns `success: false`, the session is gone — fresh dispatch immediately. If `SendMessage` succeeded but no completion notification arrives in a reasonable window (~60s for trivial follow-ups, ~3min for code edits), assume the agent exited and re-dispatch fresh.
+   a. **Capture the agent ID** from each `Agent({...})` dispatch result (the response includes `agentId: <id>` — e.g., `a745afcdc2e7112d6`).
 
-   **Re-dispatch must re-supply context:** a fresh agent has no memory of prior rounds. The re-briefing prompt MUST include: the file paths, the task recap, all prior QA/tester findings the agent needs, and the specific delta being asked for. Copy-paste from the SendMessage body you were about to send, plus enough preamble to orient cold.
+   b. **At each dispatch, capture the timestamp via `date -Iseconds` and note it in conversation context, scoped to the agent role:**
+      ```
+      Last dev dispatch: 2026-04-27T15:30:00-06:00 — agent ID <id> — topic <brief>
+      Last qa dispatch: 2026-04-27T15:35:12-06:00 — agent ID <id> — topic <brief>
+      Last tester dispatch: 2026-04-27T15:40:08-06:00 — agent ID <id> — topic <brief>
+      Last ops dispatch: <none yet this session>
+      ```
 
-   Why this matters: resume preserves ~60–70% input tokens via warm cache. Fresh dispatches reload everything. Never default to fresh just because it's easier to compose. Using the **wrong** addressing (name instead of ID) consistently fails — every name-based send returns `"No agent named '...' is currently addressable"` and forces a fresh dispatch, defeating the cache-preservation purpose entirely.
+   c. **On next dispatch need, run `date -Iseconds` again, compute delta against the *same agent role's* last timestamp, and decide:**
+
+   | Time since same-role last dispatch | Topic relevance | Action |
+   |---|---|---|
+   | <5 min | Same topic family | `SendMessage` resume (cache likely warm) |
+   | 5-30 min | Same topic family | Resume if accumulated transcript is small; fresh if large |
+   | 5-30 min | Unrelated topic | Fresh `Agent({...})` dispatch |
+   | >30 min | Any | Fresh dispatch (cache definitely expired; resume re-prices everything) |
+   | New Claude Code session | Any | Fresh dispatch (no prior timestamp; agent ID may be stale) |
+
+   d. **Resume protocol when cache is warm:** `SendMessage({to: '<agentId>', message: "..."})` — **addresses by agent ID, NOT by the descriptive `name:` parameter**. Per [code.claude.com/docs/en/sub-agents#resume-subagents](https://code.claude.com/docs/en/sub-agents#resume-subagents): *"When a subagent completes, Claude receives its agent ID. Claude uses the SendMessage tool with the agent's ID as the `to` field to resume it."* If `SendMessage` returns `success: false`, the session is gone — fresh dispatch immediately.
+
+   e. **Note on the name parameter:** the `name:` field in `Agent({name: 'dev', ...})` is a human-readable label for the dispatch (visible in transcripts/UI), but it does NOT make the agent addressable by that name in `SendMessage`. For subagent resume, ALWAYS use the agent ID.
+
+   f. **Re-dispatch must re-supply context:** a fresh agent has no memory of prior rounds. The re-briefing prompt MUST include: the file paths, the task recap, all prior QA/tester findings the agent needs, and the specific delta being asked for. Copy-paste from the SendMessage body you were about to send, plus enough preamble to orient cold.
+
+   This inverts the spirit of the prior "always try resume first" rule for medium-to-long gaps where the cache-warmth assumption breaks down. Resume remains the right call when warmth is observable; fresh dispatch is the right call when it isn't. Using the **wrong** addressing (name instead of ID) on resume always fails — every name-based send returns `"No agent named '...' is currently addressable"` and forces a fresh dispatch anyway.
 
 4. **Brief human-readable summary between rounds — but don't block on user response.** When QA or tester returns findings, output a concise summary to the main chat BEFORE forwarding to the developer. Then proceed directly to the SendMessage handoff. The user reads the summary and can interrupt if they want to redirect; otherwise the pipeline keeps flowing. Example:
 
@@ -153,6 +173,43 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
 9. **Iteration cap: 3 rounds.** If QA flags BLOCKING three rounds in a row OR tester returns FAIL after 2 rounds of dev fixes on the same specs, escalate to human. Usually means the spec is wrong, not the code.
 
 10. **Honest pushback on disagreements.** If the developer thinks QA's feedback would cause a regression, surface the disagreement to the human user; don't rubber-stamp.
+
+---
+
+## QA dispatch: model selection
+
+The `vesync-driver-qa` agent defaults to **Sonnet** as of v2.2 (was Opus through v2.1). Per the agent's own self-analysis after the v2.1 review cycles, Sonnet produces equivalent verdicts at ~5× lower per-token cost for most diffs in this codebase. Opus remains worth the cost for a specific subset.
+
+### Default: Sonnet
+
+Use Sonnet for the typical case (no `model:` override needed; agent definition's `model: sonnet` frontmatter handles it):
+
+- Pure refactors with bit-identical-behavior claims
+- Single-pattern bug fixes that match a documented catalog entry (BP1, BP4, BP6, etc.)
+- Doc-only changes
+- Spec-only changes (test additions, fixture updates)
+- Per-driver `version:` lockstep bumps, manifest updates, frozen_driver_names additions
+
+### Elevate to Opus
+
+Pass `model: "opus"` in the `Agent({...})` dispatch (or `model: "opus"` override on `SendMessage` resume — whatever the runtime supports) for:
+
+- **Auth / credential / token-handling code paths.** Catastrophic-failure cost; rare; Opus's nuanced judgment is worth it.
+- **New bug pattern being introduced.** First instance of a pattern that may become a catalog entry.
+- **Multiple bug patterns in interaction.** E.g., the v2.1 round-1 Theme A/B/C across 3 drivers — interaction effects need cross-pattern reasoning.
+- **3rd+ consecutive iteration on the same diff.** Subtle drift between rounds is what Opus catches.
+- **Substantial parent-driver routing or polling logic changes.** Affects every device family; missed regression hits all users.
+
+### Cost-saving levers (input-side, where 97% of tokens live)
+
+The QA agent's self-analysis after the v2.1 review cycles attributed token cost as approximately:
+- ~48% accumulated transcript carryover from prior rounds (stale content from earlier reviews)
+- ~29% additional carryover from rounds further back
+- ~15% static priming (agent definition + tool schemas + auto-injected CLAUDE.md / CONTRIBUTING.md)
+- ~3% output verdict
+- ~5% genuinely fresh content for the current review
+
+Output is only ~3% of total. **Do not reduce verdict verbosity** — output fidelity is the dev agent's signal for what to fix; cutting it sacrifices clarity for negligible cost savings. The leverage is on the input side: model default (Sonnet, applies multiplicatively to all input + output), cache hygiene (the resume-vs-fresh discipline above), and tighter briefs (don't ask for "verify all 13 driver names" if a representative sampling produces the same correctness signal).
 
 ---
 
@@ -329,7 +386,7 @@ Forgetting `--repo` is the most common preventable failure when working with thi
 
 ## Cost optimization notes
 
-The 4-agent pipeline (developer Sonnet / qa Opus / tester Haiku / operations Haiku) is shaped around model-cost asymmetry:
+The 4-agent pipeline (developer Sonnet / qa Sonnet by default — Opus on elevation per the "QA dispatch: model selection" section / tester Haiku / operations Haiku) is shaped around model-cost asymmetry:
 
 - **Resume pattern (SendMessage, not fresh Agent)** preserves ~60–70% of input tokens on iterative rounds because each agent's cache stays warm on the driver source file + prior findings. Fresh dispatches reload everything.
 - **Sonnet for dev** is ~5× cheaper per token than Opus on underlying pricing; on Claude Max plan, consumes cap at roughly ⅕ the rate of Opus.
