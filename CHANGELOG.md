@@ -22,6 +22,8 @@ Adds five new drivers — two air purifiers, two humidifiers, and two fans (the 
 - **Cross-check citation audit** — ~272 lines of structured `CROSS-CHECK` comment blocks (decision/rationale/source/refutation criteria) across all 5 v2.1 drivers (01d421c).
 - **HPM packageName rename** to *"Levoit Air Purifiers, Humidifiers, and Fans"*. Repository.json `Fan` tag added.
 - **Preview banner** — `[PREVIEW v2.1]` prefix in each new driver's `description:` field (visible in Hubitat Drivers Code list and device Type dropdown). Name field deliberately untouched (Bug Pattern #9 protection).
+- **Lint rule 22 (whitelist parity)** — new static lint at `tests/lint_rules/whitelist_parity.py` enforcing that every model code recognized by parent driver `deviceType()` is also recognized by `isLevoitClimateDevice()` (the Generic-driver fall-through whitelist). Catches both omissions and regressions at lint-time. Companion `@Unroll` Spock parity spec (18-row `where:` table) validates the same invariant at test-time (fe4d723).
+- **18 additional Spock tests** for v2.1 driver bug fixes — Tower/Pedestal Fan FanControl-`"on"` enum coverage, Tower/Pedestal/Vital100S SwitchLevel `setLevel(0)→off()` coverage, Vital 100S/200S + Superior 6000S `state.lastSwitchSet` seeding + race-free toggle coverage. Final spec count: **446** (9d52179).
 
 ### Changed
 
@@ -38,6 +40,13 @@ Adds five new drivers — two air purifiers, two humidifiers, and two fans (the 
 - **OasisMist 450S `humidity` mode rejection** — dropped from `setMode` enum. Device firmware universally rejects `setHumidityMode{mode:'humidity'}` with API error 11000000 across all US model codes (pyvesync issue #295). `auto`/`sleep`/`manual` only (df2c1c4).
 - **OasisMist 450S target humidity floor** — clamp range corrected from `30-80` to `40-80` (firmware floor; pyvesync issue #296 + homebridge cross-check confirmation) (df2c1c4).
 - **README.md OasisMist row** — first-cell text aligned with driver `definition(name:)` to satisfy lint RULE21 (README Devices Sync) (28d3efa).
+- **Tower Fan / Pedestal Fan `setSpeed("on")`** — was logging an error instead of powering on. Hubitat's `FanControl` capability standard enum includes `"on"`; now properly routes to `on()` (9d52179).
+- **Tower Fan / Pedestal Fan / Vital 100S `setLevel(0)`** — was turning the device on at speed 1 instead of off. Hubitat `SwitchLevel` convention says 0% → off; now early-returns `off()` (9d52179).
+- **Vital 100S/200S, Superior 6000S `toggle()`** — was prone to read-after-write race against `device.currentValue("switch")` lag. Added `state.lastSwitchSet` seeding in `on()`/`off()` and refactored `toggle()` to read the state variable first (matches Classic 300S canonical pattern; full V2-line sister-driver parity now) (9d52179).
+- **Vital 100S `setLevel`** — now writes `state.speed` so `configureOnState` replay applies the correct named speed on the next `on()` (9d52179).
+- **Generic-driver fall-through whitelist (`isLevoitClimateDevice`) missing `LUH-` prefix** — pre-existing v2.0 gap. Any unknown LUH- humidifier was silently skipped at discovery instead of falling through to the Generic driver. Added (fe4d723).
+- **Generic-driver fall-through whitelist missing `Classic300S` literal** — some Classic 300S firmware reports this literal device-name instead of `LUH-A601S-*`. Added (fe4d723).
+- **Groovy block-comment terminator bug in `VeSyncIntegration.groovy` Javadoc** — `LUH-O451S-*/LUH-O601S-*` contained `*/` which prematurely closed the Javadoc block, breaking Spock compilation. Changed slash to comma (fe4d723).
 
 ## [2.0] - 2026-04-26
 
