@@ -495,4 +495,94 @@ class LevoitVital100SSpec extends HubitatSpec {
         // Air quality label computed locally -- canonical AQLevel=2 maps to "moderate"
         infoVal.contains("moderate") || infoVal.contains("Air Quality")
     }
+
+    // -------------------------------------------------------------------------
+    // Theme B: setLevel(0) -> off() (SwitchLevel convention)
+    // -------------------------------------------------------------------------
+
+    def "setLevel(0) calls off() -- SwitchLevel convention (Theme B)"() {
+        // Hubitat SwitchLevel says setLevel(0) means 'off' (Z-Wave dimmer convention).
+        // Previously 0 mapped to lvl=1 (val < 20 branch) and sent manualSpeedLevel=1.
+        given: "default state"
+
+        when: "setLevel(0) is called"
+        driver.setLevel(0)
+
+        then: "setSwitch with powerSwitch=0 was sent (off() was called)"
+        def req = testParent.allRequests.find { it.method == "setSwitch" }
+        req != null
+        req.data.powerSwitch == 0
+
+        and: "no setLevel API call was made (level 1 must NOT be sent)"
+        testParent.allRequests.findAll { it.method == "setLevel" }.size() == 0
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // Theme C: state.lastSwitchSet consistency + state.speed after setLevel
+    // -------------------------------------------------------------------------
+
+    def "on() seeds state.lastSwitchSet='on' (Theme C)"() {
+        when: "on() is called"
+        driver.on()
+
+        then: "lastSwitchSet is 'on'"
+        state.lastSwitchSet == "on"
+    }
+
+    def "off() seeds state.lastSwitchSet='off' (Theme C)"() {
+        when: "off() is called"
+        driver.off()
+
+        then: "lastSwitchSet is 'off'"
+        state.lastSwitchSet == "off"
+    }
+
+    def "toggle() uses state.lastSwitchSet='on' to call off() (Theme C)"() {
+        given: "state.lastSwitchSet was seeded to 'on'"
+        state.lastSwitchSet = "on"
+
+        when:
+        driver.toggle()
+
+        then: "setSwitch with powerSwitch=0 was sent (off was called)"
+        def req = testParent.allRequests.find { it.method == "setSwitch" }
+        req != null
+        req.data.powerSwitch == 0
+    }
+
+    def "toggle() falls back to device.currentValue('switch') when state not seeded (Theme C)"() {
+        given: "state.lastSwitchSet not set; device.currentValue('switch') returns 'off'"
+        assert state.lastSwitchSet == null
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "toggle() falls back to currentValue"
+        driver.toggle()
+
+        then: "on was called (switch was off, so toggle goes to on)"
+        def req = testParent.allRequests.find { it.method == "setSwitch" }
+        req != null
+        req.data.powerSwitch == 1
+    }
+
+    def "setLevel writes state.speed for configureOnState replay (Theme C)"() {
+        // setLevel establishes manual mode atomically on V2-line. The driver must write
+        // state.speed so configureOnState() can replay the correct named speed on next on().
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel(50) is called -- maps to lvl=3 (val >= 40), which is 'medium' speed"
+        driver.setLevel(50)
+
+        then: "state.speed is set (not null) so configureOnState can replay it"
+        state.speed != null
+        // lvl=3 maps to "medium" via mapIntegerToSpeed
+        state.speed == "medium"
+
+        and: "state.mode is 'manual'"
+        state.mode == "manual"
+    }
 }

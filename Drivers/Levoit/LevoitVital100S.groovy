@@ -116,6 +116,7 @@ def on(){
     try {
         if (handlePower(true)) {
             logInfo "Power on"
+            state.lastSwitchSet = "on"
             // CRITICAL: Update switch state IMMEDIATELY so Rooms/automations see device is on
             // This prevents them from resending the command while we're still configuring speed/mode
             device.sendEvent(name:"switch", value:"on")
@@ -175,6 +176,7 @@ def off(){
     try {
         if (handlePower(false)) {
             logInfo "Power off"
+            state.lastSwitchSet = "off"
             // CRITICAL: Update switch state IMMEDIATELY
             device.sendEvent(name:"switch", value:"off")
         } else {
@@ -185,7 +187,14 @@ def off(){
     }
 }
 
-def toggle(){ logDebug "toggle()"; device.currentValue("switch")=="on" ? off() : on() }
+// state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write
+// race (the new event from on()/off() may not be queryable yet on a same-tick toggle()).
+// Falls back to device.currentValue("switch") when state isn't seeded yet (first-call case).
+def toggle(){
+    logDebug "toggle()"
+    String current = state.lastSwitchSet ?: device.currentValue("switch")
+    current == "on" ? off() : on()
+}
 
 def cycleSpeed(){
     logDebug "cycleSpeed()"
@@ -195,8 +204,10 @@ def cycleSpeed(){
     setSpeed(next)
 }
 
+// SwitchLevel convention: setLevel(0) turns the device off (matches Z-Wave dimmer platform expectation).
 def setLevel(val){
     logDebug "setLevel $val"
+    if (val == 0) { off(); return }
     Integer lvl
     if (val < 20) lvl=1
     else if (val < 40) lvl=2
@@ -205,7 +216,9 @@ def setLevel(val){
     sendEvent(name:"level", value: val)
     def ok = setSpeedLevel(lvl)
     if (ok) {
-        // setLevel establishes manual mode + speed atomically (V2 quirk); emit mode events here
+        // setLevel establishes manual mode + speed atomically (V2 quirk); emit mode events here.
+        // Also write state.speed so configureOnState() replay path re-applies the correct named speed.
+        state.speed = mapIntegerToSpeed(lvl)
         state.mode = "manual"
         device.sendEvent(name:"mode", value: "manual")
         device.sendEvent(name:"petMode", value: "off")

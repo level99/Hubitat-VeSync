@@ -269,6 +269,7 @@ def setSpeed(spd){
     // Enum string (FanControl capability path)
     String s = (spd as String).toLowerCase()
     if (s == "off")  { off(); return }
+    if (s == "on")   { on(); return }   // Hubitat FanControl spec: "on" resumes at prior/default speed
     if (s == "auto") { setMode("eco"); return }  // Pedestal Fan: auto maps to eco (no auto mode)
     Integer lvl = fanControlEnumToLevel(s)
     if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; return }
@@ -284,9 +285,11 @@ def cycleSpeed(){
 }
 
 // SwitchLevel capability: setLevel(percent 0-100) -> map to 1-12
+// SwitchLevel convention: setLevel(0) turns the device off (matches Z-Wave dimmer platform expectation).
 def setLevel(val){
     logDebug "setLevel(${val})"
     Integer pct = Math.max(0, Math.min(100, (val as Integer) ?: 0))
+    if (pct == 0) { off(); return }
     Integer lvl = levelFromPercent(pct)
     // SwitchLevel spec requires emitting the level event immediately
     sendEvent(name:"level", value: pct)

@@ -102,18 +102,25 @@ def initialize(){ logDebug "Initializing" }
 def on(){
     logDebug "on()"
     def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(power=1)")
-    if (httpOk(resp)) { logInfo "Power on"; device.sendEvent(name:"switch", value:"on") }
+    if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
     else logError "Power on failed"
 }
 
 def off(){
     logDebug "off()"
     def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(power=0)")
-    if (httpOk(resp)) { logInfo "Power off"; device.sendEvent(name:"switch", value:"off") }
+    if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
     else logError "Power off failed"
 }
 
-def toggle(){ logDebug "toggle()"; device.currentValue("switch") == "on" ? off() : on() }
+// state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write
+// race (the new event from on()/off() may not be queryable yet on a same-tick toggle()).
+// Falls back to device.currentValue("switch") when state isn't seeded yet (first-call case).
+def toggle(){
+    logDebug "toggle()"
+    String current = state.lastSwitchSet ?: device.currentValue("switch")
+    current == "on" ? off() : on()
+}
 
 // ---------- Mode ----------
 def setMode(mode){

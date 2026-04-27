@@ -110,6 +110,7 @@ def on(){
     try {
         if (handlePower(true)) {
             logInfo "Power on"
+            state.lastSwitchSet = "on"
             // CRITICAL: Update switch state IMMEDIATELY so Rooms/automations see device is on
             // This prevents them from resending the command while we're still configuring speed/mode
             device.sendEvent(name:"switch", value:"on")
@@ -169,6 +170,7 @@ def off(){
     try {
         if (handlePower(false)) {
             logInfo "Power off"
+            state.lastSwitchSet = "off"
             // CRITICAL: Update switch state IMMEDIATELY
             device.sendEvent(name:"switch", value:"off")
         } else {
@@ -179,7 +181,14 @@ def off(){
     }
 }
 
-def toggle(){ logDebug "toggle()"; device.currentValue("switch")=="on" ? off() : on() }
+// state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write
+// race (the new event from on()/off() may not be queryable yet on a same-tick toggle()).
+// Falls back to device.currentValue("switch") when state isn't seeded yet (first-call case).
+def toggle(){
+    logDebug "toggle()"
+    String current = state.lastSwitchSet ?: device.currentValue("switch")
+    current == "on" ? off() : on()
+}
 
 def cycleSpeed(){
     logDebug "cycleSpeed()"

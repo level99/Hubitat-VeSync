@@ -431,4 +431,51 @@ class LevoitVital200SSpec extends HubitatSpec {
         lastEventValue("autoPreference") == "default"
         lastEventValue("roomSize") == 0
     }
+
+    // -------------------------------------------------------------------------
+    // Theme C parity: state.lastSwitchSet consistency (matches Classic 300S / V100S pattern)
+    // -------------------------------------------------------------------------
+
+    def "on() seeds state.lastSwitchSet='on' (Theme C parity)"() {
+        when: "on() is called"
+        driver.on()
+
+        then: "lastSwitchSet is 'on'"
+        state.lastSwitchSet == "on"
+    }
+
+    def "off() seeds state.lastSwitchSet='off' (Theme C parity)"() {
+        when: "off() is called"
+        driver.off()
+
+        then: "lastSwitchSet is 'off'"
+        state.lastSwitchSet == "off"
+    }
+
+    def "toggle() uses state.lastSwitchSet to avoid device.currentValue race (Theme C parity)"() {
+        given: "state.lastSwitchSet seeded to 'on'"
+        state.lastSwitchSet = "on"
+
+        when:
+        driver.toggle()
+
+        then: "setSwitch with powerSwitch=0 was sent (off was called)"
+        def req = testParent.allRequests.find { it.method == "setSwitch" }
+        req != null
+        req.data.powerSwitch == 0
+    }
+
+    def "toggle() falls back to device.currentValue('switch') when state not seeded (Theme C parity)"() {
+        given: "state.lastSwitchSet not set; device.currentValue('switch') returns 'off'"
+        assert state.lastSwitchSet == null
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "toggle() falls back to currentValue"
+        driver.toggle()
+
+        then: "on was called (switch was off, so toggle goes to on)"
+        def req = testParent.allRequests.find { it.method == "setSwitch" }
+        req != null
+        req.data.powerSwitch == 1
+    }
 }

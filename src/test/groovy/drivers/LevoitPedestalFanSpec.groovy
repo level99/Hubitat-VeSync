@@ -181,6 +181,43 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         testLog.errors.any { it.contains("0") || it.contains("invalid") || it.contains("must be") }
     }
 
+    def "setSpeed('on') calls on() -- Hubitat FanControl capability convention (Theme A)"() {
+        // Hubitat FanControl.setSpeed accepts 'on' as a valid enum value meaning 'resume at
+        // prior/default speed'. Previously this fell through to the unknown-enum error path.
+        given: "default state"
+
+        when: "setSpeed('on') is called via FanControl enum path"
+        driver.setSpeed("on")
+
+        then: "setSwitch with powerSwitch=1 was sent (on() was called)"
+        def req = testParent.allRequests.find { it.method == "setSwitch" }
+        req != null
+        req.data.powerSwitch == 1
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "setLevel(0) calls off() -- SwitchLevel convention (Theme B)"() {
+        // Hubitat SwitchLevel says setLevel(0) means 'off' (Z-Wave dimmer convention).
+        // Previously 0% mapped to levelFromPercent(0)=1 and turned the device on at level 1.
+        given: "default state"
+
+        when: "setLevel(0) is called"
+        driver.setLevel(0)
+
+        then: "setSwitch with powerSwitch=0 was sent (off() was called)"
+        def req = testParent.allRequests.find { it.method == "setSwitch" }
+        req != null
+        req.data.powerSwitch == 0
+
+        and: "no setLevel API call was made (level 1 must NOT be sent)"
+        testParent.allRequests.findAll { it.method == "setLevel" }.size() == 0
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #6: speed="off" when powerSwitch=0
     // -------------------------------------------------------------------------
