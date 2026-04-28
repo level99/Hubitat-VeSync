@@ -810,6 +810,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} Light / " + dtype;
                             equip2.name = device.deviceName + " Light";
                             equip2.label = device.deviceName + " Light";
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip2.updateDataValue("deviceType", device.deviceType);
                         }
 
                         if (equip1 == null) {
@@ -832,6 +834,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "300S") {
@@ -854,6 +858,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "400S") {
@@ -876,6 +882,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "600S") {
@@ -898,6 +906,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "V200S") {
@@ -920,6 +930,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "V601S") {
@@ -942,6 +954,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "V100S") {
@@ -964,6 +978,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "A601S") {
@@ -986,6 +1002,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "O451S") {
@@ -1008,6 +1026,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "A602S") {
@@ -1030,6 +1050,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "D301S") {
@@ -1052,6 +1074,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "TOWERFAN") {
@@ -1074,6 +1098,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "PEDESTALFAN") {
@@ -1096,6 +1122,8 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "GENERIC") {
@@ -1119,6 +1147,8 @@ private Boolean getDevices() {
                                 logDebug "Updating ${device.deviceName} / " + dtype;
                                 equip1.name = device.deviceName;
                                 equip1.label = device.deviceName;
+                                // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                                equip1.updateDataValue("deviceType", device.deviceType);
                             }
                         } else {
                             logInfo "Skipping unsupported device type: ${device.deviceType} (${device.deviceName}) -- not a Levoit air purifier or humidifier. If this is a Levoit device, please file a new-device-support issue."
@@ -1128,9 +1158,9 @@ private Boolean getDevices() {
 
                 state.deviceList = newList
                 runIn(5 * (int)settings.refreshInterval, "timeOutLevoit")
-
-                // Delay before first device update to ensure connection pool is stable
-                runIn(10, "updateDevices")
+                // Removed v2.2 — schedule()-based cron from setupPollSchedule() handles initial
+                // poll within 30s of installed/updated; runIn(10, "updateDevices") was redundant
+                // and produced a duplicate heartbeat event on first install.
                 resultHolder[0] = true
             }
         }

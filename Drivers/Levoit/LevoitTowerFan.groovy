@@ -369,7 +369,6 @@ def update(status){
 // 2-arg variant -- REQUIRED (Bug Pattern #1); parent always calls with two args.
 // nightLight parameter is ignored -- Tower Fan has no night-light hardware.
 def update(status, nightLight){
-    ensureDebugWatchdog()
     logDebug "update() from parent (2-arg, nightLight ignored -- Tower Fan has no nightlight)"
     applyStatus(status)
     return true
@@ -378,6 +377,10 @@ def update(status, nightLight){
 // ---------- applyStatus ----------
 def applyStatus(status){
     logDebug "applyStatus()"
+
+    // BP16 watchdog: auto-disable debugOutput after 30 min even across hub reboots.
+    // Placed here so all three update() entry points (0-arg, 1-arg, 2-arg) trigger it.
+    ensureDebugWatchdog()
 
     // One-time pref seed: heal descriptionTextEnable=true default for users migrated
     // from older Type without Save (forward-compat -- Bug Pattern #12)

@@ -274,7 +274,6 @@ def update(status){
 
 // 2-arg parent callback — REQUIRED (BP#1); parent always calls with two args
 def update(status, nightLight){
-    ensureDebugWatchdog()
     logDebug "update() from parent (2-arg, nightLight ignored)"
     applyStatus(status)
     return true
@@ -283,6 +282,10 @@ def update(status, nightLight){
 // ---------- applyStatus ----------
 def applyStatus(status){
     logDebug "applyStatus()"
+
+    // BP16 watchdog: auto-disable debugOutput after 30 min even across hub reboots.
+    // Placed here so all three update() entry points (0-arg, 1-arg, 2-arg) trigger it.
+    ensureDebugWatchdog()
 
     // One-time pref seed: heal descriptionTextEnable=true default for users migrated
     // from older Type without Save (forward-compat — BP#12)

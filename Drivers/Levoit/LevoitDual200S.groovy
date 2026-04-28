@@ -355,7 +355,6 @@ def update(status){
 // 2-arg parent callback -- REQUIRED (BP#1); parent always calls with two args
 // nightLight parameter accepted but ignored -- Dual 200S nightlight command is not exposed
 def update(status, nightLight){
-    ensureDebugWatchdog()
     logDebug "update() from parent (2-arg, nightLight ignored -- Dual 200S has no nightlight command)"
     applyStatus(status)
     return true
@@ -364,6 +363,10 @@ def update(status, nightLight){
 // ---------- applyStatus ----------
 def applyStatus(status){
     logDebug "applyStatus()"
+
+    // BP16 watchdog: auto-disable debugOutput after 30 min even across hub reboots.
+    // Placed here so all three update() entry points (0-arg, 1-arg, 2-arg) trigger it.
+    ensureDebugWatchdog()
 
     // One-time pref seed: heal descriptionTextEnable=true default for users migrated
     // from older Type without Save (forward-compat -- BP#12)
@@ -451,11 +454,9 @@ def applyStatus(status){
     device.sendEvent(name:"waterLacks", value: waterLacksStr)
 
     // ---- Humidity high indicator ----
-    // Not exposed as a primary attribute but used for info tile context.
-    // (Classic 300S does expose this; we omit it from Dual 200S as it's not
-    // in the primary feature set. Add a humidityHigh attribute if community requests it.)
-    def humHigh = r.humidity_high
-    boolean humHighBool = (humHigh instanceof Boolean) ? humHigh : ((humHigh as Integer) == 1)
+    // Not exposed as a primary attribute (Classic 300S does expose this; we omit it from
+    // Dual 200S as it's not in the primary feature set — add a humidityHigh attribute
+    // if community requests it).
 
     // ---- Auto-stop reached ----
     def autoStopReach = r.automatic_stop_reach_target

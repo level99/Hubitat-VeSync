@@ -623,6 +623,8 @@ def probeNightLight(){
     // night_light_brightness is the canonical pyvesync field name for this model class.
     def resp = hubBypass("setNightLightBrightness", [night_light_brightness: 50], "probeNightLight")
     // Probe response handler: always log at INFO regardless of settings (diagnostic intent).
+    // Direct log.info (not logInfo) is intentional and acceptable here: child drivers don't
+    // handle accountID/token, so bypassing sanitize() carries no credential-exposure risk.
     // The inner code is the key signal -- 0 = device accepted, non-zero = device rejected.
     def innerCode = resp?.data?.result?.code
     if (innerCode == null) {
@@ -693,7 +695,6 @@ def update(status){
 
 // 2-arg parent callback -- REQUIRED (BP#1); parent always calls with two args
 def update(status, nightLight){
-    ensureDebugWatchdog()
     logDebug "update() from parent (2-arg, nightLight ignored -- 450S has no nightlight)"
     applyStatus(status)
     return true
@@ -702,6 +703,10 @@ def update(status, nightLight){
 // ---------- applyStatus ----------
 def applyStatus(status){
     logDebug "applyStatus()"
+
+    // BP16 watchdog: auto-disable debugOutput after 30 min even across hub reboots.
+    // Placed here so all three update() entry points (0-arg, 1-arg, 2-arg) trigger it.
+    ensureDebugWatchdog()
 
     // One-time pref seed: heal descriptionTextEnable=true default for users migrated
     // from older Type without Save (forward-compat -- BP#12)
