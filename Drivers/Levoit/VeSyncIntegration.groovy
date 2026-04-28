@@ -57,6 +57,17 @@ SOFTWARE.
 //                    update(status, nightLight) (or update(status) for Core200S Light).
 //                  NOTE: state.debugEnabledAt is cleared by state.clear() in
 //                  forceReinitialize(), so a force-reinit resets the 30-min clock.
+// 2026-04-27: v2.2+ Bug fix -- setupPollSchedule() invalid Quartz cron for intervals >= 60s.
+//                  The seconds-field cron "0/N * * * * ?" requires N < 60; for N >= 60
+//                  Hubitat's Quartz scheduler rejects the expression silently and the
+//                  poll cycle never arms. All README-recommended values >= 60s (60, 120,
+//                  300) were broken. Fixed by branching on interval magnitude:
+//                  - interval < 60  => "0/${interval} * * * * ?" (seconds-resolution, unchanged)
+//                  - interval >= 60 => "0 */${interval/60} * * * ?" (minutes-resolution)
+//                  Non-multiples of 60 (e.g. 90s) fire at floor(90/60)=1 min and emit
+//                  a WARN so the user can correct. Recommended values (30/60/120/300)
+//                  all divide evenly. Maintainer live-verify was on default 30s (< 60),
+//                  so the breakage was not caught before release. (PR #4, Gemini review.)
 // 2026-04-27: v2.2+ Hub-reboot poll-chain recovery (Bug Pattern #14).
 //                  - Replaced recursive runIn() chain with schedule()-based cron job.
 //                    schedule() persists across hub reboots; runIn() does not, causing
@@ -289,8 +300,16 @@ def initialize() {
  * registered for updateDevices -- this is the migration step that kills the legacy
  * runIn-based chain on pre-v2.2 installs.
  *
- * Cron syntax: "0/N * * * * ?" -- every N seconds (Hubitat quartz-cron subset).
+ * Cron syntax depends on interval magnitude (Quartz seconds field range is 0-59;
+ * the seconds-form increment must be less than 60):
+ *   interval < 60  -> seconds-resolution form (every N seconds in the seconds field)
+ *   interval >= 60 -> minutes-resolution form (every N minutes in the minutes field,
+ *                     where N = interval / 60).
+ *                     Non-multiples of 60 (e.g. 90s) fire every floor(90/60)=1 min;
+ *                     a WARN is emitted so the user can correct to a clean multiple.
+ *                     Recommended values: 30, 60, 120, 300 (all divide evenly).
  * Minimum granularity is 1 second; any interval < 1 is clamped to 1.
+ * See the method body below for the literal cron expressions.
  *
  * state.scheduleVersion is set to "2.2" after arming so ensurePollWatchdog()
  * can distinguish schedule()-armed installs from legacy runIn()-only installs.
@@ -301,9 +320,21 @@ def initialize() {
 private setupPollSchedule() {
     Integer interval = Math.max(1, (settings?.refreshInterval ?: 30) as Integer)
     unschedule("updateDevices")
-    schedule("0/${interval} * * * * ?", "updateDevices")
+    String cron
+    if (interval < 60) {
+        cron = "0/${interval} * * * * ?"
+    } else {
+        Integer minutes = (int)(interval / 60)
+        if (interval % 60 != 0) {
+            logWarn "VeSync Integration: refreshInterval ${interval}s is not a multiple of 60. " +
+                    "Cron will fire every ${minutes} minute(s) (~${minutes * 60}s) instead. " +
+                    "Set interval to 60, 120, or 300 for exact timing."
+        }
+        cron = "0 */${minutes} * * * ?"
+    }
+    schedule(cron, "updateDevices")
     state.scheduleVersion = "2.2"
-    logDebug "Poll schedule armed: every ${interval}s (schedule()-based, persists across reboots)"
+    logDebug "Poll schedule armed: every ${interval}s via cron '${cron}' (schedule()-based, persists across reboots)"
 }
 
 /**
@@ -1461,6 +1492,10 @@ def logDebug(msg) {
 
 def logError(msg) {
     log.error sanitize(msg)
+}
+
+def logWarn(msg) {
+    log.warn sanitize(msg)
 }
 
 // Auto-sanitize log messages so debug captures shared by users in community threads / GitHub

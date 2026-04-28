@@ -389,12 +389,24 @@ Critical:
 
 **Root cause:** the pre-v2.2 poll cycle used recursive `runIn()` — each `updateDevices()` call scheduled the next. When the hub reboots between two consecutive calls, the chain breaks permanently. `runIn()` jobs are not persisted across reboots; `schedule()` cron jobs are.
 
-**Fix (v2.2):**
+**Fix (v2.2 / v2.2+):**
 ```groovy
 private setupPollSchedule() {
     Integer interval = Math.max(1, (settings?.refreshInterval ?: 30) as Integer)
     unschedule("updateDevices")
-    schedule("0/${interval} * * * * ?", "updateDevices")
+    String cron
+    if (interval < 60) {
+        cron = "0/${interval} * * * * ?"
+    } else {
+        Integer minutes = (int)(interval / 60)
+        if (interval % 60 != 0) {
+            logWarn "VeSync Integration: refreshInterval ${interval}s is not a multiple of 60. " +
+                    "Cron will fire every ${minutes} minute(s) (~${minutes * 60}s) instead. " +
+                    "Set interval to 60, 120, or 300 for exact timing."
+        }
+        cron = "0 */${minutes} * * * ?"
+    }
+    schedule(cron, "updateDevices")
     state.scheduleVersion = "2.2"
 }
 private ensurePollWatchdog() {
@@ -405,11 +417,17 @@ private ensurePollWatchdog() {
 }
 ```
 
+**Cron-syntax gotcha (PR #4, Gemini review — BLOCKING if wrong):** Quartz cron's seconds field has range 0-59. `"0/N * * * * ?"` is only valid for `N < 60`. For `N >= 60` (e.g. the README-recommended 60s, 120s, 300s), Hubitat's Quartz scheduler silently rejects the expression and the poll cycle never arms. The fix branches by threshold:
+- `interval < 60` → `"0/${interval} * * * * ?"` (seconds-resolution)
+- `interval >= 60` → `"0 */${interval/60} * * * ?"` (minutes-resolution)
+
+Non-multiples of 60 (e.g. 90s) floor-divide to the next lower minute and emit a `logWarn` (sanitize-routed, same as `logError`). Recommended values (30, 60, 120, 300) all divide evenly — no warn for those. **Flag any diff that reverts to the bare `"0/${interval} * * * * ?"` form without a < 60 guard — it is BLOCKING for the majority of deployed users who follow the README.**
+
 `ensurePollWatchdog()` is called at the top of `updateDevices()` (after BP12 pref-seed) AND at the top of `sendBypassRequest()` (before HTTP). `state.scheduleVersion != "2.2"` guard makes it idempotent. The `runIn((int)settings.refreshInterval, "updateDevices")` call inside `updateDevices()` must be removed — that was the broken chain.
 
 **Critical: do NOT add `subscribe(location, ...)` as a belt-and-braces layer.** `subscribe()` is app-only API (Bug Pattern #15) — it crashes in driver context with `MissingMethodException` at every poll tick. `schedule()` alone is sufficient; the platform persists `schedule()` cron jobs across reboots.
 
-**Live-verified 2026-04-27:** round-4 deploy on maintainer hub passed Phase 1-4 including reboot recovery; `schedule()`-based cron auto-resumed post-reboot with no user action.
+**Live-verified 2026-04-27:** round-4 deploy on maintainer hub passed Phase 1-4 including reboot recovery; `schedule()`-based cron auto-resumed post-reboot with no user action. Maintainer hub uses refreshInterval=30 (< 60, seconds-resolution path) — the >= 60 minutes-resolution path was not live-tested by the maintainer; it was caught by Gemini Code Assist review of PR #4.
 
 ### 15. Driver code uses app-only API (`subscribe`/`unsubscribe` to location events)
 

@@ -19,6 +19,11 @@ import support.TestDevice
  *                     (removed unused `result =` assignment)
  *   Pattern 2       — sendBypassRequest body.deviceRegion reads from getDeviceRegion()
  *                     (preference-backed, Elvis fallback "US" for backwards compat; v2.2)
+ *   Section I       — Bug Pattern #14 (schedule()-based poll-cycle recovery + cron-syntax fix):
+ *                     setupPollSchedule() seconds-cron (30s, 59s, null-default),
+ *                     minutes-cron (60s, 120s, 300s boundaries), non-multiple WARN (90s),
+ *                     ensurePollWatchdog() migration + idempotency,
+ *                     updateDevices() + sendBypassRequest() integration paths
  *   Section J       — EU region support (v2.2 preview):
  *                     getDeviceRegion() default, EU setting, getApiHost() routing,
  *                     updated() region-change clears token, no-op on same-region save,
@@ -1637,17 +1642,35 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     // cron) correctly arms persistent polling, self-heals pre-v2.2 installs,
     // and is idempotent once migrated.
     //
+    // Also covers the cron-syntax branching fix (PR #4, Gemini review):
+    // Quartz seconds-field range is 0-59; "0/N * * * * ?" is invalid for N >= 60.
+    // setupPollSchedule() branches:
+    //   interval < 60  => "0/${interval} * * * * ?" (seconds-resolution)
+    //   interval >= 60 => "0 */${interval/60} * * * ?" (minutes-resolution)
+    //
+    // I1  — 30s (seconds cron, golden path / default)
+    // I2  — null interval defaults to 30s seconds cron
+    // I3  — pre-v2.2 migration
+    // I4  — idempotency
+    // I5  — 60s boundary (first value needing minutes cron)
+    // I6  — 120s (minutes cron, 2-minute interval)
+    // I7  — updateDevices() integration
+    // I8  — sendBypassRequest() integration
+    // I9  — 300s (minutes cron, 5-minute interval, README-recommended max)
+    // I10 — 59s boundary (last valid seconds-resolution value)
+    // I11 — 90s (non-multiple of 60: fires at 1min with WARN)
+    //
     // NOTE: subscribe() and unsubscribe() are NOT used in the corrected BP14
     // implementation (they are app-only APIs; Bug Pattern #15). The HubitatSpec
     // base mock throws MissingMethodException for both. Any driver code that
     // accidentally re-introduces subscribe() calls will fail these specs.
     // =========================================================================
 
-    def "setupPollSchedule() arms cron with correct interval and sets scheduleVersion (I1 -- golden path)"() {
-        // I1: normal operation -- setupPollSchedule() must register a cron via schedule()
-        // with the configured refreshInterval and set state.scheduleVersion = "2.2".
-        given: "refreshInterval is 60 seconds"
-        settings.refreshInterval = 60
+    def "setupPollSchedule() arms cron with correct interval and sets scheduleVersion (I1 -- golden path 30s)"() {
+        // I1: normal operation -- setupPollSchedule() must register a seconds-resolution cron
+        // for the default 30s interval (< 60) and set state.scheduleVersion = "2.2".
+        given: "refreshInterval is 30 seconds (default, < 60 -- uses seconds-resolution cron)"
+        settings.refreshInterval = 30
         settings.descriptionTextEnable = false
 
         List<List<String>> scheduleCalls = []
@@ -1661,8 +1684,148 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         then: "schedule() was called with the correct cron and handler"
         scheduleCalls.size() == 1
-        scheduleCalls[0][0] == "0/60 * * * * ?"
+        scheduleCalls[0][0] == "0/30 * * * * ?"
         scheduleCalls[0][1] == "updateDevices"
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() uses minutes-resolution cron for interval == 60 (I5 -- 60s boundary)"() {
+        // I5: seconds-field range is 0-59; "0/60 * * * * ?" is invalid Quartz cron.
+        // For interval >= 60 the driver must switch to minutes-resolution cron.
+        // 60s => "0 */1 * * * ?" (every 1 minute).
+        given: "refreshInterval is 60 seconds (boundary: first value requiring minutes cron)"
+        settings.refreshInterval = 60
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with minutes-resolution cron '0 */1 * * * ?'"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0 */1 * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "no WARN was emitted (60 is a clean multiple of 60)"
+        testLog.warns.isEmpty()
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() uses minutes-resolution cron for interval == 120 (I6 -- 2-minute interval)"() {
+        // I6: 120s => "0 */2 * * * ?" (every 2 minutes).
+        // Verifies that the minutes divisor is computed correctly for the 2-minute case.
+        given: "refreshInterval is 120 seconds"
+        settings.refreshInterval = 120
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with cron '0 */2 * * * ?'"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0 */2 * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "no WARN was emitted (120 is a clean multiple of 60)"
+        testLog.warns.isEmpty()
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() uses minutes-resolution cron for interval == 300 (I9 -- 5-minute interval)"() {
+        // I9: 300s => "0 */5 * * * ?" (every 5 minutes).
+        // README recommends 300s for low-traffic installs -- must produce valid cron.
+        given: "refreshInterval is 300 seconds (README-recommended maximum)"
+        settings.refreshInterval = 300
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with cron '0 */5 * * * ?'"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0 */5 * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "no WARN was emitted (300 is a clean multiple of 60)"
+        testLog.warns.isEmpty()
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() uses seconds-resolution cron for interval == 59 (I10 -- boundary below 60)"() {
+        // I10: 59s is the last value in the valid seconds-field range.
+        // Must use "0/59 * * * * ?" (seconds-resolution), not minutes cron.
+        given: "refreshInterval is 59 seconds (boundary: last value using seconds cron)"
+        settings.refreshInterval = 59
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with seconds-resolution cron '0/59 * * * * ?'"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0/59 * * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() emits WARN for non-multiple-of-60 interval >= 60 (I11 -- imprecise interval)"() {
+        // I11: interval 90s is not a multiple of 60. Driver must still arm a valid cron
+        // (firing every floor(90/60)=1 minute) but emit a WARN so the user can correct it.
+        // This prevents silent polling at a different rate than the user configured.
+        // log.warn() routes through HubitatSpec's TestLog.warns -- no special mock needed.
+        given: "refreshInterval is 90 seconds (non-multiple of 60)"
+        settings.refreshInterval = 90
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was still called with floor(90/60)=1 minute cron"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0 */1 * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "a WARN was emitted mentioning the configured interval and the actual firing rate"
+        testLog.warns.any { it.contains("90") && it.contains("1 minute") }
 
         and: "state.scheduleVersion is set to '2.2'"
         state.scheduleVersion == "2.2"

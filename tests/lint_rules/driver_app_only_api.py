@@ -17,6 +17,12 @@ Scope:
 
 Comment filter:
   - Lines that (after stripping leading whitespace) begin with `//` are skipped.
+  - Lines that (after stripping leading whitespace) begin with `*` are skipped.
+    This handles javadoc-continuation lines (`* NOTE: subscribe(...)`) that
+    groovy_lite.strip_block_comments may leave behind when the block comment
+    contains a literal `*/` sequence (e.g. inside a cron string in a javadoc
+    example). There is no legitimate Groovy driver pattern that leads a live
+    code line with `*`, so the false-positive risk of this guard is zero.
   - Multi-line block comments /* ... */ are NOT deeply parsed -- the groovy_lite
     clean_source helper already strips them from cleaned_lines. RULE23 operates
     on cleaned_lines so block-comment false-positives are avoided automatically.
@@ -94,11 +100,16 @@ def check_rule23_driver_app_only_api(path, raw_lines, cleaned_lines, raw_text, c
         return findings
 
     for i, cleaned_line in enumerate(cleaned_lines, 1):
-        # Skip lines that are purely comments (// ...) after stripping leading whitespace.
+        # Skip comment lines after stripping leading whitespace:
+        #   '//' -- standard Groovy line comment
+        #   '*'  -- javadoc-continuation line left behind when groovy_lite's block-comment
+        #           stripper encounters a literal '*/' sequence inside a cron string in a
+        #           javadoc example and prematurely closes the block comment. No live
+        #           Groovy driver code leads with '*', so this guard has zero false positives.
         # Block comments are already stripped by groovy_lite.clean_source into spaces,
-        # so cleaned_line won't contain /* ... */ content.
+        # so cleaned_line won't contain /* ... */ content under normal conditions.
         stripped = cleaned_line.lstrip()
-        if stripped.startswith('//'):
+        if stripped.startswith('//') or stripped.startswith('*'):
             continue
 
         for pattern, api_name, fix_msg in APP_ONLY_PATTERNS:
