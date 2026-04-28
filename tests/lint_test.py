@@ -67,6 +67,7 @@ def rule_ids(findings):
 # Import all rules at module level (avoids class-binding pitfalls)
 # ---------------------------------------------------------------------------
 
+from lint_rules.groovy_javadoc_terminator import check_rule26_javadoc_terminator
 from lint_rules.bug_patterns import (
     check_bp1_missing_2arg_update,
     check_bp2_hardcoded_purifier_method,
@@ -671,6 +672,152 @@ class TestRule20ReentranceGuards:
         assert any(f['rule_id'] == 'RULE20_reentrance_guard_unclosed' for f in findings)
         assert all(f['severity'] == 'WARN'
                    for f in findings if f['rule_id'] == 'RULE20_reentrance_guard_unclosed')
+
+
+# ---------------------------------------------------------------------------
+# Rule 26 — Javadoc terminator detector
+# ---------------------------------------------------------------------------
+
+class TestRule26JavadocTerminator:
+    """
+    RULE26: detect `*/` embedded inside Groovy `/**` Javadoc blocks.
+
+    An embedded `*/` causes Groovy to close the block comment prematurely.
+    Everything between the embedded `*/` and the intended close is then
+    parsed as live code, producing a compile error. This bit the codebase
+    twice (v2.1 fe4d723 and v2.2 PR#4) before the rule was added.
+
+    Note: RULE26 operates on raw_text (NOT cleaned_lines) because
+    groovy_lite.clean_source already strips block comments. The run_rule()
+    helper passes raw_text correctly via its internal clean_source call.
+    """
+
+    # --- PASS cases ---
+
+    CLEAN_JAVADOC = textwrap.dedent("""\
+        /**
+         * Sets the purifier mode.
+         * @param mode one of: auto, sleep, manual
+         * @return void
+         */
+        def setMode(String mode) { }
+    """)
+
+    EMPTY_JAVADOC = textwrap.dedent("""\
+        /**/
+        def noop() { }
+    """)
+
+    LINE_COMMENT_WITH_STAR_SLASH = textwrap.dedent("""\
+        // This line has */ in a line comment — not inside a block comment
+        def someMethod() { return 42 }
+    """)
+
+    STRING_LITERAL_WITH_STAR_SLASH = textwrap.dedent("""\
+        def getCron() {
+            return "0 */5 * * * ?"
+        }
+    """)
+
+    # --- FAIL cases ---
+
+    # v2.1 reproducer: model-code list with */ inside a Javadoc block
+    V21_REPRODUCER = textwrap.dedent("""\
+        /**
+         * Supported models: LUH-O451S-*/LUH-O601S-*
+         * Use this driver for either variant.
+         */
+        def applyStatus(status) { }
+    """)
+
+    # v2.2 reproducer: cron string with */ inside a Javadoc block
+    V22_REPRODUCER = textwrap.dedent("""\
+        /**
+         * Sets up the poll schedule. Example cron: "0 */${minutes} * * * ?"
+         * @param minutes poll interval in minutes
+         */
+        def setupPollSchedule(int minutes) { }
+    """)
+
+    # Nested /* inner */ inside /** ... */ — inner */ closes the outer block
+    NESTED_BLOCK_INSIDE_JAVADOC = textwrap.dedent("""\
+        /**
+         * Main doc.
+         * /* inner block comment */
+         * More doc that now parses as live code.
+         */
+        def foo() { }
+    """)
+
+    def test_clean_javadoc_passes(self):
+        findings = run_rule(check_rule26_javadoc_terminator, self.CLEAN_JAVADOC)
+        assert findings == [], f"Expected no findings on clean Javadoc, got: {findings}"
+
+    def test_empty_javadoc_passes(self):
+        # /**/  — open immediately followed by close; no embedded */ inside
+        findings = run_rule(check_rule26_javadoc_terminator, self.EMPTY_JAVADOC)
+        assert findings == [], f"Expected no findings on empty /**/, got: {findings}"
+
+    def test_line_comment_with_star_slash_passes(self):
+        # */ in a // line comment — not inside a block comment; should not trigger
+        findings = run_rule(
+            check_rule26_javadoc_terminator, self.LINE_COMMENT_WITH_STAR_SLASH
+        )
+        assert findings == [], (
+            f"Expected no findings for */ in line comment, got: {findings}"
+        )
+
+    def test_string_literal_with_star_slash_passes(self):
+        # */ inside a string literal in live code — no Javadoc block present; PASS
+        findings = run_rule(
+            check_rule26_javadoc_terminator, self.STRING_LITERAL_WITH_STAR_SLASH
+        )
+        assert findings == [], (
+            f"Expected no findings for */ in string literal outside Javadoc, got: {findings}"
+        )
+
+    def test_v21_reproducer_fails(self):
+        # LUH-O451S-*/LUH-O601S-* inside Javadoc — the */ after LUH-O451S-
+        # terminates the block; rest of the block content is live code.
+        findings = run_rule(check_rule26_javadoc_terminator, self.V21_REPRODUCER)
+        rule26 = [f for f in findings if f['rule_id'] == 'RULE26_javadoc_terminator']
+        assert rule26, "Expected RULE26 finding on v2.1 reproducer"
+        assert all(f['severity'] == 'FAIL' for f in rule26)
+
+    def test_v22_reproducer_fails(self):
+        # "0 */${minutes} * * * ?" inside Javadoc — the */ in the cron string
+        # terminates the block early.
+        findings = run_rule(check_rule26_javadoc_terminator, self.V22_REPRODUCER)
+        rule26 = [f for f in findings if f['rule_id'] == 'RULE26_javadoc_terminator']
+        assert rule26, "Expected RULE26 finding on v2.2 reproducer"
+        assert all(f['severity'] == 'FAIL' for f in rule26)
+
+    def test_nested_block_inside_javadoc_fails(self):
+        # /* inner */ inside /** ... */ — the inner */ terminates the outer block
+        findings = run_rule(
+            check_rule26_javadoc_terminator, self.NESTED_BLOCK_INSIDE_JAVADOC
+        )
+        rule26 = [f for f in findings if f['rule_id'] == 'RULE26_javadoc_terminator']
+        assert rule26, "Expected RULE26 finding on nested /* */ inside /** */"
+        assert all(f['severity'] == 'FAIL' for f in rule26)
+
+    def test_non_groovy_file_skipped(self):
+        # RULE26 only checks .groovy files; .py files should produce no findings
+        findings = run_rule(
+            check_rule26_javadoc_terminator,
+            self.V21_REPRODUCER,
+            fname="some_script.py",
+        )
+        assert findings == [], (
+            "RULE26 should not check non-.groovy files"
+        )
+
+    def test_finding_includes_line_number(self):
+        # The embedded */ in the v2.1 reproducer is on line 2; verify lineno is set
+        findings = run_rule(check_rule26_javadoc_terminator, self.V21_REPRODUCER)
+        rule26 = [f for f in findings if f['rule_id'] == 'RULE26_javadoc_terminator']
+        assert rule26, "Expected at least one RULE26 finding"
+        assert all(f['line'] > 0 for f in rule26), "line number must be positive"
 
 
 # ---------------------------------------------------------------------------

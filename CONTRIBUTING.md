@@ -55,6 +55,14 @@ Hubitat-VeSync/
     └── commands/cut-release.md            ← /cut-release slash command spec
 ```
 
+### Note on `Notification Tile.groovy`
+
+This driver exists in `Drivers/Levoit/` but is **intentionally not listed in `levoitManifest.json`**. It is a generic dashboard-tile companion utility inherited from upstream [thebearmay/hubitat](https://github.com/thebearmay/hubitat). Users add it as a virtual device manually (Hubitat UI → Devices → Add Virtual Device → select "Notification Tile"). HPM "Install" of the VeSync package would not give the user a working tile device — the driver alone doesn't auto-create one — so a manifest entry would be misleading rather than helpful.
+
+The lint rule RULE18 (manifest ↔ files reconciliation) would normally flag this as a gap; the `manifest_excluded_files` entry in `tests/lint_config.yaml` records it as an intentional exception with an explanatory comment. If you see RULE18 pass cleanly for `Notification Tile.groovy`, that is expected behavior — not a lint oversight.
+
+Do not add a manifest entry for this driver. If you ship a new driver that genuinely belongs in HPM (i.e., users install it as a child device via device discovery, not manually), it does need a manifest entry — see step 8 of "Adding a new device driver" above.
+
 ### Architecture in one paragraph
 
 A single **parent driver** (`VeSyncIntegration.groovy`) holds the VeSync account credentials, logs in to VeSync's cloud, discovers devices, schedules periodic polling, and routes API calls. **Child drivers** are per-model (one for Core 200S, one for Vital 200S, etc.). Each child exposes Hubitat capabilities (`Switch`, `FanControl`, etc.) and parses status responses. The parent calls `child.update(status, nightLight)` on every poll cycle. All API traffic uses VeSync's `bypassV2` endpoint with model-specific method names + payloads.

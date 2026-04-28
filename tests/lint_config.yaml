@@ -93,6 +93,11 @@ pii_token_allowlist:
 # Filenames (basename only) that intentionally have no manifest entry.
 
 manifest_excluded_files:
+  # Notification Tile is a generic-utility virtual driver inherited from
+  # upstream thebearmay/hubitat. Users instantiate it manually as a virtual
+  # device — HPM "Install" wouldn't give a usable device since the driver
+  # alone doesn't auto-create one. Intentional exception, not a packaging gap.
+  # See CONTRIBUTING.md "Codebase orientation" for the full rationale.
   - "Notification Tile.groovy"
 
 
