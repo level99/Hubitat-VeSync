@@ -26,6 +26,34 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-27: v2.2.1 Bug fixes.
+//                  - Bug 1: safeAddChildDevice() helper wraps every addChildDevice()
+//                    call in getDevices() with UnknownDeviceTypeException catch.
+//                    A missing optional driver no longer crashes the entire discovery
+//                    loop; subsequent devices continue to be added. INFO log includes
+//                    an install URL so the user knows exactly which driver to install.
+//                    Core 200S Light specifically: a missing Light driver is treated as
+//                    non-fatal — the main Core 200S purifier is still added.
+//                  - Bug 2: resp?.msg -> resp?.hasProperty('msg') ? resp.msg : ''
+//                    in updateDevices() error path. resp?.msg only null-guards against
+//                    a null resp, but HttpResponseDecorator has no 'msg' property so
+//                    the access still throws MissingPropertyException when resp is
+//                    non-null. hasProperty() check eliminates hourly ERROR bursts.
+//                  - Bug 3: Removed stale "reboot your hub after driver code changes"
+//                    preferences banner. Advice was relevant on early Hubitat platforms
+//                    but obsolete on current versions (2.3+). The connection-pool-shutdown
+//                    retry logic added in v2.0 handles transient HTTP failures
+//                    transparently without a hub reboot.
+//                  - Bug 4: Missing-driver INFO log dedup. When N devices share a missing
+//                    driver, safeAddChildDevice() now logs exactly once per unique driver
+//                    per Resync Equipment call (not once per device). state.warnedMissingDrivers
+//                    Set is initialized before the device-add loop and removed after.
+//                  - Bug 5: Heartbeat log spam eliminated. "syncing" intermediate sendEvent
+//                    removed (transient — emitted immediately before "synced" on every
+//                    cycle, carries no distinct signal). "synced" sendEvent now uses
+//                    isStateChange + descriptionText only on transitions (e.g. recovery
+//                    from "not synced"); steady-state cycles update the attribute silently.
+//                    ~240 INFO lines/hour eliminated on a healthy hub.
 // 2026-04-27: v2.2+ EU region support (preview). Added deviceRegion preference (US/EU).
 //                  - New getDeviceRegion() getter reads settings?.deviceRegion ?: "US".
 //                  - New getApiHost() helper: EU -> smartapi.vesync.eu, US -> smartapi.vesync.com.
@@ -195,7 +223,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson (original); Dan Cox (fork: Vital 200S, Superior 6000S, parent fixes); elfege (contributor)",
         description: "Integrates Levoit air purifiers and humidifiers with Hubitat Elevation via VeSync cloud API",
-        version: "2.2",
+        version: "2.2.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"
@@ -212,7 +240,6 @@ metadata {
         input("descriptionTextEnable", "bool", title: "Enable descriptive (info-level) logging?", defaultValue: true, required: false)
         input("debugOutput", "bool", title: "Enable debug logging?", defaultValue: false, required: false)
         input("verboseDebug", "bool", title: "Verbose API response logging? (Logs full response body of every VeSync API call. Useful for diagnosing 'VeSync changed an API field' issues. Sanitized automatically. Heavy on log buffer — leave off unless triaging.)", defaultValue: false, required: false)
-        input("note", "hidden", title: "<b>IMPORTANT:</b> After saving driver code changes, reboot your hub for reliable HTTP operation. Connection pool errors may occur until reboot.")
 
         command "resyncEquipment"
         command "forceReinitialize", [[name: "Force reinitialization (use if connection errors persist after driver update)"]]
@@ -530,8 +557,8 @@ def Boolean updateDevices()
     // fix. Adding a runIn() back here would create a second concurrent chain on top of the
     // schedule() cron and is incorrect.
 
-    sendEvent(name: "heartbeat", value: "syncing", isStateChange: true, descriptionText: "Waiting on update from VeSync servers.")
-    logInfo "Heartbeat: syncing"
+    // "syncing" is a transient intermediate state immediately followed by "synced"
+    // or an error — emitting it every cycle is pure log noise. Dropped in v2.2.1.
 
     for (e in state.deviceList) {
 
@@ -568,7 +595,7 @@ def Boolean updateDevices()
                 {
                     def status = resp.data.result
                     if (status == null)
-                        logError "No status returned from ${method}: ${resp?.msg}"
+                        logError "No status returned from ${method}: ${resp?.hasProperty('msg') ? resp.msg : ''}"
                     else
                         dev.update(status, getChildDevice(dni+"-nl"))
                 }
@@ -580,8 +607,27 @@ def Boolean updateDevices()
         }
     }
 
-    sendEvent(name: "heartbeat", value: "synced", isStateChange: true, descriptionText: "Update received from VeSync servers.")
-    logInfo "Heartbeat: synced"
+    // Only emit descriptionText when the heartbeat transitions to a new value.
+    // Steady-state "synced→synced" cycles update the attribute silently so
+    // Rule Machine / dashboards still read it, but no INFO log is generated.
+    // The recovery case ("not synced" → "synced") does emit descriptionText so the
+    // user can see when the stall cleared. ~240 INFO lines/hour eliminated at rest.
+    String prevHeartbeat = device.currentValue("heartbeat")
+    boolean heartbeatChanged = (prevHeartbeat != "synced")
+    // Distinguish first-run (null) from recovery (was a non-"synced" value) so the
+    // event history doesn't say "recovered from unknown" on every fresh install.
+    String descText = null
+    if (heartbeatChanged) {
+        descText = (prevHeartbeat == null)
+            ? "Heartbeat: synced"
+            : "Heartbeat: synced (recovered from ${prevHeartbeat})"
+    }
+    // Note: no explicit logInfo() call here. sendEvent with a non-null descriptionText
+    // auto-logs at INFO when descriptionTextEnable=true (standard Hubitat platform
+    // behavior); calling logInfo() in addition would produce a duplicate INFO line on
+    // every heartbeat transition. This bypasses the parent's sanitize() routing --
+    // safe because descText is statically constructed and contains no interpolated PII.
+    sendEvent(name: "heartbeat", value: "synced", isStateChange: heartbeatChanged, descriptionText: descText)
 
     // Schedule a call to the timeout method. This will cancel any outstanding
     // schedules.
@@ -814,7 +860,13 @@ private Boolean getDevices() {
                     }
                 }
 
-                for (device in resp.data.result.list) {
+                // Dedup missing-driver INFO logs: track which driver names have already
+                // been warned about this Resync so N devices missing the same driver
+                // produce exactly 1 actionable message (not N). Cleared in finally so
+                // cleanup runs on both normal exit and any unhandled exception in the loop.
+                state.warnedMissingDrivers = [] as Set
+
+                try { for (device in resp.data.result.list) {
                     def dtype = deviceType(device.deviceType);
                     def equip1 = getChildDevice(device.cid)
 
@@ -822,20 +874,27 @@ private Boolean getDevices() {
                         def equip2 = getChildDevice(device.cid+"-nl")
 
                         if (equip2 == null) {
-                            equip2 = addChildDevice("Levoit Core200S Air Purifier Light", device.cid+"-nl", [name: device.deviceName + " Light", label: device.deviceName + " Light", isComponent: false]);
-                            // Defensive validation: addChildDevice may return a phantom handle if the DNI was
-                            // recently deleted and Hubitat's purge has not completed (platform race condition).
-                            def verifyLight = getChildDevice(device.cid + "-nl")
-                            if (verifyLight == null) {
-                                logError "addChildDevice for ${device.deviceName} Light (${device.cid}-nl) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
-                                continue
+                            // Note: a null return from safeAddChildDevice means the Light driver is not installed.
+                            // This is non-fatal for the 200S branch — we continue to add the main purifier device.
+                            equip2 = safeAddChildDevice("Levoit Core200S Air Purifier Light", device.cid+"-nl",
+                                [name: device.deviceName + " Light", label: device.deviceName + " Light", isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore200S%20Light.groovy")
+                            if (equip2 != null) {
+                                // Defensive validation: addChildDevice may return a phantom handle if the DNI was
+                                // recently deleted and Hubitat's purge has not completed (platform race condition).
+                                def verifyLight = getChildDevice(device.cid + "-nl")
+                                if (verifyLight == null) {
+                                    logError "addChildDevice for ${device.deviceName} Light (${device.cid}-nl) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                    // Non-fatal: continue to add the main Core 200S device below.
+                                } else {
+                                    equip2 = verifyLight
+                                    equip2.updateDataValue("configModule", device.configModule);
+                                    equip2.updateDataValue("cid", device.cid);
+                                    equip2.updateDataValue("uuid", device.uuid);
+                                    equip2.updateDataValue("deviceType", device.deviceType);
+                                    logInfo "Added child device: ${device.deviceName} Light (Levoit Core200S Air Purifier Light)"
+                                }
                             }
-                            equip2 = verifyLight
-                            equip2.updateDataValue("configModule", device.configModule);
-                            equip2.updateDataValue("cid", device.cid);
-                            equip2.updateDataValue("uuid", device.uuid);
-                            equip2.updateDataValue("deviceType", device.deviceType);
-                            logInfo "Added child device: ${device.deviceName} Light (Levoit Core200S Air Purifier Light)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} Light / " + dtype;
@@ -847,7 +906,10 @@ private Boolean getDevices() {
 
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Core200S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit Core200S Air Purifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore200S.groovy")
+                            if (equip1 == null) continue
                             // Defensive validation: confirm the device is queryable (guards against DNI-purge phantom)
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
@@ -872,7 +934,10 @@ private Boolean getDevices() {
                     else if (dtype == "300S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Core300S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit Core300S Air Purifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore300S.groovy")
+                            if (equip1 == null) continue
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
                                 logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -896,7 +961,10 @@ private Boolean getDevices() {
                     else if (dtype == "400S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Core400S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit Core400S Air Purifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore400S.groovy")
+                            if (equip1 == null) continue
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
                                 logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -920,7 +988,10 @@ private Boolean getDevices() {
                     else if (dtype == "600S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Core600S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit Core600S Air Purifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore600S.groovy")
+                            if (equip1 == null) continue
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
                                 logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -944,7 +1015,10 @@ private Boolean getDevices() {
                     else if (dtype == "V200S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Vital 200S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit Vital 200S Air Purifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitVital200S.groovy")
+                            if (equip1 == null) continue
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
                                 logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -968,7 +1042,10 @@ private Boolean getDevices() {
                     else if (dtype == "V601S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Superior 6000S Humidifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit Superior 6000S Humidifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitSuperior6000S.groovy")
+                            if (equip1 == null) continue
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
                                 logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -992,7 +1069,10 @@ private Boolean getDevices() {
                     else if (dtype == "V100S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Vital 100S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit Vital 100S Air Purifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitVital100S.groovy")
+                            if (equip1 == null) continue
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
                                 logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -1016,7 +1096,10 @@ private Boolean getDevices() {
                     else if (dtype == "A601S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Classic 300S Humidifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit Classic 300S Humidifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitClassic300S.groovy")
+                            if (equip1 == null) continue
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
                                 logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -1040,7 +1123,10 @@ private Boolean getDevices() {
                     else if (dtype == "O451S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit OasisMist 450S Humidifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit OasisMist 450S Humidifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitOasisMist450S.groovy")
+                            if (equip1 == null) continue
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
                                 logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -1064,7 +1150,10 @@ private Boolean getDevices() {
                     else if (dtype == "A602S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit LV600S Humidifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit LV600S Humidifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitLV600S.groovy")
+                            if (equip1 == null) continue
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
                                 logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -1088,7 +1177,10 @@ private Boolean getDevices() {
                     else if (dtype == "D301S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Dual 200S Humidifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit Dual 200S Humidifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitDual200S.groovy")
+                            if (equip1 == null) continue
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
                                 logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -1112,7 +1204,10 @@ private Boolean getDevices() {
                     else if (dtype == "TOWERFAN") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Tower Fan", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit Tower Fan", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitTowerFan.groovy")
+                            if (equip1 == null) continue
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
                                 logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -1136,7 +1231,10 @@ private Boolean getDevices() {
                     else if (dtype == "PEDESTALFAN") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Pedestal Fan", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            equip1 = safeAddChildDevice("Levoit Pedestal Fan", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitPedestalFan.groovy")
+                            if (equip1 == null) continue
                             def verify1 = getChildDevice(device.cid)
                             if (verify1 == null) {
                                 logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -1161,7 +1259,10 @@ private Boolean getDevices() {
                         if (isLevoitClimateDevice(device.deviceType)) {
                             if (equip1 == null) {
                                 logDebug "Adding ${device.deviceName} (unrecognized model ${device.deviceType} -- using Generic driver)"
-                                equip1 = addChildDevice("Levoit Generic Device", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                                equip1 = safeAddChildDevice("Levoit Generic Device", device.cid,
+                                    [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                    "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitGeneric.groovy")
+                                if (equip1 == null) continue
                                 def verify1 = getChildDevice(device.cid)
                                 if (verify1 == null) {
                                     logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
@@ -1185,6 +1286,11 @@ private Boolean getDevices() {
                             logInfo "Skipping unsupported device type: ${device.deviceType} (${device.deviceName}) -- not a Levoit air purifier or humidifier. If this is a Levoit device, please file a new-device-support issue."
                         }
                     }
+                } } finally {
+                    // Clean up the dedup set — it was only needed during the loop above.
+                    // Removing it from state avoids persisting a stale set on disk.
+                    // finally{} ensures cleanup runs even if the loop throws unexpectedly.
+                    state.remove('warnedMissingDrivers')
                 }
 
                 state.deviceList = newList
@@ -1467,6 +1573,46 @@ def getAccountID() {
  */
 private String getLocationTimeZone() {
     return location?.timeZone?.ID ?: DEFAULT_TIME_ZONE
+}
+
+/**
+ * Attempt to add a child device by driver name; return null and log an actionable INFO
+ * message (with install URL) if the driver is not installed, so the discovery loop can
+ * continue to the next device rather than crashing.
+ *
+ * This catches com.hubitat.app.exception.UnknownDeviceTypeException — the exception
+ * thrown by addChildDevice() when the named driver type has not been installed on the
+ * hub. Without this guard, a single missing optional driver kills the entire discovery
+ * loop for all subsequent devices.
+ *
+ * For the Core 200S Light companion specifically: the caller should treat a null return
+ * as a non-fatal skip (continue to add the main Core 200S device). For all other drivers
+ * a null return means the entire device cannot be managed and the caller should skip it.
+ *
+ * @param driverName  Hubitat driver type name (e.g. "Levoit Core200S Air Purifier")
+ * @param dni         Device Network Id to assign
+ * @param opts        Map of options (name, label, isComponent)
+ * @param installUrl  Raw GitHub URL for the driver file (shown in the INFO log)
+ * @return            The new child device, or null if the driver is not installed
+ */
+private safeAddChildDevice(String driverName, String dni, Map opts, String installUrl) {
+    try {
+        return addChildDevice(driverName, dni, opts)
+    } catch (com.hubitat.app.exception.UnknownDeviceTypeException ex) {
+        // Dedup: only log the first miss per driver per Resync Equipment invocation.
+        // state.warnedMissingDrivers is initialized at the top of the device-add loop
+        // in getDevices() and removed when the loop completes. Subsequent devices that
+        // need the same missing driver are silently skipped (still return null) so the
+        // user sees exactly one actionable message per missing driver, not one per device.
+        if (state.warnedMissingDrivers == null || !state.warnedMissingDrivers.contains(driverName)) {
+            logInfo "Driver '${driverName}' is not installed — skipping ${opts?.label ?: dni}. " +
+                "Add via HPM → Modify → 'Levoit Air Purifiers, Humidifiers, and Fans' → " +
+                "check '${driverName}' → Next. Or paste from ${installUrl}. " +
+                "Then click Resync Equipment again."
+            if (state.warnedMissingDrivers != null) state.warnedMissingDrivers.add(driverName)
+        }
+        return null
+    }
 }
 
 def MD5(s) {
