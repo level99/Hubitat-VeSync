@@ -607,8 +607,8 @@ def Boolean updateDevices()
         }
     }
 
-    // Only log (descriptionText + logInfo) when the heartbeat transitions to a new
-    // value. Steady-state "synced→synced" cycles update the attribute silently so
+    // Only emit descriptionText when the heartbeat transitions to a new value.
+    // Steady-state "synced→synced" cycles update the attribute silently so
     // Rule Machine / dashboards still read it, but no INFO log is generated.
     // The recovery case ("not synced" → "synced") does emit descriptionText so the
     // user can see when the stall cleared. ~240 INFO lines/hour eliminated at rest.
@@ -622,8 +622,12 @@ def Boolean updateDevices()
             ? "Heartbeat: synced"
             : "Heartbeat: synced (recovered from ${prevHeartbeat})"
     }
+    // Note: no explicit logInfo() call here. sendEvent with a non-null descriptionText
+    // auto-logs at INFO when descriptionTextEnable=true (standard Hubitat platform
+    // behavior); calling logInfo() in addition would produce a duplicate INFO line on
+    // every heartbeat transition. This bypasses the parent's sanitize() routing --
+    // safe because descText is statically constructed and contains no interpolated PII.
     sendEvent(name: "heartbeat", value: "synced", isStateChange: heartbeatChanged, descriptionText: descText)
-    if (heartbeatChanged) logInfo descText
 
     // Schedule a call to the timeout method. This will cancel any outstanding
     // schedules.

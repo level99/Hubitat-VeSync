@@ -2622,9 +2622,11 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     def "updateDevices() heartbeat descriptionText fires only on transition; steady-state is silent (M6)"() {
-        // M6: heartbeat log dedup. First updateDevices() call transitions heartbeat
-        // from null -> "synced" and logs INFO. Second call is steady-state synced->synced
-        // and must emit sendEvent WITHOUT descriptionText so Hubitat generates no INFO log.
+        // M6: heartbeat transition-gating. First updateDevices() call transitions heartbeat
+        // from null -> "synced" and sets descriptionText (Hubitat auto-logs it at INFO).
+        // Second call is steady-state synced->synced: descriptionText must be null so
+        // Hubitat generates no INFO log. No explicit logInfo() call in the driver (that
+        // would duplicate Hubitat's auto-log); testLog.infos carries no heartbeat entries.
         // The "syncing" intermediate event (dropped in v2.2.1) must not appear at all.
         given: "driver initialized with no prior heartbeat value and one device in the list"
         settings.refreshInterval = 30
@@ -2667,7 +2669,7 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         and: "isStateChange is false on the second call"
         hbEventsAfterSecond[1].isStateChange == false
 
-        and: "exactly one 'Heartbeat: synced' INFO log total -- steady-state is silent"
-        testLog.infos.count { it.contains("Heartbeat: synced") } == 1
+        and: "no explicit logInfo heartbeat entry -- driver relies on Hubitat auto-log from descriptionText, not logInfo()"
+        testLog.infos.count { it.contains("Heartbeat: synced") } == 0
     }
 }
