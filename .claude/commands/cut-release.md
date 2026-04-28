@@ -339,19 +339,29 @@ v<version> release prepared. Files staged-ready (uncommitted):
 
 Next steps for you:
   1. Review with: git diff
-  2. Commit (preview-before-publish: I'll draft the message when you ask)
-  3. Tag: git tag -a v<version> -m "<release subject>"
-  4. Push branch + tag: git push origin <branch> v<version>
+  2. Commit (preview-before-publish: ask for a message draft)
+  3. Push the release branch to origin: git push -u origin <branch>
+  4. Open PR <branch> -> main (preview-before-publish: ask for a body draft)
+  5. Iterate on PR review (Gemini auto-review + maintainer comments)
+  6. Squash-merge to main once review is clean
+  7. Tag the squash commit on main:
+       git checkout main && git pull
+       git tag -a v<version> -m "<release subject>"
+       git push origin v<version>
+  8. Publish the GitHub Release for the new tag (gh release create or via web UI)
+  9. Community-thread announce (Hubitat forum) with migration notes if applicable
 
 Note: TODO.md is gitignored, so even if it was updated it stays local-only.
 Don't try to git-add it.
 ```
 
-Stop. The user owns commit/tag/push under preview-before-publish.
+Stop. The user owns commit/push/PR/tag/release under preview-before-publish.
 
 ## Notes
 
-- This procedure does NOT push to remote, does NOT open a PR, does NOT update GitHub releases. Those are post-merge steps after maintainer review.
+- This procedure does NOT push to remote, does NOT open a PR, does NOT tag, does NOT update GitHub releases. Those happen across the steps above:
+  * Push branch and open PR are POST-CUT, PRE-MERGE (steps 3-5).
+  * Tag and GitHub Release are POST-MERGE (steps 7-8) -- tag the squash commit on main, NOT the release branch tip (the tag is what users install via HPM, and HPM resolves URLs against main).
 - If the user runs this with uncommitted in-progress work other than `TODO.md`, stop and ask — they may have intended to commit first.
 - The `TODO.md` file is intentionally gitignored / not part of releases. Do not surface it in the release diff.
 - For dry-run / preview-only mode, the user can say "draft only, don't apply" — produce Step 5 output and stop without waiting for approval.
