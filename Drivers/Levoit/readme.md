@@ -98,9 +98,18 @@ The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing
 | --- | --- | --- |
 | filter | 0-100 | Remaining filter life (%) |
 | mode | manual, sleep | Current mode |
+| childLock | on, off | Front-panel button-lock state. Called "Display Lock" in the VeSync mobile app for Core line. |
+| display | on, off | Front-panel display state. |
+| timerRemain | seconds | Auto-off timer remaining (0 if no timer set). |
 | info | HTML | Dashboard-tile-friendly summary |
 | switch | on, off | Power state |
 | speed | off, low, medium, high | Fan speed |
+
+Commands: `setDisplay`, `setSpeed`, `setMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`.
+
+Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
+
+**Timer units:** `setTimer` accepts seconds for Core line (matches the Levoit V1 API). The Vital line's `setTimer` accepts minutes — be aware if you have both device families.
 
 ### Core 300S
 
@@ -109,6 +118,11 @@ The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing
 | filter | 0-100 | Filter life (%) |
 | mode | manual, sleep, auto | Current mode |
 | auto_mode | default, quiet, efficient | Auto-mode preference |
+| childLock | on, off | Front-panel button-lock state. Called "Display Lock" in the VeSync mobile app for Core line. |
+| display | on, off | Front-panel display state. |
+| timerRemain | seconds | Auto-off timer remaining (0 if no timer set). |
+| pm25 | µg/m³ | Real-time PM2.5 reading. |
+| airQualityIndex | 1-4 | Levoit's categorical air-quality (1=excellent, 4=very bad). Distinct from the driver-computed US AQI (`aqi` attribute). |
 | aqi | 0-500 | US-formula AQI |
 | aqiDanger | string | Risk level for tile display |
 | aqiColor | hex | Color for HTML |
@@ -116,13 +130,27 @@ The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing
 | switch | on, off | Power |
 | speed | off, sleep, low, medium, high | Fan speed |
 
+Commands: `setDisplay`, `setSpeed`, `setMode`, `setAutoMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`.
+
+Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
+
+**Timer units:** `setTimer` accepts seconds for Core line (matches the Levoit V1 API). The Vital line's `setTimer` accepts minutes — be aware if you have both device families.
+
 ### Core 400S
 
-Same as 300S except `speed` adds `max`.
+Same as Core 300S except `speed` adds `max`.
+
+Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
+
+**Timer units:** `setTimer` accepts seconds for Core line (matches the Levoit V1 API). The Vital line's `setTimer` accepts minutes — be aware if you have both device families.
 
 ### Core 600S
 
-Same as 400S; `auto_mode` adds `eco`.
+Same as Core 400S; `auto_mode` adds `eco`.
+
+Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
+
+**Timer units:** `setTimer` accepts seconds for Core line (matches the Levoit V1 API). The Vital line's `setTimer` accepts minutes — be aware if you have both device families.
 
 ### Vital 200S (LAP-V201S-*, LAP-V201-AUSR¹)
 

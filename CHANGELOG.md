@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — v2.3
+
+### Added
+
+- **Core line feature back-fill** (Core 200S/300S/400S/600S). Closes long-standing gaps inherited from the original Niklas upstream where the Core drivers exposed less than the underlying VeSync API supports. New attributes and commands per driver:
+  - `childLock` attribute + `setChildLock` command (all 4 Core drivers) — labeled "Display Lock" in the VeSync mobile app for Core line hardware; exposed here as `childLock` for cross-driver consistency with the Vital line.
+  - `display` read-back attribute (all 4 Core drivers) — the driver could always write display state; now it also reads it back from the poll response.
+  - `setTimer` / `cancelTimer` commands + `timerRemain` attribute (all 4 Core drivers) — auto-off timer support, matching the Vital line feature set.
+  - `resetFilter` command (all 4 Core drivers) — zero out filter-life percentage after replacing the filter, without needing the Levoit mobile app.
+  - `pm25` attribute (Core 300S/400S/600S only) — real-time PM2.5 in µg/m³, previously buried in the `info` HTML attribute only.
+  - `airQualityIndex` attribute (Core 300S/400S/600S only) — Levoit's own categorical 1-4 reading, distinct from the driver-computed US-AQI `aqi` attribute.
+  - `capability "AirQuality"` declaration (Core 300S/400S/600S only) — wires the device into Hubitat's standard air-quality dashboard tiles.
+- All new features use JSON-RPC method names already proven by the Vital line drivers (`setChildLock`, `addTimer`, `delTimer`, `resetFilter`). No new API patterns introduced.
+
 ## [2.2.1] - 2026-04-28
 
 ### Fixed

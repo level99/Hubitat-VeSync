@@ -25,6 +25,11 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-28: v2.3 (community fork, level99/Hubitat-VeSync, by Dan Cox)
+//                  - Added childLock attribute + setChildLock command (Core-line "Display Lock")
+//                  - Added display read-back attribute (was write-only)
+//                  - Added setTimer / cancelTimer commands + timerRemain attribute
+//                  - Added resetFilter command
 // 2026-04-25: v2.0 (community fork, level99/Hubitat-VeSync, by Dan Cox)
 //                  - Added descriptionTextEnable preference (default true) and gated logInfo helper
 //                  - Added INFO logging at state-change transitions (power, mode, speed, filter alerts)
@@ -57,13 +62,20 @@ metadata {
             capability "Actuator"
 
             attribute "filter", "number";                              // Filter status (0-100%)
-            attribute "mode", "string";                                // Purifier mode 
-            
+            attribute "mode", "string";                                // Purifier mode
+            attribute "childLock", "string";                           // Front-panel button lock (VeSync app calls it "Display Lock" for Core line)
+            attribute "display", "string";                             // Front-panel display state
+            attribute "timerRemain", "number";                         // Auto-off timer remaining (seconds; 0 when no timer)
+
             attribute "info", "string";                               // HTML
 
             command "setDisplay", [[name:"Display*", type: "ENUM", description: "Display", constraints: ["on", "off"] ] ]
             command "setSpeed", [[name:"Speed*", type: "ENUM", description: "Speed", constraints: ["off", "low", "medium", "high"] ] ]
             command "setMode",  [[name:"Mode*", type: "ENUM", description: "Mode", constraints: ["manual", "sleep"] ] ]
+            command "setChildLock", [[name: "On/Off*", type: "ENUM", description: "Display Lock (Child Lock)", constraints: ["on", "off"] ] ]
+            command "setTimer", [[name: "Seconds*", type: "NUMBER", description: "Auto-off seconds (1-86400)"]]
+            command "cancelTimer"
+            command "resetFilter"
             command "toggle"
         }
 
@@ -396,6 +408,14 @@ def update(status, nightLight)
             break;
     }
 
+    // New v2.3 fields: child_lock, display, timer_remain
+    if (status.result?.child_lock != null)
+        device.sendEvent(name: "childLock", value: status.result.child_lock ? "on" : "off")
+    if (status.result?.display != null)
+        device.sendEvent(name: "display", value: status.result.display ? "on" : "off")
+    if (status.result?.extension?.timer_remain != null)
+        device.sendEvent(name: "timerRemain", value: status.result.extension.timer_remain as Integer)
+
     def html = "Filter: ${status.result.filter_life}%"
     device.sendEvent(name: "info", value: html)
 
@@ -406,7 +426,79 @@ def update(status, nightLight)
     return status
 }
 
-def handleDisplayOn(displayOn) 
+def setChildLock(value) {
+    // Core-line API uses child_lock (boolean); Vital-line API uses childLockSwitch (integer). Intentional divergence per pyvesync class hierarchy.
+    logDebug "setChildLock(${value})"
+    def result = false
+    parent.sendBypassRequest(device, [
+                data: [ child_lock: (value == "on") ],
+                "method": "setChildLock",
+                "source": "APP"
+            ]) { resp ->
+        if (checkHttpResponse("setChildLock", resp)) {
+            device.sendEvent(name: "childLock", value: value)
+            logInfo "Child lock (Display Lock): ${value}"
+            result = true
+        }
+    }
+    return result
+}
+
+def setTimer(seconds) {
+    int secs = (seconds as Integer) ?: 0
+    logDebug "setTimer(${secs}s)"
+    if (secs <= 0) { cancelTimer(); return }
+    def result = false
+    parent.sendBypassRequest(device, [
+                data: [ action: "off", total: secs ],
+                "method": "addTimer",
+                "source": "APP"
+            ]) { resp ->
+        if (checkHttpResponse("setTimer", resp)) {
+            def tid = resp?.data?.result?.id
+            if (tid != null) state.timerId = tid
+            logInfo "Timer set: power off in ${secs}s (id=${tid})"
+            result = true
+        }
+    }
+    return result
+}
+
+def cancelTimer() {
+    logDebug "cancelTimer()"
+    if (!state.timerId) { logDebug "No active timer to cancel"; return }
+    def result = false
+    parent.sendBypassRequest(device, [
+                data: [ id: state.timerId ],
+                "method": "delTimer",
+                "source": "APP"
+            ]) { resp ->
+        if (checkHttpResponse("cancelTimer", resp)) {
+            state.remove("timerId")
+            logInfo "Timer cancelled"
+            result = true
+        }
+    }
+    return result
+}
+
+def resetFilter() {
+    logDebug "resetFilter()"
+    def result = false
+    parent.sendBypassRequest(device, [
+                data: [:],
+                "method": "resetFilter",
+                "source": "APP"
+            ]) { resp ->
+        if (checkHttpResponse("resetFilter", resp)) {
+            logInfo "Filter life reset"
+            result = true
+        }
+    }
+    return result
+}
+
+def handleDisplayOn(displayOn)
 {
     logDebug "handleDisplayOn()"
 
