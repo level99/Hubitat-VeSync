@@ -110,7 +110,7 @@ The 2-arg signature is the failure point for many community-reported "device dis
 ### F. Metadata, manifest, readme consistency
 
 1. New driver added → entry in `levoitManifest.json` with fresh UUID + correct path.
-2. Manifest version bumped + `dateReleased` updated + `releaseNotes` reflects the change.
+2. **Version policy (RULE20 lockstep, NOT preemptive bumps).** On feature branches, the manifest top-level `version` and `dateReleased` stay at the LAST RELEASED value (the maintainer renumbers on merge). Per-driver `definition(version: "X.Y.Z")` fields MUST match the manifest top-level (RULE20 lint enforces this). For NEW drivers added on a feature branch, declare `version:` matching the current manifest top-level — NOT the next anticipated release version. Lint will FAIL otherwise. **Do NOT flag the lockstep state as inconsistency.** A new preview driver showing `version: "2.2.1"` while the branch is named `release/v2.3` is CORRECT — it matches `levoitManifest.json` `"version": "2.2.1"`. The driver `description` field may say `[PREVIEW v2.3]` (a release-candidate marker) — that's fine and does not contradict the version field. Only flag as ISSUE if (a) the per-driver `version:` does NOT match `levoitManifest.json` top-level `version` (true RULE20 violation), or (b) the manifest itself was bumped on a feature branch (preemptive-bump policy violation).
 3. `readme.md` driver-list table includes the new file.
 4. `readme.md` events table per-device shows new attributes.
 5. Driver `name` metadata field NOT changed for existing-deployed drivers (breaks device association). For NEW drivers, use clean name; for legacy drivers, preserve original name even if descriptive misleading.
