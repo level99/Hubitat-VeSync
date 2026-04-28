@@ -636,7 +636,7 @@ def Boolean updateDevices()
  * Method mapping by device family:
  *   Tower Fan   (TOWERFAN)                                  → getTowerFanStatus
  *   Pedestal Fan (PEDESTALFAN)                              → getFanStatus
- *   Humidifiers (V601S, A601S, O451S, A602S, D301S)        → getHumidifierStatus
+ *   Humidifiers (V601S, A601S, O451S, A602S, D301S, C200S, A603S) → getHumidifierStatus
  *   Air purifiers + Generic (all other dtypes)             → getPurifierStatus
  */
 private String deviceMethodFor(child) {
@@ -652,6 +652,8 @@ private String deviceMethodFor(child) {
         case "O451S":
         case "A602S":
         case "D301S":
+        case "C200S":
+        case "A603S":
             return "getHumidifierStatus"
         default:
             // All purifier dtypes (200S, 300S, 400S, 600S, V200S, V100S) + GENERIC
@@ -754,6 +756,18 @@ private deviceType(code) {
         case "LUH-D301S-WEU":
         case "LUH-D301S-KEUR":
             return "D301S";
+        // Classic 200S Humidifier — pyvesync VeSyncHumid200S (subclass of VeSyncHumid200300S).
+        // NAMING TRAP: VeSyncHumid200S overrides toggle_display() to use setIndicatorLightSwitch.
+        // This is the ONLY difference from VeSyncHumid200300S. Only one literal code: "Classic200S".
+        // Device has no LUH- prefix -- it only reports the literal device type "Classic200S".
+        case "Classic200S":
+            return "C200S";
+        // LV600S Hub Connect Humidifier — pyvesync VeSyncLV600S (DIFFERENT from VeSyncHumid200300S).
+        // NAMING TRAP: LUH-A603S (this block) uses VeSyncLV600S; LUH-A602S uses VeSyncHumid200300S.
+        // Both are marketed as "LV600S" but have completely different API payload conventions.
+        // VeSyncLV600S: powerSwitch/switchIdx, workMode (auto='humidity'), levelIdx/virtualLevel/levelType.
+        case "LUH-A603S-WUS":
+            return "A603S";
         default:
             // Unknown model code — fall through to Generic diagnostic driver.
             // The Generic driver provides best-effort power control and captureDiagnostics()
@@ -794,7 +808,8 @@ private Boolean isLevoitClimateDevice(String code) {
     // v2.1: fan prefixes added alongside proper Tower Fan and Pedestal Fan drivers
     if (code.startsWith("LTF-")) return true
     if (code.startsWith("LPF-")) return true
-    if (code in ["Core200S", "Core300S", "Core400S", "Core600S", "Vital200S", "Classic300S", "Dual200S"]) return true
+    if (code in ["Core200S", "Core300S", "Core400S", "Core600S", "Vital200S", "Classic300S", "Dual200S", "Classic200S"]) return true
+    // LUH-A603S-WUS covered by LUH-* prefix blanket above (no extra entry needed; RULE22 satisfied)
     return false
 }
 
@@ -866,7 +881,7 @@ private Boolean getDevices() {
                     }
                     else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S" ||
                              dtype == "V100S" || dtype == "A601S" || dtype == "O451S" || dtype == "TOWERFAN" || dtype == "PEDESTALFAN" ||
-                             dtype == "A602S" || dtype == "D301S") {
+                             dtype == "A602S" || dtype == "D301S" || dtype == "C200S" || dtype == "A603S") {
                         newList[device.cid] = device.configModule;
                     }
                     else if (dtype == "GENERIC" && isLevoitClimateDevice(device.deviceType)) {
@@ -1225,6 +1240,58 @@ private Boolean getDevices() {
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                        }
+                    }
+                    else if (dtype == "C200S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = safeAddChildDevice("Levoit Classic 200S Humidifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitClassic200S.groovy")
+                            if (equip1 == null) continue
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                            logInfo "Added child device: ${device.deviceName} (Levoit Classic 200S Humidifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                        }
+                    }
+                    else if (dtype == "A603S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = safeAddChildDevice("Levoit LV600S Hub Connect Humidifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitLV600SHubConnect.groovy")
+                            if (equip1 == null) continue
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                            logInfo "Added child device: ${device.deviceName} (Levoit LV600S Hub Connect Humidifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }

@@ -50,6 +50,8 @@ Copy the relevant `.groovy` files from the `Drivers/Levoit/` directory into Hubi
 | `LevoitOasisMist450S.groovy` | Levoit OasisMist 450S Smart Humidifier (US) *(v2.1 preview)* |
 | `LevoitLV600S.groovy` | Levoit LV600S Humidifier *(v2.2 preview)* |
 | `LevoitDual200S.groovy` | Levoit Dual 200S Humidifier *(v2.2 preview)* |
+| `LevoitClassic200S.groovy` | Levoit Classic 200S Humidifier *(v2.3 preview)* |
+| `LevoitLV600SHubConnect.groovy` | Levoit LV600S Hub Connect Humidifier (LUH-A603S) *(v2.3 preview)* |
 | `LevoitTowerFan.groovy` | Levoit Tower Fan *(v2.1 preview)* |
 | `LevoitPedestalFan.groovy` | Levoit Pedestal Fan *(v2.1 preview)* |
 | `LevoitGeneric.groovy` | **Fall-through diagnostic driver** — any unrecognized Levoit model code. Best-effort power control + `captureDiagnostics()` for filing new-device-support requests. |
@@ -327,6 +329,61 @@ Covers all 5 model codes: `Dual200S` (literal device type reported by some firmw
 | info | HTML | Tile summary |
 
 Commands: `setMode` (auto/manual), `setMistLevel` (1-2), `setHumidity` (30-80), `setDisplay`, `setAutoStop`, `toggle`. (No `setNightLight` — feature flag absent; no `setWarmMistLevel` — hardware absent.)
+
+### Classic 200S Humidifier (`Classic200S`) *— v2.3 preview*
+
+pyvesync class: `VeSyncHumid200S` (subclass of `VeSyncHumid200300S`). The **one** meaningful difference from Classic 300S / LV600S (A602S) is the display command: Classic 200S uses `setIndicatorLightSwitch {enabled: bool, id: 0}` rather than `setDisplay {state: bool}`. All other modes, mist levels, target-humidity, and auto-stop behavior are inherited from the VeSyncHumid200300S base class and match Classic 300S conventions.
+
+**CROSS-CHECK — Classic 200S vs Classic 300S naming trap:**
+- `Classic200S` (this driver) → `VeSyncHumid200S`; device code literal `Classic200S`; display = `setIndicatorLightSwitch`; modes auto/manual only; no night-light command.
+- `Classic300S` (separate `LevoitClassic300S.groovy`) → `VeSyncHumid200300S` base class; device codes `LUH-A601S-*`; display = `setDisplay`; modes auto/sleep/manual; 3-step night-light.
+Do NOT add LUH-A601S codes to this driver and do NOT add `Classic200S` to the Classic 300S driver.
+
+Modes: auto and manual only (no sleep per `device_map.py`). Mist levels 1-9.
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| mode | auto, manual | Current mode (auto/manual only; sleep not supported per device_map.py) |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 30-80 | Auto-mode target humidity |
+| mistLevel | 0-9 | Reported mist level (0 = inactive) |
+| waterLacks | yes, no | Water-tank low/empty indicator |
+| displayOn | on, off | Front-panel display state |
+| autoStopEnabled | on, off | Auto-stop-when-target-reached config |
+| autoStopReached | yes, no | Whether auto-stop is currently active |
+| nightLightBrightness | 0, 50, 100 | Night-light brightness from API (read-only passive; no setter) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/manual), `setMistLevel` (1-9), `setHumidity` (30-80), `setDisplay`, `setAutoStop`, `toggle`. (No `setNightLight` — feature flag absent per `device_map.py`; no `setWarmMistLevel` — hardware absent.)
+
+### LV600S Hub Connect Humidifier (LUH-A603S-WUS) *— v2.3 preview*
+
+pyvesync class: `VeSyncLV600S` — **distinct from `VeSyncHumid200300S`** used by the existing `LevoitLV600S.groovy` (A602S). Despite both being marketed as "LV600S", A603S and A602S use entirely different API conventions.
+
+**CROSS-CHECK — A603S vs A602S naming trap:**
+- `LUH-A603S-WUS` (this driver) → `VeSyncLV600S`; V2-style payload conventions (camelCase, `powerSwitch`/`switchIdx`, `workMode`, `levelIdx`/`virtualLevel`/`levelType`); auto mode wire value = `"humidity"`; no `setAutoStop` (device_map.py features=[WARM_MIST]); `setWarmMistLevel` uses API method `setLevel`.
+- `LUH-A602S-*` (separate `LevoitLV600S.groovy`) → `VeSyncHumid200300S`; V1-style payload conventions (snake_case, `enabled`/`id`, `mode`, `id`/`level`/`type`); auto mode wire value = `"auto"`; has `setAutoStop`.
+Do NOT add `LUH-A603S` to `LevoitLV600S.groovy` and do NOT add `LUH-A602S` codes to this driver.
+
+Auto mode sends `workMode: "humidity"` on the wire (normalized to `"auto"` in the driver's state and events). Warm mist 0-3. No auto-stop command (feature flag absent; `autoStopSwitch`/`autoStopState` from status are exposed as passive read-only attributes).
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| mode | auto, sleep, manual | Current mode (`"humidity"` on wire normalized to `"auto"` in state/events) |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 30-80 | Auto-mode target humidity |
+| mistLevel | 0-9 | Reported mist level (0 = inactive) |
+| warmMistLevel | 0-3 | Warm-mist level (0 = warm-mist off) |
+| warmMistEnabled | on, off | Boolean derived from warmMistLevel (on if 1-3, off if 0) |
+| waterLacks | yes, no | Water-tank low/empty indicator |
+| displayOn | on, off | Front-panel display state |
+| autoStopEnabled | on, off | Auto-stop config (passive read from `autoStopSwitch` — no setter) |
+| autoStopReached | yes, no | Whether auto-stop is currently active (passive read from `autoStopState`) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/sleep/manual), `setMistLevel` (1-9), `setWarmMistLevel` (0-3), `setHumidity` (30-80), `setDisplay`, `toggle`. (No `setAutoStop` — WARM_MIST is the only feature flag per `device_map.py`.)
 
 ### Tower Fan (LTF-F422S) *— v2.1 preview*
 

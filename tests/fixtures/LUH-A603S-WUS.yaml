@@ -1,0 +1,271 @@
+# pyvesync canonical API fixtures for LV600S Hub Connect (LUH-A603S-WUS) humidifier
+# Source: https://github.com/webdjoe/pyvesync
+# Commit: c98729c45860cc765d63d49a9a02bbc18de090c4 (2026-04-16)
+# Retrieved: 2026-04-28
+#
+# Upstream fixture: src/tests/api/vesynchumidifier/LUH-A603S-WUS.yaml
+# RESPONSE data synthesized from pyvesync LV600SResult model +
+#   device_map.py LUH-A603S-WUS entry (VeSyncLV600S class).
+#
+# Device: VeSyncLV600S class (separate from VeSyncHumid200300S)
+# Model codes: LUH-A603S-WUS (single confirmed model code in device_map.py)
+#
+# CROSS-CHECK — NAMING TRAP (LV600S Hub Connect vs existing LV600S driver):
+#   VeSyncLV600S (this device) is NOT the same as VeSyncHumid200300S (LevoitLV600S.groovy, A602S).
+#   Both are branded "LV600S" by Levoit. Payload field names differ completely:
+#   A602S (VeSyncHumid200300S): {enabled, id}, {mode:'auto'}, {id, level, type}, {state: bool}
+#   A603S (VeSyncLV600S):       {powerSwitch, switchIdx}, {workMode:'humidity'}, {levelIdx, virtualLevel, levelType}, {screenSwitch: int}
+#
+# CRITICAL: Auto mode on A603S uses workMode:'humidity' (NOT 'auto').
+#   pyvesync device_map.py LUH-A603S-WUS mist_modes = {AUTO:'humidity', SLEEP:'sleep', MANUAL:'manual'}
+#   The driver normalizes workMode='humidity' -> user-facing mode='auto' on read.
+#   The driver sends {workMode:'humidity'} when user selects "auto" mode.
+#
+# WARM MIST NOTE:
+#   set_warm_level uses the 'setLevel' method (not 'setVirtualLevel').
+#   Payload: {levelIdx:0, levelType:'warm', mistLevel:0, warmLevel:N}
+#   warmLevel=0 means warm mist off; 1-3 means warm intensity.
+#
+# RESPONSE format (LV600SResult -- camelCase, all top-level, NO configuration sub-object):
+#   powerSwitch (int), humidity (int), targetHumidity (int), virtualLevel (int),
+#   mistLevel (int), workMode (str), waterLacksState (int), waterTankLifted (int),
+#   autoStopSwitch (int), autoStopState (int), screenSwitch (int), screenState (int),
+#   warmPower (bool), warmLevel (int 0-3)
+#
+# API payload shapes:
+#   - Switch: {powerSwitch: 0|1, switchIdx: 0}  NOT {enabled, id}
+#   - Mode: {workMode: 'humidity'|'sleep'|'manual'}  NOT {mode: ...}
+#   - setVirtualLevel mist: {levelIdx:0, virtualLevel:N, levelType:'mist'}
+#   - setLevel warm: {levelIdx:0, levelType:'warm', mistLevel:0, warmLevel:N}
+#   - Display: {screenSwitch: 0|1}  NOT {state: bool}
+#   - targetHumidity: {targetHumidity: N}  camelCase, NOT snake_case target_humidity
+#   - No setAutomaticStop command (AUTO_STOP not in features)
+#   - Status query: getHumidifierStatus (same as other humidifiers)
+
+requests:
+  turn_on:
+    payload:
+      data:
+        powerSwitch: 1
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        powerSwitch: 0
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  # CRITICAL: auto mode sends workMode:'humidity' (NOT 'auto')
+  # pyvesync device_map.py LUH-A603S-WUS mist_modes = {AUTO:'humidity', ...}
+  set_auto_mode:
+    payload:
+      data:
+        workMode: humidity
+      method: setHumidityMode
+      source: APP
+
+  set_sleep_mode:
+    payload:
+      data:
+        workMode: sleep
+      method: setHumidityMode
+      source: APP
+
+  set_manual_mode:
+    payload:
+      data:
+        workMode: manual
+      method: setHumidityMode
+      source: APP
+
+  # CROSS-CHECK: field names levelIdx/virtualLevel/levelType (NOT id/level/type)
+  set_mist_level:
+    payload:
+      data:
+        levelIdx: 0
+        levelType: mist
+        virtualLevel: 2
+      method: setVirtualLevel
+      source: APP
+
+  # CROSS-CHECK: warm mist uses 'setLevel' method (not 'setVirtualLevel')
+  # mistLevel field is always 0 in warm payload; warmLevel is the actual intensity.
+  set_warm_level:
+    payload:
+      data:
+        levelIdx: 0
+        levelType: warm
+        mistLevel: 0
+        warmLevel: 3
+      method: setLevel
+      source: APP
+
+  # CROSS-CHECK: targetHumidity is camelCase (NOT snake_case target_humidity)
+  set_humidity:
+    payload:
+      data:
+        targetHumidity: 50
+      method: setTargetHumidity
+      source: APP
+
+  # CROSS-CHECK: display uses screenSwitch int (NOT state bool or enabled/id)
+  turn_on_display:
+    payload:
+      data:
+        screenSwitch: 1
+      method: setDisplay
+      source: APP
+
+  turn_off_display:
+    payload:
+      data:
+        screenSwitch: 0
+      method: setDisplay
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getHumidifierStatus
+      source: APP
+
+# RESPONSE device data -- what the LV600S Hub Connect (A603S) returns after envelope peel.
+# Shape matches LV600SResult: camelCase fields, all top-level, NO configuration sub-object.
+#
+# KEY DIFFERENCES from A602S (LevoitLV600S.groovy) response:
+#   - powerSwitch (int 0|1) instead of enabled (bool)
+#   - workMode (str) instead of mode (str); auto is 'humidity' not 'auto'
+#   - virtualLevel + mistLevel (camelCase) instead of mist_virtual_level + mist_level (snake_case)
+#   - targetHumidity (top-level, camelCase) instead of configuration.auto_target_humidity
+#   - waterLacksState (int) instead of water_lacks (bool)
+#   - screenSwitch + screenState (int) instead of display (bool)
+#   - warmLevel (int) + warmPower (bool) instead of warm_level (int) + warm_enabled (bool)
+#   - autoStopSwitch + autoStopState (int) instead of configuration.automatic_stop (bool)
+#   - No configuration sub-object at all
+#   - No indicator_light_switch alias
+
+responses:
+  # Canonical: device on, manual mode, mist=5, warm mist level=2 (enabled)
+  device_on_manual_warm2:
+    powerSwitch: 1
+    humidity: 55
+    targetHumidity: 60
+    virtualLevel: 5
+    mistLevel: 5
+    workMode: manual
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+    warmPower: true
+    warmLevel: 2
+    scheduleCount: 0
+    timerRemain: 0
+    errorCode: 0
+
+  # Auto mode: workMode='humidity' (canonical auto-mode wire value for A603S)
+  # Verifies that 'humidity' is normalized to user-facing 'auto' on read
+  device_on_auto_humidity:
+    powerSwitch: 1
+    humidity: 52
+    targetHumidity: 65
+    virtualLevel: 4
+    mistLevel: 4
+    workMode: humidity
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+    warmPower: false
+    warmLevel: 0
+    scheduleCount: 0
+    timerRemain: 0
+    errorCode: 0
+
+  # Sleep mode
+  device_on_sleep_mode:
+    powerSwitch: 1
+    humidity: 50
+    targetHumidity: 55
+    virtualLevel: 2
+    mistLevel: 2
+    workMode: sleep
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 0
+    autoStopState: 0
+    screenSwitch: 0
+    screenState: 0
+    warmPower: false
+    warmLevel: 0
+    scheduleCount: 0
+    timerRemain: 0
+    errorCode: 0
+
+  # Device off -- powerSwitch=0, virtualLevel=0, warm off
+  device_off:
+    powerSwitch: 0
+    humidity: 48
+    targetHumidity: 60
+    virtualLevel: 0
+    mistLevel: 3
+    workMode: manual
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 0
+    screenState: 0
+    warmPower: false
+    warmLevel: 0
+    scheduleCount: 0
+    timerRemain: 0
+    errorCode: 0
+
+  # Warm mist off -- warmLevel=0, warmPower=false
+  device_warm_off:
+    powerSwitch: 1
+    humidity: 60
+    targetHumidity: 65
+    virtualLevel: 3
+    mistLevel: 3
+    workMode: manual
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+    warmPower: false
+    warmLevel: 0
+    scheduleCount: 0
+    timerRemain: 0
+    errorCode: 0
+
+  # Water reservoir empty
+  device_water_lacks:
+    powerSwitch: 1
+    humidity: 32
+    targetHumidity: 60
+    virtualLevel: 3
+    mistLevel: 3
+    workMode: humidity
+    waterLacksState: 1
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+    warmPower: true
+    warmLevel: 1
+    scheduleCount: 0
+    timerRemain: 0
+    errorCode: 0

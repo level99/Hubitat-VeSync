@@ -1,0 +1,267 @@
+# pyvesync canonical API fixtures for Classic 200S humidifier
+# Source: https://github.com/webdjoe/pyvesync
+# Commit: c98729c45860cc765d63d49a9a02bbc18de090c4 (2026-04-16)
+# Retrieved: 2026-04-28
+#
+# Upstream fixture: src/tests/api/vesynchumidifier/Classic200S.yaml
+# RESPONSE data synthesized from pyvesync ClassicLVHumidResult model +
+#   device_map.py Classic200S entry (VeSyncHumid200S class).
+#
+# Device: VeSyncHumid200S class (subclass of VeSyncHumid200300S, one override)
+# Model codes: Classic200S (ONLY -- this is a literal device-type name, no LUH- prefix code)
+#
+# CROSS-CHECK — NAMING TRAP:
+#   VeSyncHumid200S class is NOT the same as VeSyncHumid200300S (which covers Classic 300S,
+#   LV600S/A602S, OasisMist 450S, Dual 200S). The ONLY behavioral difference is toggle_display:
+#   VeSyncHumid200S overrides it to use setIndicatorLightSwitch with {enabled: bool, id: 0}
+#   instead of setDisplay with {state: bool}.
+#
+# KEY DIFFERENCES from Classic 300S (LUH-A601S / VeSyncHumid200300S class):
+#   - Model code: literal "Classic200S" only (no LUH- prefix)
+#   - Display command: setIndicatorLightSwitch {enabled: bool, id: 0} (NOT setDisplay {state: bool})
+#   - Modes: auto + manual only (no sleep; device_map.py Classic200S mist_modes={AUTO,MANUAL})
+#   - Mist levels: 1-9 (same as Classic 300S; NOT 1-2 like Dual 200S)
+#   - Features: AUTO_STOP only (no WARM_MIST)
+#   - Response display field: indicator_light_switch (Alias in ClassicLVHumidResult)
+#     The JSON key from the device is indicator_light_switch, not 'display'.
+#
+# API payload shapes (same as Classic 300S EXCEPT display command):
+#   - Switch: {enabled: bool, id: 0}
+#   - Mode: {mode: value} -- NOT {workMode} (V2-class difference)
+#   - setVirtualLevel mist: {id:0, level:N, type:'mist'}
+#   - Display: {enabled: bool, id: 0} via setIndicatorLightSwitch (Classic 200S override)
+#   - Auto-stop: {enabled: bool}
+#   - Status query: getHumidifierStatus
+#   - targetHumidity lives at configuration.auto_target_humidity (same as Classic 300S)
+#   - Response `enabled` (bool) for power
+#
+# REQUEST payloads -- as sent to /cloud/v2/deviceManaged/bypassV2
+# Sourced from upstream Classic200S.yaml (commit c98729c)
+
+requests:
+  turn_on:
+    payload:
+      data:
+        enabled: true
+        id: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        enabled: false
+        id: 0
+      method: setSwitch
+      source: APP
+
+  set_auto_mode:
+    payload:
+      data:
+        mode: auto
+      method: setHumidityMode
+      source: APP
+
+  set_manual_mode:
+    payload:
+      data:
+        mode: manual
+      method: setHumidityMode
+      source: APP
+
+  # NOTE: set_sleep_mode intentionally absent -- Classic 200S has no sleep mode per device_map.py
+  # Classic 300S has sleep; Classic 200S does not (class difference, not a pyvesync omission).
+
+  set_mist_level:
+    payload:
+      data:
+        id: 0
+        level: 2
+        type: mist
+      method: setVirtualLevel
+      source: APP
+
+  set_humidity:
+    payload:
+      data:
+        target_humidity: 50
+      method: setTargetHumidity
+      source: APP
+
+  # CROSS-CHECK: Classic 200S display uses setIndicatorLightSwitch (not setDisplay).
+  # pyvesync VeSyncHumid200S.toggle_display() override -- the ONLY method override vs parent class.
+  # Source: upstream Classic200S.yaml turn_on_display / turn_off_display (commit c98729c).
+  turn_on_display:
+    payload:
+      data:
+        enabled: true
+        id: 0
+      method: setIndicatorLightSwitch
+      source: APP
+
+  turn_off_display:
+    payload:
+      data:
+        enabled: false
+        id: 0
+      method: setIndicatorLightSwitch
+      source: APP
+
+  turn_on_automatic_stop:
+    payload:
+      data:
+        enabled: true
+      method: setAutomaticStop
+      source: APP
+
+  turn_off_automatic_stop:
+    payload:
+      data:
+        enabled: false
+      method: setAutomaticStop
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getHumidifierStatus
+      source: APP
+
+# RESPONSE device data -- what the Classic 200S returns after envelope peel.
+# Shape matches ClassicLVHumidResult (same as Classic 300S).
+# Response is SINGLE-WRAPPED, same as other VeSyncHumid200300S class devices.
+#
+# KEY: top-level display field is 'indicator_light_switch' (Alias in ClassicLVHumidResult),
+# NOT 'display'. The model aliases indicator_light_switch -> display internally, but the
+# JSON response from the device uses indicator_light_switch.
+# configuration sub-object also uses indicator_light_switch alias for its display field.
+#
+# Fields (snake_case throughout, matching ClassicLVHumidResult):
+#   enabled, mist_virtual_level, mist_level, mode, indicator_light_switch (display alias),
+#   water_lacks, humidity, humidity_high, automatic_stop_reach_target, water_tank_lifted,
+#   warm_enabled, warm_level (null -- no warm mist), night_light_brightness
+# plus nested: configuration.auto_target_humidity, configuration.indicator_light_switch,
+#              configuration.automatic_stop
+
+responses:
+  # Canonical: device on, manual mode, mist=3
+  device_on_manual_canonical:
+    enabled: true
+    humidity: 42
+    mist_virtual_level: 3
+    mist_level: 3
+    mode: manual
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    indicator_light_switch: true
+    automatic_stop_reach_target: false
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 50
+      indicator_light_switch: true
+      automatic_stop: false
+
+  # Auto mode, higher mist level
+  device_on_auto_mist7:
+    enabled: true
+    humidity: 38
+    mist_virtual_level: 7
+    mist_level: 7
+    mode: auto
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    indicator_light_switch: true
+    automatic_stop_reach_target: false
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 55
+      indicator_light_switch: true
+      automatic_stop: true
+
+  # Device off -- switch=off, mist_virtual_level=0
+  device_off:
+    enabled: false
+    humidity: 40
+    mist_virtual_level: 0
+    mist_level: 3
+    mode: manual
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    indicator_light_switch: false
+    automatic_stop_reach_target: false
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 50
+      indicator_light_switch: false
+      automatic_stop: true
+
+  # Water reservoir empty
+  device_water_lacks:
+    enabled: true
+    humidity: 25
+    mist_virtual_level: 3
+    mist_level: 3
+    mode: auto
+    water_lacks: true
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    indicator_light_switch: true
+    automatic_stop_reach_target: false
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 55
+      indicator_light_switch: true
+      automatic_stop: true
+
+  # Synthesized: 'display' key present instead of indicator_light_switch (defensive fallback test)
+  # Tests the fallback path in applyStatus for firmware that uses 'display' instead of 'indicator_light_switch'
+  device_display_key_fallback:
+    enabled: true
+    humidity: 45
+    mist_virtual_level: 2
+    mist_level: 2
+    mode: manual
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    display: true
+    automatic_stop_reach_target: false
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 50
+      automatic_stop: false
+      # Note: indicator_light_switch intentionally absent from configuration too
+      # to force driver to use top-level 'display' fallback
+
+  # Auto-stop reached
+  device_auto_stop_reached:
+    enabled: false
+    humidity: 62
+    mist_virtual_level: 0
+    mist_level: 3
+    mode: auto
+    water_lacks: false
+    humidity_high: true
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    indicator_light_switch: false
+    automatic_stop_reach_target: true
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 60
+      indicator_light_switch: false
+      automatic_stop: true

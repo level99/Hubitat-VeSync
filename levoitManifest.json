@@ -109,6 +109,20 @@
       "required": false
     },
     {
+      "id": "b2e94f7a-3d1c-4e8b-a6f0-5c7d9e2b1a4f",
+      "name": "Levoit Classic 200S Humidifier",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitClassic200S.groovy",
+      "required": false
+    },
+    {
+      "id": "7f3a8c2d-e5b1-4d9a-b7c0-2e6f4a1d8c3b",
+      "name": "Levoit LV600S Hub Connect Humidifier",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitLV600SHubConnect.groovy",
+      "required": false
+    },
+    {
       "id": "ca33c74b-ac89-44d5-b9f1-10044c8a520f",
       "name": "Levoit Tower Fan",
       "namespace": "NiklasGustafsson",
