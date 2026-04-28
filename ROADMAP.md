@@ -11,6 +11,7 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 ### Preview drivers added in v2.2
 
 - **LV600S Humidifier** (`LUH-A602S-*`, all 6 regional variants) — same `VeSyncHumid200300S` class as Classic 300S, extended with warm-mist (0-3 levels). Ships as `[PREVIEW v2.2]`. **Known open question:** [pyvesync PR #505](https://github.com/webdjoe/pyvesync/pull/505) reports EU firmware variants (LUH-A602S-WEU/-WEUR) may need `mode:"humidity"` instead of `mode:"auto"` to switch auto mode; PR is unmerged pending clarification. Community hardware reports welcome.
+- **RGB nightlight for `LUH-O451S-WEU`** (EU OasisMist 450S 4.5L) — ships as preview in the existing OasisMist 450S driver (`LevoitOasisMist450S.groovy`). Single-driver, runtime-gated implementation. Standard Hubitat `ColorControl` capability + custom `setNightlightSwitch`. Based on [pyvesync PR #502](https://github.com/webdjoe/pyvesync/pull/502) (OPEN/CHANGES_REQUESTED, stalled 2026-01). **Future:** monitor PR #502 for upstream merge; if merged payload or gradient values differ from v2.2 implementation, update `colorSliderLocation` anchor table and re-verify HSV-brightness adjustment against pyvesync's `_apply_brightness_to_rgb`. Community EU hardware reports welcome — paste `applyStatus raw r ...` debug log and `setColor` response in the [Hubitat thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499).
 
 ### Fixed in v2.2
 
@@ -42,18 +43,31 @@ Items below are not yet locked to a release. They're available for community pic
 | LV600S Hub Connect | `LUH-A603S-WUS` | `VeSyncLV600S` | **Naming trap** — different class than `-A602S` despite both being branded "LV600S" |
 | Sprout Humid | `LEH-B381S-*` | `VeSyncSproutHumid` | Newest humidifier class, less docs |
 | Classic 200S | `Classic200S` | `VeSyncHumid200S` | Different class from `VeSyncHumid200300S` despite the naming similarity |
-| Dual 200S | `Dual200S`, `LUH-D301S-*` | `VeSyncHumid200300S` | Trivial after Classic 300S (shipped v2.1) — same class, mist 1-2 instead of 1-9 |
-| OasisMist 450S EU | `LUH-O451S-WEU` | `VeSyncHumid200300S` | Trivial after 450S US (shipped v2.1) — same class, no humidity mode |
+| ~~**Dual 200S**~~ | ~~`Dual200S`, `LUH-D301S-*`~~ | ~~`VeSyncHumid200300S`~~ | **Shipped v2.2 as preview.** Mist 1-2, auto/manual modes, no nightlight command. |
+| ~~OasisMist 450S EU~~ | ~~`LUH-O451S-WEU`~~ | ~~`VeSyncHumid200300S`~~ | **Shipped v2.2.** Model code routed to existing OasisMist 450S driver. |
 | OasisMist 1000S EU / Vibe Mini | `LUH-M101S-WEUR` | `VeSyncHumid1000S` | Low effort after 1000S US |
 
 #### Tier 4 — out-of-scope unless demand surfaces
 
 - **LV-PUR131S** / **LV-RH131S** — older WiFi 131 line. Different API entirely (NOT bypassV2). Older Wi-Fi cloud protocol with different envelope; would need a separate `sendV1Request` path. Substantial separate code path for products that are EOL (~2018-2020 generation). **Recommend SKIP** unless explicit community demand justifies the infrastructure work.
 
+### Deferred model code variants (low-urgency, v2.3+)
+
+The v2.2 pyvesync audit identified two additional model codes present in `device_map.py` that were NOT added to `deviceType()` in v2.2. These fall through to the Generic driver today.
+
+| Code | Likely dtype | Reason deferred |
+|---|---|---|
+| `LAP-C301S-WAAA` | `300S` | Unknown region suffix `WAAA`; pyvesync supports it but suffix meaning is undocumented. Routing it to Core 300S is almost certainly correct, but without a community hardware report it's hard to confirm. Low risk to add; low urgency. |
+| `LAP-C302S-WGC` | `300S` | Unknown region suffix `WGC`; same reasoning. `C302S` is the bundle SKU family (`LAP-C302S-WUSB` was added in v2.2 for US); `WGC` could be a China mainland variant. Low risk; low urgency. |
+
+Community hardware reports (a debug log showing the model code + `captureDiagnostics` output) will confirm routing and unblock adding these in the next polish round.
+
 ### Tooling & dev experience
 
 - **Full pyvesync compatibility audit** — manual side-by-side pass through every supported driver against pyvesync's canonical fixtures + class implementations, plus an automated `PyvesyncCoverageSpec` CI gate that re-runs on pyvesync upstream refresh. Catches the entire class of "VeSync API drifted, our driver silently wrong" bugs before they reach users.
-- **Whole-repo `runIn` bare-identifier sweep** — convert remaining bare-identifier `runIn(N, handlerName)` calls to string-literal form for portability between Hubitat sandbox and the test classloader. ~14 instances across 8 files; bundle with the next child-driver lifecycle spec coverage round.
+- **Whole-repo `runIn` hygiene pass** — two related audits bundled:
+  - **Bare-identifier sweep:** convert remaining bare-identifier `runIn(N, handlerName)` calls to string-literal form for portability between Hubitat sandbox and the test classloader. ~14 instances across 8 files.
+  - **Reboot-survival audit:** classify every `runIn`/`runInMillis` call site by reboot-survival risk. Empirical pattern (BP14 polling chain + BP16 debug auto-disable) is that load-bearing `runIn` timers don't survive hub reboots. Catalog each remaining call as (a) one-shot user-action-triggered (low risk; no stuck-state), (b) load-bearing recurring with watchdog (BP14/BP16 already covered), (c) load-bearing one-shot vulnerable (apply watchdog or re-architecture). Call sites not yet audited: `runIn(15, "initialize")` in updated/installed, `runIn(10, "updateDevices")` post-discovery kick, `runIn(5 * (int)settings.refreshInterval, "timeOutLevoit")` watchdog, `runInMillis(500, "configureOnState")` post-command, `runIn(3, "refresh")` in preview-driver `updated()`. Bundle with the bare-identifier sweep into a single child-driver lifecycle hygiene round.
 - **Virtual test parent driver** — sibling driver to `VeSyncIntegration.groovy` that returns canned pyvesync-fixture data instead of talking to the cloud. Lets contributors exercise child-driver parser paths end-to-end without owning the hardware. Worth building if hardware coverage expands or if multiple new device types need to land in succession.
 - **Pyvesync local Python harness** — small Python script that diff's our driver payloads against pyvesync's canonical request/response shapes. Useful as a CI gate; skip until CI is the limiting factor.
 - **`CONTRIBUTING.md`** — translate the dev/QA/tester pipeline + agent dispatch + PR conventions in `CLAUDE.md` to a human-contributor audience.

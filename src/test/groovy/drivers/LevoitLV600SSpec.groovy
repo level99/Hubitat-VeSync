@@ -16,8 +16,12 @@ import support.TestParent
  *   Mist level      -- setMistLevel(5) produces setVirtualLevel with {id:0, level:5, type:'mist'}
  *   Warm mist level -- setWarmMistLevel(2) produces setVirtualLevel with {id:0, level:2, type:'warm'}
  *   Warm mist off   -- setWarmMistLevel(0) sets warmMistEnabled='off' (LV600S-correct logic)
- *   Mode payload    -- setMode("auto") produces setHumidityMode with {mode:'auto'} (NOT 'workMode')
- *   PR #505 check   -- mode payload uses 'mode' field key (no 'humidity' fallback in this driver)
+ *   Mode write-path -- setMode("auto") canonical-accept: payload="auto", cached as "std"
+ *                   -- setMode("auto") canonical-reject, alt-accept: falls back to "humidity", cached as "alt"
+ *                   -- setMode("auto") with cached "alt": goes direct to "humidity" without retry
+ *                   -- updated() clears state.firmwareVariant so firmware updates are re-detected
+ *   Mode read-path  -- "auto"/"autoPro"/"humidity" all normalize to user-facing "auto"
+ *   PR #505 check   -- mode payload uses 'mode' field key (not 'workMode')
  *   Target humidity -- setHumidity(55) produces setTargetHumidity with {target_humidity:55}
  *   Display field   -- 'display' key first; fallback to 'indicator_light_switch'
  *   No night-light  -- driver declares no setNightLight command, no night_light_brightness parsing
@@ -496,28 +500,91 @@ class LevoitLV600SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Mode payload (LV600S uses 'mode' not 'workMode' -- VeSyncHumid200300S class)
+    // Mode write-path: multi-firmware try-canonical-then-fallback-with-cache (PR #505)
     // -------------------------------------------------------------------------
 
-    def "setMode('auto') sends setHumidityMode with {mode:'auto'} -- NOT workMode, NOT 'humidity' (pyvesync canonical)"() {
-        given:
-        settings.descriptionTextEnable = false
+    def "setMode('auto') canonical-accept: first attempt uses 'auto' payload, cached as 'std'"() {
+        given: "no cached firmware variant (first call)"
+        settings.descriptionTextEnable = true
+        assert state.firmwareVariant == null
+
+        when: "setMode('auto') called -- defaultOkResponse => inner code 0 => canonical accepted"
+        driver.setMode("auto")
+
+        then: "first request used canonical 'auto' payload"
+        def req = testParent.allRequests[0]
+        req != null
+        req.method == "setHumidityMode"
+        req.data.mode == "auto"
+
+        and: "only one request was sent (no retry needed)"
+        testParent.allRequests.size() == 1
+
+        and: "firmwareVariant cached as 'std'"
+        state.firmwareVariant == "std"
+
+        and: "mode event emitted as 'auto' (user-facing)"
+        lastEventValue("mode") == "auto"
+
+        and: "Superior 6000S 'workMode' field is absent"
+        !req.data.containsKey("workMode")
+    }
+
+    def "setMode('auto') canonical-reject then alt-accept: falls back to 'humidity', cached as 'alt'"() {
+        given: "no cached variant; canonical 'auto' payload rejected (inner code -1)"
+        settings.descriptionTextEnable = true
+        // First sendBypassRequest call gets inner-error response (rejects "auto")
+        // Second call (retry with "humidity") gets success
+        testParent.cannedResponse = TestParent.innerErrorResponse()
 
         when:
         driver.setMode("auto")
 
-        then:
-        def req = testParent.allRequests.find { it.method == "setHumidityMode" }
-        req != null
-        // CROSS-CHECK: canonical pyvesync LUH-A602S-WUS.yaml fixture uses "auto"
-        // PR #505 says WEU variant needs "humidity" -- but that PR is unmerged
-        req.data.mode == "auto"
+        then: "two requests sent: first 'auto' (rejected), then 'humidity' (accepted)"
+        testParent.allRequests.size() == 2
+        testParent.allRequests[0].data.mode == "auto"
+        testParent.allRequests[1].data.mode == "humidity"
 
-        and: "Superior 6000S field name 'workMode' is absent"
-        !req.data.containsKey("workMode")
+        and: "firmwareVariant cached as 'alt'"
+        state.firmwareVariant == "alt"
+
+        and: "mode event emitted as 'auto' (user-facing, despite 'humidity' payload used)"
+        lastEventValue("mode") == "auto"
     }
 
-    def "setMode('sleep') sends setHumidityMode with {mode:'sleep'}"() {
+    def "setMode('auto') with cached 'alt': goes direct to 'humidity' payload, no retry"() {
+        given: "firmwareVariant already cached as 'alt' (from prior detection)"
+        settings.descriptionTextEnable = true
+        state.firmwareVariant = "alt"
+
+        when:
+        driver.setMode("auto")
+
+        then: "only one request sent, directly with 'humidity' payload (cache hit)"
+        testParent.allRequests.size() == 1
+        testParent.allRequests[0].data.mode == "humidity"
+
+        and: "firmwareVariant remains 'alt'"
+        state.firmwareVariant == "alt"
+
+        and: "mode event emitted as 'auto'"
+        lastEventValue("mode") == "auto"
+    }
+
+    def "updated() clears state.firmwareVariant so firmware updates get re-detected on next setMode('auto')"() {
+        given: "firmwareVariant is set from a prior detection session"
+        settings.descriptionTextEnable = false
+        state.firmwareVariant = "alt"
+        assert state.firmwareVariant == "alt"
+
+        when: "updated() is called (e.g. user clicks Save Preferences after firmware update)"
+        driver.updated()
+
+        then: "state is cleared including firmwareVariant"
+        state.firmwareVariant == null
+    }
+
+    def "setMode('sleep') sends setHumidityMode with {mode:'sleep'} -- no fallback logic for non-auto modes"() {
         given:
         settings.descriptionTextEnable = false
 
@@ -528,6 +595,7 @@ class LevoitLV600SSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setHumidityMode" }
         req != null
         req.data.mode == "sleep"
+        testParent.allRequests.size() == 1  // no retry for sleep
     }
 
     def "setMode('manual') sends setHumidityMode with {mode:'manual'}"() {
@@ -556,25 +624,18 @@ class LevoitLV600SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // pyvesync PR #505 read-path: mode='humidity' from device is emitted as-received
+    // Mode read-path normalization: "auto"/"autoPro"/"humidity" all map to user-facing "auto"
     // -------------------------------------------------------------------------
 
-    def "applyStatus mode='humidity' (EU firmware variant per PR #505) emitted as-received without remapping"() {
+    def "applyStatus mode='humidity' (EU firmware per PR #505) normalized to user-facing 'auto'"() {
         given:
         settings.descriptionTextEnable = false
-        // Simulate a LUH-A602S-WEU device that reports mode='humidity' in status
+        // Simulate LUH-A602S-WEU reporting mode='humidity' (its auto-mode alias)
         def deviceData = [
-            enabled: true,
-            humidity: 60,
-            mist_virtual_level: 4,
-            mist_level: 4,
-            mode: "humidity",   // PR #505 EU firmware variant auto-mode alias
-            water_lacks: false,
-            humidity_high: false,
-            water_tank_lifted: false,
-            warm_enabled: false,
-            warm_level: 0,
-            display: true,
+            enabled: true, humidity: 60, mist_virtual_level: 4, mist_level: 4,
+            mode: "humidity",   // EU firmware auto-mode alias -- must normalize to "auto"
+            water_lacks: false, humidity_high: false, water_tank_lifted: false,
+            warm_enabled: false, warm_level: 0, display: true,
             automatic_stop_reach_target: false,
             configuration: [auto_target_humidity: 65, display: true, automatic_stop: true]
         ]
@@ -583,9 +644,63 @@ class LevoitLV600SSpec extends HubitatSpec {
         when:
         driver.applyStatus(status)
 
-        then: "mode is passed through as 'humidity' -- reality wins over our allow-list"
-        lastEventValue("mode") == "humidity"
+        then: "mode attribute is 'auto' (normalized from 'humidity') for user-facing consistency"
+        lastEventValue("mode") == "auto"
         noExceptionThrown()
+    }
+
+    def "applyStatus mode='autoPro' normalized to user-facing 'auto'"() {
+        given:
+        settings.descriptionTextEnable = false
+        def deviceData = [
+            enabled: true, humidity: 55, mist_virtual_level: 3, mist_level: 3,
+            mode: "autoPro",   // alternate auto-mode alias (some firmware variants)
+            water_lacks: false, humidity_high: false, water_tank_lifted: false,
+            warm_enabled: false, warm_level: 0, display: true,
+            automatic_stop_reach_target: false,
+            configuration: [auto_target_humidity: 60, display: true, automatic_stop: false]
+        ]
+        def status = purifierStatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "mode attribute is 'auto' (normalized from 'autoPro')"
+        lastEventValue("mode") == "auto"
+    }
+
+    def "applyStatus mode='auto' passes through unchanged (standard firmware)"() {
+        given:
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("LUH-A602S.yaml")
+        def status = purifierStatusEnvelope(fixture.responses.device_on_auto_mode as Map)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "'auto' -> 'auto' (no remapping needed; normalization is a no-op)"
+        lastEventValue("mode") == "auto"
+    }
+
+    def "applyStatus mode='sleep' passes through unchanged (not an auto alias)"() {
+        given:
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("LUH-A602S.yaml")
+        def status = purifierStatusEnvelope(fixture.responses.device_on_warm_mist_level2 as Map)
+        // device_on_warm_mist_level2 has mode='manual' -- use inline for sleep
+        def deviceData = [
+            enabled: true, humidity: 50, mist_virtual_level: 3, mist_level: 3,
+            mode: "sleep", water_lacks: false, humidity_high: false, water_tank_lifted: false,
+            warm_enabled: false, warm_level: 0, display: true,
+            automatic_stop_reach_target: false,
+            configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
+        ]
+
+        when:
+        driver.applyStatus(purifierStatusEnvelope(deviceData))
+
+        then: "'sleep' -> 'sleep' (not remapped)"
+        lastEventValue("mode") == "sleep"
     }
 
     // -------------------------------------------------------------------------

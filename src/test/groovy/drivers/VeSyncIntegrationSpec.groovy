@@ -23,6 +23,12 @@ import support.TestDevice
  *                     getDeviceRegion() default, EU setting, getApiHost() routing,
  *                     updated() region-change clears token, no-op on same-region save,
  *                     bypassV2 body reflects preference value
+ *   Section K       — Model code routing v2.2 audit additions (6 new codes):
+ *                     LUH-O451S-WEU, LAP-V201S-AEUR, LAP-V201-AUSR (no-S typo SKU),
+ *                     LAP-C202S-WUSR, LAP-V201S-WJP, LAP-C302S-WUSB
+ *   Section L       — Bug Pattern #16 (debug auto-disable watchdog, parent):
+ *                     updated() timestamp set/clear, ensureDebugWatchdog() no-op below
+ *                     threshold, fires above threshold, called from updateDevices()
  *
  * ARCHITECTURE NOTE: The parent driver is NOT a child — it runs differently.
  * It calls httpPost (for login/getDevices), not parent.sendBypassRequest.
@@ -1982,5 +1988,167 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         then: "the request body carries deviceRegion 'EU' matching the preference"
         capturedBypassBodies.size() == 1
         capturedBypassBodies[0].deviceRegion == "EU"
+    }
+
+    // =========================================================================
+    // Section K — Model code routing: v2.2 audit additions
+    //
+    // Six regional / variant model codes added to deviceType() by the v2.2 pyvesync
+    // audit. All map to existing dtypes and existing drivers -- no new driver
+    // behavior. Tests are a single parameterized spec so the where: table is the
+    // single source of truth for the routing contract.
+    //
+    // Deferred (v2.3+ candidates): LAP-C301S-WAAA, LAP-C302S-WGC -- unknown-region
+    // suffix codes; pyvesync supports them but suffix meaning is unclear. Not added
+    // here to avoid silently misrouting if the API behavior differs.
+    // =========================================================================
+
+    def "deviceType() routes v2.2 audit model codes to correct dtype (K1)"(String code, String expected) {
+        // K1: parameterized routing table for all 6 codes added in the v2.2 pyvesync audit.
+        // Each row is a model code → expected dtype assertion.
+        //
+        // LAP-V201-AUSR (no S after V201): intentional typo SKU -- this is the literal code
+        // the VeSync API emits for AU-market V201S hardware per pyvesync device_map.py.
+        // The missing S is NOT a test typo; do not "fix" it.
+        expect:
+        driver.deviceType(code) == expected
+
+        where:
+        code                | expected
+        "LUH-O451S-WEU"    | "O451S"   // EU OasisMist 450S -- same VeSyncHumid200300S class
+        "LAP-V201S-AEUR"   | "V200S"   // EU V201S variant -- same VeSyncAirBypass class
+        "LAP-V201-AUSR"    | "V200S"   // AU V201S: no-S typo SKU as emitted by VeSync API
+        "LAP-C202S-WUSR"   | "200S"    // US Core 200S variant -- same VeSyncAirBypass class
+        "LAP-V201S-WJP"    | "V200S"   // Japan V201S variant -- same VeSyncAirBypass class
+        "LAP-C302S-WUSB"   | "300S"    // US Core 300S bundle SKU -- same VeSyncAirBypass class
+    }
+
+    // =========================================================================
+    // Section L — Bug Pattern #16: debug auto-disable watchdog (parent)
+    //
+    // runIn(1800, "logDebugOff") in updated() is in-memory only. After a hub
+    // reboot settings.debugOutput persists true but the runIn timer evaporates.
+    // ensureDebugWatchdog() detects that condition and self-heals within one poll.
+    //
+    // Tests:
+    //   L1 — updated() records state.debugEnabledAt when debug enabled
+    //   L2 — updated() clears state.debugEnabledAt when debug disabled
+    //   L3 — ensureDebugWatchdog() no-ops when debugOutput is false
+    //   L4 — ensureDebugWatchdog() no-ops when elapsed < 30 min
+    //   L5 — ensureDebugWatchdog() fires and disables when elapsed >= 30 min
+    //   L6 — updateDevices() calls ensureDebugWatchdog() (integration)
+    // =========================================================================
+
+    def "updated() records state.debugEnabledAt when debugOutput is enabled (L1)"() {
+        // L1: when the user enables debug and saves preferences, updated() must
+        // record a timestamp so the watchdog can measure elapsed time post-reboot.
+        given: "debugOutput is true"
+        settings.debugOutput = true
+        settings.refreshInterval = 30
+
+        when:
+        driver.updated()
+
+        then: "state.debugEnabledAt is set to a recent timestamp"
+        state.debugEnabledAt != null
+        // Within 5 seconds of now() -- not checking exact value, just presence
+        Math.abs(driver.now() - (state.debugEnabledAt as Long)) < 5000
+    }
+
+    def "updated() clears state.debugEnabledAt when debugOutput is disabled (L2)"() {
+        // L2: when the user disables debug, updated() must remove debugEnabledAt
+        // so the watchdog does not fire on a stale timestamp from a prior enable.
+        given: "state has a prior timestamp and debugOutput is now false"
+        state.debugEnabledAt = driver.now() - (60 * 60 * 1000)  // 60 min ago
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+
+        when:
+        driver.updated()
+
+        then: "state.debugEnabledAt is removed"
+        !state.containsKey("debugEnabledAt")
+    }
+
+    def "ensureDebugWatchdog() is a no-op when debugOutput is false (L3)"() {
+        // L3: watchdog should short-circuit immediately when debug is off.
+        // No updateSetting call should be made.
+        given:
+        settings.debugOutput = false
+        state.debugEnabledAt = driver.now() - (2 * 60 * 60 * 1000)  // 2 hours ago
+
+        when:
+        driver.ensureDebugWatchdog()
+
+        then: "no setting update triggered"
+        def debugCall = testDevice.settingsUpdates.find { it.name == "debugOutput" }
+        debugCall == null
+    }
+
+    def "ensureDebugWatchdog() is a no-op when elapsed time is less than 30 min (L4)"() {
+        // L4: within the 30-min window, watchdog must not fire.
+        // This ensures a fresh debug enable is not immediately killed.
+        given: "debug enabled 10 min ago (within window)"
+        settings.debugOutput = true
+        settings.descriptionTextEnable = true
+        state.debugEnabledAt = driver.now() - (10 * 60 * 1000)  // 10 min ago
+
+        when:
+        driver.ensureDebugWatchdog()
+
+        then: "no updateSetting call (watchdog did not fire)"
+        def debugCall = testDevice.settingsUpdates.find { it.name == "debugOutput" }
+        debugCall == null
+
+        and: "no BP16 log emitted"
+        !testLog.infos.any { it.contains("BP16") }
+    }
+
+    def "ensureDebugWatchdog() disables debug when elapsed >= 30 min (L5)"() {
+        // L5: core BP16 behavior — when debugOutput has been true for >30 min
+        // (runIn timer evaporated post-reboot), watchdog auto-disables it.
+        given: "debug was enabled 35 min ago (past the 30-min threshold)"
+        settings.debugOutput = true
+        settings.descriptionTextEnable = true
+        state.debugEnabledAt = driver.now() - (35 * 60 * 1000)  // 35 min ago
+
+        when:
+        driver.ensureDebugWatchdog()
+
+        then: "updateSetting called to disable debugOutput"
+        def debugCall = testDevice.settingsUpdates.find { it.name == "debugOutput" }
+        debugCall != null
+        debugCall.value == false
+
+        and: "state.debugEnabledAt is cleared"
+        !state.containsKey("debugEnabledAt")
+
+        and: "BP16 INFO log emitted with the expected token"
+        testLog.infos.any { it.contains("BP16 watchdog") }
+    }
+
+    def "updateDevices() calls ensureDebugWatchdog() during poll cycle (L6 -- integration)"() {
+        // L6: integration -- ensureDebugWatchdog() must be invoked from updateDevices()
+        // so the watchdog self-heals without user interaction.
+        // We set debug to true with a stale timestamp and verify the watchdog fires.
+        given: "debug stuck true for 40 min (post-reboot scenario)"
+        settings.debugOutput = true
+        settings.descriptionTextEnable = true
+        settings.refreshInterval = 30
+        state.debugEnabledAt = driver.now() - (40 * 60 * 1000)  // 40 min ago
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"  // skip BP14 migration noise
+        state.deviceList = [:]
+
+        when:
+        driver.updateDevices()
+
+        then: "watchdog fired: debugOutput was disabled"
+        def debugCall = testDevice.settingsUpdates.find { it.name == "debugOutput" }
+        debugCall != null
+        debugCall.value == false
+
+        and: "BP16 INFO log emitted"
+        testLog.infos.any { it.contains("BP16 watchdog") }
     }
 }

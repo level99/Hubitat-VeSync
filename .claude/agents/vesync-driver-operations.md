@@ -32,7 +32,7 @@ Reason: Hubitat MCP server not available in this Claude Code session.
 Recommendation: Orchestrator should perform manual deploy via Hubitat UI:
   1. In Hubitat UI: Drivers Code → find driver → Edit → paste new content → Save
   2. Open the affected device's page → Refresh
-  3. Check Logs for expected markers (see CLAUDE.md "Log markers" section)
+  3. Check Logs for expected markers (see the "Log markers" section below in this document)
   4. Confirm attribute values via the device page
 ```
 

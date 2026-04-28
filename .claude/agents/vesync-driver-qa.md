@@ -421,6 +421,56 @@ private ensurePollWatchdog() {
 
 **Flag this pattern** whenever you see `subscribe(location, ...)` or `unsubscribe()` in a driver diff. It is always BLOCKING.
 
+### 16. `debugOutput` stuck `true` indefinitely after hub reboot
+
+**Symptom:** Debug log spam running indefinitely after a hub reboot — roughly 2.75 lines/sec from `sendBypassRequest` / API-trace calls. Parent device `1064` observed generating weeks of continuous debug spam, caught manually. User may report "my logs are flooded."
+
+**Root cause:** Same class as BP14. `runIn(1800, "logDebugOff")` in `updated()` is in-memory only; it evaporates across hub reboots. `settings.debugOutput` persists across reboots (Hubitat settings are disk-backed). `updated()` does NOT auto-fire on hub-reboot recovery (platform fact, same constraint as BP14). Result: `debugOutput=true` forever with no further user action, until the user manually opens Preferences and saves.
+
+**Fix:**
+
+In `updated()` of every driver (parent + all 16 children):
+```groovy
+// Existing runIn stays (happy path — no reboot):
+if (settings?.debugOutput) {
+    runIn(1800, "logDebugOff")
+    state.debugEnabledAt = now()   // NEW: record timestamp for watchdog
+} else {
+    state.remove("debugEnabledAt")  // NEW: clear on disable
+}
+```
+
+New `ensureDebugWatchdog()` method in every driver (identical 10-line body):
+```groovy
+private void ensureDebugWatchdog() {
+    if (settings?.debugOutput && state.debugEnabledAt) {
+        Long elapsed = now() - (state.debugEnabledAt as Long)
+        if (elapsed > 30 * 60 * 1000) {
+            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
+            device.updateSetting("debugOutput", [type:"bool", value:false])
+            state.remove("debugEnabledAt")
+        }
+    }
+}
+```
+
+Call sites:
+- **Parent (`VeSyncIntegration.groovy`):** top of `updateDevices()`, alongside `ensurePollWatchdog()` (after pref-seed, before `driverReloading` guard).
+- **Each child:** top of `update(status, nightLight)` (the 2-arg required signature).
+- **`LevoitCore200S Light.groovy` exception:** top of `update(status)` (1-arg only; this child has no 2-arg signature per the BP1 exception for this driver).
+- **`Notification Tile.groovy`:** top of `deviceNotification(notification)` (event-driven, no `update()` method). Uses `logsOff()` not `logDebugOff()`; `ensureDebugWatchdog()` body mirrors the same disable + clear logic.
+
+**Critical properties:**
+- The existing `runIn(1800, "logDebugOff")` pattern STAYS. BP16 is additive — both layers coexist. `runIn` handles the happy path (no reboot within 30 min); the watchdog handles the broken-by-reboot path.
+- `state.debugEnabledAt` is set fresh on every Save Preferences when debug is enabled — gives the user a fresh 30-min window each time.
+- `state.debugEnabledAt` is cleared by `state.clear()` in `forceReinitialize()` (parent) — auto-handles. No explicit workaround needed.
+- The watchdog is idempotent: O(1) overhead once debug is off (`settings?.debugOutput` is false → first condition fails → return immediately).
+- INFO log format: `"BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"` — explicit BP16 token, matches BP14's migration log style. Visible in Live Logs without debug enabled.
+
+**Live-verified:** pending (no live deploy completed at time of writing — v2.2 task 9 diff).
+
+**Flag this pattern** whenever a driver diff adds a `runIn(1800, "logDebugOff")` without the accompanying `state.debugEnabledAt = now()` state-tracking. It is BLOCKING — the fix is incomplete without the timestamp.
+
 ---
 
 ## Report format

@@ -46,6 +46,7 @@ Copy the relevant `.groovy` files from the `Drivers/Levoit/` directory into Hubi
 | `LevoitSuperior6000S.groovy` | Levoit Superior 6000S evaporative humidifier |
 | `LevoitOasisMist450S.groovy` | Levoit OasisMist 450S Smart Humidifier (US) *(v2.1 preview)* |
 | `LevoitLV600S.groovy` | Levoit LV600S Humidifier *(v2.2 preview)* |
+| `LevoitDual200S.groovy` | Levoit Dual 200S Humidifier *(v2.2 preview)* |
 | `LevoitTowerFan.groovy` | Levoit Tower Fan *(v2.1 preview)* |
 | `LevoitPedestalFan.groovy` | Levoit Pedestal Fan *(v2.1 preview)* |
 | `LevoitGeneric.groovy` | **Fall-through diagnostic driver** — any unrecognized Levoit model code. Best-effort power control + `captureDiagnostics()` for filing new-device-support requests. |
@@ -120,7 +121,7 @@ Same as 300S except `speed` adds `max`.
 
 Same as 400S; `auto_mode` adds `eco`.
 
-### Vital 200S (LAP-V201S)
+### Vital 200S (LAP-V201S-*, LAP-V201-AUSR¹)
 
 | event | Values | Description |
 | --- | --- | --- |
@@ -214,11 +215,13 @@ Commands: `setMode`, `setMistLevel`, `setTargetHumidity`, `setDisplay`, `setChil
 
 Commands: `setMode`, `setMistLevel` (1-9), `setHumidity` (30-80), `setNightLight` (off/dim/bright), `setDisplay`, `setAutoStop`, `toggle`.
 
-### OasisMist 450S Smart Humidifier (LUH-O451S, LUH-O601S) *— v2.1 preview*
+### OasisMist 450S Smart Humidifier (LUH-O451S-*, LUH-O601S-*) *— v2.1/v2.2 preview*
 
-Builds on the Classic 300S API platform. Adds warm-mist (3 levels). Differs from Classic 300S: **no night-light hardware** (no `setNightLight` command), and `setMode` excludes `humidity` (device firmware universally rejects that mode per pyvesync issue #295). Target humidity range is 40-80 (firmware floor of 40, per pyvesync issue #296).
+Builds on the Classic 300S API platform. Adds warm-mist (3 levels). Differs from Classic 300S: **no night-light hardware** on US/KUS variants (no `setNightLight` command), and `setMode` excludes `humidity` as a user-settable mode (device firmware universally rejects that mode per pyvesync issue #295; v2.2 transparently handles firmware variants where `humidity` is the internal auto-mode payload). Target humidity range is 40-80 (firmware floor of 40, per pyvesync issue #296).
 
-Covers all 4 model codes: LUH-O451S-WUS, LUH-O451S-WUSR, LUH-O601S-WUS, LUH-O601S-KUS.
+Covers 5 model codes: LUH-O451S-WUS, LUH-O451S-WUSR, LUH-O451S-WEU (EU 4.5L variant, added v2.2), LUH-O601S-WUS, LUH-O601S-KUS.
+
+**LUH-O451S-WEU (EU variant) only:** RGB nightlight support added in v2.2. Hubitat `ColorControl` capability is declared for all variants (static metadata limitation); commands gate at runtime on the detected model code. Non-WEU users see the ColorControl commands on their device page; they no-op with an INFO log ("RGB nightlight not supported on this hardware variant"). Based on [pyvesync PR #502](https://github.com/webdjoe/pyvesync/pull/502) (OPEN/CHANGES_REQUESTED, stalled 2026-01) — **ships as preview** pending EU community hardware validation.
 
 | event | Values | Description |
 | --- | --- | --- |
@@ -235,8 +238,15 @@ Covers all 4 model codes: LUH-O451S-WUS, LUH-O451S-WUSR, LUH-O601S-WUS, LUH-O601
 | autoStopReached | yes, no | Whether auto-stop is currently active |
 | humidityHigh | yes, no | Whether humidity exceeds the high-alarm threshold |
 | info | HTML | Tile summary |
+| nightlightSwitch | on, off | RGB nightlight power state (**LUH-O451S-WEU only**) |
+| nightlightBrightness | 40-100 | RGB nightlight brightness (**LUH-O451S-WEU only**; firmware floor at 40) |
+| hue | 0-100 | ColorControl hue (0-100 Hubitat scale) (**LUH-O451S-WEU only**) |
+| saturation | 0-100 | ColorControl saturation (**LUH-O451S-WEU only**) |
+| colorMode | RGB | Color mode (**LUH-O451S-WEU only**) |
 
 Commands: `setMode`, `setMistLevel` (1-9), `setHumidity` (40-80), `setWarmMistLevel` (0-3), `setDisplay`, `setAutoStop`, `toggle`.
+
+RGB commands (**LUH-O451S-WEU only** — no-op with INFO log on other variants): `setNightlightSwitch` (on/off), `setColor` (Hubitat ColorControl map: hue 0-100, saturation 0-100, level 0-100), `setHue` (0-100), `setSaturation` (0-100).
 
 ### LV600S Humidifier (LUH-A602S-*) *— v2.2 preview*
 
@@ -262,6 +272,28 @@ Covers all 6 model codes: LUH-A602S-WUSR, LUH-A602S-WUS, LUH-A602S-WEUR, LUH-A60
 | info | HTML | Tile summary |
 
 Commands: `setMode`, `setMistLevel` (1-9), `setHumidity` (30-80), `setWarmMistLevel` (0-3), `setDisplay`, `setAutoStop`, `toggle`. (No `setNightLight` — hardware absent.)
+
+### Dual 200S Humidifier (LUH-D301S-*) *— v2.2 preview*
+
+Same VeSyncHumid200300S API class as Classic 300S + LV600S. **Key differences from Classic 300S:** mist range is 1-2 only (not 1-9); supported modes are auto and manual only (no sleep per pyvesync device_map.py LUH-D301S entry); no warm mist; no nightlight command (nightlight feature flag absent — `nightLightBrightness` is a read-only passive attribute). EU SKUs (LUH-D301S-WEU, LUH-D301S-KEUR) apply the same multi-firmware auto-mode try-fallback as LV600S (pyvesync PR #505 risk).
+
+Covers all 5 model codes: `Dual200S` (literal device type reported by some firmware), `LUH-D301S-WUSR`, `LUH-D301S-WJP`, `LUH-D301S-WEU`, `LUH-D301S-KEUR`.
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| mode | auto, manual | Current mode (auto/manual only; sleep not supported per device_map.py) |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 30-80 | Auto-mode target humidity |
+| mistLevel | 0-2 | Reported mist level (0 = inactive; max 2 per hardware spec) |
+| waterLacks | yes, no | Water-tank low/empty indicator |
+| displayOn | on, off | Front-panel display state |
+| autoStopEnabled | on, off | Auto-stop-when-target-reached config |
+| autoStopReached | yes, no | Whether auto-stop is currently active |
+| nightLightBrightness | 0, 50, 100 | Night-light brightness from API (read-only; no setter command) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/manual), `setMistLevel` (1-2), `setHumidity` (30-80), `setDisplay`, `setAutoStop`, `toggle`. (No `setNightLight` — feature flag absent; no `setWarmMistLevel` — hardware absent.)
 
 ### Tower Fan (LTF-F422S) *— v2.1 preview*
 
@@ -372,6 +404,8 @@ If something doesn't work right, capture a debug log and post it ([Hubitat commu
 Account email, accountID, and auth token are auto-redacted in every log line — you can post directly without scrubbing. Debug logging auto-disables 30 minutes after enabling.
 
 If a maintainer asks for deeper API output, they'll point you to the **Verbose API response logging** preference on the parent device — same procedure, that toggle additionally captures the full API response body.
+
+¹ `LAP-V201-AUSR` (no `S` after `V201`) is an intentional typo SKU — this is the literal model code the VeSync cloud API emits for AU-market V201S hardware per pyvesync `device_map.py`. The driver routes it to the Vital 200S child device. Do not assume it is a different model.
 
 ## Acknowledgements
 

@@ -221,7 +221,7 @@ You don't have to deploy to merge — code review + spec-conformance via the dev
 
 ---
 
-## Logging conventions (enforce in every change)
+## Logging conventions
 
 Three preferences gate logging in every driver:
 
@@ -288,6 +288,7 @@ The QA agent's definition contains a numbered catalog of bug patterns from the v
 13. Token-expiry silent failure (no re-auth on HTTP 401 or inner auth codes)
 14. Hub-reboot drops `runIn`-based poll cycle — `runIn()` is in-memory only; use `schedule()` cron for periodic work (persists across reboots). See `vesync-driver-qa.md` BP14 entry for canonical `setupPollSchedule()` + `ensurePollWatchdog()` design and live-verification footer.
 15. Driver code uses app-only API (`subscribe`/`unsubscribe` to location events) — drivers cannot subscribe to location events; use `schedule()` for periodic work, parent→child calls for cross-device. HubitatSpec mock must fail-fast (not no-op). See `vesync-driver-qa.md` BP15 entry for full root-cause + fix.
+16. `debugOutput` stuck `true` indefinitely after hub reboot — `runIn(1800, "logDebugOff")` in `updated()` is in-memory only and evaporates across reboots; `settings.debugOutput` persists. Fix: `updated()` records `state.debugEnabledAt = now()` when debug enabled (clears it when disabled); `ensureDebugWatchdog()` at top of every poll/command entry auto-disables when elapsed > 30 min. Same architectural shape as BP14. See `vesync-driver-qa.md` BP16 entry for full design.
 
 When the developer or QA recognizes one of these patterns in a diff, name it explicitly: *"Bug Pattern #1 — missing 2-arg signature."* The other agent recognizes the name and applies the canonical fix.
 

@@ -36,6 +36,27 @@ SOFTWARE.
 //                    accountID, and forces re-login when region is switched.
 //                  NOTE: EU support ships as preview -- no EU hardware live-verified.
 //                  Community validation welcome on Hubitat thread.
+// 2026-04-27: v2.2+ Dual 200S Humidifier preview driver wiring.
+//                  - deviceType() switch: added Dual200S, LUH-D301S-WUSR, LUH-D301S-WJP,
+//                    LUH-D301S-WEU, LUH-D301S-KEUR returning "D301S" dtype.
+//                  - getDevices() addChildDevice loop: new D301S else-if branch with
+//                    verify1 defensive validation, mapping to "Levoit Dual 200S Humidifier".
+//                  - getDevices() newList tracking: extended cid-tracking conditional
+//                    to include "D301S".
+//                  - isLevoitClimateDevice(): LUH-D301S-* covered by existing LUH-* blanket;
+//                    "Dual200S" literal added to the literal-names list (RULE22 parity).
+// 2026-04-27: v2.2+ Debug auto-disable watchdog (Bug Pattern #16).
+//                  - updated() now records state.debugEnabledAt = now() when debug is
+//                    enabled, and clears it when debug is disabled.  The existing
+//                    runIn(1800, "logDebugOff") stays for the happy path (no reboot).
+//                  - Added ensureDebugWatchdog(): called at top of updateDevices()
+//                    alongside ensurePollWatchdog().  If debugOutput has been true for
+//                    >30 min (i.e. runIn timer evaporated across a hub reboot) the
+//                    watchdog auto-disables debug and logs an INFO with the BP16 token.
+//                  - Children each carry an identical ensureDebugWatchdog() called from
+//                    update(status, nightLight) (or update(status) for Core200S Light).
+//                  NOTE: state.debugEnabledAt is cleared by state.clear() in
+//                  forceReinitialize(), so a force-reinit resets the 30-min clock.
 // 2026-04-27: v2.2+ Hub-reboot poll-chain recovery (Bug Pattern #14).
 //                  - Replaced recursive runIn() chain with schedule()-based cron job.
 //                    schedule() persists across hub reboots; runIn() does not, causing
@@ -222,8 +243,13 @@ def updated() {
     // Delay initialization to allow HTTP connection pool to stabilize (15s for reliability)
 	runIn(15, "initialize")
 
-    // Turn off debug log in 30 minutes
-    if (settings?.debugOutput) runIn(1800, "logDebugOff");
+    // Turn off debug log in 30 minutes (happy path — no hub reboot)
+    if (settings?.debugOutput) {
+        runIn(1800, "logDebugOff")
+        state.debugEnabledAt = now()
+    } else {
+        state.remove("debugEnabledAt")
+    }
 }
 
 def uninstalled() {
@@ -293,6 +319,27 @@ private ensurePollWatchdog() {
     if (state.scheduleVersion != "2.2") {
         logInfo "BP14 migration: switching from runIn-based to schedule()-based poll cycle"
         setupPollSchedule()
+    }
+}
+
+/**
+ * Debug auto-disable watchdog -- Bug Pattern #16.
+ *
+ * runIn(1800, "logDebugOff") in updated() is in-memory only and evaporates across
+ * hub reboots.  settings.debugOutput persists, so after a reboot debug runs forever.
+ * This watchdog detects that condition and self-heals within one poll cycle.
+ *
+ * Called at the top of updateDevices() alongside ensurePollWatchdog().
+ * Idempotent: O(1) when debug is off or state.debugEnabledAt is absent.
+ */
+private void ensureDebugWatchdog() {
+    if (settings?.debugOutput && state.debugEnabledAt) {
+        Long elapsed = now() - (state.debugEnabledAt as Long)
+        if (elapsed > 30 * 60 * 1000) {
+            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
+            device.updateSetting("debugOutput", [type:"bool", value:false])
+            state.remove("debugEnabledAt")
+        }
     }
 }
 
@@ -411,6 +458,10 @@ def Boolean updateDevices()
     // to schedule()-based on first call. Idempotent once state.scheduleVersion == "2.2".
     ensurePollWatchdog()
 
+    // BP16 debug watchdog -- detects stuck debugOutput=true after hub reboots (runIn
+    // timer evaporated) and auto-disables. Idempotent once debug is off.
+    ensureDebugWatchdog()
+
     // Stop if driver is reloading
     if (state.driverReloading) {
         logDebug "Skipping updateDevices - driver reloading"
@@ -486,7 +537,7 @@ def Boolean updateDevices()
                 {
                     def status = resp.data.result
                     if (status == null)
-                        logError "No status returned from ${method}: ${resp.msg}"
+                        logError "No status returned from ${method}: ${resp?.msg}"
                     else
                         dev.update(status, getChildDevice(dni+"-nl"))
                 }
@@ -509,12 +560,14 @@ def Boolean updateDevices()
 private deviceType(code) {
     switch(code)
     {
-        case "Core200S": 
+        case "Core200S":
         case "LAP-C201S-AUSR":
         case "LAP-C201S-WUSR":
+        case "LAP-C202S-WUSR":      // US Core 200S variant (v2.2 audit -- same VeSyncAirBypass class)
             return "200S";
-        case "Core300S": 
+        case "Core300S":
         case "LAP-C301S-WJP":
+        case "LAP-C302S-WUSB":      // US Core 300S bundle SKU (v2.2 audit -- same VeSyncAirBypass class)
             return "300S";
         case "Core400S": 
         case "LAP-C401S-WJP":
@@ -533,6 +586,11 @@ private deviceType(code) {
         case "LAP-V201S-WEUR":
         case "LAP-V201S-AASR":
         case "LAP-V201S-AUSR":
+        case "LAP-V201S-AEUR":      // EU V201S variant (v2.2 audit -- same VeSyncAirBypass class)
+        case "LAP-V201-AUSR":       // AU market V201S: intentional no-S typo SKU -- this is the
+                                    // literal code the VeSync API emits for that hardware (verified
+                                    // in pyvesync device_map.py). Do NOT "fix" the spelling here.
+        case "LAP-V201S-WJP":       // Japan V201S variant (v2.2 audit -- same VeSyncAirBypass class)
             return "V200S";
         // Vital 100S — pyvesync VeSyncAirBaseV2, dev_types LAP-V102S-* family
         case "LAP-V102S-AASR":
@@ -551,10 +609,12 @@ private deviceType(code) {
         case "LUH-A601S-WUSB":
         case "LUH-A601S-AUSW":
             return "A601S";
-        // OasisMist 450S US — same pyvesync class as Classic 300S; LUH-O601S-* shares this map entry
-        // per SmartThings + Homebridge cross-check (4 model codes confirmed in device_map.py)
+        // OasisMist 450S — same pyvesync class as Classic 300S; LUH-O601S-* shares this map entry
+        // per SmartThings + Homebridge cross-check (4 US model codes confirmed in device_map.py).
+        // LUH-O451S-WEU added v2.2 audit: EU 4.5L variant, pyvesync confirms VeSyncHumid200300S class.
         case "LUH-O451S-WUS":
         case "LUH-O451S-WUSR":
+        case "LUH-O451S-WEU":       // EU 4.5L variant (v2.2 audit -- same VeSyncHumid200300S class)
         case "LUH-O601S-WUS":
         case "LUH-O601S-KUS":
             return "O451S";
@@ -580,6 +640,16 @@ private deviceType(code) {
         case "LUH-A602S-WJP":
         case "LUH-A602S-WUSC":
             return "A602S";
+        // Dual 200S Humidifier — pyvesync VeSyncHumid200300S (same class as Classic 300S + LV600S)
+        // Mist range 1-2 only (Classic 300S is 1-9). Modes: auto + manual only (no sleep).
+        // Features: AUTO_STOP only (no nightlight, no warm mist per device_map.py LUH-D301S entry).
+        // "Dual200S" is the literal device type some firmware reports; LUH-D301S-* are the SKU codes.
+        case "Dual200S":
+        case "LUH-D301S-WUSR":
+        case "LUH-D301S-WJP":
+        case "LUH-D301S-WEU":
+        case "LUH-D301S-KEUR":
+            return "D301S";
         default:
             // Unknown model code — fall through to Generic diagnostic driver.
             // The Generic driver provides best-effort power control and captureDiagnostics()
@@ -620,7 +690,7 @@ private Boolean isLevoitClimateDevice(String code) {
     // v2.1: fan prefixes added alongside proper Tower Fan and Pedestal Fan drivers
     if (code.startsWith("LTF-")) return true
     if (code.startsWith("LPF-")) return true
-    if (code in ["Core200S", "Core300S", "Core400S", "Core600S", "Vital200S", "Classic300S"]) return true
+    if (code in ["Core200S", "Core300S", "Core400S", "Core600S", "Vital200S", "Classic300S", "Dual200S"]) return true
     return false
 }
 
@@ -692,7 +762,7 @@ private Boolean getDevices() {
                     }
                     else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S" ||
                              dtype == "V100S" || dtype == "A601S" || dtype == "O451S" || dtype == "TOWERFAN" || dtype == "PEDESTALFAN" ||
-                             dtype == "A602S") {
+                             dtype == "A602S" || dtype == "D301S") {
                         newList[device.cid] = device.configModule;
                     }
                     else if (dtype == "GENERIC" && isLevoitClimateDevice(device.deviceType)) {
@@ -733,6 +803,7 @@ private Boolean getDevices() {
                             equip2.updateDataValue("configModule", device.configModule);
                             equip2.updateDataValue("cid", device.cid);
                             equip2.updateDataValue("uuid", device.uuid);
+                            equip2.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} Light (Levoit Core200S Air Purifier Light)"
                         }
                         else {
@@ -754,6 +825,7 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Core200S Air Purifier)"
                         }
                         else {
@@ -775,6 +847,7 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Core300S Air Purifier)"
                         }
                         else {
@@ -796,6 +869,7 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Core400S Air Purifier)"
                         }
                         else {
@@ -817,6 +891,7 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Core600S Air Purifier)"
                         }
                         else {
@@ -838,6 +913,7 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Vital 200S Air Purifier)"
                         }
                         else {
@@ -859,6 +935,7 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Superior 6000S Humidifier)"
                         }
                         else {
@@ -880,6 +957,7 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Vital 100S Air Purifier)"
                         }
                         else {
@@ -901,6 +979,7 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Classic 300S Humidifier)"
                         }
                         else {
@@ -922,6 +1001,7 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit OasisMist 450S Humidifier)"
                         }
                         else {
@@ -943,7 +1023,30 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit LV600S Humidifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                        }
+                    }
+                    else if (dtype == "D301S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = addChildDevice("Levoit Dual 200S Humidifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                            logInfo "Added child device: ${device.deviceName} (Levoit Dual 200S Humidifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;
@@ -964,6 +1067,7 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Tower Fan)"
                         }
                         else {
@@ -985,6 +1089,7 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Pedestal Fan)"
                         }
                         else {

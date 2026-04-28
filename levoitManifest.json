@@ -102,6 +102,13 @@
       "required": false
     },
     {
+      "id": "4498037d-0da4-40ad-a587-0a607b76c475",
+      "name": "Levoit Dual 200S Humidifier",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitDual200S.groovy",
+      "required": false
+    },
+    {
       "id": "ca33c74b-ac89-44d5-b9f1-10044c8a520f",
       "name": "Levoit Tower Fan",
       "namespace": "NiklasGustafsson",

@@ -95,8 +95,13 @@ def updated() {
 
     runIn(3, update)
 
-    // Turn off debug log in 30 minutes
-    if (settings?.debugOutput) runIn(1800, logDebugOff);
+    // Turn off debug log in 30 minutes (happy path — no hub reboot)
+    if (settings?.debugOutput) {
+        runIn(1800, logDebugOff)
+        state.debugEnabledAt = now()
+    } else {
+        state.remove("debugEnabledAt")
+    }
 }
 
 def uninstalled() {
@@ -344,6 +349,18 @@ void logDebugOff() {
   if (settings?.debugOutput) device.updateSetting("debugOutput", [type: "bool", value: false]);
 }
 
+// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
+private void ensureDebugWatchdog() {
+    if (settings?.debugOutput && state.debugEnabledAt) {
+        Long elapsed = now() - (state.debugEnabledAt as Long)
+        if (elapsed > 30 * 60 * 1000) {
+            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
+            device.updateSetting("debugOutput", [type:"bool", value:false])
+            state.remove("debugEnabledAt")
+        }
+    }
+}
+
 def handlePower(on) {
 
     def result = false
@@ -459,6 +476,7 @@ def update() {
 
 def update(status, nightLight)
 {
+    ensureDebugWatchdog()
     logDebug "update(status, nightLight)"
     // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
     if (!state.prefsSeeded) {

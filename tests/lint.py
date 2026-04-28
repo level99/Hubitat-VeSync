@@ -136,9 +136,15 @@ def load_config(config_path: Path) -> dict:
 
 def _collect_per_file_rules():
     """Import all rule modules and return a flat list of per-file rule functions."""
-    from lint_rules import bug_patterns, logging_discipline, sandbox_safety, pii_scan, reentrance
+    from lint_rules import (
+        bug_patterns, logging_discipline, sandbox_safety, pii_scan, reentrance,
+        driver_app_only_api, agent_pointer_integrity, bp16_watchdog_call_site,
+    )
     rules = []
-    for module in [bug_patterns, logging_discipline, sandbox_safety, pii_scan, reentrance]:
+    for module in [
+        bug_patterns, logging_discipline, sandbox_safety, pii_scan, reentrance,
+        driver_app_only_api, agent_pointer_integrity, bp16_watchdog_call_site,
+    ]:
         rules.extend(module.ALL_RULES)
     return rules
 

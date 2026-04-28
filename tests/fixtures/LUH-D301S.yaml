@@ -1,0 +1,275 @@
+# pyvesync canonical API fixtures for Dual 200S (LUH-D301S series) humidifier
+# Source: https://github.com/webdjoe/pyvesync
+# Commit: c98729c45860cc765d63d49a9a02bbc18de090c4 (2026-04-16)
+# Retrieved: 2026-04-27
+#
+# REQUEST payloads sourced from src/tests/api/vesynchumidifier/Dual200S.yaml
+# RESPONSE data for device_on_manual_canonical sourced from src/tests/call_json_humidifiers.py
+#   HUMIDIFIER_DETAILS["Dual200S"] with HumidifierDefaults constants resolved.
+#
+# KEY DIFFERENCES from Classic 300S (same VeSyncHumid200300S class):
+#   - Mist range: 1-2 only (Classic 300S 1-9; device_map.py LUH-D301S mist_levels=range(1,3))
+#   - Mist modes: auto + manual only (NO sleep; device_map.py LUH-D301S mist_modes={AUTO,MANUAL})
+#   - Features: AUTO_STOP only (no NIGHTLIGHT, no WARM_MIST in device_map.py features list)
+#   - All API payload conventions identical to Classic 300S (VeSyncHumid200300S class)
+#   - night_light_brightness IS present in response (base class response shape) -- passive read only
+#   - No warm_enabled / warm_level fields expected (no WARM_MIST feature)
+#
+# API payload shapes (all same as Classic 300S):
+#   - Switch: {enabled: bool, id: 0} -- NOT purifier shape {powerSwitch, switchIdx}
+#   - Mode: {mode: <value>} -- NOT {workMode: <value>} (Superior 6000S difference)
+#   - setVirtualLevel: {id:0, level:N, type:'mist'} -- NOT {levelIdx, virtualLevel, levelType}
+#   - Display: {state: bool} -- NOT {screenSwitch: int}
+#   - Auto-stop: {enabled: bool} -- NOT {autoStopSwitch: int}
+#   - Response `enabled` (bool) for power, NOT `powerSwitch` (int)
+#   - Response uses snake_case field names: mist_virtual_level, water_lacks, night_light_brightness
+#   - targetHumidity lives under configuration.auto_target_humidity (not top-level)
+#   - Response shape: single-wrapped (same as Classic 300S, not double-wrapped)
+#
+# REQUEST payloads -- as sent to /cloud/v2/deviceManaged/bypassV2
+
+requests:
+  turn_on:
+    payload:
+      data:
+        enabled: true
+        id: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        enabled: false
+        id: 0
+      method: setSwitch
+      source: APP
+
+  set_auto_mode:
+    payload:
+      data:
+        mode: auto
+      method: setHumidityMode
+      source: APP
+
+  set_manual_mode:
+    payload:
+      data:
+        mode: manual
+      method: setHumidityMode
+      source: APP
+
+  # NOTE: set_sleep_mode intentionally absent -- Dual 200S has no sleep mode per device_map.py
+
+  set_mist_level_1:
+    payload:
+      data:
+        id: 0
+        level: 1
+        type: mist
+      method: setVirtualLevel
+      source: APP
+
+  set_mist_level_2:
+    payload:
+      data:
+        id: 0
+        level: 2
+        type: mist
+      method: setVirtualLevel
+      source: APP
+
+  set_humidity:
+    payload:
+      data:
+        target_humidity: 50
+      method: setTargetHumidity
+      source: APP
+
+  turn_on_display:
+    payload:
+      data:
+        state: true
+      method: setDisplay
+      source: APP
+
+  turn_off_display:
+    payload:
+      data:
+        state: false
+      method: setDisplay
+      source: APP
+
+  turn_on_automatic_stop:
+    payload:
+      data:
+        enabled: true
+      method: setAutomaticStop
+      source: APP
+
+  turn_off_automatic_stop:
+    payload:
+      data:
+        enabled: false
+      method: setAutomaticStop
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getHumidifierStatus
+      source: APP
+
+# RESPONSE device data -- what the Dual 200S returns after envelope peel.
+# Note: Dual 200S responses are SINGLE-WRAPPED (same as Classic 300S). The parent passes
+# resp.data.result to child.update(), which is:
+#   { code:0, result: { <device fields> } }
+# The peel-while-loop in applyStatus() may peel once to reach device fields.
+#
+# Field naming uses snake_case (pyvesync ClassicLVHumidResult model):
+#   enabled, mist_virtual_level, mist_level, mode, display, water_lacks,
+#   humidity, humidity_high, automatic_stop_reach_target, water_tank_lifted,
+#   warm_enabled, warm_level, night_light_brightness
+# plus nested: configuration.auto_target_humidity, configuration.display,
+#              configuration.automatic_stop
+#
+# NOTE: Dual 200S has NO warm mist (warm_enabled: false, warm_level: null)
+# NOTE: night_light_brightness included (base class response shape) but
+#       Dual 200S features=[AUTO_STOP] only -- no NIGHTLIGHT feature flag.
+#       Driver reads this passively but does NOT expose a setNightLight command.
+
+responses:
+  # Canonical: from call_json_humidifiers.py HUMIDIFIER_DETAILS["Dual200S"]
+  # HumidifierDefaults constants resolved at commit c98729c:
+  #   device_status -> DeviceStatus.ON -> 1 -> bool(1) = True -> enabled: true
+  #   humidity -> HumidifierDefaults.humidity -> 35 (from defaults.py)
+  #   virtual_mist_level -> HumidifierDefaults.virtual_mist_level -> 1
+  #   mist_level -> HumidifierDefaults.mist_level -> 1
+  #   humidifier_mode -> HumidifierDefaults.humidifier_mode -> HumidifierModes.MANUAL -> 'manual'
+  #   water_lacks -> HumidifierDefaults.water_lacks -> False
+  #   humidity_high -> HumidifierDefaults.humidity_high -> False
+  #   water_tank_lifted -> HumidifierDefaults.water_tank_lifted -> False
+  #   display -> HumidifierDefaults.display -> True
+  #   auto_stop_reached -> HumidifierDefaults.auto_stop_reached -> False
+  #   nightlight_brightness -> HumidifierDefaults.nightlight_brightness -> 0
+  #   target_humidity -> HumidifierDefaults.target_humidity -> 50
+  #   display_config -> HumidifierDefaults.display_config -> True
+  #   auto_stop -> HumidifierDefaults.auto_stop -> False
+  device_on_manual_canonical:
+    enabled: true
+    humidity: 35
+    mist_virtual_level: 1
+    mist_level: 1
+    mode: manual
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    display: true
+    automatic_stop_reach_target: false
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 50
+      display: true
+      automatic_stop: false
+
+  # Synthesized scenario: device on, auto mode, mist=2 (max for Dual 200S)
+  device_on_auto_mist2:
+    enabled: true
+    humidity: 42
+    mist_virtual_level: 2
+    mist_level: 2
+    mode: auto
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    display: true
+    automatic_stop_reach_target: false
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 55
+      display: true
+      automatic_stop: true
+
+  # Synthesized scenario: device off (switch=off, mist_virtual_level=0)
+  device_off:
+    enabled: false
+    humidity: 38
+    mist_virtual_level: 0
+    mist_level: 1
+    mode: manual
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    display: false
+    automatic_stop_reach_target: false
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 50
+      display: false
+      automatic_stop: true
+
+  # Synthesized scenario: water reservoir empty
+  device_water_lacks:
+    enabled: true
+    humidity: 28
+    mist_virtual_level: 1
+    mist_level: 1
+    mode: auto
+    water_lacks: true
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    display: true
+    automatic_stop_reach_target: false
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 55
+      display: true
+      automatic_stop: true
+
+  # Synthesized scenario: legacy firmware -- uses indicator_light_switch instead of display
+  device_legacy_display_alias:
+    enabled: true
+    humidity: 45
+    mist_virtual_level: 2
+    mist_level: 2
+    mode: sleep
+    water_lacks: false
+    humidity_high: false
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    indicator_light_switch: true
+    automatic_stop_reach_target: false
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 60
+      display: true
+      automatic_stop: false
+
+  # Synthesized scenario: auto-stop reached (device shut itself off)
+  device_auto_stop_reached:
+    enabled: false
+    humidity: 60
+    mist_virtual_level: 0
+    mist_level: 1
+    mode: auto
+    water_lacks: false
+    humidity_high: true
+    water_tank_lifted: false
+    warm_enabled: false
+    warm_level: null
+    display: false
+    automatic_stop_reach_target: true
+    night_light_brightness: 0
+    configuration:
+      auto_target_humidity: 55
+      display: false
+      automatic_stop: true

@@ -93,7 +93,13 @@ def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
     runIn(3, refresh)
-    if (settings?.debugOutput) runIn(1800, logDebugOff)
+    // Turn off debug log in 30 minutes (happy path — no hub reboot)
+    if (settings?.debugOutput) {
+        runIn(1800, logDebugOff)
+        state.debugEnabledAt = now()
+    } else {
+        state.remove("debugEnabledAt")
+    }
 }
 def uninstalled(){ logDebug "Uninstalled" }
 def initialize(){ logDebug "Initializing" }
@@ -235,6 +241,7 @@ def update(status){
 
 // 2-arg variant — parent driver calls update(status, nightLight); nightLight not applicable to humidifiers
 def update(status, nightLight){
+    ensureDebugWatchdog()
     logDebug "update() from parent (2-arg, nightLight ignored)"
     applyStatus(status)
     return true
@@ -391,6 +398,18 @@ def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
 def logError(msg){ log.error msg }
 def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
 void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
+
+// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
+private void ensureDebugWatchdog() {
+    if (settings?.debugOutput && state.debugEnabledAt) {
+        Long elapsed = now() - (state.debugEnabledAt as Long)
+        if (elapsed > 30 * 60 * 1000) {
+            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
+            device.updateSetting("debugOutput", [type:"bool", value:false])
+            state.remove("debugEnabledAt")
+        }
+    }
+}
 
 // Hub/parent call wrapper
 private hubBypass(method, Map data=[:], tag=null, cb=null){
