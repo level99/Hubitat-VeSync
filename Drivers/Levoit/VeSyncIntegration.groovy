@@ -654,6 +654,7 @@ private String deviceMethodFor(child) {
         case "D301S":
         case "C200S":
         case "A603S":
+        case "OM1000S":
             return "getHumidifierStatus"
         default:
             // All purifier dtypes (200S, 300S, 400S, 600S, V200S, V100S) + GENERIC
@@ -768,6 +769,15 @@ private deviceType(code) {
         // VeSyncLV600S: powerSwitch/switchIdx, workMode (auto='humidity'), levelIdx/virtualLevel/levelType.
         case "LUH-A603S-WUS":
             return "A603S";
+        // OasisMist 1000S — pyvesync VeSyncHumid1000S (inherits VeSyncHumid200300S; key method overrides).
+        // V2-style payloads: powerSwitch/switchIdx, workMode (auto='auto'), levelIdx/virtualLevel/levelType,
+        // targetHumidity top-level camelCase, screenSwitch for display, setAutoStopSwitch for auto-stop.
+        // US/WUSR: features=[AUTO_STOP]. WEUR: features=[NIGHTLIGHT, NIGHTLIGHT_BRIGHTNESS, AUTO_STOP].
+        // All three model codes route to the same Levoit OasisMist 1000S Humidifier driver.
+        case "LUH-M101S-WUS":
+        case "LUH-M101S-WUSR":
+        case "LUH-M101S-WEUR":
+            return "OM1000S";
         default:
             // Unknown model code — fall through to Generic diagnostic driver.
             // The Generic driver provides best-effort power control and captureDiagnostics()
@@ -881,7 +891,7 @@ private Boolean getDevices() {
                     }
                     else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S" ||
                              dtype == "V100S" || dtype == "A601S" || dtype == "O451S" || dtype == "TOWERFAN" || dtype == "PEDESTALFAN" ||
-                             dtype == "A602S" || dtype == "D301S" || dtype == "C200S" || dtype == "A603S") {
+                             dtype == "A602S" || dtype == "D301S" || dtype == "C200S" || dtype == "A603S" || dtype == "OM1000S") {
                         newList[device.cid] = device.configModule;
                     }
                     else if (dtype == "GENERIC" && isLevoitClimateDevice(device.deviceType)) {
@@ -1287,6 +1297,32 @@ private Boolean getDevices() {
                             equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit LV600S Hub Connect Humidifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                        }
+                    }
+                    else if (dtype == "OM1000S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = safeAddChildDevice("Levoit OasisMist 1000S Humidifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitOasisMist1000S.groovy")
+                            if (equip1 == null) continue
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                            logInfo "Added child device: ${device.deviceName} (Levoit OasisMist 1000S Humidifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;

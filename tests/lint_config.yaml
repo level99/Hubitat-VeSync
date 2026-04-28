@@ -35,6 +35,7 @@ frozen_driver_names:
   LevoitDual200S.groovy:           "Levoit Dual 200S Humidifier"
   LevoitClassic200S.groovy:        "Levoit Classic 200S Humidifier"
   LevoitLV600SHubConnect.groovy:   "Levoit LV600S Hub Connect Humidifier"
+  LevoitOasisMist1000S.groovy:     "Levoit OasisMist 1000S Humidifier"
   LevoitTowerFan.groovy:           "Levoit Tower Fan"
   LevoitPedestalFan.groovy:        "Levoit Pedestal Fan"
   LevoitGeneric.groovy:            "Levoit Generic Device"

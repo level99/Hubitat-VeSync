@@ -52,6 +52,7 @@ Copy the relevant `.groovy` files from the `Drivers/Levoit/` directory into Hubi
 | `LevoitDual200S.groovy` | Levoit Dual 200S Humidifier *(v2.2 preview)* |
 | `LevoitClassic200S.groovy` | Levoit Classic 200S Humidifier *(v2.3 preview)* |
 | `LevoitLV600SHubConnect.groovy` | Levoit LV600S Hub Connect Humidifier (LUH-A603S) *(v2.3 preview)* |
+| `LevoitOasisMist1000S.groovy` | Levoit OasisMist 1000S Humidifier (LUH-M101S) *(v2.3 preview)* |
 | `LevoitTowerFan.groovy` | Levoit Tower Fan *(v2.1 preview)* |
 | `LevoitPedestalFan.groovy` | Levoit Pedestal Fan *(v2.1 preview)* |
 | `LevoitGeneric.groovy` | **Fall-through diagnostic driver** — any unrecognized Levoit model code. Best-effort power control + `captureDiagnostics()` for filing new-device-support requests. |
@@ -384,6 +385,34 @@ Auto mode sends `workMode: "humidity"` on the wire (normalized to `"auto"` in th
 | info | HTML | Tile summary |
 
 Commands: `setMode` (auto/sleep/manual), `setMistLevel` (1-9), `setWarmMistLevel` (0-3), `setHumidity` (30-80), `setDisplay`, `toggle`. (No `setAutoStop` — WARM_MIST is the only feature flag per `device_map.py`.)
+
+### OasisMist 1000S Humidifier (LUH-M101S-WUS, LUH-M101S-WUSR, LUH-M101S-WEUR) *— v2.3 preview*
+
+pyvesync class: `VeSyncHumid1000S` (inherits `VeSyncHumid200300S`; overrides key write methods). All three model codes route to this single driver. EU variant (`LUH-M101S-WEUR`) adds nightlight hardware.
+
+**CROSS-CHECK — OasisMist 1000S vs sibling classes:**
+- vs `VeSyncHumid200300S` (Classic 300S, OasisMist 450S, LV600S A602S, Dual 200S): switch uses `powerSwitch/switchIdx` (not `enabled/id`); mode uses `workMode` field (not `mode`); mist level uses API method `virtualLevel` with `levelIdx/virtualLevel/levelType` payload (not `setVirtualLevel` + `id/level/type`); target humidity is camelCase top-level `targetHumidity` (not nested `configuration.auto_target_humidity`); display uses `screenSwitch` integer (not `state: bool`); auto-stop uses `setAutoStopSwitch` method (not `setAutomaticStop`).
+- vs `VeSyncLV600S` (LV600S Hub Connect LUH-A603S): both use V2-style payloads; 1000S auto mode wire value is `'auto'` (A603S uses `'humidity'`); 1000S has nightlight (WEUR only); A603S has warm mist; 1000S has auto-stop, A603S does not.
+- vs `VeSyncHumid200S` (Classic 200S): same V2-payload divergences from 200300S base, but Classic 200S display is `setIndicatorLightSwitch`; 1000S display is `setDisplay {screenSwitch}`.
+
+Nightlight gating: US/WUSR variants have `AUTO_STOP` feature only — no nightlight hardware. WEUR variant adds `NIGHTLIGHT + NIGHTLIGHT_BRIGHTNESS`. The `setNightlight` command is declared for all variants (Hubitat static-metadata limitation); it no-ops with an INFO log on US/WUSR.
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| mode | auto, sleep, manual | Current mode |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 30-80 | Auto-mode target humidity |
+| mistLevel | 0-9 | Reported mist level (0 = inactive) |
+| waterLacks | yes, no | Water-tank low/empty or tank removed |
+| displayOn | on, off | Front-panel display state |
+| autoStopEnabled | on, off | Auto-stop-when-target-reached config |
+| autoStopReached | yes, no | Whether auto-stop is currently active |
+| nightlightOn | on, off | Nightlight power state (**WEUR only**; passive read on US/WUSR) |
+| nightlightBrightness | 0-100 | Nightlight brightness (**WEUR only**; passive read on US/WUSR) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/sleep/manual), `setMistLevel` (1-9), `setHumidity` (30-80), `setDisplay`, `setAutoStop`, `setNightlight` (on/off + brightness 0-100; **WEUR only** — no-ops with INFO log on US/WUSR), `toggle`. (No `setWarmMistLevel` — 1000S has no warm mist hardware.)
 
 ### Tower Fan (LTF-F422S) *— v2.1 preview*
 

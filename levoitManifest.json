@@ -123,6 +123,13 @@
       "required": false
     },
     {
+      "id": "a1c7e3f9-2b4d-4a8e-b6f1-9d3c5e7a2b4f",
+      "name": "Levoit OasisMist 1000S Humidifier",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitOasisMist1000S.groovy",
+      "required": false
+    },
+    {
       "id": "ca33c74b-ac89-44d5-b9f1-10044c8a520f",
       "name": "Levoit Tower Fan",
       "namespace": "NiklasGustafsson",
