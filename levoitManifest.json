@@ -130,6 +130,20 @@
       "required": false
     },
     {
+      "id": "3e8b1f5d-7c2a-4d9e-b0f4-6a1c8e3d5b7f",
+      "name": "Levoit Sprout Humidifier",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitSproutHumidifier.groovy",
+      "required": false
+    },
+    {
+      "id": "9f4a2e7c-1b6d-4c8f-a3e5-2d0b7f9c4e1a",
+      "name": "Levoit Sprout Air Purifier",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitSproutAir.groovy",
+      "required": false
+    },
+    {
       "id": "ca33c74b-ac89-44d5-b9f1-10044c8a520f",
       "name": "Levoit Tower Fan",
       "namespace": "NiklasGustafsson",

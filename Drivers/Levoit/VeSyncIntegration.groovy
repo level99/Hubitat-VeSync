@@ -655,6 +655,7 @@ private String deviceMethodFor(child) {
         case "C200S":
         case "A603S":
         case "OM1000S":
+        case "B381S":
             return "getHumidifierStatus"
         default:
             // All purifier dtypes (200S, 300S, 400S, 600S, V200S, V100S) + GENERIC
@@ -778,6 +779,24 @@ private deviceType(code) {
         case "LUH-M101S-WUSR":
         case "LUH-M101S-WEUR":
             return "OM1000S";
+        // Sprout Humidifier — pyvesync VeSyncSproutHumid (BypassV2Mixin, VeSyncHumidifier).
+        // V2-style payloads: powerSwitch/switchIdx, workMode (auto='autoPro' — NOT 'auto'),
+        // setVirtualLevel for mist (range 1-2 only), nightlight via setLightStatus
+        // with colorTemperature field. Drying mode, child lock, dual filter life.
+        case "LEH-B381S-WUS":
+        case "LEH-B381S-WEU":
+            return "B381S";
+        // Sprout Air Purifier — pyvesync VeSyncAirSprout (inherits VeSyncAirBaseV2).
+        // V2-style payloads: powerSwitch/switchIdx, setPurifierMode {workMode} for auto/sleep,
+        // manual mode via setLevel (NOT setPurifierMode). Fan levels 1-3.
+        // AIR_QUALITY + NIGHTLIGHT features. Nightlight via setNightLight {night_light: str}.
+        case "LAP-B851S-WEU":
+        case "LAP-B851S-WNA":
+        case "LAP-B851S-AEUR":
+        case "LAP-B851S-AUS":
+        case "LAP-B851S-WUS":
+        case "LAP-BAY-MAX01S":
+            return "B851S";
         default:
             // Unknown model code — fall through to Generic diagnostic driver.
             // The Generic driver provides best-effort power control and captureDiagnostics()
@@ -819,7 +838,10 @@ private Boolean isLevoitClimateDevice(String code) {
     if (code.startsWith("LTF-")) return true
     if (code.startsWith("LPF-")) return true
     if (code in ["Core200S", "Core300S", "Core400S", "Core600S", "Vital200S", "Classic300S", "Dual200S", "Classic200S"]) return true
-    // LUH-A603S-WUS covered by LUH-* prefix blanket above (no extra entry needed; RULE22 satisfied)
+    // LUH-A603S-WUS / LUH-M101S-* / LEH-B381S-* covered by LUH-*/LEH-* prefix blankets above (RULE22 satisfied)
+    // LAP-B851S-* / LAP-BAY-MAX01S covered by LAP-* prefix blanket above (RULE22 satisfied)
+    // B381S and B851S are dtype abbreviations (not raw model codes), not reachable here directly.
+    // isLevoitClimateDevice() is called with raw model codes, so prefix checks above cover them.
     return false
 }
 
@@ -891,7 +913,8 @@ private Boolean getDevices() {
                     }
                     else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S" ||
                              dtype == "V100S" || dtype == "A601S" || dtype == "O451S" || dtype == "TOWERFAN" || dtype == "PEDESTALFAN" ||
-                             dtype == "A602S" || dtype == "D301S" || dtype == "C200S" || dtype == "A603S" || dtype == "OM1000S") {
+                             dtype == "A602S" || dtype == "D301S" || dtype == "C200S" || dtype == "A603S" || dtype == "OM1000S" ||
+                             dtype == "B381S" || dtype == "B851S") {
                         newList[device.cid] = device.configModule;
                     }
                     else if (dtype == "GENERIC" && isLevoitClimateDevice(device.deviceType)) {
@@ -1323,6 +1346,58 @@ private Boolean getDevices() {
                             equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit OasisMist 1000S Humidifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                        }
+                    }
+                    else if (dtype == "B381S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = safeAddChildDevice("Levoit Sprout Humidifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitSproutHumidifier.groovy")
+                            if (equip1 == null) continue
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                            logInfo "Added child device: ${device.deviceName} (Levoit Sprout Humidifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                        }
+                    }
+                    else if (dtype == "B851S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = safeAddChildDevice("Levoit Sprout Air Purifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitSproutAir.groovy")
+                            if (equip1 == null) continue
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                            logInfo "Added child device: ${device.deviceName} (Levoit Sprout Air Purifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;

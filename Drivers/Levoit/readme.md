@@ -53,6 +53,8 @@ Copy the relevant `.groovy` files from the `Drivers/Levoit/` directory into Hubi
 | `LevoitClassic200S.groovy` | Levoit Classic 200S Humidifier *(v2.3 preview)* |
 | `LevoitLV600SHubConnect.groovy` | Levoit LV600S Hub Connect Humidifier (LUH-A603S) *(v2.3 preview)* |
 | `LevoitOasisMist1000S.groovy` | Levoit OasisMist 1000S Humidifier (LUH-M101S) *(v2.3 preview)* |
+| `LevoitSproutHumidifier.groovy` | Levoit Sprout Humidifier (LEH-B381S-WUS, LEH-B381S-WEU) *(v2.3 preview)* |
+| `LevoitSproutAir.groovy` | Levoit Sprout Air Purifier (LAP-B851S-*, LAP-BAY-MAX01S) *(v2.3 preview)* |
 | `LevoitTowerFan.groovy` | Levoit Tower Fan *(v2.1 preview)* |
 | `LevoitPedestalFan.groovy` | Levoit Pedestal Fan *(v2.1 preview)* |
 | `LevoitGeneric.groovy` | **Fall-through diagnostic driver** — any unrecognized Levoit model code. Best-effort power control + `captureDiagnostics()` for filing new-device-support requests. |
@@ -413,6 +415,74 @@ Nightlight gating: US/WUSR variants have `AUTO_STOP` feature only — no nightli
 | info | HTML | Tile summary |
 
 Commands: `setMode` (auto/sleep/manual), `setMistLevel` (1-9), `setHumidity` (30-80), `setDisplay`, `setAutoStop`, `setNightlight` (on/off + brightness 0-100; **WEUR only** — no-ops with INFO log on US/WUSR), `toggle`. (No `setWarmMistLevel` — 1000S has no warm mist hardware.)
+
+### Sprout Humidifier (LEH-B381S-WUS, LEH-B381S-WEU) *— v2.3 preview*
+
+pyvesync class: `VeSyncSproutHumid` (inherits `BypassV2Mixin` + `VeSyncHumidifier` directly — **not** a subclass of `VeSyncHumid200300S`). V2-style payload conventions (camelCase field names, `powerSwitch`/`switchIdx`). Both WUS and WEU model codes are supported by this single driver; WEU adds nightlight hardware with full color-temperature control.
+
+**CROSS-CHECK — Sprout Humidifier vs siblings:**
+- Auto mode wire value is `"autoPro"` (NOT `"auto"` — different from Classic/LV600S A602S/Dual 200S). Driver normalizes `"autoPro"` → `"auto"` in state and events.
+- Mist API method is `setVirtualLevel` (NOT `virtualLevel` as used by OasisMist 1000S). Payload: `{levelIdx:0, virtualLevel:1-2, levelType:"mist"}`.
+- Mist range: **1-2 only** (2-level hardware per pyvesync `device_map.py`).
+- Nightlight API: `setLightStatus {brightness, colorTemperature, nightLightSwitch}` — colorTemperature in Kelvin (2000-3500). This is distinct from OasisMist 1000S nightlight which omits colorTemperature.
+- No warm mist hardware.
+- No auto-stop command.
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power state |
+| mode | auto, sleep, manual | Current mode (`"autoPro"` on wire normalized to `"auto"` in state/events) |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 30-80 | Auto-mode target humidity |
+| mistLevel | 1-2 | Active mist level (0 when device is off) |
+| waterLacks | yes, no | Water-tank low/empty indicator |
+| displayOn | on, off | Front-panel display state |
+| childLock | on, off | Child-lock state |
+| autoStopEnabled | on, off | Auto-stop config (passive read — no setter) |
+| autoStopReached | yes, no | Whether auto-stop is currently active (passive read) |
+| dryingEnabled | on, off | Whether auto-drying mode is enabled |
+| filterLife | 0-100 | Primary filter life (%) |
+| hepaFilterLife | 0-100 | HEPA filter life (%), if separately tracked by firmware |
+| nightlightOn | on, off | Nightlight power state (**WEU only**; passive read on WUS) |
+| nightlightBrightness | 0-100 | Nightlight brightness (**WEU only**; passive read on WUS) |
+| nightlightColorTemp | 2000-3500 | Nightlight color temperature in Kelvin (**WEU only**) |
+| temperature | °F | Ambient temperature from onboard sensor (raw value / 10) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/sleep/manual), `setMistLevel` (1-2), `setHumidity` (30-80), `setDisplay`, `setChildLock`, `setAutoStop`, `setDryingMode` (on/off), `setNightlight` (on/off + optional brightness 0-100 + optional colorTemp 2000-3500; **WEU only** — no-ops with INFO log on WUS), `toggle`.
+
+### Sprout Air Purifier (LAP-B851S-*, LAP-BAY-MAX01S) *— v2.3 preview*
+
+pyvesync class: `VeSyncAirSprout` (inherits `VeSyncAirBaseV2` → `VeSyncAirBypass`). V2-style payload conventions. Supports all 6 model codes: `LAP-B851S-WEU`, `LAP-B851S-WNA`, `LAP-B851S-AEUR`, `LAP-B851S-AUS`, `LAP-B851S-WUS`, `LAP-BAY-MAX01S`.
+
+**CROSS-CHECK — Sprout Air vs Vital line:**
+- Manual mode is established via `setLevel` (fan speed) — **NOT** `setPurifierMode {workMode:"manual"}`. pyvesync `VeSyncAirBaseV2.set_mode()` delegates `manual` to `set_fan_speed(1)`. Calling `setPurifierMode` with `workMode:"manual"` returns inner code -1.
+- Fan speed range: **1-3** (Sprout hardware). Different from Vital 200S (1-4) and Core 600S (1-5).
+- Nightlight uses `setNightLight {night_light: "on"|"off"|"dim"|"auto"}` string enum via inherited `VeSyncAirBypass.set_nightlight_mode()`. This is **completely different** from humidifier nightlight (`setLightStatus`).
+- Mode `"turbo"` is hardware-supported (listed in pyvesync `PurifierModes` for this class).
+- Full AQ sensor suite: AQLevel (1-4), PM2.5, PM1.0, PM10, VOC, CO2 (where available in response).
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power state |
+| mode | auto, manual, sleep, turbo, pet | Current mode |
+| fanSpeed | 0-3 | Active fan speed (0 when device is off; 255 sentinel mapped to 0) |
+| airQualityIndex | 1-4 | Levoit categorical AQ index (1=excellent, 4=very bad) |
+| pm25 | µg/m³ | Real-time PM2.5 reading |
+| pm1 | µg/m³ | Real-time PM1.0 reading (if present in response) |
+| pm10 | µg/m³ | Real-time PM10 reading (if present in response) |
+| aqi | 0-500 | US-formula AQI computed from PM2.5 |
+| voc | number | VOC level (if present in response) |
+| co2 | ppm | CO2 level (if present in response) |
+| displayOn | on, off | Front-panel display state |
+| childLock | on, off | Child-lock state |
+| nightlightOn | on, off | Nightlight power state (on if mode is `on` or `dim`) |
+| nightlightBrightness | 0-100 | Nightlight brightness (100 for `on`, 50 for `dim`, 0 for `off`) |
+| humidity | % | Ambient humidity from onboard sensor (if present in response) |
+| temperature | °F | Ambient temperature from onboard sensor (if present in response) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/sleep/turbo/pet — manual mode use `setFanSpeed` instead), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setNightlightMode` (on/off/dim/auto), `toggle`.
 
 ### Tower Fan (LTF-F422S) *— v2.1 preview*
 

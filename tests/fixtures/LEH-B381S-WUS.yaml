@@ -1,0 +1,343 @@
+# pyvesync canonical API fixtures for Sprout Humidifier (LEH-B381S-* series)
+# Source: https://github.com/webdjoe/pyvesync
+# Commit: c98729c45860cc765d63d49a9a02bbc18de090c4 (2026-04-16)
+# Retrieved: 2026-04-28
+#
+# Model codes:
+#   LEH-B381S-WUS  -- US
+#   LEH-B381S-WEU  -- EU
+#   Both route to the Levoit Sprout Humidifier driver.
+#
+# Device class: VeSyncSproutHumid (BypassV2Mixin, VeSyncHumidifier)
+#
+# CRITICAL payload notes:
+#   - Switch: {powerSwitch: int, switchIdx: 0}  (NOT {enabled, id} VeSyncHumid200300S style)
+#   - Mode: {workMode: wire_value} via setHumidityMode
+#     mist_modes: auto->'autoPro', sleep->'sleep', manual->'manual'
+#     NOTE: 'autoPro' NOT 'auto' (contrast OasisMist 1000S which uses 'auto')
+#   - Mist level: method 'setVirtualLevel' (NOT 'virtualLevel' -- OasisMist 1000S uses 'virtualLevel')
+#     payload {levelIdx:0, virtualLevel:N, levelType:'mist'}; range 1-2 (2-level hardware)
+#   - Target humidity: {targetHumidity: N} top-level camelCase
+#   - Display: {screenSwitch: int} via setDisplay
+#   - Child lock: {childLockSwitch: int} via setChildLock
+#   - Auto-stop: {autoStopSwitch: int} via setAutoStopSwitch
+#   - Drying mode: {autoDryingSwitch: int} via setDryingMode
+#   - Nightlight: {brightness, colorTemperature, nightLightSwitch} via setLightStatus
+#     colorTemperature range: 2000-3500 K
+#
+# Response fields (top-level unless noted):
+#   powerSwitch, workMode, humidity, targetHumidity, virtualLevel, mistLevel,
+#   waterLacksState, waterTankLifted, autoStopSwitch, autoStopState,
+#   screenSwitch, screenState, childLockSwitch, filterLifePercent, hepaFilterLifePercent,
+#   temperature (F*10 -- divide by 10),
+#   nightLight: {brightness, nightLightSwitch, colorTemperature}  -- nested
+#   dryingMode: {autoDryingSwitch, dryingState, dryingRemain, dryingLevel}  -- nested
+
+requests:
+  turn_on:
+    payload:
+      data:
+        powerSwitch: 1
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        powerSwitch: 0
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  # NOTE: auto mode wire value is 'autoPro' (NOT 'auto' -- contrast OasisMist 1000S)
+  set_auto_mode:
+    payload:
+      data:
+        workMode: autoPro
+      method: setHumidityMode
+      source: APP
+
+  set_sleep_mode:
+    payload:
+      data:
+        workMode: sleep
+      method: setHumidityMode
+      source: APP
+
+  set_manual_mode:
+    payload:
+      data:
+        workMode: manual
+      method: setHumidityMode
+      source: APP
+
+  # NOTE: method is 'setVirtualLevel' (NOT 'virtualLevel' -- 1000S uses 'virtualLevel')
+  # Range 1-2 only (Sprout is a 2-level mist device; mist_levels=[1,2])
+  set_mist_level:
+    payload:
+      data:
+        levelIdx: 0
+        virtualLevel: 2
+        levelType: mist
+      method: setVirtualLevel
+      source: APP
+
+  set_humidity:
+    payload:
+      data:
+        targetHumidity: 50
+      method: setTargetHumidity
+      source: APP
+
+  turn_on_display:
+    payload:
+      data:
+        screenSwitch: 1
+      method: setDisplay
+      source: APP
+
+  turn_off_display:
+    payload:
+      data:
+        screenSwitch: 0
+      method: setDisplay
+      source: APP
+
+  turn_on_child_lock:
+    payload:
+      data:
+        childLockSwitch: 1
+      method: setChildLock
+      source: APP
+
+  turn_off_child_lock:
+    payload:
+      data:
+        childLockSwitch: 0
+      method: setChildLock
+      source: APP
+
+  turn_on_automatic_stop:
+    payload:
+      data:
+        autoStopSwitch: 1
+      method: setAutoStopSwitch
+      source: APP
+
+  turn_off_automatic_stop:
+    payload:
+      data:
+        autoStopSwitch: 0
+      method: setAutoStopSwitch
+      source: APP
+
+  turn_on_drying_mode:
+    payload:
+      data:
+        autoDryingSwitch: 1
+      method: setDryingMode
+      source: APP
+
+  turn_off_drying_mode:
+    payload:
+      data:
+        autoDryingSwitch: 0
+      method: setDryingMode
+      source: APP
+
+  # Nightlight: {brightness, colorTemperature, nightLightSwitch} via setLightStatus
+  # NOTE: includes colorTemperature (K) unlike OasisMist 1000S which omits it
+  set_nightlight_on:
+    payload:
+      data:
+        brightness: 80
+        colorTemperature: 3500
+        nightLightSwitch: 1
+      method: setLightStatus
+      source: APP
+
+  set_nightlight_off:
+    payload:
+      data:
+        brightness: 0
+        colorTemperature: 3500
+        nightLightSwitch: 0
+      method: setLightStatus
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getHumidifierStatus
+      source: APP
+
+responses:
+  # Canonical: device on, manual mode, mist=2 (max for Sprout 2-level hardware)
+  device_on_manual_canonical:
+    powerSwitch: 1
+    workMode: manual
+    humidity: 45
+    targetHumidity: 55
+    mistLevel: 2
+    virtualLevel: 2
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+    childLockSwitch: 0
+    filterLifePercent: 85
+    hepaFilterLifePercent: 78
+    temperature: 720
+    nightLight:
+      nightLightSwitch: 0
+      brightness: 0
+      colorTemperature: 3500
+
+  # Auto mode (workMode='autoPro' on wire; driver normalizes back to 'auto')
+  device_on_auto_mode:
+    powerSwitch: 1
+    workMode: autoPro
+    humidity: 55
+    targetHumidity: 60
+    mistLevel: 1
+    virtualLevel: 1
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+    childLockSwitch: 0
+    filterLifePercent: 85
+    hepaFilterLifePercent: 78
+    temperature: 715
+    nightLight:
+      nightLightSwitch: 0
+      brightness: 0
+      colorTemperature: 3500
+
+  # Sleep mode
+  device_on_sleep_mode:
+    powerSwitch: 1
+    workMode: sleep
+    humidity: 50
+    targetHumidity: 55
+    mistLevel: 1
+    virtualLevel: 1
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 0
+    screenState: 0
+    childLockSwitch: 0
+    filterLifePercent: 85
+    hepaFilterLifePercent: 78
+    temperature: 710
+
+  # Device off -- virtualLevel may retain last-set value; driver clamps to 0 (BP#6)
+  device_off:
+    powerSwitch: 0
+    workMode: manual
+    humidity: 52
+    targetHumidity: 55
+    mistLevel: 2
+    virtualLevel: 2
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 0
+    screenState: 0
+    childLockSwitch: 0
+    filterLifePercent: 85
+    hepaFilterLifePercent: 78
+    temperature: 708
+
+  # Water reservoir empty
+  device_water_lacks:
+    powerSwitch: 1
+    workMode: auto
+    humidity: 25
+    targetHumidity: 50
+    mistLevel: 2
+    virtualLevel: 2
+    waterLacksState: 1
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+    childLockSwitch: 0
+    filterLifePercent: 80
+    hepaFilterLifePercent: 70
+    temperature: 718
+
+  # Auto-stop reached (target humidity hit)
+  device_auto_stop_reached:
+    powerSwitch: 0
+    workMode: autoPro
+    humidity: 61
+    targetHumidity: 60
+    mistLevel: 0
+    virtualLevel: 0
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 1
+    screenSwitch: 0
+    screenState: 0
+    childLockSwitch: 0
+    filterLifePercent: 84
+    hepaFilterLifePercent: 76
+    temperature: 720
+
+  # Nightlight on at brightness=80, warm colorTemperature=2700K
+  device_nightlight_on:
+    powerSwitch: 1
+    workMode: manual
+    humidity: 48
+    targetHumidity: 55
+    mistLevel: 1
+    virtualLevel: 1
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+    childLockSwitch: 0
+    filterLifePercent: 85
+    hepaFilterLifePercent: 78
+    temperature: 720
+    nightLight:
+      nightLightSwitch: 1
+      brightness: 80
+      colorTemperature: 2700
+
+  # Drying mode active
+  device_drying_mode_active:
+    powerSwitch: 0
+    workMode: manual
+    humidity: 58
+    targetHumidity: 55
+    mistLevel: 0
+    virtualLevel: 0
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 0
+    screenState: 0
+    childLockSwitch: 0
+    filterLifePercent: 85
+    hepaFilterLifePercent: 78
+    temperature: 730
+    dryingMode:
+      autoDryingSwitch: 1
+      dryingState: 1
+      dryingRemain: 1200
+      dryingLevel: 1
