@@ -47,7 +47,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Classic 300S (LUH-A601S) humidifier — mist 1-9, target humidity, auto/sleep/manual modes, night-light (off/dim/bright), auto-stop, display; canonical pyvesync payloads",
-        version: "2.1",
+        version: "2.2",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"

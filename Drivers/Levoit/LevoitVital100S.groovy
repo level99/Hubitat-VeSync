@@ -51,7 +51,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Vital 100S (LAP-V102S) — power, fan speed, mode, timer, AQ/PM2.5, filter health; canonical pyvesync payloads",
-        version: "2.1",
+        version: "2.2",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"

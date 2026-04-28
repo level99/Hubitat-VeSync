@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — v2.2
+## [2.2] - 2026-04-27
+
+Adds two new humidifier drivers (Levoit LV600S and Dual 200S — both preview), EU region support (preview), RGB color nightlight on the EU OasisMist 450S 4.5L variant, and routing for 6 additional regional model code variants. Fixes two reboot-survival bugs (Bug Patterns #14 and #16) that could leave polling permanently stopped or debug logging stuck on indefinitely after a hub reboot. v2.2 device drivers ship as **preview** — built without maintainer EU hardware via cross-referencing pyvesync canonical fixtures + Home Assistant `vesync` integration. Each carries inline `CROSS-CHECK` comment blocks documenting contentious decisions for community refutation.
 
 ### Added
 
@@ -20,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Parent driver wiring** for Dual 200S: `deviceType()` switch adding Dual200S + LUH-D301S-* → D301S dtype, `addChildDevice` branch for "Levoit Dual 200S Humidifier" with verify1 defensive validation, newList tracking extended, `isLevoitClimateDevice()` updated with "Dual200S" literal (LUH-D301S-* already covered by LUH- prefix blanket).
 - **Spock unit-test spec** `LevoitDual200SSpec.groovy` — 32 tests covering BP#1 (2-arg update), BP#3 (envelope peel), BP#6 (mist=0 when off), BP#12 (pref-seed), happy-path from canonical fixture, switch/mist-clamping (1-2 ceiling enforced, Classic-300S-style 9 clamped to 2), mode rejection (sleep invalid), multi-firmware auto-mode try-fallback/cache, mode-read normalization, setHumidity, display field chain, no nightlight command, no warm-mist command, water-lacks state-change gating, nightLightBrightness passive read.
 - **Vendored pyvesync fixture** `tests/fixtures/LUH-D301S.yaml` — request payloads sourced from upstream `Dual200S.yaml` (commit c98729c); response scenarios include canonical (from call_json_humidifiers.py HUMIDIFIER_DETAILS["Dual200S"]) + device_off + device_on_auto_mist2 + device_water_lacks + device_legacy_display_alias + device_auto_stop_reached. SOURCE.md updated.
+- **`CODE_OF_CONDUCT.md`** — Contributor Covenant 2.1 verbatim canonical text + cross-references in README/CONTRIBUTING/CLAUDE (746b1c4).
+- **`CONTRIBUTING.md`** — shared contributor onboarding (codebase tour, dev environment, conventions, test runners, PR flow, preview-driver protocol). Useful for both human contributors and AI sessions; complements `CLAUDE.md` (AI-pipeline overlay) (93a4a90).
+- **Lint rules RULE23/24/25** — `driver_app_only_api` (forbids `subscribe()`/`unsubscribe()` in `Drivers/Levoit/*.groovy`; closes the BP15 gap that let app-only API calls reach v2.1 hubs), `agent_pointer_integrity` (verifies cross-doc `see CLAUDE.md X` / `see CONTRIBUTING.md X` references resolve to actual section headers), `bp16_watchdog_call_site` (enforces `ensureDebugWatchdog()` call site in all driver files).
+
+### Changed
+
+- Parent driver `updateDevices()` API-method routing centralized in `@Field` map — replaces inline string-substring matching with a single lookup table (c31c14c). No behavioral change.
+- `releaseNotes` field in `levoitManifest.json` now cumulates per-version notes (matches HPM convention used by long-lived packages); the HPM update popup will show the full version history starting v2.0 forward (2a39b14).
+- Hubitat community thread URL updated across docs to the active-maintenance thread (50bb123).
+- README.md install-path text corrected — VeSync Integration is a driver, not an app (27a54be).
 
 ### Fixed
 

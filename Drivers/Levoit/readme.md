@@ -8,9 +8,12 @@ This is a **community fork** of [NiklasGustafsson/Hubitat](https://github.com/Ni
 - **Levoit Vital 100S Air Purifier** (LAP-V102S) — same V2 platform as Vital 200S, no light-detection feature *(v2.1)*
 - **Levoit Superior 6000S Humidifier** (LEH-S601S) — mist control, drying mode, auto-stop, water-pump cleaning, ambient temp sensor
 - **Levoit Classic 300S Humidifier** (LUH-A601S) — mist 1-9, target humidity, 3-step night light *(v2.1)*
-- **Levoit OasisMist 450S Smart Humidifier** (LUH-O451S, LUH-O601S) — mist 1-9 + warm mist 0-3, auto-stop, no night light *(v2.1)*
+- **Levoit OasisMist 450S Smart Humidifier** (LUH-O451S, LUH-O601S) — mist 1-9 + warm mist 0-3, auto-stop *(v2.1)*. EU variant `LUH-O451S-WEU` adds RGB color nightlight via standard Hubitat ColorControl *(v2.2)*
+- **Levoit LV600S Humidifier** (LUH-A602S, all 6 regional variants) — mist 1-9, warm mist 0-3, target humidity 30-80, auto-stop *(v2.2)*
+- **Levoit Dual 200S Humidifier** (LUH-D301S, all 5 regional variants) — mist 1-2 (2-level hardware), target humidity 30-80, auto/manual modes only *(v2.2)*
 - **Levoit Tower Fan** (LTF-F422S) — 12-speed fan, oscillation, mute, ambient temperature *(v2.1)*
 - **Levoit Pedestal Fan** (LPF-R432S) — 12-speed fan, 2-axis oscillation with range control, ambient temperature *(v2.1)*
+- **EU region support** — `VeSync API region` parent preference (US/EU) routes API calls to the appropriate VeSync cloud host *(v2.2 preview)*
 - **Parent driver fix**: humidifier devices were silently failing every poll because the parent always sent `getPurifierStatus`. The parent now branches by device type.
 - **Connection-pool retry logic** for transient HTTP failures.
 

@@ -29,11 +29,11 @@ A Hubitat Elevation driver pack for **Levoit smart home devices** (air purifiers
 
 ¹ `LAP-V201-AUSR` (no `S` after `V201`) is an intentional typo SKU — this is the literal model code the VeSync cloud API emits for AU-market V201S hardware, as documented in pyvesync `device_map.py`. If your Hubitat log shows `LAP-V201-AUSR` as unrecognized, update to v2.2 or later.
 
-*Preview drivers* are v2.1 drivers built without maintainer hardware, validated against canonical pyvesync fixtures + Home Assistant + SmartThings/Homebridge community drivers. Each carries inline `CROSS-CHECK` comment blocks documenting every contentious decision. If your device behaves differently, please [open an issue](https://github.com/level99/Hubitat-VeSync/issues) with a `captureDiagnostics` paste and a debug log.
+*Preview drivers* are v2.1+ drivers built without maintainer hardware, validated against canonical pyvesync fixtures + Home Assistant + SmartThings/Homebridge community drivers. Each carries inline `CROSS-CHECK` comment blocks documenting every contentious decision. If your device behaves differently, please [open an issue](https://github.com/level99/Hubitat-VeSync/issues) with a `captureDiagnostics` paste and a debug log.
 
 For per-device attribute and command details: [`Drivers/Levoit/readme.md`](Drivers/Levoit/readme.md).
 
-For upcoming devices beyond v2.1: [`ROADMAP.md`](ROADMAP.md).
+For upcoming devices beyond v2.2: [`ROADMAP.md`](ROADMAP.md).
 
 ## Install via Hubitat Package Manager
 
@@ -128,7 +128,7 @@ Roadmap and unscheduled future work: [`ROADMAP.md`](ROADMAP.md).
 - **[Niklas Gustafsson](https://github.com/NiklasGustafsson)** — original VeSyncIntegration framework, Core 200S/300S/400S/600S drivers
 - **Dan Cox** — community fork maintainer (v2.0+); Vital 100S/200S, Classic 300S, Superior 6000S, OasisMist 450S, Tower Fan, Pedestal Fan, parent humidifier-method fix, Generic diagnostic driver, token-expiry auto-recovery, infrastructure
 - **elfege** — `setLevel()` support, Core 600S 'max' speed
-- **[pyvesync](https://github.com/webdjoe/pyvesync)** — canonical VeSync API payload reference; HA `vesync` integration, SmartThings + Homebridge community drivers used as v2.1 cross-check sources
+- **[pyvesync](https://github.com/webdjoe/pyvesync)** — canonical VeSync API payload reference; HA `vesync` integration, SmartThings + Homebridge community drivers used as cross-check sources
 
 ## License
 

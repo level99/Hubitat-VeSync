@@ -51,7 +51,7 @@ metadata {
 			description: "Simple driver to act as a destination for notifications, and provide an attribute to display the last 5 on a tile.",
 			author: "Jean P. May, Jr.",
 			importUrl:"https://raw.githubusercontent.com/thebearmay/hubitat/main/notifyTile.groovy",
-			version: "2.1",
+			version: "2.2",
             singleThreaded: true
 		) {
 			capability "Notification"

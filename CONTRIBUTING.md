@@ -31,6 +31,8 @@ Hubitat-VeSync/
 │   ├── LevoitClassic300S.groovy          ← V1-humidifier base
 │   ├── LevoitSuperior6000S.groovy        ← V2-humidifier (double-wrapped responses)
 │   ├── LevoitOasisMist450S.groovy        ← extends Classic 300S with warm mist
+│   ├── LevoitLV600S.groovy               ← v2.2 preview, warm-mist humidifier (LUH-A602S)
+│   ├── LevoitDual200S.groovy             ← v2.2 preview, mist 1-2 humidifier (LUH-D301S)
 │   ├── LevoitTowerFan.groovy             ← v2.1 fan (single-axis oscillation)
 │   ├── LevoitPedestalFan.groovy          ← v2.1 fan (2-axis oscillation, range)
 │   ├── LevoitGeneric.groovy              ← fall-through diagnostic driver
@@ -39,7 +41,7 @@ Hubitat-VeSync/
 ├── src/test/groovy/drivers/              ← Spock unit-test specs (one per driver)
 ├── tests/
 │   ├── lint.py                            ← static lint orchestrator
-│   ├── lint_rules/                        ← 22 pluggable rules (BP1-13, RULE15-22)
+│   ├── lint_rules/                        ← 25 pluggable rules (BP1-16, RULE15-25)
 │   ├── lint_config.yaml                   ← frozen_driver_names, exemptions
 │   └── fixtures/*.yaml                    ← captured pyvesync API responses
 ├── levoitManifest.json                    ← HPM package manifest
