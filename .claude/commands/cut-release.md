@@ -48,12 +48,13 @@ Then collect, in parallel:
 - `dateReleased`: today's date in `YYYY-MM-DD` (use `date +%Y-%m-%d` via bash).
 - `releaseNotes`: **PREPEND a new line for this release to the existing string — do NOT overwrite.** The convention is a single string accumulating all versions, newest-first, one line per release, separated by literal `\n` escape sequences. Format per line:
   ```
-  <version> - <author> - <user-facing description, ~2-4 sentences, no bullets>.
+  <version> - <user-facing description, ~2-4 sentences, no bullets>.
   ```
   Example after a 2.1 cut on a manifest that previously had only 2.0:
   ```
-  "releaseNotes": "2.1 - Dan Cox - Adds five new drivers: ...\n2.0 - Dan Cox - First community-fork release after Niklas's repo went idle. Adds ..."
+  "releaseNotes": "2.1 - Adds five new drivers: ...\n2.0 - First community-fork release after Niklas's repo went idle. Adds ..."
   ```
+  Note: the manifest's top-level `author` field already credits the maintainer; don't repeat it inline on every release line. (Older manifests through v2.1 had `<version> - Dan Cox - ...` lines; v2.2 cut scrubbed the redundant author tag from all historical lines for consistency.)
 
   Reference: this matches the convention used by well-maintained Hubitat HPM packages (e.g. [tomwpublic/hubitat_SmartHQ](https://github.com/tomwpublic/hubitat_SmartHQ/blob/main/packageManifest.json) — accumulates ~15 versions back to 0.9.0). HPM displays the entire string verbatim in the update popup; cumulative notes give users updating from a stale install (e.g. v0.0 manual paste, or skipping several versions) the full context of what changed in their jump.
 
@@ -156,6 +157,83 @@ Run `[ -f TODO.md ] && echo "present" || echo "absent"` to check. `TODO.md` is g
 
 - **If absent:** skip silently. Do not create `TODO.md` from scratch — it's a maintainer-personal artifact, not something to seed automatically.
 
+### Artifact F — `CONTRIBUTING.md` drift check (only if file exists)
+
+Run `[ -f CONTRIBUTING.md ] && echo "present" || echo "absent"` to check.
+
+- **If absent:** skip silently. (Older clones / branches may not have it.)
+
+- **If present:** scan the sections that drift release-over-release and propose edits where they no longer match current state:
+
+  | CONTRIBUTING.md section | Drift source | Check |
+  |---|---|---|
+  | `## Codebase orientation` (repo tree) | new/renamed driver files | glob `Drivers/Levoit/*.groovy` and compare to the tree's listed files |
+  | `## Adding a new device driver` (closest-existing-driver-as-template hints) | new device families | scan for hardcoded references to existing driver classes; flag if a v2.X+ family (e.g. fans added in v2.1) isn't represented |
+  | `## Conventions enforced by lint/tests` (rule IDs + BP refs) | new lint rules / new bug patterns | glob `tests/lint_rules/*.py` for rule IDs and cross-check against the listed rules. Cross-check BP catalog references against `CLAUDE.md` "Bug-pattern catalog" entries |
+  | `### What's still gappy in shipped previews` | preview drivers losing/gaining gaps | grep `Drivers/Levoit/*.groovy` for `[PREVIEW vX.Y]` in `definition(description: ...)` and cross-check against the listed gaps |
+
+  Surface drift as **proposed edits** in the approval round (unified diff or proposed-section snippet). **Do not apply automatically** — content drift in a contributor-facing doc deserves a human eyeball.
+
+  If no drift detected: report *"No CONTRIBUTING.md drift detected this release."*
+
+### Artifact G — `README.md` drift check (only if file exists)
+
+Run `[ -f README.md ] && echo "present" || echo "absent"` to check.
+
+- **If absent:** skip silently.
+
+- **If present:** scan for hardcoded version references in prose that drift release-over-release. The scan should NOT touch per-device row annotations like `*(v2.1 preview)*` — those mark when each driver was first introduced and are intentional historical markers; leaving them in place preserves provenance.
+
+  Drift patterns to surface:
+
+  | Pattern | Why it drifts |
+  |---|---|
+  | `Preview drivers are v<X.Y> drivers...` (or similar generalizing prose) | Each release adds new preview drivers. Generalize to `v<earliest>+` or version-agnostic phrasing. |
+  | `For upcoming devices beyond v<X.Y>: ROADMAP.md` (or similar pointer) | The "beyond" version should bump to the version being cut. |
+  | `...used as v<X.Y> cross-check sources` (acknowledgements section) | Cross-check sources are used across all releases; drop the version qualifier rather than bumping it. |
+
+  Surface drift as **proposed edits** in the approval round (unified diff). **Do not apply automatically** — README content is user-facing and deserves a human eyeball.
+
+  If no drift detected: report *"No README.md drift detected this release."*
+
+### Artifact H — `repository.json` drift check (only if file exists)
+
+Run `[ -f repository.json ] && echo "present" || echo "absent"` to check.
+
+- **If absent:** skip silently. (Older clones or non-HPM forks may not have it.)
+
+- **If present:** the file is a tier-2 HPM repository manifest. Scan the `description` field of each entry in the `packages` array for stale device-list references. The description typically enumerates supported device families (e.g., *"Supports air purifiers (Core 200S/300S/400S/600S, Vital 100S/200S), humidifiers (Classic 300S, ...), and fans (Tower, Pedestal)"*). Compare the listed devices against:
+
+  | Source of truth | What to check |
+  |---|---|
+  | `Drivers/Levoit/*.groovy` file inventory | Every supported device family represented in the description |
+  | Each driver's `definition(name: "...")` block | Marketing names match (don't invent shorthand) |
+  | Recent CHANGELOG entries since last cut | Major user-facing features (e.g., EU region support, RGB nightlight) worth a brief mention if they expand the package's scope |
+
+  This file drifted silently across v2.0 → v2.1 → v2.2 because no artifact checked it. The v2.2 cut updated the description to mention LV600S + Dual 200S humidifiers + EU region. Surface drift as a proposed JSON edit. **Do not auto-apply** — the description is user-facing in HPM keyword search.
+
+  If no drift detected: report *"No repository.json drift detected this release."*
+
+### Artifact I — `Drivers/Levoit/readme.md` top-blurb drift check (only if file exists)
+
+Run `[ -f Drivers/Levoit/readme.md ] && echo "present" || echo "absent"` to check.
+
+- **If absent:** skip silently.
+
+- **If present:** scan the top-blurb prose (typically the first ~15 lines after the heading) for stale per-release device-addition annotations. Lines like `**Levoit X** ... — short description *(vN.M)*` record when each driver was first introduced. Compare against:
+
+  - The driver-file inventory in `Drivers/Levoit/*.groovy`
+  - Each driver's `definition(name: "...")` block
+  - The version being cut
+
+  If a driver was added in the version being cut and isn't represented in the blurb, propose adding a row with the appropriate `*(v<X.Y>)*` annotation. **Don't touch the existing rows** — those are intentional historical markers documenting when each driver first shipped.
+
+  The driver-list table further down in this file (per-driver section headers and event/attribute tables) is typically maintained by the developer agent on each driver-add diff, not by the cut-release procedure. **Only the top-blurb prose is the cut-release responsibility.**
+
+  Surface drift as proposed edits (unified diff or proposed-row snippet). **Do not auto-apply** — the blurb is user-facing.
+
+  If no drift detected: report *"No Drivers/Levoit/readme.md top-blurb drift detected this release."*
+
 ## Step 5 — Present for approval
 
 Output a single message structured as:
@@ -203,6 +281,22 @@ Output a single message structured as:
 
 <unified diff or proposed-section snippet, or "TODO.md not present locally — skipping">
 
+### Artifact F — CONTRIBUTING.md drift check
+
+<unified diff or proposed-section snippet, or "No CONTRIBUTING.md drift detected this release" or "CONTRIBUTING.md not present — skipping">
+
+### Artifact G — README.md drift check
+
+<unified diff or proposed-section snippet, or "No README.md drift detected this release" or "README.md not present — skipping">
+
+### Artifact H — repository.json drift check
+
+<proposed JSON edit to description field, or "No repository.json drift detected this release" or "repository.json not present — skipping">
+
+### Artifact I — Drivers/Levoit/readme.md top-blurb drift check
+
+<unified diff or proposed-row snippet, or "No Drivers/Levoit/readme.md top-blurb drift detected this release" or "Drivers/Levoit/readme.md not present — skipping">
+
 ---
 
 Approve to apply, or tell me what to change.
@@ -220,6 +314,10 @@ After explicit approval (e.g., "approved", "go", "ship it"):
 - Apply Artifact C.7 edits: for each `.groovy` file in `Drivers/Levoit/`, update or add the `version:` field inside `definition()` to match the new package version.
 - Apply Artifact D `ROADMAP.md` edits if any were proposed.
 - Apply Artifact E `TODO.md` edits if `TODO.md` exists locally and edits were proposed.
+- Apply any Artifact F `CONTRIBUTING.md` edits if proposed and approved.
+- Apply any Artifact G `README.md` edits if proposed and approved.
+- Apply any Artifact H `repository.json` edits if proposed and approved.
+- Apply any Artifact I `Drivers/Levoit/readme.md` edits if proposed and approved.
 
 Do NOT commit. Do NOT tag. Do NOT push.
 
@@ -234,22 +332,36 @@ v<version> release prepared. Files staged-ready (uncommitted):
   - Drivers/Levoit/*.groovy   (version: field lockstep — all N files updated)
   - ROADMAP.md         (if advanced)
   - TODO.md            (if present locally and swept)
+  - CONTRIBUTING.md    (if drift detected and approved)
+  - README.md          (if drift detected and approved)
+  - repository.json    (if drift detected and approved)
+  - Drivers/Levoit/readme.md  (if top-blurb drift detected and approved)
 
 Next steps for you:
   1. Review with: git diff
-  2. Commit (preview-before-publish: I'll draft the message when you ask)
-  3. Tag: git tag -a v<version> -m "<release subject>"
-  4. Push branch + tag: git push origin <branch> v<version>
+  2. Commit (preview-before-publish: ask for a message draft)
+  3. Push the release branch to origin: git push -u origin <branch>
+  4. Open PR <branch> -> main (preview-before-publish: ask for a body draft)
+  5. Iterate on PR review (Gemini auto-review + maintainer comments)
+  6. Squash-merge to main once review is clean
+  7. Tag the squash commit on main:
+       git checkout main && git pull
+       git tag -a v<version> -m "<release subject>"
+       git push origin v<version>
+  8. Publish the GitHub Release for the new tag (gh release create or via web UI)
+  9. Community-thread announce (Hubitat forum) with migration notes if applicable
 
 Note: TODO.md is gitignored, so even if it was updated it stays local-only.
 Don't try to git-add it.
 ```
 
-Stop. The user owns commit/tag/push under preview-before-publish.
+Stop. The user owns commit/push/PR/tag/release under preview-before-publish.
 
 ## Notes
 
-- This procedure does NOT push to remote, does NOT open a PR, does NOT update GitHub releases. Those are post-merge steps after maintainer review.
+- This procedure does NOT push to remote, does NOT open a PR, does NOT tag, does NOT update GitHub releases. Those happen across the steps above:
+  * Push branch and open PR are POST-CUT, PRE-MERGE (steps 3-5).
+  * Tag and GitHub Release are POST-MERGE (steps 7-8) -- tag the squash commit on main, NOT the release branch tip (the tag is what users install via HPM, and HPM resolves URLs against main).
 - If the user runs this with uncommitted in-progress work other than `TODO.md`, stop and ask — they may have intended to commit first.
 - The `TODO.md` file is intentionally gitignored / not part of releases. Do not surface it in the release diff.
 - For dry-run / preview-only mode, the user can say "draft only, don't apply" — produce Step 5 output and stop without waiting for approval.

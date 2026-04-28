@@ -51,7 +51,7 @@ metadata {
 			description: "Simple driver to act as a destination for notifications, and provide an attribute to display the last 5 on a tile.",
 			author: "Jean P. May, Jr.",
 			importUrl:"https://raw.githubusercontent.com/thebearmay/hubitat/main/notifyTile.groovy",
-			version: "2.1",
+			version: "2.2",
             singleThreaded: true
 		) {
 			capability "Notification"
@@ -82,7 +82,13 @@ metadata {
 
 	void updated(){
         logDebug "updated()"
-		if(settings?.debugOutput) runIn(1800,logsOff)
+        // Turn off debug log in 30 minutes (happy path — no hub reboot)
+        if (settings?.debugOutput) {
+            runIn(1800, logsOff)
+            state.debugEnabledAt = now()
+        } else {
+            state.remove("debugEnabledAt")
+        }
 
 	// V2.0.2 When converting from original version set state variables, adjust html in last5 to make it work with V2.0.0+	
 		if (state?.msgCount == null)
@@ -157,6 +163,7 @@ metadata {
 	}
 
 void deviceNotification(notification){
+    ensureDebugWatchdog()
 	logDebug "deviceNotification entered: ${notification}"
     // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
     if (!state.prefsSeeded) {
@@ -229,6 +236,20 @@ void deviceNotification(notification){
 	void logsOff(){
 		device.updateSetting("debugOutput",[value:"false",type:"bool"])
 	}
+
+    // BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
+    // Notification Tile uses logsOff() (not logDebugOff()); watchdog mirrors that.
+    // Called from top of deviceNotification() — fires on every incoming notification.
+    private void ensureDebugWatchdog() {
+        if (settings?.debugOutput && state.debugEnabledAt) {
+            Long elapsed = now() - (state.debugEnabledAt as Long)
+            if (elapsed > 30 * 60 * 1000) {
+                logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
+                device.updateSetting("debugOutput", [type:"bool", value:false])
+                state.remove("debugEnabledAt")
+            }
+        }
+    }
 
 	def logDebug(msg) {
 		if (settings?.debugOutput) log.debug msg

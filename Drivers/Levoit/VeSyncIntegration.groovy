@@ -26,6 +26,69 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-27: v2.2+ EU region support (preview). Added deviceRegion preference (US/EU).
+//                  - New getDeviceRegion() getter reads settings?.deviceRegion ?: "US".
+//                  - New getApiHost() helper: EU -> smartapi.vesync.eu, US -> smartapi.vesync.com.
+//                  - All three hardcoded API URLs now use getApiHost() dynamically.
+//                  - Removed @Field static DEVICE_REGION constant; body field "deviceRegion"
+//                    now reads from getDeviceRegion().
+//                  - updated() detects region change (state.lastRegion diff), clears token +
+//                    accountID, and forces re-login when region is switched.
+//                  NOTE: EU support ships as preview -- no EU hardware live-verified.
+//                  Community validation welcome on Hubitat thread.
+// 2026-04-27: v2.2+ Dual 200S Humidifier preview driver wiring.
+//                  - deviceType() switch: added Dual200S, LUH-D301S-WUSR, LUH-D301S-WJP,
+//                    LUH-D301S-WEU, LUH-D301S-KEUR returning "D301S" dtype.
+//                  - getDevices() addChildDevice loop: new D301S else-if branch with
+//                    verify1 defensive validation, mapping to "Levoit Dual 200S Humidifier".
+//                  - getDevices() newList tracking: extended cid-tracking conditional
+//                    to include "D301S".
+//                  - isLevoitClimateDevice(): LUH-D301S-* covered by existing LUH-* blanket;
+//                    "Dual200S" literal added to the literal-names list (RULE22 parity).
+// 2026-04-27: v2.2+ Debug auto-disable watchdog (Bug Pattern #16).
+//                  - updated() now records state.debugEnabledAt = now() when debug is
+//                    enabled, and clears it when debug is disabled.  The existing
+//                    runIn(1800, "logDebugOff") stays for the happy path (no reboot).
+//                  - Added ensureDebugWatchdog(): called at top of updateDevices()
+//                    alongside ensurePollWatchdog().  If debugOutput has been true for
+//                    >30 min (i.e. runIn timer evaporated across a hub reboot) the
+//                    watchdog auto-disables debug and logs an INFO with the BP16 token.
+//                  - Children each carry an identical ensureDebugWatchdog() called from
+//                    update(status, nightLight) (or update(status) for Core200S Light).
+//                  NOTE: state.debugEnabledAt is cleared by state.clear() in
+//                  forceReinitialize(), so a force-reinit resets the 30-min clock.
+// 2026-04-27: v2.2+ Bug fix -- setupPollSchedule() invalid Quartz cron for intervals >= 60s.
+//                  The seconds-field cron "0/N * * * * ?" requires N < 60; for N >= 60
+//                  Hubitat's Quartz scheduler rejects the expression silently and the
+//                  poll cycle never arms. All README-recommended values >= 60s (60, 120,
+//                  300) were broken. Fixed by branching on interval magnitude:
+//                  - interval < 60  => "0/${interval} * * * * ?" (seconds-resolution, unchanged)
+//                  - interval >= 60 => "0 */${interval/60} * * * ?" (minutes-resolution)
+//                  Non-multiples of 60 (e.g. 90s) fire at floor(90/60)=1 min and emit
+//                  a WARN so the user can correct. Recommended values (30/60/120/300)
+//                  all divide evenly. Maintainer live-verify was on default 30s (< 60),
+//                  so the breakage was not caught before release. (PR #4, Gemini review.)
+// 2026-04-27: v2.2+ Hub-reboot poll-chain recovery (Bug Pattern #14).
+//                  - Replaced recursive runIn() chain with schedule()-based cron job.
+//                    schedule() persists across hub reboots; runIn() does not, causing
+//                    polling to die permanently after every reboot until the user
+//                    clicks Save Preferences.
+//                  - Added setupPollSchedule() -- arms the cron, clears any prior
+//                    runIn chain with unschedule("updateDevices").
+//                  - Added ensurePollWatchdog() -- called at top of updateDevices()
+//                    (after BP12 pref-seed) and at top of sendBypassRequest() (before
+//                    HTTP); detects pre-v2.2 installs that still have the runIn-based
+//                    chain, migrates them to schedule()-based automatically on first
+//                    call. Idempotent once state.scheduleVersion == "2.2".
+//                  - Removed the runIn((int)settings.refreshInterval, "updateDevices")
+//                    call from inside updateDevices() (was the entire chain that broke
+//                    on reboot). schedule() now drives the recurring tick.
+//                  - initialize() now calls setupPollSchedule() so fresh installs
+//                    start reboot-resilient.
+//                  NOTE: subscribe(location, ...) is app-only API (Bug Pattern #15).
+//                  The prior round's systemStart belt-and-braces layer was removed
+//                  because it crashed in driver context. schedule() alone is sufficient
+//                  -- Hubitat platform persists schedule() cron jobs across reboots.
 // 2026-04-26: v2.1+ Phase 3 — parent driver wiring for 5 new v2.1 drivers.
 //                  - deviceType() switch: added V100S (LAP-V102S-* family),
 //                    A601S (Classic300S / LUH-A601S-*), O451S (LUH-O451S-* /
@@ -74,12 +137,11 @@ SOFTWARE.
 //                  - Issue 3: getDevices() now retries with re-auth on token expiry
 //                    (same effectiveClosure pattern as sendBypassRequest)
 //                  - Pattern 2: extracted hardcoded API metadata to @Field constants
-//                    (APP_VERSION, DEFAULT_TRACE_ID, DEFAULT_TIME_ZONE, DEVICE_REGION);
+//                    (APP_VERSION, DEFAULT_TRACE_ID, DEFAULT_TIME_ZONE);
 //                    timeZone now derived from hub location with fallback to DEFAULT_TIME_ZONE.
-//                    NOTE: regional API routing is binary (US→smartapi.vesync.com,
-//                    EU→smartapi.vesync.eu per pyvesync const.py); a full implementation
-//                    requires switching the endpoint host, not just the body field. Parked
-//                    for v2.1+ — DEVICE_REGION constant left as breadcrumb.
+//                    NOTE: regional API routing (US→smartapi.vesync.com / EU→smartapi.vesync.eu)
+//                    implemented in v2.2 via getApiHost() + deviceRegion preference.
+//                    DEVICE_REGION @Field constant was removed in favour of getDeviceRegion().
 // 2026-04-25: v2.0+ Token-expiry re-auth fix (Bug Pattern #13).
 //                  - isAuthFailure() detects HTTP 401 and inner code -11001000 (token expired)
 //                    and -11201000 (invalid credentials); also handles rare 4-digit variants
@@ -112,8 +174,20 @@ import groovy.transform.Field
 @Field static final String DEFAULT_TRACE_ID  = "1634265366"
 @Field static final String DEFAULT_TIME_ZONE = "America/Los_Angeles"
 // Regional routing is binary: US → smartapi.vesync.com, EU → smartapi.vesync.eu
-// (per pyvesync const.py). Full support requires switching the endpoint host — parked for v2.1+.
-@Field static final String DEVICE_REGION     = "US"
+// (per pyvesync const.py). Implemented in v2.2 via deviceRegion preference + getApiHost() helper.
+
+// updateDevices() poll-method routing map (GitHub issue #3 / Gemini PR #2 suggestion).
+// Maps a typeName substring to the VeSync API method that returns device status for that family.
+// Iteration order (LinkedHashMap insertion order) is preserved; most-specific keys listed first.
+// Keys are frozen by Bug Pattern #9 / RULE19 — driver typeName substrings are frozen once shipped
+// because Hubitat associates devices to drivers by name. Adding a new driver family requires a new
+// map entry here AND a matching driver whose definition(name:) contains the same substring.
+@Field static final Map<String,String> TYPENAME_TO_METHOD = [
+    "Tower Fan":    "getTowerFanStatus",
+    "Pedestal Fan": "getFanStatus",
+    "Humidifier":   "getHumidifierStatus"
+]
+@Field static final String DEFAULT_POLL_METHOD = "getPurifierStatus"
 
 metadata {
     definition(
@@ -121,7 +195,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson (original); Dan Cox (fork: Vital 200S, Superior 6000S, parent fixes); elfege (contributor)",
         description: "Integrates Levoit air purifiers and humidifiers with Hubitat Elevation via VeSync cloud API",
-        version: "2.1",
+        version: "2.2",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"
@@ -132,6 +206,9 @@ metadata {
         input(name: "email", type: "string", title: "<font style='font-size:12px; color:#1a77c9'>Email Address</font>", description: "<font style='font-size:12px; font-style: italic'>VeSync Account Email Address</font>", defaultValue: "", required: true);
         input(name: "password", type: "password", title: "<font style='font-size:12px; color:#1a77c9'>Password</font>", description: "<font style='font-size:12px; font-style: italic'>VeSync Account Password</font>", defaultValue: "");
 		input("refreshInterval", "number", title: "<font style='font-size:12px; color:#1a77c9'>Refresh Interval</font>", description: "<font style='font-size:12px; font-style: italic'>Poll VeSync status every N seconds</font>", required: true, defaultValue: 30)
+        input("deviceRegion", "enum", title: "<font style='font-size:12px; color:#1a77c9'>VeSync API region</font>",
+              description: "<font style='font-size:12px; font-style: italic'>US: smartapi.vesync.com (default). EU: smartapi.vesync.eu. Changing region clears stored auth token and forces re-login. EU support is preview — community validation welcome.</font>",
+              options: ["US", "EU"], defaultValue: "US", required: true)
         input("descriptionTextEnable", "bool", title: "Enable descriptive (info-level) logging?", defaultValue: true, required: false)
         input("debugOutput", "bool", title: "Enable debug logging?", defaultValue: false, required: false)
         input("verboseDebug", "bool", title: "Verbose API response logging? (Logs full response body of every VeSync API call. Useful for diagnosing 'VeSync changed an API field' issues. Sanitized automatically. Heavy on log buffer — leave off unless triaging.)", defaultValue: false, required: false)
@@ -151,6 +228,16 @@ def installed() {
 def updated() {
 	logDebug "Updated with settings: ${settings}"
 
+    // Region-change detection: if the user switched US <-> EU, cross-region tokens are invalid.
+    // Clear stored auth credentials and force re-login via initialize() below.
+    String newRegion = settings?.deviceRegion ?: "US"
+    if (state.lastRegion != null && state.lastRegion != newRegion) {
+        logInfo "VeSync API region changed from ${state.lastRegion} to ${newRegion} -- clearing stored token and forcing re-login"
+        state.remove('token')
+        state.remove('accountID')
+    }
+    state.lastRegion = newRegion
+
     // Set flag to stop any running tasks from old driver instance
     state.driverReloading = true
     try {
@@ -167,8 +254,13 @@ def updated() {
     // Delay initialization to allow HTTP connection pool to stabilize (15s for reliability)
 	runIn(15, "initialize")
 
-    // Turn off debug log in 30 minutes
-    if (settings?.debugOutput) runIn(1800, "logDebugOff");
+    // Turn off debug log in 30 minutes (happy path — no hub reboot)
+    if (settings?.debugOutput) {
+        runIn(1800, "logDebugOff")
+        state.debugEnabledAt = now()
+    } else {
+        state.remove("debugEnabledAt")
+    }
 }
 
 def uninstalled() {
@@ -185,7 +277,11 @@ def uninstalled() {
 
 def initialize() {
 	logDebug "initializing"
-    
+
+    // Arm the persistent cron schedule before login so that even a failed login
+    // attempt still establishes the poll timer for when credentials are next corrected.
+    setupPollSchedule()
+
     // Start the initialization chain: login → getDevices → updateDevices
     def loginSuccess = login()
     if (loginSuccess) {
@@ -194,6 +290,108 @@ def initialize() {
     } else {
         logError "Login failed - check credentials and retry"
     }
+}
+
+/**
+ * Arm (or re-arm) the persistent schedule()-based poll cron (Bug Pattern #14).
+ *
+ * schedule() registers a platform-level cron job that survives hub reboots.
+ * unschedule("updateDevices") first clears any prior schedule() OR runIn() chain
+ * registered for updateDevices -- this is the migration step that kills the legacy
+ * runIn-based chain on pre-v2.2 installs.
+ *
+ * Cron syntax depends on interval magnitude (Quartz seconds field range is 0-59;
+ * the seconds-form increment must be less than 60):
+ *   interval < 60  -> seconds-resolution form (every N seconds in the seconds field)
+ *   interval >= 60 -> minutes-resolution form (every N minutes in the minutes field,
+ *                     where N = interval / 60).
+ *                     Non-multiples of 60 (e.g. 90s) fire every floor(90/60)=1 min;
+ *                     a WARN is emitted so the user can correct to a clean multiple.
+ *                     Recommended values: 30, 60, 120, 300 (all divide evenly).
+ * Minimum granularity is 1 second; any interval < 1 is clamped to 1.
+ * See the method body below for the literal cron expressions.
+ *
+ * state.scheduleVersion is set to "2.2" after arming so ensurePollWatchdog()
+ * can distinguish schedule()-armed installs from legacy runIn()-only installs.
+ *
+ * NOTE: subscribe(location, ...) is NOT available in driver context (Bug Pattern #15).
+ * Do NOT add location-event subscriptions here or anywhere in this driver.
+ */
+private setupPollSchedule() {
+    Integer interval = Math.max(1, (settings?.refreshInterval ?: 30) as Integer)
+    unschedule("updateDevices")
+    String cron
+    if (interval < 60) {
+        cron = "0/${interval} * * * * ?"
+    } else {
+        Integer minutes = (int)(interval / 60)
+        if (interval % 60 != 0) {
+            logWarn "VeSync Integration: refreshInterval ${interval}s is not a multiple of 60. " +
+                    "Cron will fire every ${minutes} minute(s) (~${minutes * 60}s) instead. " +
+                    "Set interval to 60, 120, or 300 for exact timing."
+        }
+        cron = "0 */${minutes} * * * ?"
+    }
+    schedule(cron, "updateDevices")
+    state.scheduleVersion = "2.2"
+    logDebug "Poll schedule armed: every ${interval}s via cron '${cron}' (schedule()-based, persists across reboots)"
+}
+
+/**
+ * Self-heal watchdog -- detects pre-v2.2 installs and migrates them (Bug Pattern #14).
+ *
+ * Called at the top of updateDevices() (after BP12 pref-seed, before driverReloading guard)
+ * and at the top of sendBypassRequest() (before HTTP -- catches the case where polling died
+ * but a direct command is still sent, e.g. from a Rule that fires the device).
+ *
+ * Idempotent: once state.scheduleVersion == "2.2" the body is skipped in O(1).
+ */
+private ensurePollWatchdog() {
+    if (state.scheduleVersion != "2.2") {
+        logInfo "BP14 migration: switching from runIn-based to schedule()-based poll cycle"
+        setupPollSchedule()
+    }
+}
+
+/**
+ * Debug auto-disable watchdog -- Bug Pattern #16.
+ *
+ * runIn(1800, "logDebugOff") in updated() is in-memory only and evaporates across
+ * hub reboots.  settings.debugOutput persists, so after a reboot debug runs forever.
+ * This watchdog detects that condition and self-heals within one poll cycle.
+ *
+ * Called at the top of updateDevices() alongside ensurePollWatchdog().
+ * Idempotent: O(1) when debug is off or state.debugEnabledAt is absent.
+ */
+private void ensureDebugWatchdog() {
+    if (settings?.debugOutput && state.debugEnabledAt) {
+        Long elapsed = now() - (state.debugEnabledAt as Long)
+        if (elapsed > 30 * 60 * 1000) {
+            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
+            device.updateSetting("debugOutput", [type:"bool", value:false])
+            state.remove("debugEnabledAt")
+        }
+    }
+}
+
+/**
+ * Returns the configured API region ("US" or "EU").
+ * Reads from settings?.deviceRegion; defaults to "US" when preference is unset
+ * (preserves backwards compatibility for existing installs).
+ */
+private String getDeviceRegion() {
+    settings?.deviceRegion ?: "US"
+}
+
+/**
+ * Returns the VeSync API host for the configured region.
+ * Regional routing is binary per pyvesync const.py:
+ *   US → smartapi.vesync.com
+ *   EU → smartapi.vesync.eu
+ * Used in all three API call sites: login, getDevices, and sendBypassRequest.
+ */
+private String getApiHost() {
+    getDeviceRegion() == "EU" ? "smartapi.vesync.eu" : "smartapi.vesync.com"
 }
 
 private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCall) {
@@ -235,7 +433,7 @@ Boolean login() {
         def logmd5 = MD5(password)
 
         def params = [
-            uri: "https://smartapi.vesync.com/cloud/v1/user/login",
+            uri: "https://${getApiHost()}/cloud/v1/user/login",
             contentType: "application/json",
             requestContentType: "application/json",
             body: [
@@ -269,7 +467,7 @@ Boolean login() {
             if (checkHttpResponse("login", resp)) {
                 state.token = resp.data.result.token
                 state.accountID = resp.data.result.accountID
-                logInfo "Logged in to VeSync"
+                logInfo "Logged in to VeSync (${getDeviceRegion()} region: ${getApiHost()})"
                 result = true
             }
         }
@@ -286,6 +484,15 @@ def Boolean updateDevices()
         }
         state.prefsSeeded = true
     }
+
+    // BP14 migration watchdog -- detects runIn-based installs (pre-v2.2) and converts them
+    // to schedule()-based on first call. Idempotent once state.scheduleVersion == "2.2".
+    ensurePollWatchdog()
+
+    // BP16 debug watchdog -- detects stuck debugOutput=true after hub reboots (runIn
+    // timer evaporated) and auto-disables. Idempotent once debug is off.
+    ensureDebugWatchdog()
+
     // Stop if driver is reloading
     if (state.driverReloading) {
         logDebug "Skipping updateDevices - driver reloading"
@@ -317,9 +524,11 @@ def Boolean updateDevices()
         logInfo "Self-heal: removed ${staleCids.size()} stale device tracking entries. Run forceReinitialize to retry discovery."
     }
 
-    // Immediately schedule the next update -- this will keep the
-    // referesh interval as close to constant as possible.
-    runIn((int)settings.refreshInterval, "updateDevices")
+    // NOTE (BP14): the schedule()-based cron (set up in setupPollSchedule()) drives the
+    // recurring poll tick automatically. There is NO runIn() call here for the next
+    // updateDevices() invocation -- the legacy runIn chain was removed as part of the BP14
+    // fix. Adding a runIn() back here would create a second concurrent chain on top of the
+    // schedule() cron and is incorrect.
 
     sendEvent(name: "heartbeat", value: "syncing", isStateChange: true, descriptionText: "Waiting on update from VeSync servers.")
     logInfo "Heartbeat: syncing"
@@ -342,24 +551,12 @@ def Boolean updateDevices()
 
             // Branch the API method by device type. The VeSync API uses different read methods
             // for each device family; calling the wrong method returns code:-1 with empty result.
-            //   Tower Fan   -> getTowerFanStatus  (per pyvesync VeSyncTowerFan.get_details)
-            //   Pedestal Fan -> getFanStatus       (per pyvesync VeSyncPedestalFan.get_details)
-            //   Humidifier  -> getHumidifierStatus
-            //   All others  -> getPurifierStatus   (air purifiers)
-            // Order: most-specific fan checks first; "Humidifier" is not a substring of either
-            // fan typeName so the humidifier check is safe in any order, but most-specific
-            // first is the canonical style here.
+            // Routing is driven by TYPENAME_TO_METHOD (defined near the top of this file alongside
+            // the other @Field constants). Keys are typeName substrings; iteration order (insertion
+            // order, most-specific first) is preserved by Groovy's LinkedHashMap default.
+            // DEFAULT_POLL_METHOD ("getPurifierStatus") covers all purifiers and any unrecognized type.
             String typeName = dev.typeName ?: dev.name ?: ""
-            String method
-            if (typeName.contains("Tower Fan")) {
-                method = "getTowerFanStatus"
-            } else if (typeName.contains("Pedestal Fan")) {
-                method = "getFanStatus"
-            } else if (typeName.contains("Humidifier")) {
-                method = "getHumidifierStatus"
-            } else {
-                method = "getPurifierStatus"
-            }
+            String method = TYPENAME_TO_METHOD.find { typeName.contains(it.key) }?.value ?: DEFAULT_POLL_METHOD
             def command = [
                 "method": method,
                 "source": "APP",
@@ -371,7 +568,7 @@ def Boolean updateDevices()
                 {
                     def status = resp.data.result
                     if (status == null)
-                        logError "No status returned from ${method}: ${resp.msg}"
+                        logError "No status returned from ${method}: ${resp?.msg}"
                     else
                         dev.update(status, getChildDevice(dni+"-nl"))
                 }
@@ -394,12 +591,14 @@ def Boolean updateDevices()
 private deviceType(code) {
     switch(code)
     {
-        case "Core200S": 
+        case "Core200S":
         case "LAP-C201S-AUSR":
         case "LAP-C201S-WUSR":
+        case "LAP-C202S-WUSR":      // US Core 200S variant (v2.2 audit -- same VeSyncAirBypass class)
             return "200S";
-        case "Core300S": 
+        case "Core300S":
         case "LAP-C301S-WJP":
+        case "LAP-C302S-WUSB":      // US Core 300S bundle SKU (v2.2 audit -- same VeSyncAirBypass class)
             return "300S";
         case "Core400S": 
         case "LAP-C401S-WJP":
@@ -418,6 +617,11 @@ private deviceType(code) {
         case "LAP-V201S-WEUR":
         case "LAP-V201S-AASR":
         case "LAP-V201S-AUSR":
+        case "LAP-V201S-AEUR":      // EU V201S variant (v2.2 audit -- same VeSyncAirBypass class)
+        case "LAP-V201-AUSR":       // AU market V201S: intentional no-S typo SKU -- this is the
+                                    // literal code the VeSync API emits for that hardware (verified
+                                    // in pyvesync device_map.py). Do NOT "fix" the spelling here.
+        case "LAP-V201S-WJP":       // Japan V201S variant (v2.2 audit -- same VeSyncAirBypass class)
             return "V200S";
         // Vital 100S — pyvesync VeSyncAirBaseV2, dev_types LAP-V102S-* family
         case "LAP-V102S-AASR":
@@ -436,10 +640,12 @@ private deviceType(code) {
         case "LUH-A601S-WUSB":
         case "LUH-A601S-AUSW":
             return "A601S";
-        // OasisMist 450S US — same pyvesync class as Classic 300S; LUH-O601S-* shares this map entry
-        // per SmartThings + Homebridge cross-check (4 model codes confirmed in device_map.py)
+        // OasisMist 450S — same pyvesync class as Classic 300S; LUH-O601S-* shares this map entry
+        // per SmartThings + Homebridge cross-check (4 US model codes confirmed in device_map.py).
+        // LUH-O451S-WEU added v2.2 audit: EU 4.5L variant, pyvesync confirms VeSyncHumid200300S class.
         case "LUH-O451S-WUS":
         case "LUH-O451S-WUSR":
+        case "LUH-O451S-WEU":       // EU 4.5L variant (v2.2 audit -- same VeSyncHumid200300S class)
         case "LUH-O601S-WUS":
         case "LUH-O601S-KUS":
             return "O451S";
@@ -454,6 +660,27 @@ private deviceType(code) {
         case "LPF-R432S-AEU":
         case "LPF-R432S-AUS":
             return "PEDESTALFAN";
+        // LV600S Humidifier — pyvesync VeSyncHumid200300S (same class as Classic 300S + OasisMist 450S)
+        // NAMING TRAP: LUH-A602S (this block) uses VeSyncHumid200300S; LUH-A603S uses VeSyncLV600S.
+        // Both are branded "LV600S" by Levoit but have different API behaviors. Only A602S here.
+        // All 6 regional variants route to the same driver (pyvesync device_map.py LUH-A602S entry).
+        case "LUH-A602S-WUSR":
+        case "LUH-A602S-WUS":
+        case "LUH-A602S-WEUR":
+        case "LUH-A602S-WEU":
+        case "LUH-A602S-WJP":
+        case "LUH-A602S-WUSC":
+            return "A602S";
+        // Dual 200S Humidifier — pyvesync VeSyncHumid200300S (same class as Classic 300S + LV600S)
+        // Mist range 1-2 only (Classic 300S is 1-9). Modes: auto + manual only (no sleep).
+        // Features: AUTO_STOP only (no nightlight, no warm mist per device_map.py LUH-D301S entry).
+        // "Dual200S" is the literal device type some firmware reports; LUH-D301S-* are the SKU codes.
+        case "Dual200S":
+        case "LUH-D301S-WUSR":
+        case "LUH-D301S-WJP":
+        case "LUH-D301S-WEU":
+        case "LUH-D301S-KEUR":
+            return "D301S";
         default:
             // Unknown model code — fall through to Generic diagnostic driver.
             // The Generic driver provides best-effort power control and captureDiagnostics()
@@ -494,14 +721,14 @@ private Boolean isLevoitClimateDevice(String code) {
     // v2.1: fan prefixes added alongside proper Tower Fan and Pedestal Fan drivers
     if (code.startsWith("LTF-")) return true
     if (code.startsWith("LPF-")) return true
-    if (code in ["Core200S", "Core300S", "Core400S", "Core600S", "Vital200S", "Classic300S"]) return true
+    if (code in ["Core200S", "Core300S", "Core400S", "Core600S", "Vital200S", "Classic300S", "Dual200S"]) return true
     return false
 }
 
 private Boolean getDevices() {
     return retryableHttp("getDevices", 3) {
         def params = [
-            uri: "https://smartapi.vesync.com/cloud/v1/deviceManaged/devices",
+            uri: "https://${getApiHost()}/cloud/v1/deviceManaged/devices",
             contentType: "application/json",
             requestContentType: "application/json",
             body: [
@@ -565,7 +792,8 @@ private Boolean getDevices() {
                         newList[device.cid+"-nl"] = device.configModule;
                     }
                     else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S" ||
-                             dtype == "V100S" || dtype == "A601S" || dtype == "O451S" || dtype == "TOWERFAN" || dtype == "PEDESTALFAN") {
+                             dtype == "V100S" || dtype == "A601S" || dtype == "O451S" || dtype == "TOWERFAN" || dtype == "PEDESTALFAN" ||
+                             dtype == "A602S" || dtype == "D301S") {
                         newList[device.cid] = device.configModule;
                     }
                     else if (dtype == "GENERIC" && isLevoitClimateDevice(device.deviceType)) {
@@ -606,12 +834,15 @@ private Boolean getDevices() {
                             equip2.updateDataValue("configModule", device.configModule);
                             equip2.updateDataValue("cid", device.cid);
                             equip2.updateDataValue("uuid", device.uuid);
+                            equip2.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} Light (Levoit Core200S Air Purifier Light)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} Light / " + dtype;
                             equip2.name = device.deviceName + " Light";
                             equip2.label = device.deviceName + " Light";
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip2.updateDataValue("deviceType", device.deviceType);
                         }
 
                         if (equip1 == null) {
@@ -627,12 +858,15 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Core200S Air Purifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "300S") {
@@ -648,12 +882,15 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Core300S Air Purifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "400S") {
@@ -669,12 +906,15 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Core400S Air Purifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "600S") {
@@ -690,12 +930,15 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Core600S Air Purifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "V200S") {
@@ -711,12 +954,15 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Vital 200S Air Purifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "V601S") {
@@ -732,12 +978,15 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Superior 6000S Humidifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "V100S") {
@@ -753,12 +1002,15 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Vital 100S Air Purifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "A601S") {
@@ -774,12 +1026,15 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Classic 300S Humidifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "O451S") {
@@ -795,12 +1050,63 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit OasisMist 450S Humidifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                        }
+                    }
+                    else if (dtype == "A602S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = addChildDevice("Levoit LV600S Humidifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                            logInfo "Added child device: ${device.deviceName} (Levoit LV600S Humidifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                        }
+                    }
+                    else if (dtype == "D301S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = addChildDevice("Levoit Dual 200S Humidifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                            logInfo "Added child device: ${device.deviceName} (Levoit Dual 200S Humidifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "TOWERFAN") {
@@ -816,12 +1122,15 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Tower Fan)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "PEDESTALFAN") {
@@ -837,12 +1146,15 @@ private Boolean getDevices() {
                             equip1.updateDataValue("configModule", device.configModule);
                             equip1.updateDataValue("cid", device.cid);
                             equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Pedestal Fan)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                            equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
                     else if (dtype == "GENERIC") {
@@ -866,6 +1178,8 @@ private Boolean getDevices() {
                                 logDebug "Updating ${device.deviceName} / " + dtype;
                                 equip1.name = device.deviceName;
                                 equip1.label = device.deviceName;
+                                // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
+                                equip1.updateDataValue("deviceType", device.deviceType);
                             }
                         } else {
                             logInfo "Skipping unsupported device type: ${device.deviceType} (${device.deviceName}) -- not a Levoit air purifier or humidifier. If this is a Levoit device, please file a new-device-support issue."
@@ -875,9 +1189,9 @@ private Boolean getDevices() {
 
                 state.deviceList = newList
                 runIn(5 * (int)settings.refreshInterval, "timeOutLevoit")
-
-                // Delay before first device update to ensure connection pool is stable
-                runIn(10, "updateDevices")
+                // Removed v2.2 — schedule()-based cron from setupPollSchedule() handles initial
+                // poll within 30s of installed/updated; runIn(10, "updateDevices") was redundant
+                // and produced a duplicate heartbeat event on first install.
                 resultHolder[0] = true
             }
         }
@@ -974,10 +1288,15 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
         return false
     }
 
+    // BP14 migration watchdog -- catches installs where polling died after a reboot but
+    // the user (or a Rule) still sends a direct command. The direct command re-arms the
+    // cron so future polls resume from this point forward.
+    ensurePollWatchdog()
+
     logDebug "sendBypassRequest(${payload})"
 
     def params = [
-        uri: "https://smartapi.vesync.com/cloud/v2/deviceManaged/bypassV2",
+        uri: "https://${getApiHost()}/cloud/v2/deviceManaged/bypassV2",
         contentType: "application/json; charset=UTF-8",
         requestContentType: "application/json; charset=UTF-8",
         body: [
@@ -994,7 +1313,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
             "token": getAccountToken(),
             "method": "bypassV2",
             "debugMode": false,
-            "deviceRegion": DEVICE_REGION
+            "deviceRegion": getDeviceRegion()
         ],
         headers: [
             "tz": getLocationTimeZone(),
@@ -1173,6 +1492,10 @@ def logDebug(msg) {
 
 def logError(msg) {
     log.error sanitize(msg)
+}
+
+def logWarn(msg) {
+    log.warn sanitize(msg)
 }
 
 // Auto-sanitize log messages so debug captures shared by users in community threads / GitHub

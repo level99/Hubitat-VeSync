@@ -72,7 +72,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Tower Fan (LTF-F422S-WUS/WUSR/KEU/WJP) — power, fan speed 1-12, modes (normal/turbo/auto/sleep), oscillation, mute, display, timer, ambient temperature; canonical pyvesync payloads",
-        version: "2.1",
+        version: "2.2",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -128,7 +128,13 @@ def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
     runIn(3, "refresh")
-    if (settings?.debugOutput) runIn(1800, "logDebugOff")
+    // Turn off debug log in 30 minutes (happy path — no hub reboot)
+    if (settings?.debugOutput) {
+        runIn(1800, "logDebugOff")
+        state.debugEnabledAt = now()
+    } else {
+        state.remove("debugEnabledAt")
+    }
 }
 def uninstalled(){ logDebug "Uninstalled" }
 def initialize(){ logDebug "Initializing" }
@@ -372,6 +378,10 @@ def update(status, nightLight){
 def applyStatus(status){
     logDebug "applyStatus()"
 
+    // BP16 watchdog: auto-disable debugOutput after 30 min even across hub reboots.
+    // Placed here so all three update() entry points (0-arg, 1-arg, 2-arg) trigger it.
+    ensureDebugWatchdog()
+
     // One-time pref seed: heal descriptionTextEnable=true default for users migrated
     // from older Type without Save (forward-compat -- Bug Pattern #12)
     if (!state.prefsSeeded) {
@@ -590,6 +600,18 @@ def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
 def logError(msg){ log.error msg }
 def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
 void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
+
+// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
+private void ensureDebugWatchdog() {
+    if (settings?.debugOutput && state.debugEnabledAt) {
+        Long elapsed = now() - (state.debugEnabledAt as Long)
+        if (elapsed > 30 * 60 * 1000) {
+            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
+            device.updateSetting("debugOutput", [type:"bool", value:false])
+            state.remove("debugEnabledAt")
+        }
+    }
+}
 
 // ---------- Hub/parent call wrapper ----------
 // Matches sibling driver pattern (LevoitVital200S, LevoitSuperior6000S, etc.)

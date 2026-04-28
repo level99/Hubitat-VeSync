@@ -37,6 +37,19 @@ class TestParent {
     Map cannedResponse = null
 
     /**
+     * Sequential response queue. When non-empty, each sendBypassRequest call
+     * pops the first element and uses it as the response. Once exhausted, falls
+     * through to cannedResponse (then defaultOkResponse). Backward-compatible:
+     * tests using cannedResponse only are unaffected.
+     *
+     * Usage (multi-call tests):
+     *   testParent.requestResponses = [rejectResp, acceptResp]
+     *   driver.setMode("auto")
+     *   // first call gets rejectResp, second gets acceptResp
+     */
+    List<Map> requestResponses = []
+
+    /**
      * The parent driver's sendBypassRequest signature passes: (device, payloadMap, closure).
      * Children call it as:
      *   parent.sendBypassRequest(device, [method:..., source:..., data:...]) { resp -> ... }
@@ -45,8 +58,13 @@ class TestParent {
         lastRequest = payload.clone()
         allRequests << payload.clone()
 
-        def resp = cannedResponse ?: defaultOkResponse()
-        cannedResponse = null  // reset after use — no cross-call bleed
+        Map resp
+        if (requestResponses) {
+            resp = requestResponses.remove(0)  // pop from front; queue drains call-by-call
+        } else {
+            resp = cannedResponse ?: defaultOkResponse()
+            cannedResponse = null  // reset after use — no cross-call bleed
+        }
 
         callback(new TestHttpResponse(resp))
     }
@@ -131,6 +149,7 @@ class TestParent {
         lastRequest = null
         allRequests.clear()
         cannedResponse = null
+        requestResponses = []
     }
 
     // Parent is also called for child lookup during Core 200S night-light path.

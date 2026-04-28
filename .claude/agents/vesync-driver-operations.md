@@ -32,7 +32,7 @@ Reason: Hubitat MCP server not available in this Claude Code session.
 Recommendation: Orchestrator should perform manual deploy via Hubitat UI:
   1. In Hubitat UI: Drivers Code → find driver → Edit → paste new content → Save
   2. Open the affected device's page → Refresh
-  3. Check Logs for expected markers (see CLAUDE.md "Log markers" section)
+  3. Check Logs for expected markers (see the "Log markers" section below in this document)
   4. Confirm attribute values via the device page
 ```
 
@@ -42,19 +42,7 @@ Don't attempt partial work. Either you have the full toolkit or this agent is th
 
 ### Files this agent typically deploys
 
-```
-Drivers/Levoit/
-├── VeSyncIntegration.groovy          ← parent driver (auth, polling)
-├── LevoitVital200S.groovy            ← Vital 200S child
-├── LevoitSuperior6000S.groovy        ← Superior 6000S humidifier child
-├── LevoitCore200S.groovy             ← Core 200S child
-├── LevoitCore200S Light.groovy       ← Core 200S night-light child
-├── LevoitCore300S.groovy             ← Core 300S child
-├── LevoitCore400S.groovy             ← Core 400S child
-└── LevoitCore600S.groovy             ← Core 600S child
-```
-
-The orchestrator gives you, per dispatch:
+Driver files under `Drivers/Levoit/` — see `CONTRIBUTING.md` "Codebase orientation" for the current per-driver list. The orchestrator gives you, per dispatch:
 - Source file path on local disk
 - `driverId` on the hub (from `mcp__hubitat__manage_apps_drivers list_hub_drivers`)
 - `deviceId`(s) of children that use this driver (for test exercises)

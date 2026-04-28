@@ -17,8 +17,23 @@ import support.TestDevice
  *   deviceType()    — switch recognizes V201S regional variants
  *   Issue 2         — updateDevices() no longer throws MissingPropertyException
  *                     (removed unused `result =` assignment)
- *   Pattern 2       — sendBypassRequest uses DEVICE_REGION @Field constant ("US");
- *                     regional host-switching parked for v2.1+
+ *   Pattern 2       — sendBypassRequest body.deviceRegion reads from getDeviceRegion()
+ *                     (preference-backed, Elvis fallback "US" for backwards compat; v2.2)
+ *   Section I       — Bug Pattern #14 (schedule()-based poll-cycle recovery + cron-syntax fix):
+ *                     setupPollSchedule() seconds-cron (30s, 59s, null-default),
+ *                     minutes-cron (60s, 120s, 300s boundaries), non-multiple WARN (90s),
+ *                     ensurePollWatchdog() migration + idempotency,
+ *                     updateDevices() + sendBypassRequest() integration paths
+ *   Section J       — EU region support (v2.2 preview):
+ *                     getDeviceRegion() default, EU setting, getApiHost() routing,
+ *                     updated() region-change clears token, no-op on same-region save,
+ *                     bypassV2 body reflects preference value
+ *   Section K       — Model code routing v2.2 audit additions (6 new codes):
+ *                     LUH-O451S-WEU, LAP-V201S-AEUR, LAP-V201-AUSR (no-S typo SKU),
+ *                     LAP-C202S-WUSR, LAP-V201S-WJP, LAP-C302S-WUSB
+ *   Section L       — Bug Pattern #16 (debug auto-disable watchdog, parent):
+ *                     updated() timestamp set/clear, ensureDebugWatchdog() no-op below
+ *                     threshold, fires above threshold, called from updateDevices()
  *
  * ARCHITECTURE NOTE: The parent driver is NOT a child — it runs differently.
  * It calls httpPost (for login/getDevices), not parent.sendBypassRequest.
@@ -941,15 +956,18 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Pattern 2 — DEVICE_REGION constant in sendBypassRequest
-    // Regional routing is binary (US/EU host-switching) and is parked for v2.1+.
-    // The @Field constant DEVICE_REGION = "US" is used directly in the body;
-    // no settings preference is wired.
+    // Pattern 2 — deviceRegion in sendBypassRequest body (v2.2: preference-backed)
+    // Regional routing is binary (US/EU). getDeviceRegion() reads settings?.deviceRegion
+    // with "US" as the Elvis-fallback for backwards compatibility on existing installs.
+    // The @Field DEVICE_REGION constant was removed in v2.2 -- this spec validates the
+    // new preference-backed path still supplies "US" when preference is absent.
     // -------------------------------------------------------------------------
 
-    def "sendBypassRequest uses DEVICE_REGION constant ('US') in body -- regional routing parked for future PR (Pattern 2)"() {
-        // B: DEVICE_REGION is a @Field constant; body.deviceRegion == "US" unconditionally.
-        given: "no deviceRegion preference (removed); DEVICE_REGION @Field constant supplies the value"
+    def "sendBypassRequest body carries deviceRegion 'US' when preference is unset (Pattern 2 -- backwards compat)"() {
+        // B: deviceRegion preference absent → getDeviceRegion() returns "US" via Elvis fallback.
+        // Verifies backwards-compatibility for existing installs that were upgraded without
+        // explicitly setting the new preference.
+        given: "deviceRegion preference is absent (simulates pre-v2.2 install)"
         settings.remove('deviceRegion')
         settings.descriptionTextEnable = false
         settings.debugOutput = false
@@ -961,7 +979,7 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         when:
         driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
 
-        then: "the request body carries deviceRegion 'US' from the DEVICE_REGION constant"
+        then: "the request body carries deviceRegion 'US' (Elvis fallback -- no preference set)"
         capturedBypassBodies.size() == 1
         capturedBypassBodies[0].deviceRegion == "US"
     }
@@ -1577,5 +1595,723 @@ class VeSyncIntegrationSpec extends HubitatSpec {
             "Vital200S",
             "Classic300S",          // Added alongside LUH-* gap fix; some firmware reports this literal
         ]
+    }
+
+    // -------------------------------------------------------------------------
+    // H7: TYPENAME_TO_METHOD map default fallback
+    //
+    // Any child whose typeName does not contain "Tower Fan", "Pedestal Fan", or
+    // "Humidifier" must fall through to DEFAULT_POLL_METHOD ("getPurifierStatus").
+    // The Generic Levoit Diagnostic Driver ("Levoit Generic Device") is the
+    // canonical example: it contains none of the routing substrings, so the
+    // parent polls it with getPurifierStatus. This is documented in the driver
+    // readme as a known limitation for humidifier-shape Generic devices.
+    // -------------------------------------------------------------------------
+
+    def "updateDevices() falls back to getPurifierStatus for Generic Levoit Device (H7 -- map default)"() {
+        // H7: TYPENAME_TO_METHOD.find returns null for "Levoit Generic Device" (no matching
+        // key substring) → Elvis operator picks DEFAULT_POLL_METHOD = "getPurifierStatus".
+        // Bit-identical to the old if-chain's else branch for the same typeName.
+        given: "state has a Generic Levoit device"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.deviceList = ["GENERIC-CID": "test-config-module"]
+
+        def genericDevice = new TestDevice()
+        genericDevice.typeName = "Levoit Generic Device"
+        genericDevice.metaClass.update = { Map st, nl -> true }
+        childDevices["GENERIC-CID"] = genericDevice
+
+        when:
+        driver.updateDevices()
+
+        then: "the bypass request body used getPurifierStatus (DEFAULT_POLL_METHOD fallback)"
+        capturedBypassBodies.any { it.payload?.method == "getPurifierStatus" }
+
+        and: "no other poll method was used"
+        !capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
+        !capturedBypassBodies.any { it.payload?.method == "getTowerFanStatus" }
+        !capturedBypassBodies.any { it.payload?.method == "getFanStatus" }
+    }
+
+    // =========================================================================
+    // Section I — Bug Pattern #14: schedule()-based poll-cycle recovery
+    //
+    // Validates that the BP14 fix (replacing recursive runIn() with schedule()
+    // cron) correctly arms persistent polling, self-heals pre-v2.2 installs,
+    // and is idempotent once migrated.
+    //
+    // Also covers the cron-syntax branching fix (PR #4, Gemini review):
+    // Quartz seconds-field range is 0-59; "0/N * * * * ?" is invalid for N >= 60.
+    // setupPollSchedule() branches:
+    //   interval < 60  => "0/${interval} * * * * ?" (seconds-resolution)
+    //   interval >= 60 => "0 */${interval/60} * * * ?" (minutes-resolution)
+    //
+    // I1  — 30s (seconds cron, golden path / default)
+    // I2  — null interval defaults to 30s seconds cron
+    // I3  — pre-v2.2 migration
+    // I4  — idempotency
+    // I5  — 60s boundary (first value needing minutes cron)
+    // I6  — 120s (minutes cron, 2-minute interval)
+    // I7  — updateDevices() integration
+    // I8  — sendBypassRequest() integration
+    // I9  — 300s (minutes cron, 5-minute interval, README-recommended max)
+    // I10 — 59s boundary (last valid seconds-resolution value)
+    // I11 — 90s (non-multiple of 60: fires at 1min with WARN)
+    //
+    // NOTE: subscribe() and unsubscribe() are NOT used in the corrected BP14
+    // implementation (they are app-only APIs; Bug Pattern #15). The HubitatSpec
+    // base mock throws MissingMethodException for both. Any driver code that
+    // accidentally re-introduces subscribe() calls will fail these specs.
+    // =========================================================================
+
+    def "setupPollSchedule() arms cron with correct interval and sets scheduleVersion (I1 -- golden path 30s)"() {
+        // I1: normal operation -- setupPollSchedule() must register a seconds-resolution cron
+        // for the default 30s interval (< 60) and set state.scheduleVersion = "2.2".
+        given: "refreshInterval is 30 seconds (default, < 60 -- uses seconds-resolution cron)"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with the correct cron and handler"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0/30 * * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() uses minutes-resolution cron for interval == 60 (I5 -- 60s boundary)"() {
+        // I5: seconds-field range is 0-59; "0/60 * * * * ?" is invalid Quartz cron.
+        // For interval >= 60 the driver must switch to minutes-resolution cron.
+        // 60s => "0 */1 * * * ?" (every 1 minute).
+        given: "refreshInterval is 60 seconds (boundary: first value requiring minutes cron)"
+        settings.refreshInterval = 60
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with minutes-resolution cron '0 */1 * * * ?'"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0 */1 * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "no WARN was emitted (60 is a clean multiple of 60)"
+        testLog.warns.isEmpty()
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() uses minutes-resolution cron for interval == 120 (I6 -- 2-minute interval)"() {
+        // I6: 120s => "0 */2 * * * ?" (every 2 minutes).
+        // Verifies that the minutes divisor is computed correctly for the 2-minute case.
+        given: "refreshInterval is 120 seconds"
+        settings.refreshInterval = 120
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with cron '0 */2 * * * ?'"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0 */2 * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "no WARN was emitted (120 is a clean multiple of 60)"
+        testLog.warns.isEmpty()
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() uses minutes-resolution cron for interval == 300 (I9 -- 5-minute interval)"() {
+        // I9: 300s => "0 */5 * * * ?" (every 5 minutes).
+        // README recommends 300s for low-traffic installs -- must produce valid cron.
+        given: "refreshInterval is 300 seconds (README-recommended maximum)"
+        settings.refreshInterval = 300
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with cron '0 */5 * * * ?'"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0 */5 * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "no WARN was emitted (300 is a clean multiple of 60)"
+        testLog.warns.isEmpty()
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() uses seconds-resolution cron for interval == 59 (I10 -- boundary below 60)"() {
+        // I10: 59s is the last value in the valid seconds-field range.
+        // Must use "0/59 * * * * ?" (seconds-resolution), not minutes cron.
+        given: "refreshInterval is 59 seconds (boundary: last value using seconds cron)"
+        settings.refreshInterval = 59
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with seconds-resolution cron '0/59 * * * * ?'"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0/59 * * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() emits WARN for non-multiple-of-60 interval >= 60 (I11 -- imprecise interval)"() {
+        // I11: interval 90s is not a multiple of 60. Driver must still arm a valid cron
+        // (firing every floor(90/60)=1 minute) but emit a WARN so the user can correct it.
+        // This prevents silent polling at a different rate than the user configured.
+        // log.warn() routes through HubitatSpec's TestLog.warns -- no special mock needed.
+        given: "refreshInterval is 90 seconds (non-multiple of 60)"
+        settings.refreshInterval = 90
+        settings.descriptionTextEnable = false
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was still called with floor(90/60)=1 minute cron"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0 */1 * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "a WARN was emitted mentioning the configured interval and the actual firing rate"
+        testLog.warns.any { it.contains("90") && it.contains("1 minute") }
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "setupPollSchedule() defaults to 30s when refreshInterval is null (I2 -- null interval)"() {
+        // I2: null-guard -- when refreshInterval is absent (first install before settings commit),
+        // setupPollSchedule() must default to 30s rather than NPE.
+        given: "refreshInterval is not configured"
+        settings.remove('refreshInterval')
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.setupPollSchedule()
+
+        then: "schedule() was called with the 30-second default cron"
+        scheduleCalls.size() == 1
+        scheduleCalls[0][0] == "0/30 * * * * ?"
+        scheduleCalls[0][1] == "updateDevices"
+
+        and: "state.scheduleVersion is set to '2.2'"
+        state.scheduleVersion == "2.2"
+    }
+
+    def "ensurePollWatchdog() migrates pre-v2.2 install on first call (I3 -- migration)"() {
+        // I3: pre-v2.2 install -- state.scheduleVersion is absent.
+        // ensurePollWatchdog() must call setupPollSchedule() and log a migration message.
+        // After migration, state.scheduleVersion == "2.2".
+        // No subscribe() call must be made (Bug Pattern #15 -- app-only API).
+        given: "state has no scheduleVersion (simulates pre-v2.2 install)"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = true
+        state.remove('scheduleVersion')
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.ensurePollWatchdog()
+
+        then: "schedule() was called (setupPollSchedule ran)"
+        !scheduleCalls.isEmpty()
+        scheduleCalls.any { it[1] == "updateDevices" }
+
+        and: "state.scheduleVersion is now '2.2'"
+        state.scheduleVersion == "2.2"
+
+        and: "a migration INFO log was emitted"
+        testLog.infos.any { it.contains("BP14 migration") }
+
+        and: "no exception was thrown (no subscribe() call hit the fail-fast mock)"
+        noExceptionThrown()
+    }
+
+    def "ensurePollWatchdog() is idempotent when scheduleVersion is already '2.2' (I4 -- idempotency)"() {
+        // I4: already-migrated install -- ensurePollWatchdog() must be a no-op on second call.
+        // schedule() must NOT be called again; a double schedule() would create a second
+        // concurrent cron chain on top of the existing one.
+        given: "state.scheduleVersion already set to '2.2' (already migrated)"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.scheduleVersion = "2.2"
+
+        int scheduleCallCount = 0
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCallCount++
+        }
+
+        when: "ensurePollWatchdog called twice"
+        driver.ensurePollWatchdog()
+        driver.ensurePollWatchdog()
+
+        then: "schedule() was not called (no migration needed)"
+        scheduleCallCount == 0
+
+        and: "no migration log was emitted"
+        !testLog.infos.any { it.contains("BP14 migration") }
+    }
+
+    def "updateDevices() calls ensurePollWatchdog() after pref-seed (I7 -- integration)"() {
+        // I7: integration test -- verifies that updateDevices() triggers the migration
+        // path when state.scheduleVersion is absent (pre-v2.2 install scenario).
+        // pref-seed fires first (state.prefsSeeded set), watchdog fires second.
+        given: "pre-v2.2 state: scheduleVersion absent, deviceList empty (no HTTP calls)"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.prefsSeeded = true
+        state.remove('scheduleVersion')
+        state.deviceList = [:]
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.updateDevices()
+
+        then: "schedule() was called by ensurePollWatchdog()"
+        scheduleCalls.any { it[1] == "updateDevices" }
+
+        and: "state.scheduleVersion is now '2.2' (migrated)"
+        state.scheduleVersion == "2.2"
+
+        and: "no exception thrown (no subscribe() call hit the fail-fast mock)"
+        noExceptionThrown()
+    }
+
+    def "sendBypassRequest() calls ensurePollWatchdog() and migrates pre-v2.2 installs (I8 -- direct-command migration)"() {
+        // I8: direct-command migration path -- a user or Rule sends a device command while
+        // polling is dead (post-reboot, pre-v2.2 cron). sendBypassRequest must call
+        // ensurePollWatchdog() so polling is resurrected without user clicking Save Preferences.
+        given: "pre-v2.2 state: scheduleVersion absent, driverReloading cleared"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        state.remove('scheduleVersion')
+        state.remove('driverReloading')
+        state.token     = "tok-i8"
+        state.accountID = "acc-i8"
+        def equip = new TestDevice()
+
+        List<List<String>> scheduleCalls = []
+        driver.metaClass.schedule = { String cronExpr, String handler ->
+            scheduleCalls << [cronExpr, handler]
+        }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "schedule() was called by ensurePollWatchdog() inside sendBypassRequest()"
+        scheduleCalls.any { it[1] == "updateDevices" }
+
+        and: "state.scheduleVersion is now '2.2' (migrated)"
+        state.scheduleVersion == "2.2"
+
+        and: "no exception thrown (no subscribe() call hit the fail-fast mock)"
+        noExceptionThrown()
+    }
+
+    // =========================================================================
+    // Section J — EU region support (v2.2 preview)
+    //
+    // Validates the getDeviceRegion() / getApiHost() helpers, the deviceRegion
+    // preference, the updated() region-change handler, and the bypassV2 body
+    // field reflection.
+    //
+    // EU support ships as preview -- no EU hardware live-verified.
+    // These specs exercise the code paths without real network calls.
+    // =========================================================================
+
+    def "getDeviceRegion() returns 'US' when deviceRegion preference is unset (J1 -- default)"() {
+        // J1: Elvis fallback -- when the deviceRegion preference has not been set (e.g. fresh
+        // install or pre-v2.2 upgrade where the pref didn't exist), getDeviceRegion() must
+        // return "US" so existing installs are unaffected.
+        given: "deviceRegion preference is absent"
+        settings.remove('deviceRegion')
+
+        expect: "getDeviceRegion() returns 'US'"
+        driver.getDeviceRegion() == "US"
+    }
+
+    def "getDeviceRegion() reads 'EU' from settings when preference is set (J2 -- EU setting)"() {
+        // J2: preference read path -- when the user has set deviceRegion to "EU" in the
+        // driver preferences, getDeviceRegion() must return that value.
+        given: "deviceRegion preference is set to EU"
+        settings.deviceRegion = "EU"
+
+        expect: "getDeviceRegion() returns 'EU'"
+        driver.getDeviceRegion() == "EU"
+    }
+
+    def "getApiHost() returns correct host for each region (J3 -- routing)"(String region, String expectedHost) {
+        // J3: routing helper -- getApiHost() maps "US" to smartapi.vesync.com and
+        // "EU" to smartapi.vesync.eu per pyvesync const.py. Any value other than
+        // "EU" falls through to the US host (safe default).
+        given: "deviceRegion preference is set"
+        settings.deviceRegion = region
+
+        expect: "getApiHost() returns the correct VeSync cloud host"
+        driver.getApiHost() == expectedHost
+
+        where:
+        region | expectedHost
+        "US"   | "smartapi.vesync.com"
+        "EU"   | "smartapi.vesync.eu"
+        null   | "smartapi.vesync.com"    // null → Elvis → "US" → US host
+    }
+
+    def "updated() clears state.token and state.accountID when region changes (J4 -- region-change handler)"(String fromRegion, String toRegion) {
+        // J4: region-change handler -- when the user switches regions in either direction
+        // (US→EU or EU→US), the stored token and accountID are invalid (cross-region tokens
+        // are rejected by the VeSync API). updated() must clear both and log an INFO message.
+        // initialize() is called via runIn(15) and is not exercised here (mocked to no-op).
+        // Both directions are tested via the where: table to guard against asymmetric logic.
+        given: "driver was previously using fromRegion, now switching to toRegion"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.deviceRegion = toRegion
+        settings.refreshInterval = 30
+        state.lastRegion  = fromRegion
+        state.token       = "${fromRegion.toLowerCase()}-region-token"
+        state.accountID   = "acc-${fromRegion.toLowerCase()}-001"
+
+        // Stub out runIn and unschedule to prevent real scheduling side-effects
+        driver.metaClass.runIn   = { int delay, String handler -> /* no-op */ }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+        driver.metaClass.pauseExecution = { Long ms -> /* no-op */ }
+
+        when:
+        driver.updated()
+
+        then: "state.token is cleared"
+        !state.containsKey('token')
+
+        and: "state.accountID is cleared"
+        !state.containsKey('accountID')
+
+        and: "state.lastRegion is updated to the new region"
+        state.lastRegion == toRegion
+
+        and: "an INFO log was emitted naming both the old and new region"
+        testLog.infos.any { it.contains("region changed") && it.contains(fromRegion) && it.contains(toRegion) }
+
+        where:
+        fromRegion | toRegion
+        "US"       | "EU"
+        "EU"       | "US"
+    }
+
+    def "updated() does NOT clear state.token when region is unchanged (J5 -- no-op for same-region save)"() {
+        // J5: no-op path -- when the user clicks Save Preferences without changing the region,
+        // updated() must NOT clear the stored token. Clearing the token on every save would
+        // force an unnecessary re-login on every preference change.
+        given: "driver region is already US, no region change"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        settings.deviceRegion = "US"
+        settings.refreshInterval = 30
+        state.lastRegion  = "US"
+        state.token       = "valid-us-token"
+        state.accountID   = "acc-us-002"
+
+        driver.metaClass.runIn   = { int delay, String handler -> /* no-op */ }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+        driver.metaClass.pauseExecution = { Long ms -> /* no-op */ }
+
+        when:
+        driver.updated()
+
+        then: "state.token is preserved (no region change, no re-login needed)"
+        state.token == "valid-us-token"
+
+        and: "state.accountID is preserved"
+        state.accountID == "acc-us-002"
+
+        and: "no region-change INFO log was emitted"
+        !testLog.infos.any { it.contains("region changed") }
+    }
+
+    def "updated() does NOT clear token on first-ever save when state.lastRegion is null (J7 -- first-save guard)"() {
+        // J7: null-lastRegion guard -- on a fresh install or the very first updated() call
+        // after a hub restore, state.lastRegion is null (no prior region recorded).
+        // The guard `if (state.lastRegion != null && ...)` must skip the clear-and-relogin
+        // path so users aren't forced to re-authenticate on first setup.
+        // state.lastRegion must be set to the current preference value afterwards so that
+        // subsequent region changes are detected correctly.
+        given: "fresh install: state.lastRegion absent, token already populated (e.g. from a prior session)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.deviceRegion = "EU"
+        settings.refreshInterval = 30
+        state.remove('lastRegion')          // simulate first-ever save
+        state.token     = "pre-existing-token"
+        state.accountID = "pre-existing-acc"
+
+        driver.metaClass.runIn   = { int delay, String handler -> /* no-op */ }
+        driver.metaClass.unschedule = { Object[] args -> /* no-op */ }
+        driver.metaClass.pauseExecution = { Long ms -> /* no-op */ }
+
+        when:
+        driver.updated()
+
+        then: "token is NOT cleared (first-save guard skips the clear)"
+        state.token == "pre-existing-token"
+
+        and: "accountID is NOT cleared"
+        state.accountID == "pre-existing-acc"
+
+        and: "state.lastRegion is now seeded with the current preference value"
+        state.lastRegion == "EU"
+
+        and: "no region-change INFO log was emitted"
+        !testLog.infos.any { it.contains("region changed") }
+    }
+
+    def "sendBypassRequest body.deviceRegion reflects the configured preference value (J6 -- body field)"() {
+        // J6: bypassV2 body field -- the body sent to sendBypassRequest must carry the
+        // getDeviceRegion() value in body.deviceRegion. Tested for both US (default/explicit)
+        // and EU.
+        given: "deviceRegion preference is set to EU"
+        settings.deviceRegion = "EU"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.token     = "tok-j6"
+        state.accountID = "acc-j6"
+        state.scheduleVersion = "2.2"   // skip watchdog migration in this test
+        def equip = new TestDevice()
+        capturedBypassBodies.clear()
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "the request body carries deviceRegion 'EU' matching the preference"
+        capturedBypassBodies.size() == 1
+        capturedBypassBodies[0].deviceRegion == "EU"
+    }
+
+    // =========================================================================
+    // Section K — Model code routing: v2.2 audit additions
+    //
+    // Six regional / variant model codes added to deviceType() by the v2.2 pyvesync
+    // audit. All map to existing dtypes and existing drivers -- no new driver
+    // behavior. Tests are a single parameterized spec so the where: table is the
+    // single source of truth for the routing contract.
+    //
+    // Deferred (v2.3+ candidates): LAP-C301S-WAAA, LAP-C302S-WGC -- unknown-region
+    // suffix codes; pyvesync supports them but suffix meaning is unclear. Not added
+    // here to avoid silently misrouting if the API behavior differs.
+    // =========================================================================
+
+    def "deviceType() routes v2.2 audit model codes to correct dtype (K1)"(String code, String expected) {
+        // K1: parameterized routing table for all 6 codes added in the v2.2 pyvesync audit.
+        // Each row is a model code → expected dtype assertion.
+        //
+        // LAP-V201-AUSR (no S after V201): intentional typo SKU -- this is the literal code
+        // the VeSync API emits for AU-market V201S hardware per pyvesync device_map.py.
+        // The missing S is NOT a test typo; do not "fix" it.
+        expect:
+        driver.deviceType(code) == expected
+
+        where:
+        code                | expected
+        "LUH-O451S-WEU"    | "O451S"   // EU OasisMist 450S -- same VeSyncHumid200300S class
+        "LAP-V201S-AEUR"   | "V200S"   // EU V201S variant -- same VeSyncAirBypass class
+        "LAP-V201-AUSR"    | "V200S"   // AU V201S: no-S typo SKU as emitted by VeSync API
+        "LAP-C202S-WUSR"   | "200S"    // US Core 200S variant -- same VeSyncAirBypass class
+        "LAP-V201S-WJP"    | "V200S"   // Japan V201S variant -- same VeSyncAirBypass class
+        "LAP-C302S-WUSB"   | "300S"    // US Core 300S bundle SKU -- same VeSyncAirBypass class
+    }
+
+    // =========================================================================
+    // Section L — Bug Pattern #16: debug auto-disable watchdog (parent)
+    //
+    // runIn(1800, "logDebugOff") in updated() is in-memory only. After a hub
+    // reboot settings.debugOutput persists true but the runIn timer evaporates.
+    // ensureDebugWatchdog() detects that condition and self-heals within one poll.
+    //
+    // Tests:
+    //   L1 — updated() records state.debugEnabledAt when debug enabled
+    //   L2 — updated() clears state.debugEnabledAt when debug disabled
+    //   L3 — ensureDebugWatchdog() no-ops when debugOutput is false
+    //   L4 — ensureDebugWatchdog() no-ops when elapsed < 30 min
+    //   L5 — ensureDebugWatchdog() fires and disables when elapsed >= 30 min
+    //   L6 — updateDevices() calls ensureDebugWatchdog() (integration)
+    // =========================================================================
+
+    def "updated() records state.debugEnabledAt when debugOutput is enabled (L1)"() {
+        // L1: when the user enables debug and saves preferences, updated() must
+        // record a timestamp so the watchdog can measure elapsed time post-reboot.
+        given: "debugOutput is true"
+        settings.debugOutput = true
+        settings.refreshInterval = 30
+
+        when:
+        driver.updated()
+
+        then: "state.debugEnabledAt is set to a recent timestamp"
+        state.debugEnabledAt != null
+        // Within 5 seconds of now() -- not checking exact value, just presence
+        Math.abs(driver.now() - (state.debugEnabledAt as Long)) < 5000
+    }
+
+    def "updated() clears state.debugEnabledAt when debugOutput is disabled (L2)"() {
+        // L2: when the user disables debug, updated() must remove debugEnabledAt
+        // so the watchdog does not fire on a stale timestamp from a prior enable.
+        given: "state has a prior timestamp and debugOutput is now false"
+        state.debugEnabledAt = driver.now() - (60 * 60 * 1000)  // 60 min ago
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+
+        when:
+        driver.updated()
+
+        then: "state.debugEnabledAt is removed"
+        !state.containsKey("debugEnabledAt")
+    }
+
+    def "ensureDebugWatchdog() is a no-op when debugOutput is false (L3)"() {
+        // L3: watchdog should short-circuit immediately when debug is off.
+        // No updateSetting call should be made.
+        given:
+        settings.debugOutput = false
+        state.debugEnabledAt = driver.now() - (2 * 60 * 60 * 1000)  // 2 hours ago
+
+        when:
+        driver.ensureDebugWatchdog()
+
+        then: "no setting update triggered"
+        def debugCall = testDevice.settingsUpdates.find { it.name == "debugOutput" }
+        debugCall == null
+    }
+
+    def "ensureDebugWatchdog() is a no-op when elapsed time is less than 30 min (L4)"() {
+        // L4: within the 30-min window, watchdog must not fire.
+        // This ensures a fresh debug enable is not immediately killed.
+        given: "debug enabled 10 min ago (within window)"
+        settings.debugOutput = true
+        settings.descriptionTextEnable = true
+        state.debugEnabledAt = driver.now() - (10 * 60 * 1000)  // 10 min ago
+
+        when:
+        driver.ensureDebugWatchdog()
+
+        then: "no updateSetting call (watchdog did not fire)"
+        def debugCall = testDevice.settingsUpdates.find { it.name == "debugOutput" }
+        debugCall == null
+
+        and: "no BP16 log emitted"
+        !testLog.infos.any { it.contains("BP16") }
+    }
+
+    def "ensureDebugWatchdog() disables debug when elapsed >= 30 min (L5)"() {
+        // L5: core BP16 behavior — when debugOutput has been true for >30 min
+        // (runIn timer evaporated post-reboot), watchdog auto-disables it.
+        given: "debug was enabled 35 min ago (past the 30-min threshold)"
+        settings.debugOutput = true
+        settings.descriptionTextEnable = true
+        state.debugEnabledAt = driver.now() - (35 * 60 * 1000)  // 35 min ago
+
+        when:
+        driver.ensureDebugWatchdog()
+
+        then: "updateSetting called to disable debugOutput"
+        def debugCall = testDevice.settingsUpdates.find { it.name == "debugOutput" }
+        debugCall != null
+        debugCall.value == false
+
+        and: "state.debugEnabledAt is cleared"
+        !state.containsKey("debugEnabledAt")
+
+        and: "BP16 INFO log emitted with the expected token"
+        testLog.infos.any { it.contains("BP16 watchdog") }
+    }
+
+    def "updateDevices() calls ensureDebugWatchdog() during poll cycle (L6 -- integration)"() {
+        // L6: integration -- ensureDebugWatchdog() must be invoked from updateDevices()
+        // so the watchdog self-heals without user interaction.
+        // We set debug to true with a stale timestamp and verify the watchdog fires.
+        given: "debug stuck true for 40 min (post-reboot scenario)"
+        settings.debugOutput = true
+        settings.descriptionTextEnable = true
+        settings.refreshInterval = 30
+        state.debugEnabledAt = driver.now() - (40 * 60 * 1000)  // 40 min ago
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"  // skip BP14 migration noise
+        state.deviceList = [:]
+
+        when:
+        driver.updateDevices()
+
+        then: "watchdog fired: debugOutput was disabled"
+        def debugCall = testDevice.settingsUpdates.find { it.name == "debugOutput" }
+        debugCall != null
+        debugCall.value == false
+
+        and: "BP16 INFO log emitted"
+        testLog.infos.any { it.contains("BP16 watchdog") }
     }
 }

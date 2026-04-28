@@ -8,6 +8,7 @@ import support.HubitatSpec
  * Covers:
  *   Bug Pattern #1  — 2-arg update(status, nightLight) signature exists
  *   Bug Pattern #12 — pref-seed in update(status, nightLight)
+ *   Bug Pattern #16 — debug auto-disable watchdog (child-side canonical test)
  *   Happy path      — update(status, nightLight) parses Core 200S response correctly
  *
  * NOTE: The Core 200S uses an OLDER driver structure. Unlike Vital 200S,
@@ -165,5 +166,80 @@ class LevoitCore200SSpec extends HubitatSpec {
 
         then: "speed is 'medium' for level 2"
         lastEventValue("speed") == "medium"
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #16: debug auto-disable watchdog (child-side canonical test)
+    // This child is the canonical representative — other children carry identical
+    // ensureDebugWatchdog() code so are not individually specced for BP16.
+    // -------------------------------------------------------------------------
+
+    def "ensureDebugWatchdog() no-ops when debugOutput is false (BP16 -- child guard)"() {
+        given: "debug is off; timestamp from an old session is present"
+        settings.debugOutput = false
+        state.debugEnabledAt = driver.now() - (2 * 60 * 60 * 1000)  // 2 hours ago
+
+        when:
+        driver.ensureDebugWatchdog()
+
+        then: "no updateSetting call"
+        def debugCall = testDevice.settingsUpdates.find { it.name == "debugOutput" }
+        debugCall == null
+    }
+
+    def "ensureDebugWatchdog() no-ops when elapsed < 30 min (BP16 -- within window)"() {
+        given: "debug enabled 5 min ago"
+        settings.debugOutput = true
+        settings.descriptionTextEnable = true
+        state.debugEnabledAt = driver.now() - (5 * 60 * 1000)  // 5 min ago
+
+        when:
+        driver.ensureDebugWatchdog()
+
+        then: "watchdog did not fire"
+        def debugCall = testDevice.settingsUpdates.find { it.name == "debugOutput" }
+        debugCall == null
+    }
+
+    def "ensureDebugWatchdog() disables debug when elapsed >= 30 min (BP16 -- post-reboot self-heal)"() {
+        given: "debug was enabled 35 min ago (runIn timer evaporated across reboot)"
+        settings.debugOutput = true
+        settings.descriptionTextEnable = true
+        state.debugEnabledAt = driver.now() - (35 * 60 * 1000)  // 35 min ago
+
+        when:
+        driver.ensureDebugWatchdog()
+
+        then: "updateSetting called to disable debugOutput"
+        def debugCall = testDevice.settingsUpdates.find { it.name == "debugOutput" }
+        debugCall != null
+        debugCall.value == false
+
+        and: "state.debugEnabledAt cleared"
+        !state.containsKey("debugEnabledAt")
+
+        and: "BP16 INFO log emitted"
+        testLog.infos.any { it.contains("BP16 watchdog") }
+    }
+
+    def "update(status, nightLight) calls ensureDebugWatchdog() on every parent poll (BP16 -- call site)"() {
+        given: "debug stuck true for 40 min (post-reboot scenario)"
+        settings.debugOutput = true
+        settings.descriptionTextEnable = true
+        state.debugEnabledAt = driver.now() - (40 * 60 * 1000)  // 40 min ago
+
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def status = fixture.responses.device_on_manual_speed2 as Map
+
+        when: "parent calls update(status, nightLight)"
+        driver.update(status, null)
+
+        then: "watchdog fired inside update(): debug disabled"
+        def debugCall = testDevice.settingsUpdates.find { it.name == "debugOutput" }
+        debugCall != null
+        debugCall.value == false
+
+        and: "BP16 INFO log emitted"
+        testLog.infos.any { it.contains("BP16 watchdog") }
     }
 }

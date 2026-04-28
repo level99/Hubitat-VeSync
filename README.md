@@ -12,33 +12,37 @@ A Hubitat Elevation driver pack for **Levoit smart home devices** (air purifiers
 
 | Device | Model codes | Capabilities surfaced |
 |---|---|---|
-| **Levoit Core 200S** Air Purifier | `Core200S`, `LAP-C201S-AUSR`, `LAP-C201S-WUSR` | Switch, FanControl (1-3), Mode, Timer, Display, ChildLock, Filter; separate Night Light child |
-| **Levoit Core 300S** Air Purifier | `Core300S`, `LAP-C301S-WJP` | Switch, FanControl (1-4), Mode, Timer, Display, ChildLock, Filter, AQ + PM2.5 |
+| **Levoit Core 200S** Air Purifier | `Core200S`, `LAP-C201S-AUSR`, `LAP-C201S-WUSR`, `LAP-C202S-WUSR` | Switch, FanControl (1-3), Mode, Timer, Display, ChildLock, Filter; separate Night Light child |
+| **Levoit Core 300S** Air Purifier | `Core300S`, `LAP-C301S-WJP`, `LAP-C302S-WUSB` | Switch, FanControl (1-4), Mode, Timer, Display, ChildLock, Filter, AQ + PM2.5 |
 | **Levoit Core 400S** Air Purifier | `Core400S`, `LAP-C401S-WJP/-WUSR/-WAAA` | Switch, FanControl (1-4), Mode, AutoPreference, Timer, Display, ChildLock, Filter, AQ + PM2.5 |
 | **Levoit Core 600S** Air Purifier | `Core600S`, `LAP-C601S-WUS/-WUSR/-WEU` | Switch, FanControl (1-5), Mode, AutoPreference, Timer, Display, ChildLock, Filter, AQ + PM2.5 |
 | **Levoit Vital 100S** Air Purifier *(v2.1 preview)* | `LAP-V102S-AASR/-WUS/-WEU/-AUSR/-WJP/-AJPR/-AEUR` | Switch, FanControl (1-4), Mode (manual/auto/sleep/pet), AutoPreference, PetMode, Timer, Display, ChildLock, Filter, AQ + PM2.5, RoomSize. **No light-detection** (V102S lacks the LIGHT_DETECT feature flag). |
-| **Levoit Vital 200S** Air Purifier | `LAP-V201S-WUS/-WUSR/-WEU/-WEUR/-AASR/-AUSR` | Switch, FanControl (1-4), Mode, AutoPreference, PetMode, LightDetection, Timer, Display, ChildLock, Filter, AQ + PM2.5, RoomSize |
+| **Levoit Vital 200S** Air Purifier | `LAP-V201S-WUS/-WUSR/-WEU/-WEUR/-AASR/-AUSR/-AEUR/-WJP`, `LAP-V201-AUSR`¹ | Switch, FanControl (1-4), Mode, AutoPreference, PetMode, LightDetection, Timer, Display, ChildLock, Filter, AQ + PM2.5, RoomSize |
 | **Levoit Classic 300S** Humidifier *(v2.1 preview)* | `LUH-A601S-WUSB/-AUSW` (`Classic300S`) | Switch, MistLevel (1-9), TargetHumidity (30-80), Mode (auto/sleep/manual), AutoStop, NightLight (off/dim/bright), Display, Humidity sensor |
 | **Levoit Superior 6000S** Humidifier | `LEH-S601S-WUS/-WUSR/-WEUR`, `LEH-S602S-WUS` | Switch, MistLevel (1-9), TargetHumidity, Mode (auto/sleep/manual), DryingMode, AutoStop, ChildLock, Display, WickFilterLife, Water level, Pump cleaning, Temperature |
-| **Levoit OasisMist 450S Humidifier** (US Smart variant) *(v2.1 preview)* | `LUH-O451S-WUS/-WUSR`, `LUH-O601S-WUS/-KUS` | Switch, MistLevel (1-9), WarmMistLevel (0-3), TargetHumidity (40-80), Mode (auto/sleep/manual), AutoStop, Display, Humidity sensor. **No night light** (hardware lacks it). |
+| **Levoit OasisMist 450S Humidifier** *(v2.1 preview)* | `LUH-O451S-WUS/-WUSR/-WEU`, `LUH-O601S-WUS/-KUS` | Switch, MistLevel (1-9), WarmMistLevel (0-3), TargetHumidity (40-80), Mode (auto/sleep/manual), AutoStop, Display, Humidity sensor. **No night light** on US/KUS variants (hardware lacks it). **`LUH-O451S-WEU` (EU) only:** RGB nightlight via standard Hubitat ColorControl (`setColor`, `setHue`, `setSaturation`) + `setNightlightSwitch`. Ships as preview pending EU community validation; based on [pyvesync PR #502](https://github.com/webdjoe/pyvesync/pull/502) (OPEN/CHANGES_REQUESTED). |
+| **Levoit LV600S Humidifier** *(v2.2 preview)* | `LUH-A602S-WUSR/-WUS/-WEUR/-WEU/-WJP/-WUSC` | Switch, MistLevel (1-9), WarmMistLevel (0-3), TargetHumidity (30-80), Mode (auto/sleep/manual), AutoStop, Display, Humidity sensor. **No night light** (hardware lacks it). Same VeSyncHumid200300S class as Classic 300S + OasisMist 450S. **Note:** auto mode may require `humidity` payload on some EU firmware variants (see [pyvesync PR #505](https://github.com/webdjoe/pyvesync/pull/505)); driver follows canonical pyvesync fixture (`mode:"auto"`). |
+| **Levoit Dual 200S Humidifier** *(v2.2 preview)* | `Dual200S`, `LUH-D301S-WUSR/-WJP/-WEU/-KEUR` | Switch, MistLevel (**1-2 only** — 2-level hardware), TargetHumidity (30-80), Mode (**auto/manual** — no sleep per pyvesync device_map.py), AutoStop, Display, Humidity sensor. **No night light command** (feature flag absent; brightness attribute is passive read-only). Same VeSyncHumid200300S API class as Classic 300S; EU SKUs apply same multi-firmware auto-mode try-fallback as LV600S. |
 | **Levoit Tower Fan** *(v2.1 preview)* | `LTF-F422S-WUS/-WUSR/-KEU/-WJP` | Switch, FanControl (1-12), SwitchLevel, Mode (normal/turbo/auto/sleep), Oscillation (single-axis), Mute, Timer, Display, Temperature, ErrorCode |
 | **Levoit Pedestal Fan** *(v2.1 preview)* | `LPF-R432S-AEU/-AUS` | Switch, FanControl (1-12), SwitchLevel, Mode (normal/turbo/eco/sleep), 2-axis Oscillation with range control, Mute, Display, Temperature, ChildLock (read-only) |
 | **Levoit Generic Device** | Fall-through for unsupported `LAP-` / `LEH-` / `LV-` Levoit models | Best-effort Switch + SwitchLevel + AirQuality + Humidity, plus `captureDiagnostics()` for filing new-device-support issues |
 
-*Preview drivers* are v2.1 drivers built without maintainer hardware, validated against canonical pyvesync fixtures + Home Assistant + SmartThings/Homebridge community drivers. Each carries inline `CROSS-CHECK` comment blocks documenting every contentious decision. If your device behaves differently, please [open an issue](https://github.com/level99/Hubitat-VeSync/issues) with a `captureDiagnostics` paste and a debug log.
+¹ `LAP-V201-AUSR` (no `S` after `V201`) is an intentional typo SKU — this is the literal model code the VeSync cloud API emits for AU-market V201S hardware, as documented in pyvesync `device_map.py`. If your Hubitat log shows `LAP-V201-AUSR` as unrecognized, update to v2.2 or later.
+
+*Preview drivers* are v2.1+ drivers built without maintainer hardware, validated against canonical pyvesync fixtures + Home Assistant + SmartThings/Homebridge community drivers. Each carries inline `CROSS-CHECK` comment blocks documenting every contentious decision. If your device behaves differently, please [open an issue](https://github.com/level99/Hubitat-VeSync/issues) with a `captureDiagnostics` paste and a debug log.
 
 For per-device attribute and command details: [`Drivers/Levoit/readme.md`](Drivers/Levoit/readme.md).
 
-For upcoming devices beyond v2.1: [`ROADMAP.md`](ROADMAP.md).
+For upcoming devices beyond v2.2: [`ROADMAP.md`](ROADMAP.md).
 
 ## Install via Hubitat Package Manager
 
 ### First-time install (no Levoit drivers yet)
 
-Two install paths depending on whether the fork is in HPM's master index yet:
+Two install paths:
 
-1. **HPM keyword search** *(preferred — once the master-index PR merges)*: open HPM → Install → Search by Keywords → search `Levoit` or `VeSync` → install.
-2. **HPM manifest URL** *(works today)*: open HPM → Install → From a URL → paste:
+1. **HPM keyword search** *(preferred)*: open HPM → Install → Search by Keywords → search `Levoit` or `VeSync` → install.
+2. **HPM manifest URL** *(equivalent, no search needed)*: open HPM → Install → From a URL → paste:
    ```
    https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/levoitManifest.json
    ```
@@ -73,7 +77,7 @@ Install the HPM package the same way as a first-time install — Hubitat matches
 
 ## Architecture
 
-A single **parent driver** (`VeSyncIntegration.groovy`) holds your VeSync credentials, logs in, discovers devices, schedules periodic polling, and routes API calls. Per-model **child drivers** (one for Core 200S, one for Vital 200S, one for Tower Fan, etc.) expose Hubitat capabilities and parse status responses. All API traffic uses VeSync's `bypassV2` cloud endpoint with model-specific method names + payloads. Token auto-refresh on expiry; PII redaction in all log paths; connection-pool retry on transient failures.
+A single **parent driver** (`VeSyncIntegration.groovy`) holds the VeSync account credentials, logs in, discovers devices, schedules periodic polling, and routes API calls. Per-model **child drivers** (one for Core 200S, one for Vital 200S, one for Tower Fan, etc.) expose Hubitat capabilities and parse status responses. All API traffic uses VeSync's `bypassV2` cloud endpoint with model-specific method names + payloads. Token auto-refresh on expiry; PII redaction in all log paths; connection-pool retry on transient failures.
 
 ## Logging
 
@@ -85,11 +89,22 @@ Three preference toggles per driver gate log verbosity:
 
 The parent driver auto-redacts email, account ID, token, and password from every log line.
 
+## Configuration
+
+### VeSync API region (EU users)
+
+The parent driver's **VeSync API region** preference (default: `US`) controls which VeSync cloud host is used:
+
+- **US** (default) — `smartapi.vesync.com`. Correct for North America, Australia, and most other regions.
+- **EU** — `smartapi.vesync.eu`. Select this if your VeSync account was registered in the EU and US-region login fails.
+
+Changing region clears the stored auth token and forces a fresh login. **EU support is preview** — the maintainer does not have EU hardware for live verification. If you're an EU user, please report your experience on the [Hubitat community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499).
+
 ## Troubleshooting
 
 - **"Discovered but no data"** on a child device — the device's Type may not match the new fork driver. Open the device → Type dropdown → pick the matching `Levoit ...` driver → Save → Refresh.
 - **Devices unresponsive after weeks/months** — VeSync token expired. The fork's parent (v2.0+) auto-recovers; first poll after expiry may show a 5-10s delay while re-auth runs.
-- **Parent never finds devices** — verify VeSync credentials in the parent preferences; same email + password as the Levoit/VeSync mobile app.
+- **Parent never finds devices** — verify VeSync credentials in the parent preferences; same email + password as the Levoit/VeSync mobile app. EU users: confirm the **VeSync API region** preference is set to `EU`.
 - **Devices show up but attribute polling lags** — refresh interval may be too aggressive. Increase to 60-120s.
 - **Non-Levoit devices on your VeSync account** (Etekcity smart plugs, Cosori air fryers, etc.) — these are skipped at discovery with an INFO log. They don't get a Hubitat child created.
 
@@ -97,7 +112,9 @@ For new-device-support requests, install the **Generic Levoit Diagnostic** drive
 
 ## Contributing
 
-Pull requests welcome. See [`CLAUDE.md`](CLAUDE.md) for the development pipeline, code conventions, and bug-pattern catalog. The Spock unit-test harness + static lint run on every PR via GitHub Actions.
+Pull requests welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) — it covers the codebase tour, dev environment, conventions enforced by lint/tests, test runners, and PR flow. AI-assisted contributors should also read [`CLAUDE.md`](CLAUDE.md) for the dev/QA/tester agent-pipeline overlay. The Spock unit-test harness + static lint run on every PR via GitHub Actions.
+
+Community conduct: [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
 
 Roadmap and unscheduled future work: [`ROADMAP.md`](ROADMAP.md).
 
@@ -108,10 +125,10 @@ Roadmap and unscheduled future work: [`ROADMAP.md`](ROADMAP.md).
 
 ## Credits
 
-- **Niklas Gustafsson** — original VeSyncIntegration framework, Core 200S/300S/400S/600S drivers
-- **Dan Cox** — community fork maintainer, v1.6+ contributions, Vital 100S/200S, Classic 300S, Superior 6000S, OasisMist 450S, Tower Fan, Pedestal Fan, parent humidifier-method fix, Generic diagnostic driver, token-expiry auto-recovery, infrastructure
+- **[Niklas Gustafsson](https://github.com/NiklasGustafsson)** — original VeSyncIntegration framework, Core 200S/300S/400S/600S drivers
+- **Dan Cox** — community fork maintainer (v2.0+); Vital 100S/200S, Classic 300S, Superior 6000S, OasisMist 450S, Tower Fan, Pedestal Fan, parent humidifier-method fix, Generic diagnostic driver, token-expiry auto-recovery, infrastructure
 - **elfege** — `setLevel()` support, Core 600S 'max' speed
-- **[pyvesync](https://github.com/webdjoe/pyvesync)** — canonical VeSync API payload reference; HA `vesync` integration, SmartThings + Homebridge community drivers used as v2.1 cross-check sources
+- **[pyvesync](https://github.com/webdjoe/pyvesync)** — canonical VeSync API payload reference; HA `vesync` integration, SmartThings + Homebridge community drivers used as cross-check sources
 
 ## License
 
