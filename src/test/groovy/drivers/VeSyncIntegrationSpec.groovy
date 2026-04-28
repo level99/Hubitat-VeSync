@@ -2314,4 +2314,360 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         and: "BP16 INFO log emitted"
         testLog.infos.any { it.contains("BP16 watchdog") }
     }
+
+    // =========================================================================
+    // Section M — v2.2.1 patch: safeAddChildDevice + resp.msg guard
+    //
+    // Bug 1: UnknownDeviceTypeException from addChildDevice() was uncaught,
+    //   crashing the discovery loop and preventing all subsequent devices from
+    //   being added. Fixed by safeAddChildDevice() helper.
+    //
+    // Bug 2: resp?.msg on a non-null HttpResponseDecorator still throws
+    //   MissingPropertyException because ?. only guards against null, not
+    //   missing properties. Fixed by hasProperty() check.
+    //
+    // M1 -- unknown driver causes loop to continue with subsequent devices
+    // M2 -- INFO log includes driver name and install URL
+    // M3 -- Core 200S Light missing: main purifier still added (non-fatal)
+    // M4 -- resp.msg guard: no exception when msg property absent
+    // =========================================================================
+
+    def "getDevices() continues past missing-driver device and adds next device in list (M1)"() {
+        // M1: golden UnknownDeviceTypeException scenario. API returns two devices:
+        // a V100S (driver not installed) followed by a V200S (driver installed).
+        // Before the fix, the V100S throw would kill the loop and the V200S would
+        // never be added. After the fix, both are attempted and only the V200S succeeds.
+        given: "VeSync account returns two devices: V100S (driver missing) then V200S (driver present)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-m1"
+        state.accountID = "acc-m1"
+        state.prefsSeeded = true
+        int v200sAddCount = 0
+
+        // addChildDevice: throw for V100S, succeed for V200S
+        driver.metaClass.addChildDevice = { String typeName, String dni, Map props ->
+            if (typeName == "Levoit Vital 100S Air Purifier") {
+                throw new com.hubitat.app.exception.UnknownDeviceTypeException(typeName)
+            }
+            def dev = new TestDevice()
+            dev.name = typeName
+            if (typeName == "Levoit Vital 200S Air Purifier") v200sAddCount++
+            childDevices[dni] = dev
+            dev
+        }
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    list: [
+                        [deviceType: "LAP-V102S-WUS", deviceName: "My Vital 100S",
+                         cid: "cid-v100s", configModule: "cm-v100s", uuid: "uuid-v100s", macID: "AA:BB:CC:DD:EE:01"],
+                        [deviceType: "LAP-V201S-WUS", deviceName: "My Vital 200S",
+                         cid: "cid-v200s", configModule: "cm-v200s", uuid: "uuid-v200s", macID: "AA:BB:CC:DD:EE:02"]
+                    ],
+                    total: 2
+                ],
+                traceId: "test-trace"
+            ]
+            callback(r)
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "V200S device was added despite V100S throwing UnknownDeviceTypeException"
+        v200sAddCount == 1
+
+        and: "V200S is present in childDevices"
+        childDevices.containsKey("cid-v200s")
+
+        and: "no exception was thrown from getDevices() (loop was not killed)"
+        noExceptionThrown()
+    }
+
+    def "getDevices() logs INFO with driver name and install URL when driver not installed (M2)"() {
+        // M2: verify that the INFO log produced by safeAddChildDevice() contains
+        // the driver type name and the raw-GitHub install URL so the user knows
+        // exactly what to install and where to get it.
+        given: "VeSync account returns one Classic 300S device whose driver is not installed"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-m2"
+        state.accountID = "acc-m2"
+        state.prefsSeeded = true
+
+        driver.metaClass.addChildDevice = { String typeName, String dni, Map props ->
+            throw new com.hubitat.app.exception.UnknownDeviceTypeException(typeName)
+        }
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    list: [
+                        [deviceType: "LUH-A601S-WUSB", deviceName: "My Classic 300S",
+                         cid: "cid-a601s", configModule: "cm-a601s", uuid: "uuid-a601s", macID: "AA:BB:CC:DD:EE:03"]
+                    ],
+                    total: 1
+                ],
+                traceId: "test-trace"
+            ]
+            callback(r)
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "INFO log contains the driver name"
+        testLog.infos.any { it.contains("Levoit Classic 300S Humidifier") && it.contains("not installed") }
+
+        and: "INFO log contains a raw.githubusercontent.com install URL"
+        testLog.infos.any { it.contains("raw.githubusercontent.com") }
+
+        and: "INFO log mentions clicking Resync Equipment again"
+        testLog.infos.any { it.contains("Resync Equipment") }
+    }
+
+    def "getDevices() Core 200S: missing Light driver is non-fatal; main purifier is still added (M3)"() {
+        // M3: the Core 200S branch adds the Light child FIRST, then the main purifier.
+        // If the Light driver is not installed, the loop must NOT skip the main purifier --
+        // only the Light add is skipped. The main purifier continues to be added as normal.
+        // This is the critical correctness invariant for the 200S non-fatal behavior.
+        given: "VeSync account returns one Core 200S device; Light driver missing, main driver present"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-m3"
+        state.accountID = "acc-m3"
+        state.prefsSeeded = true
+        int lightAddAttempts = 0
+        int mainAddSuccesses = 0
+
+        driver.metaClass.addChildDevice = { String typeName, String dni, Map props ->
+            if (typeName == "Levoit Core200S Air Purifier Light") {
+                lightAddAttempts++
+                throw new com.hubitat.app.exception.UnknownDeviceTypeException(typeName)
+            }
+            // Main Core 200S purifier succeeds
+            def dev = new TestDevice()
+            dev.name = typeName
+            if (typeName == "Levoit Core200S Air Purifier") mainAddSuccesses++
+            childDevices[dni] = dev
+            dev
+        }
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    list: [
+                        [deviceType: "Core200S", deviceName: "My Core 200S",
+                         cid: "cid-200s", configModule: "cm-200s", uuid: "uuid-200s", macID: "AA:BB:CC:DD:EE:04"]
+                    ],
+                    total: 1
+                ],
+                traceId: "test-trace"
+            ]
+            callback(r)
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "Light add was attempted (driver was missing)"
+        lightAddAttempts == 1
+
+        and: "main Core 200S purifier was still added successfully (non-fatal behavior)"
+        mainAddSuccesses == 1
+
+        and: "main purifier is present in childDevices"
+        childDevices.containsKey("cid-200s")
+
+        and: "INFO log mentions the missing Light driver"
+        testLog.infos.any { it.contains("Levoit Core200S Air Purifier Light") && it.contains("not installed") }
+
+        and: "no exception escaped getDevices()"
+        noExceptionThrown()
+    }
+
+    def "updateDevices() error path does not throw when resp has no 'msg' property (M4)"() {
+        // M4: Bug 2 regression test. updateDevices() error path contained:
+        //   logError "No status returned from ${method}: ${resp?.msg}"
+        // resp?.msg only guards against null resp; a non-null HttpResponseDecorator
+        // without a msg property still throws MissingPropertyException. After the fix,
+        // resp?.hasProperty('msg') ? resp.msg : '' is used instead.
+        //
+        // We simulate the scenario: httpPost returns HTTP 200 with outer code 0 but
+        // resp.data.result == null (so the null-status branch is taken). The resp
+        // Expando does NOT have a 'msg' property, reproducing the exact failure mode.
+        given: "one device in deviceList; httpPost returns a null-result response with no msg property"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        state.deviceList = ["cid-msg-test": "cm-msg-test"]
+
+        def mockDev = new TestDevice()
+        mockDev.typeName = "Levoit Vital 200S Air Purifier"
+        mockDev.metaClass.update = { Map st, nl -> true }
+        childDevices["cid-msg-test"] = mockDev
+
+        // Return a response with outer code 0 but result == null,
+        // AND deliberately do NOT set a 'msg' property on the Expando.
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [
+                code: 0,
+                result: null,   // triggers the null-status error path
+                traceId: "test-trace"
+            ]
+            // Deliberately omit r.msg -- the Expando has no 'msg' property.
+            // Before the fix, resp?.msg would throw MissingPropertyException here.
+            callback(r)
+        }
+
+        when: "updateDevices() runs and hits the null-status error branch"
+        driver.updateDevices()
+
+        then: "no MissingPropertyException is thrown"
+        noExceptionThrown()
+
+        and: "an error log was emitted (the branch ran) without throwing"
+        testLog.errors.any { it.contains("No status returned from") }
+    }
+
+    def "getDevices() logs missing-driver INFO exactly once when N devices need the same driver (M5)"() {
+        // M5: dedup behavior. Two V100S devices (same missing driver). Before the fix,
+        // safeAddChildDevice() would log 2 INFO messages. After the fix, exactly 1.
+        // The second device is still skipped (returns null so the loop continues), but silently.
+        given: "VeSync account returns two V100S devices; Vital 100S driver is not installed"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-m5"
+        state.accountID = "acc-m5"
+        state.prefsSeeded = true
+        int addCallCount = 0
+
+        driver.metaClass.addChildDevice = { String typeName, String dni, Map props ->
+            addCallCount++
+            if (typeName == "Levoit Vital 100S Air Purifier") {
+                throw new com.hubitat.app.exception.UnknownDeviceTypeException(typeName)
+            }
+            def dev = new TestDevice()
+            dev.name = typeName
+            childDevices[dni] = dev
+            dev
+        }
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    list: [
+                        [deviceType: "LAP-V102S-WUS", deviceName: "Meadow Noise",
+                         cid: "cid-v100s-1", configModule: "cm-v100s-1", uuid: "uuid-v100s-1", macID: "AA:BB:CC:DD:EE:01"],
+                        [deviceType: "LAP-V102S-WUS", deviceName: "Willow Noise",
+                         cid: "cid-v100s-2", configModule: "cm-v100s-2", uuid: "uuid-v100s-2", macID: "AA:BB:CC:DD:EE:02"]
+                    ],
+                    total: 2
+                ],
+                traceId: "test-trace"
+            ]
+            callback(r)
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "addChildDevice was attempted for both devices (2 calls total)"
+        addCallCount == 2
+
+        and: "exactly ONE INFO log about the missing Vital 100S driver -- not two"
+        def missingDriverLogs = testLog.infos.findAll {
+            it.contains("Levoit Vital 100S Air Purifier") && it.contains("not installed")
+        }
+        missingDriverLogs.size() == 1
+
+        and: "the INFO log references the first device by label (Meadow Noise -- first miss wins)"
+        missingDriverLogs[0].contains("Meadow Noise")
+
+        and: "state.warnedMissingDrivers is cleaned up after getDevices() completes"
+        !state.containsKey('warnedMissingDrivers')
+
+        and: "no exception escaped getDevices()"
+        noExceptionThrown()
+    }
+
+    def "updateDevices() heartbeat descriptionText fires only on transition; steady-state is silent (M6)"() {
+        // M6: heartbeat log dedup. First updateDevices() call transitions heartbeat
+        // from null -> "synced" and logs INFO. Second call is steady-state synced->synced
+        // and must emit sendEvent WITHOUT descriptionText so Hubitat generates no INFO log.
+        // The "syncing" intermediate event (dropped in v2.2.1) must not appear at all.
+        given: "driver initialized with no prior heartbeat value and one device in the list"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        state.deviceList = ["hb-cid": "hb-config"]
+
+        def mockDev = new TestDevice()
+        mockDev.typeName = "Levoit Vital 200S Air Purifier"
+        mockDev.metaClass.update = { Map st, nl -> true }
+        childDevices["hb-cid"] = mockDev
+
+        when: "first updateDevices() call -- heartbeat transitions from null to 'synced'"
+        driver.updateDevices()
+
+        then: "exactly one heartbeat sendEvent fired (no 'syncing' intermediate)"
+        def hbEventsAfterFirst = testDevice.allEvents("heartbeat")
+        hbEventsAfterFirst.size() == 1
+        hbEventsAfterFirst[0].value == "synced"
+
+        and: "descriptionText is 'Heartbeat: synced' on first call (first-run, not 'recovered from unknown')"
+        hbEventsAfterFirst[0].descriptionText == "Heartbeat: synced"
+
+        and: "isStateChange is true on the first call"
+        hbEventsAfterFirst[0].isStateChange == true
+
+        when: "second updateDevices() call -- heartbeat is already 'synced' (steady-state)"
+        driver.updateDevices()
+
+        then: "a second heartbeat event was emitted (attribute still updates every cycle)"
+        def hbEventsAfterSecond = testDevice.allEvents("heartbeat")
+        hbEventsAfterSecond.size() == 2
+        hbEventsAfterSecond[1].value == "synced"
+
+        and: "descriptionText is null on the second call (no transition -- no log)"
+        hbEventsAfterSecond[1].descriptionText == null
+
+        and: "isStateChange is false on the second call"
+        hbEventsAfterSecond[1].isStateChange == false
+
+        and: "exactly one 'Heartbeat: synced' INFO log total -- steady-state is silent"
+        testLog.infos.count { it.contains("Heartbeat: synced") } == 1
+    }
 }

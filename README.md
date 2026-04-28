@@ -61,6 +61,19 @@ Paste each driver from `Drivers/Levoit/*.groovy` into Hubitat's **Drivers Code**
 
 To re-scan after adding a new device in the VeSync app: open the parent device → **Resync Equipment**.
 
+### Adding new Levoit devices after the initial install
+
+If you buy a new Levoit device after your initial setup, the corresponding child driver may not be installed yet — most child drivers ship as optional, and you only install the ones for devices you own. After Resync Equipment, the parent driver will log an INFO message naming exactly which driver is missing.
+
+To add it via HPM:
+
+1. HPM → **Modify** (NOT Install or Update)
+2. Select **"Levoit Air Purifiers, Humidifiers, and Fans"** → **Next**
+3. Check the missing driver(s) — the parent's INFO log names them — then **Next** → install
+4. On the VeSync Integration parent device, click **Resync Equipment**. The new device should now appear.
+
+**Why HPM "Modify" not "Install":** the Install search is for fresh installs of packages you don't currently have. Picking an already-installed package via Install will hang on the "Next" spinner. If you hit that hang, HPM **Match Up** can reconcile your hub's state with the manifest, then try Modify again.
+
 ## What you get in Hubitat
 
 Each child device exposes standard Hubitat capabilities plus device-specific attributes:
