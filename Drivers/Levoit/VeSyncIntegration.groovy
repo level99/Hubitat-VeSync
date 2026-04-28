@@ -657,6 +657,8 @@ private String deviceMethodFor(child) {
         case "OM1000S":
         case "B381S":
             return "getHumidifierStatus"
+        case "EL551S":
+            return "getPurifierStatus"
         default:
             // All purifier dtypes (200S, 300S, 400S, 600S, V200S, V100S) + GENERIC
             return "getPurifierStatus"
@@ -797,6 +799,16 @@ private deviceType(code) {
         case "LAP-B851S-WUS":
         case "LAP-BAY-MAX01S":
             return "B851S";
+        // EverestAir Air Purifier — pyvesync VeSyncAirBaseV2 (same class as Vital 200S/Sprout Air).
+        // V2-style payloads: powerSwitch/switchIdx, setPurifierMode {workMode} for auto/sleep/turbo,
+        // manual mode via setLevel. Fan levels 1-3.
+        // Unique features: TURBO mode (workMode="turbo"), VENT_ANGLE (fanRotateAngle passive read),
+        // LIGHT_DETECT (setLightDetection {lightDetectionSwitch}). No nightlight, no pet mode.
+        case "LAP-EL551S-WUS":
+        case "LAP-EL551S-WEU":
+        case "LAP-EL551S-AEUR":
+        case "LAP-EL551S-AUS":
+            return "EL551S";
         default:
             // Unknown model code — fall through to Generic diagnostic driver.
             // The Generic driver provides best-effort power control and captureDiagnostics()
@@ -914,7 +926,7 @@ private Boolean getDevices() {
                     else if (dtype == "400S" || dtype == "300S" || dtype == "600S" || dtype == "V200S" || dtype == "V601S" ||
                              dtype == "V100S" || dtype == "A601S" || dtype == "O451S" || dtype == "TOWERFAN" || dtype == "PEDESTALFAN" ||
                              dtype == "A602S" || dtype == "D301S" || dtype == "C200S" || dtype == "A603S" || dtype == "OM1000S" ||
-                             dtype == "B381S" || dtype == "B851S") {
+                             dtype == "B381S" || dtype == "B851S" || dtype == "EL551S") {
                         newList[device.cid] = device.configModule;
                     }
                     else if (dtype == "GENERIC" && isLevoitClimateDevice(device.deviceType)) {
@@ -1398,6 +1410,32 @@ private Boolean getDevices() {
                             equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                             logInfo "Added child device: ${device.deviceName} (Levoit Sprout Air Purifier)"
+                        }
+                        else {
+                            logDebug "Updating ${device.deviceName} / " + dtype;
+                            equip1.name = device.deviceName;
+                            equip1.label = device.deviceName;
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                        }
+                    }
+                    else if (dtype == "EL551S") {
+                        if (equip1 == null) {
+                            logDebug "Adding ${device.deviceName}"
+                            equip1 = safeAddChildDevice("Levoit EverestAir Air Purifier", device.cid,
+                                [name: device.deviceName, label: device.deviceName, isComponent: false],
+                                "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitEverestAir.groovy")
+                            if (equip1 == null) continue
+                            def verify1 = getChildDevice(device.cid)
+                            if (verify1 == null) {
+                                logError "addChildDevice for ${device.deviceName} (${device.cid}) appeared to succeed but the device is not queryable. This usually means the DNI was recently deleted and Hubitat's purge has not completed. Try forceReinitialize again in a minute."
+                                continue
+                            }
+                            equip1 = verify1
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
+                            equip1.updateDataValue("deviceType", device.deviceType);
+                            logInfo "Added child device: ${device.deviceName} (Levoit EverestAir Air Purifier)"
                         }
                         else {
                             logDebug "Updating ${device.deviceName} / " + dtype;

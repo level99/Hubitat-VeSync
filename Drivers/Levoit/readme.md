@@ -55,6 +55,7 @@ Copy the relevant `.groovy` files from the `Drivers/Levoit/` directory into Hubi
 | `LevoitOasisMist1000S.groovy` | Levoit OasisMist 1000S Humidifier (LUH-M101S) *(v2.3 preview)* |
 | `LevoitSproutHumidifier.groovy` | Levoit Sprout Humidifier (LEH-B381S-WUS, LEH-B381S-WEU) *(v2.3 preview)* |
 | `LevoitSproutAir.groovy` | Levoit Sprout Air Purifier (LAP-B851S-*, LAP-BAY-MAX01S) *(v2.3 preview)* |
+| `LevoitEverestAir.groovy` | Levoit EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) *(v2.3 preview)* |
 | `LevoitTowerFan.groovy` | Levoit Tower Fan *(v2.1 preview)* |
 | `LevoitPedestalFan.groovy` | Levoit Pedestal Fan *(v2.1 preview)* |
 | `LevoitGeneric.groovy` | **Fall-through diagnostic driver** — any unrecognized Levoit model code. Best-effort power control + `captureDiagnostics()` for filing new-device-support requests. |
@@ -483,6 +484,43 @@ pyvesync class: `VeSyncAirSprout` (inherits `VeSyncAirBaseV2` → `VeSyncAirBypa
 | info | HTML | Tile summary |
 
 Commands: `setMode` (auto/sleep/turbo/pet — manual mode use `setFanSpeed` instead), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setNightlightMode` (on/off/dim/auto), `toggle`.
+
+### EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) *— v2.3 preview*
+
+pyvesync class: `VeSyncAirBaseV2` — same base class as Vital 200S and Sprout Air. No separate VeSyncAirEverest class exists in pyvesync; all four regional model codes map directly to `VeSyncAirBaseV2`. Single driver for all variants. "EverestAir-P" is a marketing name, not a distinct API class.
+
+**CROSS-CHECK — EverestAir vs sibling VeSyncAirBaseV2 purifiers:**
+- vs Vital 200S: EverestAir adds TURBO mode and VENT_ANGLE; Vital 200S has PET mode and LIGHT_DETECT instead. Fan range 1–3 vs 1–4.
+- vs Vital 100S: same as Vital 200S comparison; EverestAir additionally has LIGHT_DETECT (Vital 100S intentionally omits it despite API field being present).
+- vs Sprout Air: EverestAir has TURBO + VENT_ANGLE + LIGHT_DETECT; Sprout Air has NIGHTLIGHT. Both have AIR_QUALITY and fan levels 1–3.
+- vs Core line (VeSyncAirBypass): EverestAir uses V2-style payloads (`powerSwitch`/`switchIdx`, `workMode`, `manualSpeedLevel`/`levelIdx`/`levelType`). Core line uses V1 conventions (`switch`/`id`, `mode`, `level`/`id`/`type`).
+
+**TURBO mode** (first in this codebase): `workMode:"turbo"` via `setPurifierMode` — the same pathway as auto/sleep. No separate `setTurbo` command exists in pyvesync or this driver. Convention: turbo-as-mode is handled by `setMode("turbo")`.
+
+**VENT_ANGLE** (first in this codebase): `fanRotateAngle` is a **passive read-only** status field. pyvesync `VeSyncAirBaseV2._set_state()` reads it but no setter method exists anywhere in the class hierarchy. The driver exposes it as a `ventAngle` NUMBER attribute for dashboard observation. Exact unit (degrees or discrete position enum) TBD pending community hardware reports. If a write payload is discovered, a `setVentAngle` command can be added in a patch release.
+
+**LIGHT_DETECT**: `setLightDetection {lightDetectionSwitch: int}` — same API as Vital 200S. Two attributes: `lightDetection` (feature enabled/disabled) and `lightDetected` (whether ambient light is currently sensed).
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power state |
+| mode | auto, sleep, manual, turbo | Current mode (`"turbo"` is first new mode value in this codebase) |
+| fanSpeed | 0-3 | Active fan speed (0 when device is off; 255 sentinel mapped to 0) |
+| airQualityIndex | 1-4 | Levoit categorical AQ index (1=excellent, 4=very bad) |
+| pm25 | µg/m³ | Real-time PM2.5 reading |
+| pm1 | µg/m³ | Real-time PM1.0 reading (if present in response) |
+| pm10 | µg/m³ | Real-time PM10 reading (if present in response) |
+| aqPercent | 0-100 | Levoit's own AQ percent index (AQPercent field) |
+| filterLife | 0-100 | Filter life (%) |
+| timerRemain | seconds | Auto-off timer remaining (0 if no timer) |
+| displayOn | on, off | Front-panel display state |
+| childLock | on, off | Child-lock state |
+| lightDetection | on, off | Whether light-detection feature is enabled (user setting) |
+| lightDetected | yes, no | Whether ambient light is currently detected (passive read) |
+| ventAngle | number | Vent/fan rotation angle from `fanRotateAngle` response field (**passive read only** — no write path in pyvesync; exact unit TBD) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/sleep/manual/turbo), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setLightDetection` (on/off), `resetFilter`, `toggle`. (No `setVentAngle` — no write path in pyvesync. No `setNightlightMode` — NIGHTLIGHT feature flag absent. No timer commands — not in device_map.py EverestAir entry.)
 
 ### Tower Fan (LTF-F422S) *— v2.1 preview*
 

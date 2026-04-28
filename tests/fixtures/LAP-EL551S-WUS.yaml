@@ -1,0 +1,295 @@
+# Canonical API fixture for Levoit EverestAir Air Purifier (LAP-EL551S-WUS)
+# pyvesync class: VeSyncAirBaseV2 (same base class as Vital 200S and Sprout Air)
+# Source: pyvesync device_map.py EverestAir entry + EL551S.yaml fixture + VeSyncAirBaseV2._set_state()
+# Retrieved: 2026-04-28
+#
+# Model codes (all route to Levoit EverestAir Air Purifier driver):
+#   LAP-EL551S-WUS   -- US standard
+#   LAP-EL551S-WEU   -- EU standard
+#   LAP-EL551S-AEUR  -- EU variant
+#   LAP-EL551S-AUS   -- Australia
+#
+# Device class: VeSyncAirBaseV2 (no separate VeSyncAirEverest class in pyvesync)
+# Features: AIR_QUALITY, VENT_ANGLE, LIGHT_DETECT (device_map.py PurifierMap for EL551S)
+# Modes: auto, manual, sleep, turbo (PurifierModes)
+# Fan levels: 1-3
+#
+# Key API method notes:
+#   - Power:       setSwitch {powerSwitch: int, switchIdx: 0}
+#   - Mode:        setPurifierMode {workMode: str} -- for auto/sleep/turbo
+#   - Manual mode: setLevel {levelIdx:0, manualSpeedLevel:N, levelType:'wind'} -- NOT setPurifierMode
+#     (pyvesync VeSyncAirBaseV2.set_mode: manual -> delegates to set_fan_speed)
+#   - Display:     setDisplay {screenSwitch: int}
+#   - ChildLock:   setChildLock {childLockSwitch: int}
+#   - LightDetect: setLightDetection {lightDetectionSwitch: int}
+#   - FilterReset: resetFilter {}
+#   - Status:      getPurifierStatus {}
+#
+# TURBO mode: workMode="turbo" via setPurifierMode -- no separate toggle (EL551S.yaml fixture confirms).
+# VENT_ANGLE: fanRotateAngle is READ-ONLY in pyvesync -- no setter exists in the class hierarchy.
+# fanSpeedLevel=255 sentinel means device is off (driver maps to 0 -- BP#6 analog).
+
+requests:
+  turn_on:
+    payload:
+      data:
+        powerSwitch: 1
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        powerSwitch: 0
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  set_auto_mode:
+    payload:
+      data:
+        workMode: auto
+      method: setPurifierMode
+      source: APP
+
+  set_sleep_mode:
+    payload:
+      data:
+        workMode: sleep
+      method: setPurifierMode
+      source: APP
+
+  set_turbo_mode:
+    # TURBO MODE: handled identically to auto/sleep via setPurifierMode.
+    # Confirmed by pyvesync EL551S.yaml fixture.
+    # Convention: turbo-as-mode uses setPurifierMode, not a separate toggle.
+    payload:
+      data:
+        workMode: turbo
+      method: setPurifierMode
+      source: APP
+
+  set_fan_speed_1:
+    # Manual mode established via setLevel (NOT setPurifierMode {workMode:'manual'})
+    payload:
+      data:
+        levelIdx: 0
+        manualSpeedLevel: 1
+        levelType: wind
+      method: setLevel
+      source: APP
+
+  set_fan_speed_3:
+    payload:
+      data:
+        levelIdx: 0
+        manualSpeedLevel: 3
+        levelType: wind
+      method: setLevel
+      source: APP
+
+  display_on:
+    payload:
+      data:
+        screenSwitch: 1
+      method: setDisplay
+      source: APP
+
+  display_off:
+    payload:
+      data:
+        screenSwitch: 0
+      method: setDisplay
+      source: APP
+
+  child_lock_on:
+    payload:
+      data:
+        childLockSwitch: 1
+      method: setChildLock
+      source: APP
+
+  light_detection_on:
+    payload:
+      data:
+        lightDetectionSwitch: 1
+      method: setLightDetection
+      source: APP
+
+  light_detection_off:
+    payload:
+      data:
+        lightDetectionSwitch: 0
+      method: setLightDetection
+      source: APP
+
+  reset_filter:
+    payload:
+      data: {}
+      method: resetFilter
+      source: APP
+
+  get_status:
+    payload:
+      data: {}
+      method: getPurifierStatus
+      source: APP
+
+responses:
+  device_on_auto_canonical:
+    # Device on, auto mode, fan speed 2, good AQ, vent angle 90 degrees
+    # Primary reference response for applyStatus parsing.
+    powerSwitch: 1
+    workMode: auto
+    fanSpeedLevel: 2
+    manualSpeedLevel: 2
+    AQLevel: 1
+    PM25: 5
+    PM1: 3
+    PM10: 8
+    AQPercent: 95
+    filterLifePercent: 87
+    childLockSwitch: 0
+    lightDetectionSwitch: 1
+    environmentLightState: 0
+    screenSwitch: 1
+    screenState: 1
+    autoPreference:
+      autoPreferenceType: default
+      roomSize: 300
+    fanRotateAngle: 90
+    timerRemain: 0
+
+  device_on_turbo_mode:
+    # TURBO mode -- workMode="turbo" (first-of-kind in this codebase).
+    # pyvesync EL551S.yaml fixture confirms: setPurifierMode {workMode: turbo}
+    powerSwitch: 1
+    workMode: turbo
+    fanSpeedLevel: 3
+    manualSpeedLevel: 3
+    AQLevel: 4
+    PM25: 78
+    PM1: 55
+    PM10: 110
+    AQPercent: 12
+    filterLifePercent: 87
+    childLockSwitch: 0
+    lightDetectionSwitch: 0
+    environmentLightState: 0
+    screenSwitch: 1
+    screenState: 1
+    autoPreference:
+      autoPreferenceType: default
+      roomSize: 300
+    fanRotateAngle: 90
+    timerRemain: 0
+
+  device_on_sleep_mode:
+    powerSwitch: 1
+    workMode: sleep
+    fanSpeedLevel: 1
+    manualSpeedLevel: 1
+    AQLevel: 1
+    PM25: 4
+    AQPercent: 98
+    filterLifePercent: 87
+    childLockSwitch: 0
+    lightDetectionSwitch: 1
+    environmentLightState: 0
+    screenSwitch: 0
+    screenState: 0
+    fanRotateAngle: 0
+    timerRemain: 0
+
+  device_on_manual_speed2:
+    # Manual mode established via setLevel -- fanSpeedLevel reflects current speed
+    powerSwitch: 1
+    workMode: manual
+    fanSpeedLevel: 2
+    manualSpeedLevel: 2
+    AQLevel: 2
+    PM25: 25
+    AQPercent: 60
+    filterLifePercent: 87
+    childLockSwitch: 0
+    lightDetectionSwitch: 0
+    environmentLightState: 0
+    screenSwitch: 1
+    screenState: 1
+    fanRotateAngle: 45
+    timerRemain: 0
+
+  device_off:
+    # Device off: fanSpeedLevel=255 sentinel (maps to 0 in driver -- BP#6 analog)
+    powerSwitch: 0
+    workMode: auto
+    fanSpeedLevel: 255
+    manualSpeedLevel: 2
+    AQLevel: 1
+    PM25: 5
+    AQPercent: 95
+    filterLifePercent: 87
+    childLockSwitch: 0
+    lightDetectionSwitch: 1
+    environmentLightState: 0
+    screenSwitch: 0
+    screenState: 0
+    fanRotateAngle: 0
+    timerRemain: 0
+
+  device_light_detect_active:
+    # Light detected: lightDetectionSwitch=1 (enabled), environmentLightState=1 (light sensed)
+    powerSwitch: 1
+    workMode: sleep
+    fanSpeedLevel: 1
+    manualSpeedLevel: 1
+    AQLevel: 1
+    PM25: 3
+    AQPercent: 99
+    filterLifePercent: 72
+    childLockSwitch: 0
+    lightDetectionSwitch: 1
+    environmentLightState: 1
+    screenSwitch: 0
+    screenState: 0
+    fanRotateAngle: 0
+    timerRemain: 0
+
+  device_vent_angle_varied:
+    # fanRotateAngle=135 for passive-read attribute coverage
+    powerSwitch: 1
+    workMode: auto
+    fanSpeedLevel: 2
+    manualSpeedLevel: 2
+    AQLevel: 1
+    PM25: 8
+    AQPercent: 90
+    filterLifePercent: 65
+    childLockSwitch: 0
+    lightDetectionSwitch: 0
+    environmentLightState: 0
+    screenSwitch: 1
+    screenState: 1
+    fanRotateAngle: 135
+    timerRemain: 0
+
+  device_poor_aq:
+    # AQLevel=4, high PM25 -- verifies poor-AQ attribute emission + turbo mode response
+    powerSwitch: 1
+    workMode: turbo
+    fanSpeedLevel: 3
+    manualSpeedLevel: 3
+    AQLevel: 4
+    PM25: 95
+    PM1: 70
+    PM10: 140
+    AQPercent: 8
+    filterLifePercent: 45
+    childLockSwitch: 0
+    lightDetectionSwitch: 0
+    environmentLightState: 0
+    screenSwitch: 1
+    screenState: 1
+    fanRotateAngle: 90
+    timerRemain: 0

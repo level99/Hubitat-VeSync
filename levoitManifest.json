@@ -144,6 +144,13 @@
       "required": false
     },
     {
+      "id": "2c7a4f1e-8b3d-4e9c-a5f2-6d0b8e4c1a7f",
+      "name": "Levoit EverestAir Air Purifier",
+      "namespace": "NiklasGustafsson",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitEverestAir.groovy",
+      "required": false
+    },
+    {
       "id": "ca33c74b-ac89-44d5-b9f1-10044c8a520f",
       "name": "Levoit Tower Fan",
       "namespace": "NiklasGustafsson",
