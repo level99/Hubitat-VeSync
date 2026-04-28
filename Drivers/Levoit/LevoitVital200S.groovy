@@ -91,10 +91,10 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
-    runIn(3, update)
+    runIn(3, "update")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
-        runIn(1800, logDebugOff)
+        runIn(1800, "logDebugOff")
         state.debugEnabledAt = now()
     } else {
         state.remove("debugEnabledAt")

@@ -296,29 +296,32 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Bug Pattern #2: updateDevices() branches by typeName
+    // Bug Pattern #2: updateDevices() dtype-based routing via deviceMethodFor()
+    // (v2.3: routing moved from typeName substring-matching to deviceMethodFor(),
+    //  which reads child's stored raw model code via getDataValue("deviceType").)
     // Issue 2: `result = dev.update(...)` was dropped — no longer throws
     //          MissingPropertyException on every poll cycle.
     // -------------------------------------------------------------------------
 
     def "updateDevices() uses getPurifierStatus for purifier device (Bug Pattern #2)"() {
-        given: "state has a purifier device"
+        given: "state has a purifier device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
         state.deviceList = ["PURIFIER-CID": "test-config-module"]
 
-        // Wire a mock child device with purifier typeName
+        // deviceMethodFor() reads getDataValue("deviceType"), not typeName.
+        // Must set the raw model code explicitly so routing resolves correctly.
         def purifierDevice = new TestDevice()
         purifierDevice.typeName = "Levoit Vital 200S Air Purifier"
-        // Mock its update(status, nightLight) method via metaClass
+        purifierDevice.updateDataValue("deviceType", "LAP-V201S-WUS")  // dtype → V200S → getPurifierStatus
         purifierDevice.metaClass.update = { Map st, nl -> true }
         childDevices["PURIFIER-CID"] = purifierDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getPurifierStatus"
+        then: "deviceMethodFor() resolved V200S dtype → getPurifierStatus"
         def purifierBody = capturedBypassBodies.find { b ->
             b.payload?.method == "getPurifierStatus"
         }
@@ -326,22 +329,23 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     def "updateDevices() uses getHumidifierStatus for humidifier device (Bug Pattern #2)"() {
-        given: "state has a humidifier device"
+        given: "state has a humidifier device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
         state.deviceList = ["HUMIDIFIER-CID": "test-config-module"]
 
-        // Wire a mock child device with humidifier typeName
+        // deviceMethodFor() reads getDataValue("deviceType") — must set raw model code.
         def humDevice = new TestDevice()
         humDevice.typeName = "Levoit Superior 6000S Humidifier"
+        humDevice.updateDataValue("deviceType", "LEH-S601S-WUS")  // dtype → V601S → getHumidifierStatus
         humDevice.metaClass.update = { Map st, nl -> true }
         childDevices["HUMIDIFIER-CID"] = humDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getHumidifierStatus"
+        then: "deviceMethodFor() resolved V601S dtype → getHumidifierStatus"
         def humBody = capturedBypassBodies.find { b ->
             b.payload?.method == "getHumidifierStatus"
         }
@@ -349,7 +353,7 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     def "updateDevices() correctly branches both devices in same deviceList (Bug Pattern #2)"() {
-        given: "state has both a purifier and a humidifier"
+        given: "state has both a purifier and a humidifier, each with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -360,21 +364,23 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         def purifierDevice = new TestDevice()
         purifierDevice.typeName = "Levoit Core 400S Air Purifier"
+        purifierDevice.updateDataValue("deviceType", "LAP-C401S-WJP")  // dtype → 400S → getPurifierStatus
         purifierDevice.metaClass.update = { Map st, nl -> true }
         childDevices["PURIFIER-CID"] = purifierDevice
 
         def humDevice = new TestDevice()
         humDevice.typeName = "Levoit Superior 6000S Humidifier"
+        humDevice.updateDataValue("deviceType", "LEH-S601S-WUS")  // dtype → V601S → getHumidifierStatus
         humDevice.metaClass.update = { Map st, nl -> true }
         childDevices["HUMIDIFIER-CID"] = humDevice
 
         when:
         driver.updateDevices()
 
-        then: "getPurifierStatus was sent for the purifier"
+        then: "deviceMethodFor() sent getPurifierStatus for the purifier"
         capturedBypassBodies.any { it.payload?.method == "getPurifierStatus" }
 
-        and: "getHumidifierStatus was sent for the humidifier"
+        and: "deviceMethodFor() sent getHumidifierStatus for the humidifier"
         capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
     }
 
@@ -1347,14 +1353,22 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // H: updateDevices() method routing — v2.1 fan types
+    // H: updateDevices() method routing — dtype-based (v2.3 refactor)
     //
-    // Tower Fan -> getTowerFanStatus, Pedestal Fan -> getFanStatus.
-    // Existing Humidifier and purifier fallthrough must remain unchanged.
+    // Routing is now done via deviceMethodFor(child), which reads the child's
+    // stored raw model code (getDataValue("deviceType")), maps it through
+    // deviceType() to a dtype string, then dispatches dtype → API method.
+    // typeName is no longer used for routing — tests must set updateDataValue
+    // ("deviceType", rawModelCode) to exercise the correct branch.
+    //
+    // Tower Fan   -> getTowerFanStatus  (dtype TOWERFAN)
+    // Pedestal Fan -> getFanStatus      (dtype PEDESTALFAN)
+    // Humidifiers -> getHumidifierStatus (dtypes V601S/A601S/O451S/A602S/D301S)
+    // All others  -> getPurifierStatus  (all purifier dtypes + GENERIC)
     // -------------------------------------------------------------------------
 
     def "updateDevices() uses getTowerFanStatus for Tower Fan device (H1)"() {
-        given: "state has a Tower Fan device"
+        given: "state has a Tower Fan device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -1362,18 +1376,19 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         def fanDevice = new TestDevice()
         fanDevice.typeName = "Levoit Tower Fan"
+        fanDevice.updateDataValue("deviceType", "LTF-F422S-WUS")  // dtype → TOWERFAN
         fanDevice.metaClass.update = { Map st, nl -> true }
         childDevices["TOWERFAN-CID"] = fanDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getTowerFanStatus"
+        then: "deviceMethodFor() resolved TOWERFAN dtype → getTowerFanStatus"
         capturedBypassBodies.any { it.payload?.method == "getTowerFanStatus" }
     }
 
     def "updateDevices() uses getFanStatus for Pedestal Fan device (H2)"() {
-        given: "state has a Pedestal Fan device"
+        given: "state has a Pedestal Fan device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -1381,18 +1396,19 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         def fanDevice = new TestDevice()
         fanDevice.typeName = "Levoit Pedestal Fan"
+        fanDevice.updateDataValue("deviceType", "LPF-R432S-AEU")  // dtype → PEDESTALFAN
         fanDevice.metaClass.update = { Map st, nl -> true }
         childDevices["PEDESTALFAN-CID"] = fanDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getFanStatus"
+        then: "deviceMethodFor() resolved PEDESTALFAN dtype → getFanStatus"
         capturedBypassBodies.any { it.payload?.method == "getFanStatus" }
     }
 
     def "updateDevices() uses getPurifierStatus for Vital 100S device (H3 -- purifier fallthrough)"() {
-        given: "state has a Vital 100S purifier device"
+        given: "state has a Vital 100S purifier device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -1400,18 +1416,19 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         def purifierDevice = new TestDevice()
         purifierDevice.typeName = "Levoit Vital 100S Air Purifier"
+        purifierDevice.updateDataValue("deviceType", "LAP-V102S-WUS")  // dtype → V100S → default branch
         purifierDevice.metaClass.update = { Map st, nl -> true }
         childDevices["V100S-CID"] = purifierDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getPurifierStatus (fallthrough -- no 'Humidifier', 'Tower Fan', or 'Pedestal Fan' in typeName)"
+        then: "deviceMethodFor() resolved V100S dtype → getPurifierStatus (default branch)"
         capturedBypassBodies.any { it.payload?.method == "getPurifierStatus" }
     }
 
     def "updateDevices() uses getHumidifierStatus for Classic 300S device (H4 -- humidifier branch)"() {
-        given: "state has a Classic 300S humidifier device"
+        given: "state has a Classic 300S humidifier device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -1419,18 +1436,19 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         def humDevice = new TestDevice()
         humDevice.typeName = "Levoit Classic 300S Humidifier"
+        humDevice.updateDataValue("deviceType", "LUH-A601S-WUSB")  // dtype → A601S → getHumidifierStatus
         humDevice.metaClass.update = { Map st, nl -> true }
         childDevices["A601S-CID"] = humDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getHumidifierStatus"
+        then: "deviceMethodFor() resolved A601S dtype → getHumidifierStatus"
         capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
     }
 
     def "updateDevices() uses getHumidifierStatus for OasisMist 450S device (H5 -- humidifier branch)"() {
-        given: "state has an OasisMist 450S humidifier device"
+        given: "state has an OasisMist 450S humidifier device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -1438,18 +1456,19 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         def humDevice = new TestDevice()
         humDevice.typeName = "Levoit OasisMist 450S Humidifier"
+        humDevice.updateDataValue("deviceType", "LUH-O451S-WUS")  // dtype → O451S → getHumidifierStatus
         humDevice.metaClass.update = { Map st, nl -> true }
         childDevices["O451S-CID"] = humDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getHumidifierStatus"
+        then: "deviceMethodFor() resolved O451S dtype → getHumidifierStatus"
         capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
     }
 
     def "updateDevices() routes all 5 v2.1 devices correctly in a single deviceList (H6 -- combined)"() {
-        given: "state has all 5 new v2.1 device types"
+        given: "state has all 5 new v2.1 device types, each with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -1461,15 +1480,18 @@ class VeSyncIntegrationSpec extends HubitatSpec {
             "PEDESTAL-CID":   "cm-pedestal"
         ]
 
+        // Each device must carry the raw model code so deviceMethodFor() can resolve
+        // the correct dtype via deviceType(). typeName is no longer used for routing.
         [
-            ["V100S-CID",    "Levoit Vital 100S Air Purifier"],
-            ["A601S-CID",    "Levoit Classic 300S Humidifier"],
-            ["O451S-CID",    "Levoit OasisMist 450S Humidifier"],
-            ["TOWERFAN-CID", "Levoit Tower Fan"],
-            ["PEDESTAL-CID", "Levoit Pedestal Fan"]
-        ].each { cid, typeName ->
+            ["V100S-CID",    "Levoit Vital 100S Air Purifier",    "LAP-V102S-WUS"],
+            ["A601S-CID",    "Levoit Classic 300S Humidifier",    "LUH-A601S-WUSB"],
+            ["O451S-CID",    "Levoit OasisMist 450S Humidifier",  "LUH-O451S-WUS"],
+            ["TOWERFAN-CID", "Levoit Tower Fan",                   "LTF-F422S-WUS"],
+            ["PEDESTAL-CID", "Levoit Pedestal Fan",                "LPF-R432S-AEU"]
+        ].each { cid, tn, rawCode ->
             def dev = new TestDevice()
-            dev.typeName = typeName
+            dev.typeName = tn
+            dev.updateDataValue("deviceType", rawCode)
             dev.metaClass.update = { Map st, nl -> true }
             childDevices[cid] = dev
         }

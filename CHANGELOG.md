@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `airQualityIndex` attribute (Core 300S/400S/600S only) — Levoit's own categorical 1-4 reading, distinct from the driver-computed US-AQI `aqi` attribute.
   - `capability "AirQuality"` declaration (Core 300S/400S/600S only) — wires the device into Hubitat's standard air-quality dashboard tiles.
 - All new features use JSON-RPC method names already proven by the Vital line drivers (`setChildLock`, `addTimer`, `delTimer`, `resetFilter`). No new API patterns introduced.
+- **Regional model code additions** (v2.3 audit): `LAP-C401S-KUSR` (PlasmaPro 400S-P black; routes to Core 400S driver via existing `400S` dtype) and `LPF-R432S-AUK` (UK Pedestal Fan; routes to Pedestal Fan driver via existing `PEDESTALFAN` dtype). Both confirmed in pyvesync `device_map.py` as members of their respective API classes. `isLevoitClimateDevice()` unchanged — `LAP-` and `LPF-` prefix blankets already cover both codes (RULE22 satisfied).
+
+### Changed
+
+- **Poll-method routing refactored from substring to dtype-based** (issue #3 AC #3). `updateDevices()` previously resolved the API method (`getPurifierStatus` / `getHumidifierStatus` / `getTowerFanStatus` / `getFanStatus`) by calling `TYPENAME_TO_METHOD.find { typeName.contains(it.key) }` — a substring match on the child's driver `typeName`. This satisfied issue #3 AC #1 and AC #2 but failed AC #3: substring matching is brittle (breaks silently if a driver's `definition(name:)` changes or a new driver's name doesn't contain the expected substring). Replaced with a new `deviceMethodFor(child)` helper that reads the child's stored raw model code (`getDataValue("deviceType")`), maps it through `deviceType()` to a dtype string, then dispatches dtype → method via an explicit switch. No behavioral change for all 16 currently-supported driver families. Removes the `@Field static final Map TYPENAME_TO_METHOD` and `DEFAULT_POLL_METHOD` constants.
+- **`runIn` bare-identifier calls converted to string-literal form** across 8 driver files (Core 200S, Core 300S, Core 400S, Core 600S, Vital 200S, Superior 6000S, Core 200S Light, Notification Tile). Bare-identifier form (`runIn(3, update)`) depends on Hubitat sandbox binding magic that does not replicate in the Spock test classloader. String-literal form (`runIn(3, "update")`) is the canonical safe form per CLAUDE.md conventions. No behavioral change on Hubitat at runtime.
 
 ## [2.2.1] - 2026-04-28
 

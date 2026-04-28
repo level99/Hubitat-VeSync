@@ -144,6 +144,8 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 
 **Timer units:** `setTimer` accepts seconds for Core line (matches the Levoit V1 API). The Vital line's `setTimer` accepts minutes — be aware if you have both device families.
 
+**Model codes:** `Core400S`, `LAP-C401S-WJP`, `LAP-C401S-WUSR`, `LAP-C401S-WAAA`, `LAP-C401S-KUSR` (PlasmaPro 400S-P black variant, v2.3). All use the same VeSyncAirBypass API class.
+
 ### Core 600S
 
 Same as Core 400S; `auto_mode` adds `eco`.
@@ -352,7 +354,7 @@ Commands: `setMode`, `setSpeed` (1-12), `setOscillation`, `setMute`, `setDisplay
 
 2-axis oscillation (horizontal + vertical, controlled separately). Mode `sleep` maps to `advancedSleep` like Tower Fan; mode `eco` is the Pedestal Fan's auto-equivalent (Tower Fan has `auto`; do not confuse). `childLock` is read-only — pyvesync has no setter and ST/HB community drivers also expose no write path. Timer is omitted in v2.1 (no community-confirmed payload).
 
-Covers LPF-R432S-AEU and LPF-R432S-AUS. (pyvesync's fixture filename is a typo — `LPF-R423S.yaml` — but real device codes are `LPF-R432S`.)
+Covers LPF-R432S-AEU, LPF-R432S-AUS, and LPF-R432S-AUK (UK market variant, v2.3). (pyvesync's fixture filename is a typo — `LPF-R423S.yaml` — but real device codes are `LPF-R432S`.)
 
 | event | Values | Description |
 | --- | --- | --- |

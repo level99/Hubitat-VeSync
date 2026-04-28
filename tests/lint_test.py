@@ -125,16 +125,27 @@ class TestBP1Missing2ArgUpdate:
 # ---------------------------------------------------------------------------
 
 class TestBP2HardcodedPurifierMethod:
+    # v2.3+: BP2 is now a positive assertion — updateDevices() MUST call deviceMethodFor().
+    # Pre-v2.3 GOOD snippet used typeName.contains(); that pattern is now the BAD case.
     GOOD = textwrap.dedent("""\
         def updateDevices() {
-            String method = typeName.contains("Humidifier") ? "getHumidifierStatus" : "getPurifierStatus"
+            String method = deviceMethodFor(dev)
             sendBypassRequest(dev, ["method": method, "data": {}])
         }
     """)
 
-    BAD = textwrap.dedent("""\
+    # Missing deviceMethodFor() — inline hardcoded method (old pattern, regression risk)
+    BAD_HARDCODED = textwrap.dedent("""\
         def updateDevices() {
             sendBypassRequest(dev, ["method": "getPurifierStatus", "data": {}])
+        }
+    """)
+
+    # Missing deviceMethodFor() — old typeName.contains() pattern (also bad: re-inlines routing)
+    BAD_TYPENAME_CONTAINS = textwrap.dedent("""\
+        def updateDevices() {
+            String method = typeName.contains("Humidifier") ? "getHumidifierStatus" : "getPurifierStatus"
+            sendBypassRequest(dev, ["method": method, "data": {}])
         }
     """)
 
@@ -142,12 +153,17 @@ class TestBP2HardcodedPurifierMethod:
         findings = run_rule(check_bp2_hardcoded_purifier_method, self.GOOD, "VeSyncIntegration")
         assert findings == []
 
-    def test_bad_fails(self):
-        findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD, "VeSyncIntegration")
-        assert any(f['rule_id'] == 'BP2_hardcoded_purifier_method' for f in findings)
+    def test_bad_hardcoded_fails(self):
+        findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD_HARDCODED, "VeSyncIntegration")
+        assert any(f['rule_id'] == 'BP2_missing_deviceMethodFor_call' for f in findings)
+
+    def test_bad_typename_contains_fails(self):
+        # The old "correct" pattern is now also a violation — it re-inlines routing
+        findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD_TYPENAME_CONTAINS, "VeSyncIntegration")
+        assert any(f['rule_id'] == 'BP2_missing_deviceMethodFor_call' for f in findings)
 
     def test_not_checked_for_children(self):
-        findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD, "LevoitVital200S")
+        findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD_HARDCODED, "LevoitVital200S")
         assert findings == []
 
 

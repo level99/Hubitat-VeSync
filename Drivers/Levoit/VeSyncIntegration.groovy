@@ -204,18 +204,10 @@ import groovy.transform.Field
 // Regional routing is binary: US → smartapi.vesync.com, EU → smartapi.vesync.eu
 // (per pyvesync const.py). Implemented in v2.2 via deviceRegion preference + getApiHost() helper.
 
-// updateDevices() poll-method routing map (GitHub issue #3 / Gemini PR #2 suggestion).
-// Maps a typeName substring to the VeSync API method that returns device status for that family.
-// Iteration order (LinkedHashMap insertion order) is preserved; most-specific keys listed first.
-// Keys are frozen by Bug Pattern #9 / RULE19 — driver typeName substrings are frozen once shipped
-// because Hubitat associates devices to drivers by name. Adding a new driver family requires a new
-// map entry here AND a matching driver whose definition(name:) contains the same substring.
-@Field static final Map<String,String> TYPENAME_TO_METHOD = [
-    "Tower Fan":    "getTowerFanStatus",
-    "Pedestal Fan": "getFanStatus",
-    "Humidifier":   "getHumidifierStatus"
-]
-@Field static final String DEFAULT_POLL_METHOD = "getPurifierStatus"
+// Poll-method routing is handled by deviceMethodFor(child) below.
+// TYPENAME_TO_METHOD and DEFAULT_POLL_METHOD were removed in v2.3 (issue #3 AC #3):
+// substring matching on typeName was fragile and untestable. Routing is now dtype-based
+// via deviceType() + the dtype→method switch in deviceMethodFor().
 
 metadata {
     definition(
@@ -578,12 +570,9 @@ def Boolean updateDevices()
 
             // Branch the API method by device type. The VeSync API uses different read methods
             // for each device family; calling the wrong method returns code:-1 with empty result.
-            // Routing is driven by TYPENAME_TO_METHOD (defined near the top of this file alongside
-            // the other @Field constants). Keys are typeName substrings; iteration order (insertion
-            // order, most-specific first) is preserved by Groovy's LinkedHashMap default.
-            // DEFAULT_POLL_METHOD ("getPurifierStatus") covers all purifiers and any unrecognized type.
-            String typeName = dev.typeName ?: dev.name ?: ""
-            String method = TYPENAME_TO_METHOD.find { typeName.contains(it.key) }?.value ?: DEFAULT_POLL_METHOD
+            // Routing is dtype-based via deviceMethodFor() (v2.3: replaced the old
+            // TYPENAME_TO_METHOD substring-matching approach that failed issue #3 AC #3).
+            String method = deviceMethodFor(dev)
             def command = [
                 "method": method,
                 "source": "APP",
@@ -634,6 +623,42 @@ def Boolean updateDevices()
     runIn(5 * (int)settings.refreshInterval, "timeOutLevoit")
 }
 
+/**
+ * Returns the VeSync API poll method for the given child device (v2.3).
+ *
+ * Routing is dtype-based: reads the raw model code from the child's stored
+ * deviceType dataValue, maps it through deviceType() to a dtype string, then
+ * maps dtype → API method. This eliminates the old TYPENAME_TO_METHOD
+ * substring-matching approach (issue #3 AC #3) which could silently mis-route
+ * if a driver's metadata name changed or a new driver's name didn't contain
+ * the expected substring.
+ *
+ * Method mapping by device family:
+ *   Tower Fan   (TOWERFAN)                                  → getTowerFanStatus
+ *   Pedestal Fan (PEDESTALFAN)                              → getFanStatus
+ *   Humidifiers (V601S, A601S, O451S, A602S, D301S)        → getHumidifierStatus
+ *   Air purifiers + Generic (all other dtypes)             → getPurifierStatus
+ */
+private String deviceMethodFor(child) {
+    String rawCode = child?.getDataValue("deviceType") ?: ""
+    String dtype = rawCode ? deviceType(rawCode) : "GENERIC"
+    switch (dtype) {
+        case "TOWERFAN":
+            return "getTowerFanStatus"
+        case "PEDESTALFAN":
+            return "getFanStatus"
+        case "V601S":
+        case "A601S":
+        case "O451S":
+        case "A602S":
+        case "D301S":
+            return "getHumidifierStatus"
+        default:
+            // All purifier dtypes (200S, 300S, 400S, 600S, V200S, V100S) + GENERIC
+            return "getPurifierStatus"
+    }
+}
+
 private deviceType(code) {
     switch(code)
     {
@@ -646,10 +671,11 @@ private deviceType(code) {
         case "LAP-C301S-WJP":
         case "LAP-C302S-WUSB":      // US Core 300S bundle SKU (v2.2 audit -- same VeSyncAirBypass class)
             return "300S";
-        case "Core400S": 
+        case "Core400S":
         case "LAP-C401S-WJP":
         case "LAP-C401S-WUSR":
         case "LAP-C401S-WAAA":
+        case "LAP-C401S-KUSR":      // PlasmaPro 400S-P black (v2.3 audit -- same VeSyncAirBypass class)
             return "400S";
         case "Core600S": 
         case "LAP-C601S-WUS":
@@ -705,6 +731,7 @@ private deviceType(code) {
         // Note: pyvesync fixture filename has a typo (LPF-R423S) but real device codes are LPF-R432S
         case "LPF-R432S-AEU":
         case "LPF-R432S-AUS":
+        case "LPF-R432S-AUK":       // UK Pedestal Fan (v2.3 audit -- same VeSyncPedestalFan class)
             return "PEDESTALFAN";
         // LV600S Humidifier — pyvesync VeSyncHumid200300S (same class as Classic 300S + OasisMist 450S)
         // NAMING TRAP: LUH-A602S (this block) uses VeSyncHumid200300S; LUH-A603S uses VeSyncLV600S.
