@@ -59,7 +59,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         given: "a single-wrapped 450S status (device on, manual, mist=5, warm=2)"
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
         def deviceData = fixture.responses.device_on_warm_mist_level2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when: "parent calls update(status, nightLight) with null nightLight"
         def result = driver.update(status, null)
@@ -73,7 +73,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         given:
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
         def deviceData = fixture.responses.device_on_warm_mist_level2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         def result = driver.update(status)
@@ -99,7 +99,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         given: "status map as parent passes it: {code:0, result:{<device fields>}}"
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
         def deviceData = fixture.responses.device_on_warm_mist_level2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -143,7 +143,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         assert !state.prefsSeeded
 
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_warm_mist_level2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_warm_mist_level2 as Map)
 
         when:
         driver.applyStatus(status)
@@ -160,7 +160,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
 
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_warm_mist_level2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_warm_mist_level2 as Map)
 
         when:
         driver.applyStatus(status)
@@ -176,7 +176,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         settings.descriptionTextEnable = null
 
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_warm_mist_level2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_warm_mist_level2 as Map)
 
         when:
         driver.applyStatus(status)
@@ -196,7 +196,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
         def deviceData = fixture.responses.device_on_warm_mist_level2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -251,7 +251,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_off as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_off as Map)
 
         when:
         driver.applyStatus(status)
@@ -270,7 +270,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_humidity_mode as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_humidity_mode as Map)
 
         when:
         driver.applyStatus(status)
@@ -287,7 +287,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
         // device_warm_off has warm_enabled=false, warm_level=0 (consistent, correct case)
-        def status = purifierStatusEnvelope(fixture.responses.device_warm_off as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_warm_off as Map)
 
         when:
         driver.applyStatus(status)
@@ -317,7 +317,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
             display: true,
             configuration: [auto_target_humidity: 50, display: true, automatic_stop: false]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -333,7 +333,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_water_lacks as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_water_lacks as Map)
 
         when:
         driver.applyStatus(status)
@@ -349,7 +349,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         state.lastWaterLacks = "yes"
 
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_water_lacks as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_water_lacks as Map)
         int infosBefore = testLog.infos.size()
 
         when:
@@ -787,7 +787,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
             automatic_stop_reach_target: false, warm_enabled: false, warm_level: 0,
             display: true, configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -805,7 +805,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
             automatic_stop_reach_target: false, warm_enabled: false, warm_level: 0,
             display: true, configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -823,7 +823,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
             automatic_stop_reach_target: false, warm_enabled: false, warm_level: 0,
             display: true, configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -841,7 +841,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
             automatic_stop_reach_target: false, warm_enabled: false, warm_level: 0,
             display: true, configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -858,7 +858,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_warm_mist_level2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_warm_mist_level2 as Map)
 
         when:
         driver.applyStatus(status)
@@ -887,7 +887,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
             night_light_brightness: 50,  // should be silently ignored
             configuration: [auto_target_humidity: 50, display: true, automatic_stop: false]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -1036,7 +1036,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
 
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_warm_mist_level2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_warm_mist_level2 as Map)
 
         when:
         driver.applyStatus(status)
@@ -1058,7 +1058,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_warm_off as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_warm_off as Map)
 
         when:
         driver.applyStatus(status)
@@ -1095,7 +1095,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
                 automatic_stop: true
             ]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -1111,7 +1111,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_off as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_off as Map)
         // device_off: configuration.automatic_stop=true
 
         when:
@@ -1687,7 +1687,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
             rgbNightLight: [action: "on", brightness: 80, red: 255, green: 0, blue: 0,
                             colorMode: "color", speed: 0, colorSliderLocation: 0]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         // Capture events before applyStatus -- note any hue/sat/nightlightSwitch currently set
         int eventsBefore = testDevice.events.size()
@@ -1713,7 +1713,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
             rgbNightLight: [action: "on", brightness: 80, red: 2, green: 255, blue: 120,
                             colorMode: "color", speed: 0, colorSliderLocation: 43]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -1736,7 +1736,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
             rgbNightLight: [action: "off", brightness: 100, red: 0, green: 40, blue: 255,
                             colorMode: "color", speed: 0, colorSliderLocation: 71]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -1755,7 +1755,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
             rgbNightLight: [action: "on", brightness: 80, red: 255, green: 0, blue: 0,
                             colorMode: "color", speed: 0, colorSliderLocation: 0]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -1772,7 +1772,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
         state.deviceType = "LUH-O451S-WEU"
 
-        def status = purifierStatusEnvelope(buildBaseDeviceData())  // no rgbNightLight key
+        def status = v2StatusEnvelope(buildBaseDeviceData())  // no rgbNightLight key
 
         when:
         driver.applyStatus(status)
@@ -1820,7 +1820,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         testDevice.updateDataValue("deviceType", "LUH-O451S-WEU")
         settings.descriptionTextEnable = false
 
-        def status = purifierStatusEnvelope(buildBaseDeviceData())
+        def status = v2StatusEnvelope(buildBaseDeviceData())
 
         when:
         driver.applyStatus(status)
@@ -1837,7 +1837,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         testDevice.updateDataValue("deviceType", "LUH-O451S-WEU")  // different value
         settings.descriptionTextEnable = false
 
-        def status = purifierStatusEnvelope(buildBaseDeviceData())
+        def status = v2StatusEnvelope(buildBaseDeviceData())
 
         when:
         driver.applyStatus(status)

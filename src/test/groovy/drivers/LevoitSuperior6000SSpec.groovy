@@ -89,7 +89,7 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
             dryingMode: [dryingState: 0, autoDryingSwitch: 0, dryingLevel: 1, dryingRemain: 0],
             waterPump: [cleanStatus: 0, remainTime: 0, totalTime: 3600]
         ]
-        def status = purifierStatusEnvelope(deviceData)  // single-wrap
+        def status = v2StatusEnvelope(deviceData)  // single-wrap
 
         when:
         driver.applyStatus(status)

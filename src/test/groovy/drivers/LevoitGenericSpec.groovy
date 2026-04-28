@@ -38,7 +38,7 @@ class LevoitGenericSpec extends HubitatSpec {
         given: "a single-wrapped purifier-shape status response"
         def fixture = loadYamlFixture("LevoitGeneric.yaml")
         def deviceData = fixture.responses.purifier_on_manual as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when: "parent calls update(status, nightLight) with null nightLight"
         def result = driver.update(status, null)
@@ -51,7 +51,7 @@ class LevoitGenericSpec extends HubitatSpec {
     def "update(status) 1-arg signature is callable"() {
         given: "a single-wrapped status response"
         def fixture = loadYamlFixture("LevoitGeneric.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.purifier_on_manual as Map)
+        def status = v2StatusEnvelope(fixture.responses.purifier_on_manual as Map)
 
         when:
         def result = driver.update(status)
@@ -82,7 +82,7 @@ class LevoitGenericSpec extends HubitatSpec {
         given: "a single-wrapped purifier status response"
         def fixture = loadYamlFixture("LevoitGeneric.yaml")
         def deviceData = fixture.responses.purifier_on_manual as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when: "applyStatus is called with the single-wrapped envelope"
         driver.applyStatus(status)
@@ -138,7 +138,7 @@ class LevoitGenericSpec extends HubitatSpec {
 
         when: "applyStatus is called (pref-seed is at the top of applyStatus)"
         def fixture = loadYamlFixture("LevoitGeneric.yaml")
-        driver.applyStatus(purifierStatusEnvelope(fixture.responses.purifier_on_manual as Map))
+        driver.applyStatus(v2StatusEnvelope(fixture.responses.purifier_on_manual as Map))
 
         then: "updateSetting was called to seed descriptionTextEnable=true"
         def seedCall = testDevice.settingsUpdates.find { it.name == "descriptionTextEnable" }
@@ -154,7 +154,7 @@ class LevoitGenericSpec extends HubitatSpec {
 
         when:
         def fixture = loadYamlFixture("LevoitGeneric.yaml")
-        driver.applyStatus(purifierStatusEnvelope(fixture.responses.purifier_on_manual as Map))
+        driver.applyStatus(v2StatusEnvelope(fixture.responses.purifier_on_manual as Map))
 
         then: "updateSetting NOT called for descriptionTextEnable (user setting preserved)"
         def seedCall = testDevice.settingsUpdates.find { it.name == "descriptionTextEnable" }
@@ -166,7 +166,7 @@ class LevoitGenericSpec extends HubitatSpec {
         given: "settings has descriptionTextEnable=null"
         settings.descriptionTextEnable = null
         def fixture = loadYamlFixture("LevoitGeneric.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.purifier_on_manual as Map)
+        def status = v2StatusEnvelope(fixture.responses.purifier_on_manual as Map)
 
         when: "applyStatus is called twice"
         driver.applyStatus(status)
@@ -185,7 +185,7 @@ class LevoitGenericSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LevoitGeneric.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.purifier_on_manual as Map)
+        def status = v2StatusEnvelope(fixture.responses.purifier_on_manual as Map)
 
         when:
         driver.applyStatus(status)
@@ -220,7 +220,7 @@ class LevoitGenericSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LevoitGeneric.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.purifier_off as Map)
+        def status = v2StatusEnvelope(fixture.responses.purifier_off as Map)
 
         when:
         driver.applyStatus(status)
@@ -290,7 +290,7 @@ class LevoitGenericSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LevoitGeneric.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.unknown_shape_minimal as Map)
+        def status = v2StatusEnvelope(fixture.responses.unknown_shape_minimal as Map)
 
         when:
         driver.applyStatus(status)
@@ -316,7 +316,7 @@ class LevoitGenericSpec extends HubitatSpec {
             manualSpeedLevel: 2,
             filterLifePercent: 80
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -337,7 +337,7 @@ class LevoitGenericSpec extends HubitatSpec {
             targetHumidity: 60,
             waterLacksState: 0
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)

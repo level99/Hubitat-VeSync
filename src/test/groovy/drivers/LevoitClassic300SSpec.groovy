@@ -40,7 +40,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         given: "a single-wrapped Classic 300S status (device on, manual, mist=5)"
         def fixture = loadYamlFixture("Classic300S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed5 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when: "parent calls update(status, nightLight) with null nightLight"
         def result = driver.update(status, null)
@@ -54,7 +54,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         given:
         def fixture = loadYamlFixture("Classic300S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed5 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         def result = driver.update(status)
@@ -72,7 +72,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         given: "status map as parent passes it: {code:0, result:{<device fields>}}"
         def fixture = loadYamlFixture("Classic300S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed5 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -116,7 +116,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         assert !state.prefsSeeded
 
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_speed5 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_speed5 as Map)
 
         when:
         driver.applyStatus(status)
@@ -133,7 +133,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
 
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_speed5 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_speed5 as Map)
 
         when:
         driver.applyStatus(status)
@@ -149,7 +149,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         settings.descriptionTextEnable = null
 
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_speed5 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_speed5 as Map)
 
         when:
         driver.applyStatus(status)
@@ -169,7 +169,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("Classic300S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed5 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -221,7 +221,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_off as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_off as Map)
 
         when:
         driver.applyStatus(status)
@@ -235,7 +235,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_water_lacks as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_water_lacks as Map)
 
         when:
         driver.applyStatus(status)
@@ -251,7 +251,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         state.lastWaterLacks = "yes"  // already logged on prior poll
 
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_water_lacks as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_water_lacks as Map)
         int infosBefore = testLog.infos.size()
 
         when:
@@ -545,7 +545,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_speed5 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_speed5 as Map)
         // device_on_manual_speed5: night_light_brightness=50
 
         when:
@@ -560,7 +560,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_off as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_off as Map)
         // device_off: night_light_brightness=0
 
         when:
@@ -575,7 +575,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_legacy_display_alias as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_legacy_display_alias as Map)
         // device_legacy_display_alias: night_light_brightness=100
 
         when:
@@ -601,7 +601,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
             night_light_brightness: 75,  // NOT a valid 3-step value
             configuration: [auto_target_humidity: 50, display: true, automatic_stop: false]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -625,7 +625,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         def deviceData = fixture.responses.device_on_manual_speed5 as Map
         assert deviceData.containsKey("display")
         assert !deviceData.containsKey("indicator_light_switch")
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -642,7 +642,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         def deviceData = fixture.responses.device_legacy_display_alias as Map
         assert !deviceData.containsKey("display") : "fixture must NOT have 'display' key"
         assert deviceData.containsKey("indicator_light_switch")  : "fixture must have 'indicator_light_switch'"
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -655,7 +655,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_off as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_off as Map)
         // device_off: display=false
 
         when:
@@ -675,7 +675,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
 
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_speed5 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_speed5 as Map)
 
         when:
         driver.applyStatus(status)
@@ -715,7 +715,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
                 automatic_stop: true
             ]
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -731,7 +731,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_off as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_off as Map)
         // device_off: configuration.automatic_stop=true
 
         when:

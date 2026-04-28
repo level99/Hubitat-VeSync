@@ -62,7 +62,7 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
         given: "single-wrapped 1000S canonical status"
         def fixture = loadYamlFixture("LUH-M101S-WUS.yaml")
         def deviceData = fixture.responses.device_on_manual_canonical as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when: "parent calls update(status, nightLight) with null nightLight"
         def result = driver.update(status, null)
@@ -76,7 +76,7 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
         given:
         def fixture = loadYamlFixture("LUH-M101S-WUS.yaml")
         def deviceData = fixture.responses.device_on_manual_canonical as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         def result = driver.update(status)

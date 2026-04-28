@@ -55,7 +55,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         given: "a single-wrapped A603S status (device on, manual mode, warm=2)"
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
         def deviceData = fixture.responses.device_on_manual_warm2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when: "parent calls update(status, nightLight) with null nightLight"
         def result = driver.update(status, null)
@@ -69,7 +69,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         given:
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
         def deviceData = fixture.responses.device_on_manual_warm2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         def result = driver.update(status)
@@ -87,7 +87,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         given:
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
         def deviceData = fixture.responses.device_on_manual_warm2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -128,7 +128,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_off as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_off as Map)
 
         when:
         driver.applyStatus(status)
@@ -148,7 +148,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         assert !state.prefsSeeded
 
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
 
         when:
         driver.applyStatus(status)
@@ -165,7 +165,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
 
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
 
         when:
         driver.applyStatus(status)
@@ -181,7 +181,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         settings.descriptionTextEnable = null
 
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
 
         when:
         driver.applyStatus(status)
@@ -201,7 +201,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
         def deviceData = fixture.responses.device_on_manual_warm2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -226,7 +226,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_auto_humidity as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_auto_humidity as Map)
 
         when:
         driver.applyStatus(status)
@@ -359,7 +359,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_auto_humidity as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_auto_humidity as Map)
 
         when:
         driver.applyStatus(status)
@@ -372,7 +372,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_sleep_mode as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_sleep_mode as Map)
 
         when:
         driver.applyStatus(status)
@@ -385,7 +385,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
 
         when:
         driver.applyStatus(status)
@@ -520,7 +520,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_warm_off as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_warm_off as Map)
 
         when:
         driver.applyStatus(status)
@@ -534,7 +534,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
 
         when:
         driver.applyStatus(status)
@@ -556,7 +556,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
             warmPower: true
             // warmLevel deliberately absent -- exercises fallback to warmPower
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -625,7 +625,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
             warmPower: false, warmLevel: 0
             // no 'configuration' sub-object -- A603S response has none
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -675,22 +675,17 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
 
     def "setAutoStop command does NOT exist on LV600S Hub Connect (AUTO_STOP not in features)"() {
         when:
-        def thrown = null
-        try {
-            driver.setAutoStop("on")
-        } catch (MissingMethodException e) {
-            thrown = e
-        }
+        driver.setAutoStop("on")
 
         then:
-        thrown != null
+        thrown(MissingMethodException)
     }
 
     def "applyStatus autoStopSwitch=1: autoStopEnabled='on' (passive read)"() {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
 
         when:
         driver.applyStatus(status)
@@ -709,7 +704,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         driver.setNightLight("off")
 
         then:
-        thrown(Exception)
+        thrown(MissingMethodException)
     }
 
     def "applyStatus does NOT emit nightLight events (LV600S Hub Connect has no night-light hardware)"() {
@@ -724,7 +719,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
             warmPower: false, warmLevel: 0,
             night_light_brightness: 50   // present but must be ignored
         ]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -742,7 +737,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_water_lacks as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_water_lacks as Map)
 
         when:
         driver.applyStatus(status)
@@ -758,7 +753,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         state.lastWaterLacks = "yes"
 
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_water_lacks as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_water_lacks as Map)
         int infosBefore = testLog.infos.size()
 
         when:
@@ -779,7 +774,7 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
 
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
 
         when:
         driver.applyStatus(status)

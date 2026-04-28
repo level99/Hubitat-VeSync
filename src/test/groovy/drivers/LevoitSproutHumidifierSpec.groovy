@@ -60,7 +60,7 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         given:
         def fixture = loadYamlFixture("LEH-B381S-WUS.yaml")
         def deviceData = fixture.responses.device_on_manual_canonical as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         def result = driver.update(status, null)
@@ -74,7 +74,7 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         given:
         def fixture = loadYamlFixture("LEH-B381S-WUS.yaml")
         def deviceData = fixture.responses.device_on_manual_canonical as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         def result = driver.update(status)

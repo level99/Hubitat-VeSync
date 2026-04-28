@@ -88,6 +88,10 @@ from lint_rules.logging_discipline import (
 from lint_rules.sandbox_safety import check_rule17_sandbox_forbidden
 from lint_rules.pii_scan import check_rule16_pii_scan
 from lint_rules.reentrance import check_rule20_reentrance_guards
+from lint_rules.whitelist_parity import (
+    _extract_regex_prefix_cases,
+    _all_regex_cases_are_prefix_anchored,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -818,6 +822,88 @@ class TestRule26JavadocTerminator:
         rule26 = [f for f in findings if f['rule_id'] == 'RULE26_javadoc_terminator']
         assert rule26, "Expected at least one RULE26 finding"
         assert all(f['line'] > 0 for f in rule26), "line number must be positive"
+
+
+# ---------------------------------------------------------------------------
+# RULE22 — whitelist parity regex prefix extraction
+# ---------------------------------------------------------------------------
+
+class TestRule22RegexPrefixExtraction:
+    """
+    Unit tests for the RULE22 regex-case resolution helpers added in v2.3.
+
+    _extract_regex_prefix_cases() resolves prefix-anchored Groovy regex cases
+    (``case ~/^PREFIX-.*$/:`` form) to literal prefix strings.
+
+    _all_regex_cases_are_prefix_anchored() returns True only when every
+    ``case ~/.../:`` pattern in the body was resolved by the extractor.
+    """
+
+    # Body with a single clean prefix-anchored regex case
+    BODY_SINGLE_PREFIX = "switch(code) { case ~/^LAP-.*$/: return 'EL551S' }"
+
+    # Body with two distinct prefix-anchored regex cases
+    BODY_TWO_PREFIXES = (
+        "switch(code) { "
+        "case ~/^LAP-.*$/: return 'LAP' "
+        "case ~/^LEH-.*$/: return 'LEH' "
+        "}"
+    )
+
+    # Body without trailing $ (also valid anchored form)
+    BODY_NO_DOLLAR = "switch(code) { case ~/^LAP-.*/:  return 'EL551S' }"
+
+    # Body with a non-prefix-anchored regex (character class) -- not resolvable
+    BODY_CHAR_CLASS = "switch(code) { case ~/^LEH-S60[12]S-.*$/: return 'Humidifier' }"
+
+    # Body with one resolvable + one unresolvable regex
+    BODY_MIXED = (
+        "switch(code) { "
+        "case ~/^LAP-.*$/: return 'LAP' "
+        "case ~/^LEH-S60[12]S-.*$/: return 'LEH_special' "
+        "}"
+    )
+
+    # Body with no regex cases at all
+    BODY_NO_REGEX = 'switch(code) { case "LAP-EL551S-WUS": return "EL551S" }'
+
+    def test_single_prefix_extracted(self):
+        result = _extract_regex_prefix_cases(self.BODY_SINGLE_PREFIX)
+        assert result == {"LAP-"}
+
+    def test_two_prefixes_extracted(self):
+        result = _extract_regex_prefix_cases(self.BODY_TWO_PREFIXES)
+        assert result == {"LAP-", "LEH-"}
+
+    def test_no_dollar_anchor_extracted(self):
+        # Trailing $ is optional in the pattern; should still resolve
+        result = _extract_regex_prefix_cases(self.BODY_NO_DOLLAR)
+        assert result == {"LAP-"}
+
+    def test_char_class_not_extracted(self):
+        # Character class [12] breaks the simple prefix anchor form -- not resolved
+        result = _extract_regex_prefix_cases(self.BODY_CHAR_CLASS)
+        assert result == set()
+
+    def test_no_regex_returns_empty(self):
+        result = _extract_regex_prefix_cases(self.BODY_NO_REGEX)
+        assert result == set()
+
+    def test_all_anchored_when_all_resolve(self):
+        # Both regex cases in BODY_TWO_PREFIXES are prefix-anchored -- all resolved
+        resolved = _extract_regex_prefix_cases(self.BODY_TWO_PREFIXES)
+        assert _all_regex_cases_are_prefix_anchored(self.BODY_TWO_PREFIXES, resolved) is True
+
+    def test_not_all_anchored_when_one_unresolvable(self):
+        # BODY_MIXED has 2 regex cases but only 1 is prefix-anchored
+        resolved = _extract_regex_prefix_cases(self.BODY_MIXED)
+        assert len(resolved) == 1  # only LAP- resolved
+        assert _all_regex_cases_are_prefix_anchored(self.BODY_MIXED, resolved) is False
+
+    def test_all_anchored_on_body_with_no_regex(self):
+        # No regex cases at all -- vacuously True (0 == 0)
+        resolved = _extract_regex_prefix_cases(self.BODY_NO_REGEX)
+        assert _all_regex_cases_are_prefix_anchored(self.BODY_NO_REGEX, resolved) is True
 
 
 # ---------------------------------------------------------------------------

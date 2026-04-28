@@ -102,6 +102,45 @@ def _has_regex_cases(body: str) -> bool:
     return bool(re.search(r'\bcase\s*~/', body))
 
 
+def _extract_regex_prefix_cases(body: str) -> set:
+    """
+    Extract literal prefix strings from prefix-anchored Groovy regex case patterns.
+
+    Matches the common form:
+        case ~/^PREFIX-.*$/:
+        case ~/^PREFIX-.*/:   (no trailing $)
+
+    Where PREFIX is one or more uppercase letters, digits, or hyphens.
+    Returns the set of prefix strings WITH trailing hyphen (matching startsWith convention),
+    e.g. ``{"LAP-", "LEH-"}`` for ``case ~/^LAP-.*$/:``.
+
+    Regex patterns that don't match this anchor form (e.g. mid-string wildcards, OR groups,
+    character classes) are left for the caller to emit a fallback WARN on.
+    """
+    # Pattern: case ~/^PREFIX-.*$/:  or  case ~/^PREFIX-.*/:
+    # PREFIX = one or more UPPERCASE letters, digits, or hyphens (not ending in hyphen itself)
+    anchored = re.compile(
+        r'\bcase\s*~/\s*\^'          # case ~/^
+        r'([A-Z0-9][A-Z0-9-]*-)'    # capture group: PREFIX- (must end with -)
+        r'\.\*'                      # .*
+        r'(?:\$)?'                   # optional trailing $
+        r'\s*/:'                     # /:
+    )
+    return set(m.group(1) for m in anchored.finditer(body))
+
+
+def _all_regex_cases_are_prefix_anchored(body: str, resolved_prefixes: set) -> bool:
+    """
+    Return True if every ``case ~/.../:`` pattern in body was resolved to a prefix by
+    ``_extract_regex_prefix_cases``.  Used to decide whether to emit the fallback WARN.
+
+    Counts total regex cases vs. the number that were successfully resolved.
+    A regex case is "resolved" if its prefix appears in resolved_prefixes.
+    """
+    total_regex = len(re.findall(r'\bcase\s*~/', body))
+    return total_regex == len(resolved_prefixes)
+
+
 def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
     return {
         "severity": severity,
@@ -198,22 +237,48 @@ def check_rule22_whitelist_parity(repo_root: Path, config: dict):
     wl_prefixes = _extract_starts_with_prefixes(whitelist_body)
     wl_literals = _extract_literal_cases(whitelist_body)
 
-    # Note if deviceType() has regex cases (we skip those; just warn once)
+    # Handle regex cases in deviceType().
+    # For prefix-anchored patterns (case ~/^PREFIX-.*$/:) we can resolve the prefix statically
+    # and check whitelist parity just like a startsWith() call.
+    # Patterns that don't match the anchor form are unresolvable -- emit the fallback WARN.
     if _has_regex_cases(device_type_body):
-        findings.append(_making_finding(
-            severity="WARN",
-            rule_id="RULE22_regex_cases_skipped",
-            title="deviceType() contains regex case patterns -- RULE22 cannot verify parity for those",
-            file_str=rel_path,
-            lineno=0,
-            context="    Found: case ~/.../ patterns in deviceType()",
-            why="RULE22 (Whitelist Parity): regex case patterns (case ~/.../:) are too brittle to "
-                "parse statically. Their prefixes are not checked by this rule. Ensure any device "
-                "family matched by a regex case also has a corresponding prefix in "
-                "isLevoitClimateDevice().",
-            fix="Manually verify that regex-matched device code families (e.g. LEH-S60[12]S-*) "
-                "have a matching prefix in isLevoitClimateDevice() (e.g. startsWith(\"LEH-\")).",
-        ))
+        resolved_prefixes = _extract_regex_prefix_cases(device_type_body)
+
+        # Check parity for each resolved prefix against the whitelist
+        for prefix in sorted(resolved_prefixes):
+            if prefix not in wl_prefixes:
+                findings.append(_making_finding(
+                    severity="FAIL",
+                    rule_id="RULE22a_regex_prefix_missing_from_whitelist",
+                    title=f'deviceType() has regex case ~/^{prefix}.*$/: but isLevoitClimateDevice() has no matching startsWith("{prefix}")',
+                    file_str=rel_path,
+                    lineno=0,
+                    context=f'    deviceType() regex-derived prefix: "{prefix}"',
+                    why="RULE22a (Whitelist Parity / regex prefix): a prefix-anchored regex case in "
+                        "deviceType() was resolved to a literal prefix. That prefix must appear in "
+                        "isLevoitClimateDevice() via a startsWith() call, or discovered devices "
+                        "with that prefix will be silently skipped by the Generic-driver filter.",
+                    fix=f'Add `if (code.startsWith("{prefix}")) return true` to '
+                        f'isLevoitClimateDevice() in {rel_path}.',
+                ))
+
+        # If any regex patterns remain unresolvable, emit the fallback WARN
+        # (detect unresolvable by checking whether all regex cases were prefix-anchored)
+        all_regex_anchored = _all_regex_cases_are_prefix_anchored(device_type_body, resolved_prefixes)
+        if not all_regex_anchored:
+            findings.append(_making_finding(
+                severity="WARN",
+                rule_id="RULE22_regex_cases_skipped",
+                title="deviceType() contains non-prefix-anchored regex case patterns -- RULE22 cannot verify parity for those",
+                file_str=rel_path,
+                lineno=0,
+                context="    Found: case ~/.../ patterns that are not simple ~/^PREFIX-.*$/: form",
+                why="RULE22 (Whitelist Parity): non-prefix-anchored regex case patterns (e.g. those "
+                    "with character classes, OR groups, or mid-string wildcards) cannot be resolved "
+                    "statically. Their coverage is not verified by this rule.",
+                fix="Manually verify that regex-matched device code families have a corresponding "
+                    "prefix in isLevoitClimateDevice() (e.g. startsWith(\"LEH-\")).",
+            ))
 
     # RULE22a: prefix parity
     for prefix in sorted(dt_prefixes):

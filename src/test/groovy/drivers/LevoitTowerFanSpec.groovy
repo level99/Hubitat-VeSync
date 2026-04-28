@@ -59,7 +59,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         given: "a single-wrapped Tower Fan status response"
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         def result = driver.update(status)
@@ -73,7 +73,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         given: "a single-wrapped Tower Fan status response"
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when: "parent calls update(status, null) -- Tower Fan has no nightlight hardware"
         def result = driver.update(status, null)
@@ -91,7 +91,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         given: "single-wrapped status: {code:0, result:{device fields}}"
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -222,7 +222,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def deviceData = fixture.responses.device_off as Map
         assert deviceData.powerSwitch == 0
         assert deviceData.manualSpeedLevel == 5 : "fixture must have non-zero manualSpeedLevel to exercise BP#6"
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -237,7 +237,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
         assert deviceData.powerSwitch == 1
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -259,7 +259,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
 
         when:
         def fixture = loadYamlFixture("LTF-F422S.yaml")
-        driver.applyStatus(purifierStatusEnvelope(fixture.responses.device_on_normal_speed5 as Map))
+        driver.applyStatus(v2StatusEnvelope(fixture.responses.device_on_normal_speed5 as Map))
 
         then: "updateSetting was called to seed descriptionTextEnable=true"
         def seedCall = testDevice.settingsUpdates.find { it.name == "descriptionTextEnable" }
@@ -275,7 +275,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
 
         when:
         def fixture = loadYamlFixture("LTF-F422S.yaml")
-        driver.applyStatus(purifierStatusEnvelope(fixture.responses.device_on_normal_speed5 as Map))
+        driver.applyStatus(v2StatusEnvelope(fixture.responses.device_on_normal_speed5 as Map))
 
         then: "updateSetting NOT called for descriptionTextEnable (user choice preserved)"
         def seedCall = testDevice.settingsUpdates.find { it.name == "descriptionTextEnable" }
@@ -287,7 +287,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         given: "descriptionTextEnable=null"
         settings.descriptionTextEnable = null
         def fixture = loadYamlFixture("LTF-F422S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
 
         when: "applyStatus called twice"
         driver.applyStatus(status)
@@ -307,7 +307,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -346,7 +346,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
         assert deviceData.sleepPreference?.sleepPreferenceType == "default"
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -361,7 +361,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_off as Map
         assert deviceData.sleepPreference == null
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -442,7 +442,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_advanced_sleep as Map
         assert deviceData.workMode == "advancedSleep"
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -513,7 +513,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
         assert deviceData.temperature == 717
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -533,7 +533,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_temperature_high as Map
         assert deviceData.temperature == 850
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -549,7 +549,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
                           fanSpeedLevel: 3, temperature: 0, errorCode: 0, timerRemain: 0,
                           screenState: 1, screenSwitch: 1, oscillationSwitch: 1,
                           oscillationState: 1, muteSwitch: 0, muteState: 0, scheduleCount: 0]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -568,7 +568,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_with_displayingType as Map
         assert deviceData.displayingType == 1
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -590,7 +590,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
         assert deviceData.displayingType == 0
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -783,7 +783,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LTF-F422S.yaml")
         def deviceData = fixture.responses.device_advanced_sleep as Map
         assert deviceData.sleepPreference?.sleepPreferenceType == "default"
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -801,7 +801,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         assert testDevice.events.isEmpty()
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LTF-F422S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
 
         when:
         driver.applyStatus(status)
@@ -818,7 +818,7 @@ class LevoitTowerFanSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LTF-F422S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
 
         when:
         driver.applyStatus(status)

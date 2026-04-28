@@ -51,7 +51,7 @@ class LevoitSproutAirSpec extends HubitatSpec {
         given:
         def fixture = loadYamlFixture("LAP-B851S-WUS.yaml")
         def deviceData = fixture.responses.device_on_auto_canonical as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         def result = driver.update(status, null)
@@ -65,7 +65,7 @@ class LevoitSproutAirSpec extends HubitatSpec {
         given:
         def fixture = loadYamlFixture("LAP-B851S-WUS.yaml")
         def deviceData = fixture.responses.device_on_auto_canonical as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         def result = driver.update(status)
