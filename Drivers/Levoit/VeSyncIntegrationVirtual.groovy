@@ -26,6 +26,11 @@ SOFTWARE.
 // History:
 //
 // 2026-04-29: v2.3 (community fork, level99/Hubitat-VeSync, by Dan Cox)
+//                  - Phase 1.7: 5-family template architecture (v1_purifier, v2_purifier,
+//                    v1_humidifier, v2_humidifier, fan) + 18 remaining fixture spawn surfaces.
+//                  - FIXTURE_TO_FAMILY map; family-keyed STATE_MUTATORS; 5 family default-
+//                    state constants (hand-curated from pyvesync canonical responses).
+//                  - spawnFromFixture ENUM list expanded to all 19 fixtures.
 //                  - Phase 1: driver skeleton + Core 200S fixture hand-coded.
 //                  - Fixture-driven virtual parent for child driver development
 //                    without owning the hardware.
@@ -39,42 +44,243 @@ import groovy.transform.Field
 // ---------------------------------------------------------------------------
 // Fixture-to-driver metadata maps
 // ---------------------------------------------------------------------------
-// Phase 1: one fixture. Phase 1.5 regenerator will extend these.
-// The driver name strings MUST match the real child driver's definition(name:)
-// exactly — Hubitat resolves child drivers by name string on addChildDevice().
+// The driver name strings MUST match the real child driver's metadata `name`
+// field exactly — Hubitat resolves child drivers by name string on addChildDevice().
 
 @Field static final Map FIXTURE_TO_DRIVER = [
-    "Core200S": "Levoit Core200S Air Purifier"
+    "Classic200S"    : "Levoit Classic 200S Humidifier",
+    "Classic300S"    : "Levoit Classic 300S Humidifier",
+    "Core200S"       : "Levoit Core200S Air Purifier",
+    "Core300S"       : "Levoit Core300S Air Purifier",
+    "Core400S"       : "Levoit Core400S Air Purifier",
+    "Core600S"       : "Levoit Core600S Air Purifier",
+    "Dual200S"       : "Levoit Dual 200S Humidifier",
+    "EL551S"         : "Levoit EverestAir Air Purifier",
+    "LAP-B851S-WUS"  : "Levoit Sprout Air Purifier",
+    "LAP-V102S"      : "Levoit Vital 100S Air Purifier",
+    "LAP-V201S"      : "Levoit Vital 200S Air Purifier",
+    "LEH-B381S"      : "Levoit Sprout Humidifier",
+    "LEH-S601S"      : "Levoit Superior 6000S Humidifier",
+    "LPF-R423S"      : "Levoit Pedestal Fan",
+    "LTF-F422S"      : "Levoit Tower Fan",
+    "LUH-A602S-WUS"  : "Levoit LV600S Humidifier",
+    "LUH-A603S-WUS"  : "Levoit LV600S Hub Connect Humidifier",
+    "LUH-M101S-WUS"  : "Levoit OasisMist 1000S Humidifier",
+    "LUH-O451S-WUS"  : "Levoit OasisMist 450S Humidifier"
 ]
 
+// deviceType values stored on children via updateDataValue("deviceType", ...).
+// These must match what the real VeSync cloud API returns for each model,
+// as that's what the real parent stores (and what deviceType() switch reads).
 @Field static final Map FIXTURE_TO_DEVICETYPE = [
-    "Core200S": "Core200S"
+    "Classic200S"    : "Classic200S",
+    "Classic300S"    : "LUH-A601S-WUSB",
+    "Core200S"       : "Core200S",
+    "Core300S"       : "Core300S",
+    "Core400S"       : "Core400S",
+    "Core600S"       : "Core600S",
+    "Dual200S"       : "LUH-D301S-WUSR",
+    "EL551S"         : "LAP-EL551S-WUS",
+    "LAP-B851S-WUS"  : "LAP-B851S-WUS",
+    "LAP-V102S"      : "LAP-V102S-WUS",
+    "LAP-V201S"      : "LAP-V201S-WUS",
+    "LEH-B381S"      : "LEH-B381S-WUS",
+    "LEH-S601S"      : "LEH-S601S-WUS",
+    "LPF-R423S"      : "LPF-R432S-AEU",    // note: pyvesync fixture typo R423 vs real R432
+    "LTF-F422S"      : "LTF-F422S-WUS",
+    "LUH-A602S-WUS"  : "LUH-A602S-WUS",
+    "LUH-A603S-WUS"  : "LUH-A603S-WUS",
+    "LUH-M101S-WUS"  : "LUH-M101S-WUS",
+    "LUH-O451S-WUS"  : "LUH-O451S-WUS"
 ]
 
-// configModule from pyvesync device_map.py for Core 200S (LAP-C201S-WAAA):
-// VeSyncAirBypass: WifiBTOnboardingNotificationsCore200S
+// configModule values from pyvesync device_map.py.
+// Not load-bearing for spawn/poll logic — children read this for the info HTML
+// attribute only. TBD entries will not break spawn or command routing.
 @Field static final Map FIXTURE_TO_CONFIGMODULE = [
-    "Core200S": "WifiBTOnboardingNotificationsCore200S"
+    "Classic200S"    : "WifiBTOnboardingNotificationsClassic200S",        // TBD: confirm from device_map
+    "Classic300S"    : "WifiBTOnboardingNotificationsClassic300S",        // TBD: confirm from device_map
+    "Core200S"       : "WifiBTOnboardingNotificationsCore200S",
+    "Core300S"       : "WifiBTOnboardingNotificationsCore300S",           // TBD: confirm from device_map
+    "Core400S"       : "WifiBTOnboardingNotificationsCore400S",           // TBD: confirm from device_map
+    "Core600S"       : "WifiBTOnboardingNotificationsCore600S",           // TBD: confirm from device_map
+    "Dual200S"       : "WifiBTOnboardingNotificationsDual200S",           // TBD: confirm from device_map
+    "EL551S"         : "WifiBTOnboardingNotificationsEL551S",             // TBD: confirm from device_map
+    "LAP-B851S-WUS"  : "WifiBTOnboardingNotificationsB851S",             // TBD: confirm from device_map
+    "LAP-V102S"      : "WifiBTOnboardingNotificationsV102S",             // TBD: confirm from device_map
+    "LAP-V201S"      : "WifiBTOnboardingNotificationsVital200S",         // TBD: confirm from device_map
+    "LEH-B381S"      : "WifiBTOnboardingNotificationsB381S",             // TBD: confirm from device_map
+    "LEH-S601S"      : "WifiBTOnboardingNotificationsSuperior6000S",     // TBD: confirm from device_map
+    "LPF-R423S"      : "WifiBTOnboardingNotificationsPedestalFan",       // TBD: confirm from device_map
+    "LTF-F422S"      : "WifiBTOnboardingNotificationsTowerFan",          // TBD: confirm from device_map
+    "LUH-A602S-WUS"  : "WifiBTOnboardingNotificationsLV600S",            // TBD: confirm from device_map
+    "LUH-A603S-WUS"  : "WifiBTOnboardingNotificationsLV600SHubConnect",  // TBD: confirm from device_map
+    "LUH-M101S-WUS"  : "WifiBTOnboardingNotificationsOasisMist1000S",    // TBD: confirm from device_map
+    "LUH-O451S-WUS"  : "WifiBTOnboardingNotificationsOasisMist450S"      // TBD: confirm from device_map
+]
+
+// Family assignment for each fixture — drives STATE_MUTATORS dispatch and
+// canonicalDefaultState() family-template selection.
+@Field static final Map FIXTURE_TO_FAMILY = [
+    "Classic200S"    : "v1_humidifier",
+    "Classic300S"    : "v1_humidifier",
+    "Core200S"       : "v1_purifier",
+    "Core300S"       : "v1_purifier",
+    "Core400S"       : "v1_purifier",
+    "Core600S"       : "v1_purifier",
+    "Dual200S"       : "v1_humidifier",
+    "EL551S"         : "v2_purifier",
+    "LAP-B851S-WUS"  : "v2_purifier",
+    "LAP-V102S"      : "v2_purifier",
+    "LAP-V201S"      : "v2_purifier",
+    "LEH-B381S"      : "v2_humidifier",
+    "LEH-S601S"      : "v2_humidifier",
+    "LPF-R423S"      : "fan",
+    "LTF-F422S"      : "fan",
+    "LUH-A602S-WUS"  : "v1_humidifier",
+    "LUH-A603S-WUS"  : "v2_humidifier",
+    "LUH-M101S-WUS"  : "v2_humidifier",
+    "LUH-O451S-WUS"  : "v1_humidifier"
 ]
 
 // ---------------------------------------------------------------------------
-// Core 200S default state (hand-curated from Core200S.yaml device_on_manual_speed1)
-// Mirrors the shape that the Core200S child's update(status, nightLight) reads:
-//   status.result.enabled, status.result.level, status.result.mode,
-//   status.result.filter_life, status.result.night_light,
-//   status.result.display, status.result.child_lock
+// Family default states — hand-curated from pyvesync canonical responses.
+// One constant per family; per-fixture overrides applied in canonicalDefaultState().
 // ---------------------------------------------------------------------------
 
-@Field static final Map CORE_200S_DEFAULT_STATE = [
-    enabled     : true,
-    level       : 1,
-    mode        : "manual",
-    filter_life : 80,
-    night_light : "on",
-    display     : true,
-    child_lock  : false,
-    extension   : [timer_remain: 0],
+// v1_purifier seed: Core300S device_on_manual_speed1 (superset of Core200S; adds AQ fields)
+// Children read: status.result.{enabled, level, mode, filter_life, night_light,
+//   display, child_lock, extension.timer_remain, air_quality, air_quality_value,
+//   configuration.auto_preference.{type, room_size}}
+@Field static final Map V1_PURIFIER_DEFAULT_STATE = [
+    enabled          : true,
+    level            : 1,
+    mode             : "manual",
+    filter_life      : 80,
+    night_light      : "on",
+    display          : true,
+    child_lock       : false,
+    air_quality      : 1,
+    air_quality_value: 3,
+    configuration    : [
+        display         : true,
+        display_forever : true,
+        auto_preference : [type: "default", room_size: 0]
+    ],
+    extension        : [schedule_count: 0, timer_remain: 0],
     device_error_code: 0
+].asImmutable()
+
+// v2_purifier seed: LAP-V201S device_on_manual_speed2
+// Children read: powerSwitch, workMode, fanSpeedLevel, manualSpeedLevel, AQLevel, PM25,
+//   filterLifePercent, autoPreference.{autoPreferenceType, roomSize}, childLockSwitch,
+//   lightDetectionSwitch, environmentLightState, screenState, screenSwitch, errorCode,
+//   timerRemain. Also: fanRotateAngle (EL551S), VOC/CO2/AQI/humidity/temperature (Sprout Air).
+@Field static final Map V2_PURIFIER_DEFAULT_STATE = [
+    powerSwitch            : 1,
+    workMode               : "manual",
+    fanSpeedLevel          : 1,
+    manualSpeedLevel       : 2,
+    AQLevel                : 2,
+    PM25                   : 3,
+    filterLifePercent      : 80,
+    autoPreference         : [autoPreferenceType: "default", roomSize: 0],
+    childLockSwitch        : 1,
+    lightDetectionSwitch   : 0,
+    environmentLightState  : 1,
+    screenState            : 1,
+    screenSwitch           : 1,
+    errorCode              : 0,
+    timerRemain            : 0,
+    efficientModeTimeRemain: 0,
+    scheduleCount          : 0
+].asImmutable()
+
+// v1_humidifier seed: Classic300S device_on_manual_speed5
+// Children read: enabled, humidity, mist_virtual_level, mist_level, mode, water_lacks,
+//   humidity_high, water_tank_lifted, warm_enabled, warm_level, display,
+//   automatic_stop_reach_target, night_light_brightness,
+//   configuration.{auto_target_humidity, display, automatic_stop}
+@Field static final Map V1_HUMIDIFIER_DEFAULT_STATE = [
+    enabled                   : true,
+    humidity                  : 42,
+    mist_virtual_level        : 5,
+    mist_level                : 5,
+    mode                      : "manual",
+    water_lacks               : false,
+    humidity_high             : false,
+    water_tank_lifted         : false,
+    warm_enabled              : false,
+    warm_level                : null,
+    display                   : true,
+    automatic_stop_reach_target: false,
+    night_light_brightness    : 0,
+    configuration             : [
+        auto_target_humidity: 50,
+        display             : true,
+        automatic_stop      : false
+    ]
+].asImmutable()
+
+// v2_humidifier seed: LEH-S601S device_on_manual_canonical
+// Children read: powerSwitch, workMode, humidity, targetHumidity, virtualLevel, mistLevel,
+//   waterLacksState, waterTankLifted, autoStopSwitch, autoStopState, screenSwitch,
+//   screenState, scheduleCount, timerRemain, errorCode, dryingMode.{dryingLevel,
+//   autoDryingSwitch, dryingState, dryingRemain}, autoPreference, childLockSwitch,
+//   filterLifePercent, temperature.
+@Field static final Map V2_HUMIDIFIER_DEFAULT_STATE = [
+    powerSwitch    : 1,
+    workMode       : "manual",
+    humidity       : 50,
+    targetHumidity : 60,
+    virtualLevel   : 3,
+    mistLevel      : 3,
+    waterLacksState: 0,
+    waterTankLifted: 0,
+    autoStopSwitch : 0,
+    autoStopState  : 0,
+    screenSwitch   : 1,
+    screenState    : 1,
+    scheduleCount  : 0,
+    timerRemain    : 0,
+    errorCode      : 0,
+    dryingMode     : [dryingLevel: 1, autoDryingSwitch: 1, dryingState: 0, dryingRemain: 7200],
+    autoPreference : 1,
+    childLockSwitch: 0,
+    filterLifePercent: 85,
+    temperature    : 700
+].asImmutable()
+
+// fan seed: LTF-F422S device_on_normal_speed5
+// Children read: powerSwitch, workMode, manualSpeedLevel, fanSpeedLevel, screenState,
+//   screenSwitch, oscillationSwitch, oscillationState, muteSwitch, muteState,
+//   timerRemain, temperature, errorCode, scheduleCount, displayingType,
+//   sleepPreference.{sleepPreferenceType, oscillationSwitch, initFanSpeedLevel,
+//     fallAsleepRemain, autoChangeFanLevelSwitch}.
+// Pedestal Fan also: horizontalOscillationState, verticalOscillationState, childLock.
+@Field static final Map FAN_DEFAULT_STATE = [
+    powerSwitch      : 1,
+    workMode         : "normal",
+    manualSpeedLevel : 5,
+    fanSpeedLevel    : 5,
+    screenState      : 1,
+    screenSwitch     : 1,
+    oscillationSwitch: 1,
+    oscillationState : 1,
+    muteSwitch       : 0,
+    muteState        : 0,
+    timerRemain      : 0,
+    temperature      : 717,
+    errorCode        : 0,
+    scheduleCount    : 0,
+    displayingType   : 0,
+    sleepPreference  : [
+        sleepPreferenceType       : "default",
+        oscillationSwitch         : 1,
+        initFanSpeedLevel         : 0,
+        fallAsleepRemain          : 0,
+        autoChangeFanLevelSwitch  : 1
+    ]
 ].asImmutable()
 
 // ---------------------------------------------------------------------------
@@ -201,14 +407,22 @@ import groovy.transform.Field
         [methodName: "setLevel",              dataKeys: ["levelIdx", "levelType", "manualSpeedLevel"] as Set],
         [methodName: "setOscillationStatus",  dataKeys: ["actType", "bottom", "horizontalOscillationState", "left", "right", "top", "verticalOscillationState"] as Set],
         [methodName: "setSwitch",             dataKeys: ["powerSwitch", "switchIdx"] as Set],
-        [methodName: "getFanStatus",          dataKeys: [] as Set]
+        [methodName: "getFanStatus",          dataKeys: [] as Set],
+        // Extensions: pyvesync vendored LPF-R423S.yaml omits setFanMode and setDisplay.
+        // Source: tools/virtual_parent_extensions.json LPF-R423S entry.
+        [methodName: "setFanMode",            dataKeys: ["workMode"] as Set],
+        [methodName: "setDisplay",            dataKeys: ["screenSwitch"] as Set]
     ],
     "LTF-F422S": [
         [methodName: "setLevel",              dataKeys: ["levelIdx", "levelType", "manualSpeedLevel"] as Set],
         [methodName: "setSwitch",             dataKeys: ["powerSwitch", "switchIdx"] as Set],
         [methodName: "setMuteSwitch",         dataKeys: ["muteSwitch"] as Set],
         [methodName: "setOscillationSwitch",  dataKeys: ["oscillationSwitch"] as Set],
-        [methodName: "getTowerFanStatus",     dataKeys: [] as Set]
+        [methodName: "getTowerFanStatus",     dataKeys: [] as Set],
+        // Extensions: pyvesync vendored LTF-F422S.yaml omits setTowerFanMode and setDisplay.
+        // Source: tools/virtual_parent_extensions.json LTF-F422S entry.
+        [methodName: "setTowerFanMode",       dataKeys: ["workMode"] as Set],
+        [methodName: "setDisplay",            dataKeys: ["screenSwitch"] as Set]
     ],
     "LUH-A602S-WUS": [
         [methodName: "setHumidityMode",      dataKeys: ["mode"] as Set],
@@ -250,39 +464,172 @@ import groovy.transform.Field
 // === FIXTURE_OPS GENERATED END ===
 
 // ---------------------------------------------------------------------------
-// State mutation map: method -> closure (state, data) -> void
-// updateCanonicalState() dispatches here to maintain per-DNI snapshots.
+// State mutators: family-keyed Map of method -> closure (snap, data) -> void
+// updateCanonicalState() looks up the fixture's family, then dispatches here.
 // ---------------------------------------------------------------------------
 
 @Field static final Map STATE_MUTATORS = [
-    "setSwitch": { Map snap, Map data ->
-        if (data?.containsKey("enabled")) snap.enabled = data.enabled
-    },
-    "setLevel": { Map snap, Map data ->
-        if (data?.containsKey("level")) snap.level = data.level
-        snap.mode = "manual"
-    },
-    "setPurifierMode": { Map snap, Map data ->
-        if (data?.containsKey("mode")) snap.mode = data.mode
-    },
-    "setDisplay": { Map snap, Map data ->
-        if (data?.containsKey("state")) snap.display = data["state"]
-    },
-    "setChildLock": { Map snap, Map data ->
-        if (data?.containsKey("child_lock")) snap.child_lock = data.child_lock
-    },
-    "addTimer": { Map snap, Map data ->
-        // Record that timer is active; actual remaining time is not simulated
-        snap.extension = snap.extension ?: [:]
-        snap.extension.timer_remain = data?.total ?: 0
-    },
-    "delTimer": { Map snap, Map data ->
-        snap.extension = snap.extension ?: [:]
-        snap.extension.timer_remain = 0
-    },
-    "resetFilter": { Map snap, Map data ->
-        snap.filter_life = 100
-    }
+
+    "v1_purifier": [
+        "setSwitch": { Map snap, Map data ->
+            if (data?.containsKey("enabled")) snap.enabled = data.enabled
+        },
+        "setLevel": { Map snap, Map data ->
+            if (data?.containsKey("level")) snap.level = data.level
+            snap.mode = "manual"
+        },
+        "setPurifierMode": { Map snap, Map data ->
+            if (data?.containsKey("mode")) snap.mode = data.mode
+        },
+        "setDisplay": { Map snap, Map data ->
+            if (data?.containsKey("state")) snap.display = data["state"]
+        },
+        "setChildLock": { Map snap, Map data ->
+            if (data?.containsKey("child_lock")) snap.child_lock = data.child_lock
+        },
+        "addTimer": { Map snap, Map data ->
+            snap.extension = snap.extension ?: [:]
+            snap.extension.timer_remain = data?.total ?: 0
+        },
+        "delTimer": { Map snap, Map data ->
+            snap.extension = snap.extension ?: [:]
+            snap.extension.timer_remain = 0
+        },
+        "resetFilter": { Map snap, Map data ->
+            snap.filter_life = 100
+        }
+    ],
+
+    "v2_purifier": [
+        "setSwitch": { Map snap, Map data ->
+            if (data?.containsKey("powerSwitch")) snap.powerSwitch = data.powerSwitch
+        },
+        "setLevel": { Map snap, Map data ->
+            if (data?.containsKey("manualSpeedLevel")) snap.manualSpeedLevel = data.manualSpeedLevel
+            snap.workMode = "manual"
+        },
+        "setPurifierMode": { Map snap, Map data ->
+            if (data?.containsKey("workMode")) snap.workMode = data.workMode
+        },
+        "setDisplay": { Map snap, Map data ->
+            if (data?.containsKey("screenSwitch")) snap.screenSwitch = data.screenSwitch
+        },
+        "setChildLock": { Map snap, Map data ->
+            if (data?.containsKey("childLockSwitch")) snap.childLockSwitch = data.childLockSwitch
+        },
+        "setLightDetection": { Map snap, Map data ->
+            if (data?.containsKey("lightDetectionSwitch")) snap.lightDetectionSwitch = data.lightDetectionSwitch
+        },
+        "resetFilter": { Map snap, Map data ->
+            snap.filterLifePercent = 100
+        }
+    ],
+
+    "v1_humidifier": [
+        "setSwitch": { Map snap, Map data ->
+            if (data?.containsKey("enabled")) snap.enabled = data.enabled
+        },
+        "setHumidityMode": { Map snap, Map data ->
+            if (data?.containsKey("mode")) snap.mode = data.mode
+        },
+        "setVirtualLevel": { Map snap, Map data ->
+            if (data?.containsKey("level")) {
+                snap.mist_virtual_level = data.level
+                snap.mist_level = data.level
+            }
+        },
+        "setTargetHumidity": { Map snap, Map data ->
+            if (data?.containsKey("target_humidity")) {
+                snap.configuration = snap.configuration ?: [:]
+                snap.configuration.auto_target_humidity = data.target_humidity
+            }
+        },
+        "setDisplay": { Map snap, Map data ->
+            if (data?.containsKey("state")) snap.display = data["state"]
+        },
+        "setIndicatorLightSwitch": { Map snap, Map data ->
+            // Classic 200S uses setIndicatorLightSwitch instead of setDisplay
+            if (data?.containsKey("enabled")) snap.indicator_light_switch = data.enabled
+        },
+        "setAutomaticStop": { Map snap, Map data ->
+            if (data?.containsKey("enabled")) {
+                snap.configuration = snap.configuration ?: [:]
+                snap.configuration.automatic_stop = data.enabled
+            }
+        }
+    ],
+
+    "v2_humidifier": [
+        "setSwitch": { Map snap, Map data ->
+            if (data?.containsKey("powerSwitch")) snap.powerSwitch = data.powerSwitch
+        },
+        "setHumidityMode": { Map snap, Map data ->
+            if (data?.containsKey("workMode")) snap.workMode = data.workMode
+        },
+        "setVirtualLevel": { Map snap, Map data ->
+            if (data?.containsKey("virtualLevel")) {
+                snap.virtualLevel = data.virtualLevel
+                snap.mistLevel = data.virtualLevel
+            }
+        },
+        "setTargetHumidity": { Map snap, Map data ->
+            if (data?.containsKey("targetHumidity")) snap.targetHumidity = data.targetHumidity
+        },
+        "setDisplay": { Map snap, Map data ->
+            if (data?.containsKey("screenSwitch")) snap.screenSwitch = data.screenSwitch
+        },
+        "setAutoStopSwitch": { Map snap, Map data ->
+            if (data?.containsKey("autoStopSwitch")) snap.autoStopSwitch = data.autoStopSwitch
+        },
+        "setDryingMode": { Map snap, Map data ->
+            if (data?.containsKey("autoDryingSwitch")) {
+                snap.dryingMode = snap.dryingMode ?: [:]
+                snap.dryingMode.autoDryingSwitch = data.autoDryingSwitch
+            }
+        },
+        // LUH-A603S-WUS warm mist (uses 'setLevel', not 'setVirtualLevel')
+        "setLevel": { Map snap, Map data ->
+            if (data?.containsKey("warmLevel")) snap.warmLevel = data.warmLevel
+        },
+        // OasisMist 1000S mist level (uses 'virtualLevel' method, not 'setVirtualLevel')
+        "virtualLevel": { Map snap, Map data ->
+            if (data?.containsKey("virtualLevel")) {
+                snap.virtualLevel = data.virtualLevel
+                snap.mistLevel = data.virtualLevel
+            }
+        }
+    ],
+
+    "fan": [
+        "setSwitch": { Map snap, Map data ->
+            if (data?.containsKey("powerSwitch")) snap.powerSwitch = data.powerSwitch
+        },
+        "setLevel": { Map snap, Map data ->
+            if (data?.containsKey("manualSpeedLevel")) snap.manualSpeedLevel = data.manualSpeedLevel
+            snap.workMode = "normal"  // speed set implies normal mode
+        },
+        "setTowerFanMode": { Map snap, Map data ->
+            if (data?.containsKey("workMode")) snap.workMode = data.workMode
+        },
+        "setFanMode": { Map snap, Map data ->
+            if (data?.containsKey("workMode")) snap.workMode = data.workMode
+        },
+        "setOscillationSwitch": { Map snap, Map data ->
+            // Tower Fan: single-axis oscillation
+            if (data?.containsKey("oscillationSwitch")) snap.oscillationSwitch = data.oscillationSwitch
+        },
+        "setOscillationStatus": { Map snap, Map data ->
+            // Pedestal Fan: two-axis oscillation (H+V)
+            if (data?.containsKey("horizontalOscillationState")) snap.horizontalOscillationState = data.horizontalOscillationState
+            if (data?.containsKey("verticalOscillationState"))   snap.verticalOscillationState   = data.verticalOscillationState
+        },
+        "setMuteSwitch": { Map snap, Map data ->
+            if (data?.containsKey("muteSwitch")) snap.muteSwitch = data.muteSwitch
+        },
+        "setDisplay": { Map snap, Map data ->
+            if (data?.containsKey("screenSwitch")) snap.screenSwitch = data.screenSwitch
+        }
+    ]
 ]
 
 metadata {
@@ -307,7 +654,27 @@ metadata {
         attribute "lastSendBypassMethod", "string"
 
         command "spawnFromFixture",  [
-            [name: "Fixture", type: "ENUM", constraints: ["Core200S"]],
+            [name: "Fixture", type: "ENUM", constraints: [
+                "Classic200S",
+                "Classic300S",
+                "Core200S",
+                "Core300S",
+                "Core400S",
+                "Core600S",
+                "Dual200S",
+                "EL551S",
+                "LAP-B851S-WUS",
+                "LAP-V102S",
+                "LAP-V201S",
+                "LEH-B381S",
+                "LEH-S601S",
+                "LPF-R423S",
+                "LTF-F422S",
+                "LUH-A602S-WUS",
+                "LUH-A603S-WUS",
+                "LUH-M101S-WUS",
+                "LUH-O451S-WUS"
+            ]],
             [name: "Child label", type: "STRING"]
         ]
         command "resetAllChildren"
@@ -379,7 +746,6 @@ def refresh() {
     logDebug "refresh()"
     ensureDebugWatchdog()
     Map currentBindings = state.childFixtures ?: [:]
-    Map currentSnapshots = state.fixtureSnapshots ?: [:]
     currentBindings.each { dni, fixtureName ->
         def child = getChildDevice(dni as String)
         if (child) {
@@ -467,7 +833,7 @@ def spawnFromFixture(String fixtureName, String childLabel) {
     }
 
     if (!FIXTURE_TO_DRIVER.containsKey(fixtureName)) {
-        logError "[DEV TOOL] Unknown fixture '${fixtureName}'. Known fixtures: ${FIXTURE_TO_DRIVER.keySet()}"
+        logError "[DEV TOOL] Unknown fixture '${fixtureName}'. Known fixtures: ${FIXTURE_TO_DRIVER.keySet().sort()}"
         return
     }
 
@@ -661,21 +1027,190 @@ void deliverFixtureResponse(Map data) {
 
 /**
  * Return a fresh deep copy of the default state for the named fixture.
- * Mutable — callers may mutate without affecting the constant.
+ * Mutable — callers may mutate without affecting the immutable family constant.
+ *
+ * For fixtures whose family default state has nested Maps (extension, configuration,
+ * dryingMode, sleepPreference, autoPreference), we deep-copy those sub-maps so
+ * that mutators (e.g. addTimer writing to snap.extension.timer_remain) don't hit
+ * immutable nested references.
+ *
+ * Per-fixture overrides are applied after the family copy to capture fields that
+ * genuinely differ from the family seed (e.g. Classic200S uses indicator_light_switch
+ * instead of display; OasisMist 1000S lacks configuration sub-object).
  */
 private Map canonicalDefaultState(String fixtureName) {
-    switch (fixtureName) {
-        case "Core200S":
-            // Shallow copy first, then deep-copy any nested Maps so mutators
-            // (e.g. addTimer writing to snap.extension.timer_remain) don't hit the
-            // immutable nested reference from CORE_200S_DEFAULT_STATE.asImmutable().
-            Map copy = new HashMap(CORE_200S_DEFAULT_STATE)
-            copy.extension = new HashMap(CORE_200S_DEFAULT_STATE.extension ?: [:])
-            return copy
+    String family = FIXTURE_TO_FAMILY[fixtureName]
+    if (!family) {
+        logWarn "[DEV TOOL] canonicalDefaultState: unknown fixture '${fixtureName}', returning empty map"
+        return [:]
+    }
+
+    Map copy
+    switch (family) {
+
+        case "v1_purifier":
+            copy = new HashMap(V1_PURIFIER_DEFAULT_STATE)
+            // Deep-copy nested Maps (immutable in the @Field constant)
+            copy.extension = new HashMap(V1_PURIFIER_DEFAULT_STATE.extension ?: [:])
+            copy.configuration = new HashMap(V1_PURIFIER_DEFAULT_STATE.configuration ?: [:])
+            copy.configuration.auto_preference = new HashMap(
+                (V1_PURIFIER_DEFAULT_STATE.configuration?.auto_preference) ?: [:])
+            // Core200S override: no AQ fields (the family seed has them from Core300S)
+            if (fixtureName == "Core200S") {
+                copy.remove("air_quality")
+                copy.remove("air_quality_value")
+                copy.remove("configuration")
+                // Restore the simpler Core200S extension shape
+                copy.extension = [timer_remain: 0]
+                copy.device_error_code = 0
+            }
+            break
+
+        case "v2_purifier":
+            copy = new HashMap(V2_PURIFIER_DEFAULT_STATE)
+            // autoPreference is a nested Map in V2 purifiers — deep-copy
+            copy.autoPreference = new HashMap(V2_PURIFIER_DEFAULT_STATE.autoPreference ?: [:])
+            // EL551S override: add fanRotateAngle (EverestAir VENT_ANGLE feature)
+            if (fixtureName == "EL551S") {
+                copy.fanRotateAngle = 90
+            }
+            // LAP-B851S-WUS override: Sprout Air adds full AQ suite + nightlight sub-object
+            if (fixtureName == "LAP-B851S-WUS") {
+                copy.PM1 = 3
+                copy.PM10 = 8
+                copy.AQI = 95
+                copy.humidity = 48
+                copy.temperature = 720
+                copy.VOC = 10
+                copy.CO2 = 450
+                copy.nightlight = [nightLightSwitch: false, brightness: 0]
+                // LAP-B851S-WUS inherits filterLifePercent: 80 from v2_purifier seed unchanged.
+            }
+            break
+
+        case "v1_humidifier":
+            copy = new HashMap(V1_HUMIDIFIER_DEFAULT_STATE)
+            // Deep-copy the configuration sub-map
+            copy.configuration = new HashMap(V1_HUMIDIFIER_DEFAULT_STATE.configuration ?: [:])
+            // Classic200S override: uses indicator_light_switch instead of display
+            if (fixtureName == "Classic200S") {
+                copy.remove("display")
+                copy.remove("night_light_brightness")
+                copy.indicator_light_switch = true
+                copy.configuration = [
+                    auto_target_humidity  : 50,
+                    indicator_light_switch: true,
+                    automatic_stop        : false
+                ]
+                // Classic200S has no sleep mode; mist 1-9; default mist=3
+                copy.mist_virtual_level = 3
+                copy.mist_level = 3
+            }
+            // Dual200S override: mist 1-2 only; no warm mist; default mist=1
+            if (fixtureName == "Dual200S") {
+                copy.mist_virtual_level = 1
+                copy.mist_level = 1
+                copy.humidity = 35
+            }
+            // LUH-O451S-WUS override: warm mist populated; no night_light_brightness
+            if (fixtureName == "LUH-O451S-WUS") {
+                copy.warm_enabled = true
+                copy.warm_level = 2
+                copy.remove("night_light_brightness")
+            }
+            // LUH-A602S-WUS override: warm mist populated; no night_light_brightness; no humidity_high
+            if (fixtureName == "LUH-A602S-WUS") {
+                copy.warm_enabled = true
+                copy.warm_level = 2
+                copy.humidity = 52
+                copy.remove("night_light_brightness")
+                copy.remove("humidity_high")
+                copy.configuration = [
+                    auto_target_humidity: 55,
+                    display             : true,
+                    automatic_stop      : false
+                ]
+            }
+            break
+
+        case "v2_humidifier":
+            copy = new HashMap(V2_HUMIDIFIER_DEFAULT_STATE)
+            // Deep-copy dryingMode sub-map (present in LEH-S601S seed)
+            copy.dryingMode = new HashMap(V2_HUMIDIFIER_DEFAULT_STATE.dryingMode ?: [:])
+            // LEH-B381S override: Sprout Humidifier (mist 1-2; nightlight; dual filter)
+            if (fixtureName == "LEH-B381S") {
+                copy.mistLevel = 2
+                copy.virtualLevel = 2
+                copy.humidity = 45
+                copy.targetHumidity = 55
+                copy.hepaFilterLifePercent = 78
+                copy.temperature = 720
+                copy.nightLight = [nightLightSwitch: 0, brightness: 0, colorTemperature: 3500]
+                copy.remove("dryingMode")    // Sprout Humidifier dryingMode is absent in canonical (optional)
+                copy.remove("temperature")   // re-add from override
+                copy.temperature = 720
+            }
+            // LUH-A603S-WUS override: LV600S Hub Connect (warmLevel/warmPower; no dryingMode; workMode 'humidity' for auto)
+            if (fixtureName == "LUH-A603S-WUS") {
+                copy.humidity = 55
+                copy.targetHumidity = 60
+                copy.virtualLevel = 5
+                copy.mistLevel = 5
+                copy.warmPower = true
+                copy.warmLevel = 2
+                copy.scheduleCount = 0
+                copy.timerRemain = 0
+                copy.remove("dryingMode")
+                copy.remove("autoPreference")
+                copy.remove("childLockSwitch")
+                copy.remove("filterLifePercent")
+                copy.remove("temperature")
+            }
+            // LUH-M101S-WUS override: OasisMist 1000S (no dryingMode; no filterLifePercent; no temperature at top level)
+            if (fixtureName == "LUH-M101S-WUS") {
+                copy.humidity = 42
+                copy.targetHumidity = 55
+                copy.mistLevel = 5
+                copy.virtualLevel = 5
+                copy.remove("dryingMode")
+                copy.remove("filterLifePercent")
+                copy.remove("temperature")
+                copy.remove("childLockSwitch")
+                copy.remove("autoPreference")
+            }
+            break
+
+        case "fan":
+            copy = new HashMap(FAN_DEFAULT_STATE)
+            // Deep-copy sleepPreference sub-map
+            copy.sleepPreference = new HashMap(FAN_DEFAULT_STATE.sleepPreference ?: [:])
+            // LPF-R423S (Pedestal Fan) override: replace Tower Fan fields with Pedestal Fan fields
+            if (fixtureName == "LPF-R423S") {
+                copy.remove("oscillationSwitch")
+                copy.remove("oscillationState")
+                copy.remove("displayingType")
+                copy.remove("sleepPreference")
+                copy.horizontalOscillationState = 1
+                copy.verticalOscillationState = 0
+                copy.childLock = 0
+                copy.temperature = 750
+                copy.oscillationCoordinate = [yaw: 45, pitch: 10]
+                copy.oscillationRange = [left: 10, right: 80, top: 20, bottom: 70]
+                copy.sleepPreference = [
+                    sleepPreferenceType: "default",
+                    oscillationState   : 1,
+                    fallAsleepRemain   : 0,
+                    initFanSpeedLevel  : 0
+                ]
+            }
+            break
+
         default:
-            logWarn "[DEV TOOL] canonicalDefaultState: unknown fixture '${fixtureName}', returning empty map"
+            logWarn "[DEV TOOL] canonicalDefaultState: unrecognized family '${family}' for fixture '${fixtureName}'"
             return [:]
     }
+
+    return copy
 }
 
 /**
@@ -686,10 +1221,23 @@ private Map canonicalDefaultState(String fixtureName) {
 private void updateCanonicalState(String dni, String method, Map data) {
     Map currentSnapshots = state.fixtureSnapshots ?: [:]
     Map snap = new HashMap(currentSnapshots[dni] as Map ?: [:])
-    Closure mutator = STATE_MUTATORS[method]
+
+    // Look up fixture family for this DNI
+    Map currentBindings = state.childFixtures ?: [:]
+    String fixtureName = currentBindings[dni] as String
+    String family = fixtureName ? FIXTURE_TO_FAMILY[fixtureName] : null
+
+    if (!family) {
+        logWarn "[DEV TOOL] updateCanonicalState: no family for DNI '${dni}'"
+        return
+    }
+
+    Map familyMutators = STATE_MUTATORS[family] as Map
+    Closure mutator = familyMutators ? familyMutators[method] as Closure : null
     if (mutator) {
         mutator(snap, data ?: [:])
     }
+
     // BP17 read->mutate->reassign
     Map updatedSnapshots = new HashMap(state.fixtureSnapshots ?: [:])
     updatedSnapshots[dni] = snap
@@ -700,23 +1248,48 @@ private void updateCanonicalState(String dni, String method, Map data) {
  * Build a synthetic getPurifierStatus / getHumidifierStatus response for
  * the given DNI, using the current canonical state snapshot.
  *
- * Shape matches what the Core 200S child's update(status, nightLight) expects:
- *   status.result.enabled, status.result.level, status.result.mode, etc.
- * This is the "inner result" envelope that the parent passes to update().
+ * Shape matches what child drivers' update(status, nightLight) expects:
+ *   status.result.* for Core line (v1 families)
+ *   status.* at top level for V2 families (children peel the envelope themselves)
+ *
+ * The parent calls child.update(response, null) where response is the
+ * resp.data.result from the real bypassV2 call. For Core-line children that is
+ * { code:0, result: { <device fields> } }. For V2-line children that is the
+ * device fields directly (after peel). Since the virtual parent mirrors the
+ * real parent, we return the same shape the real parent would deliver.
+ *
+ * For v1 families: wrap in { code:0, result: <snap> } (matches real parent).
+ * For v2 families: wrap in { code:0, result: { code:0, result: <snap> } }
+ *   so children's peel-loop finds the device fields after exactly one peel.
+ *   (The real parent passes resp.data.result which already has the outer
+ *   bypassV2 layer stripped, so we ship the inner double-wrap here.)
  */
 Map synthesizeStatusResponse(String dni, String fixtureName) {
     Map currentSnapshots = state.fixtureSnapshots ?: [:]
     Map snap = currentSnapshots[dni] as Map ?: canonicalDefaultState(fixtureName)
+    String family = FIXTURE_TO_FAMILY[fixtureName] ?: "v1_purifier"
 
-    // Core-line envelope shape: { code:0, result: { <device fields> } }
-    // The parent driver calls resp.data.result and passes it to update(status, nightLight).
-    // update(status, nightLight) reads status.result.* (level, mode, enabled, etc.)
-    // So we need: { code:0, result: { <device fields> } }
-    // Which is what the child receives as `status` in update(status, nightLight).
-    return [
-        code  : 0,
-        result: new HashMap(snap)
-    ]
+    // V2 families use double-wrapped responses; v1 families use single-wrapped.
+    // The real parent strips the outermost bypassV2 layer (code/result/traceId)
+    // and passes resp.data.result to child.update(). So we include one layer of
+    // wrapping here (the inner result envelope that the child's peel-loop sees).
+    if (family == "v2_purifier" || family == "v2_humidifier") {
+        return [
+            code  : 0,
+            result: [
+                code   : 0,
+                result : new HashMap(snap),
+                traceId: "virtual-trace"
+            ],
+            traceId: "virtual-trace"
+        ]
+    } else {
+        // v1_purifier, v1_humidifier, fan — single-wrapped
+        return [
+            code  : 0,
+            result: new HashMap(snap)
+        ]
+    }
 }
 
 /**
@@ -728,6 +1301,15 @@ private Map findFixtureOpByMethod(String fixtureName, String method) {
     if (!ops) return null
     return ops.find { it.methodName == method } as Map
 }
+
+// ---------------------------------------------------------------------------
+// Lookup helpers (callable from tests and from spawnFromFixture)
+// ---------------------------------------------------------------------------
+
+String getDriverNameFor(String fixtureName)    { FIXTURE_TO_DRIVER[fixtureName] }
+String getDeviceTypeFor(String fixtureName)    { FIXTURE_TO_DEVICETYPE[fixtureName] }
+String getConfigModuleFor(String fixtureName)  { FIXTURE_TO_CONFIGMODULE[fixtureName] }
+String getFamilyFor(String fixtureName)        { FIXTURE_TO_FAMILY[fixtureName] }
 
 // ---------------------------------------------------------------------------
 // Logging helpers

@@ -18,6 +18,12 @@ import support.TestDevice
  *   6. resetAllChildren removes all children and clears state.childFixtures.
  *   7. synthesizeStatusResponse returns bypassV2 envelope shape with accumulated
  *      state mutations applied.
+ *   Phase 1.7 additions:
+ *   8. spawnFromFixture LAP-V201S (v2_purifier) creates child + setSwitch mutates powerSwitch.
+ *   9. spawnFromFixture Classic300S (v1_humidifier) creates child + setHumidityMode mutates mode.
+ *  10. spawnFromFixture LEH-S601S (v2_humidifier) creates child + setHumidityMode mutates workMode.
+ *  11. spawnFromFixture LTF-F422S (fan) creates child + setLevel mutates manualSpeedLevel.
+ *  12. canonicalDefaultState for unknown fixture returns empty map (defensive).
  *
  * Architecture note:
  *   The virtual parent driver is loaded as a Groovy script (same as real drivers).
@@ -610,7 +616,7 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
     // -------------------------------------------------------------------------
     // BLOCKING #5: addTimer via sendBypassRequest uses canonicalDefaultState path
     // Exercises the deep-copy fix — would throw UnsupportedOperationException
-    // without it, because CORE_200S_DEFAULT_STATE.extension is immutable.
+    // without it, because V1_PURIFIER_DEFAULT_STATE.extension is immutable.
     // -------------------------------------------------------------------------
 
     def "addTimer via sendBypassRequest does not throw when called via canonicalDefaultState path"() {
@@ -636,5 +642,303 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
 
         and: "no errors logged"
         testLog.errors.isEmpty()
+    }
+
+    // =========================================================================
+    // Phase 1.7: Family-template specs
+    // One end-to-end spec per family (v2_purifier, v1_humidifier, v2_humidifier, fan).
+    // v1_purifier is covered above via Core200S (same family).
+    // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // Test 8: v2_purifier — LAP-V201S (Vital 200S Air Purifier)
+    // -------------------------------------------------------------------------
+
+    def "spawnFromFixture LAP-V201S creates Vital 200S child + setSwitch updates powerSwitch in canonical state"() {
+        given: "no real parent present"
+        state.realParentDetected = false
+
+        when: "spawn Vital 200S child"
+        driver.spawnFromFixture("LAP-V201S", "My Vital 200S")
+
+        then: "child created with correct metadata"
+        def expectedDni = "VirtualVeSync-LAP-V201S-My-Vital-200S"
+        childRegistry.containsKey(expectedDni)
+        childRegistry[expectedDni].name == "Levoit Vital 200S Air Purifier"
+        childRegistry[expectedDni].getDataValue("deviceType") == "LAP-V201S-WUS"
+
+        and: "v2_purifier family default state seeded (powerSwitch=1, workMode=manual)"
+        state.fixtureSnapshots[expectedDni] != null
+        state.fixtureSnapshots[expectedDni].powerSwitch == 1
+        state.fixtureSnapshots[expectedDni].workMode    == "manual"
+        state.fixtureSnapshots[expectedDni].manualSpeedLevel == 2
+
+        and: "synthesizeStatusResponse uses double-wrapped v2 envelope"
+        def response = driver.synthesizeStatusResponse(expectedDni, "LAP-V201S")
+        response.code == 0
+        response.result != null
+        response.result.code == 0
+        response.result.result != null
+        response.result.result.powerSwitch == 1
+
+        when: "send setSwitch (powerSwitch=0) — v2_purifier mutator"
+        testLog.reset()
+        def child = childRegistry[expectedDni]
+        driver.sendBypassRequest(child, [
+            method: "setSwitch",
+            source: "APP",
+            data  : [powerSwitch: 0, switchIdx: 0]
+        ], { resp -> /* closure */ })
+
+        then: "canonical snapshot reflects powerSwitch=0"
+        state.fixtureSnapshots[expectedDni]?.powerSwitch == 0
+
+        and: "double-wrapped response carries updated powerSwitch"
+        def updatedResponse = driver.synthesizeStatusResponse(expectedDni, "LAP-V201S")
+        updatedResponse.result.result.powerSwitch == 0
+
+        and: "no errors"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 9: v1_humidifier — Classic300S (Classic 300S Humidifier)
+    // -------------------------------------------------------------------------
+
+    def "spawnFromFixture Classic300S creates Classic 300S child + setHumidityMode updates mode in canonical state"() {
+        given:
+        state.realParentDetected = false
+
+        when: "spawn Classic 300S child"
+        driver.spawnFromFixture("Classic300S", "My Classic 300S")
+
+        then: "child created with correct metadata"
+        def expectedDni = "VirtualVeSync-Classic300S-My-Classic-300S"
+        childRegistry.containsKey(expectedDni)
+        childRegistry[expectedDni].name == "Levoit Classic 300S Humidifier"
+        childRegistry[expectedDni].getDataValue("deviceType") == "LUH-A601S-WUSB"
+
+        and: "v1_humidifier family default state seeded (enabled=true, mode=manual)"
+        def snap = state.fixtureSnapshots[expectedDni]
+        snap != null
+        snap.enabled == true
+        snap.mode    == "manual"
+        snap.mist_virtual_level == 5
+
+        and: "synthesizeStatusResponse uses single-wrapped v1 envelope"
+        def response = driver.synthesizeStatusResponse(expectedDni, "Classic300S")
+        response.code == 0
+        response.result != null
+        response.result.enabled == true
+        response.result.mode    == "manual"
+        // v1 envelope is single-wrapped — no nested result.result
+        !(response.result instanceof Map && response.result.containsKey("result"))
+
+        when: "send setHumidityMode (mode=auto) — v1_humidifier mutator"
+        testLog.reset()
+        def child = childRegistry[expectedDni]
+        driver.sendBypassRequest(child, [
+            method: "setHumidityMode",
+            source: "APP",
+            data  : [mode: "auto"]
+        ], { resp -> /* closure */ })
+
+        then: "canonical snapshot reflects mode=auto"
+        state.fixtureSnapshots[expectedDni]?.mode == "auto"
+
+        and: "response carries updated mode"
+        driver.synthesizeStatusResponse(expectedDni, "Classic300S").result.mode == "auto"
+
+        and: "no errors"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 10: v2_humidifier — LEH-S601S (Superior 6000S Humidifier)
+    // -------------------------------------------------------------------------
+
+    def "spawnFromFixture LEH-S601S creates Superior 6000S child + setHumidityMode updates workMode in canonical state"() {
+        given:
+        state.realParentDetected = false
+
+        when: "spawn Superior 6000S child"
+        driver.spawnFromFixture("LEH-S601S", "My Superior 6000S")
+
+        then: "child created with correct metadata"
+        def expectedDni = "VirtualVeSync-LEH-S601S-My-Superior-6000S"
+        childRegistry.containsKey(expectedDni)
+        childRegistry[expectedDni].name == "Levoit Superior 6000S Humidifier"
+        childRegistry[expectedDni].getDataValue("deviceType") == "LEH-S601S-WUS"
+
+        and: "v2_humidifier family default state seeded (powerSwitch=1, workMode=manual)"
+        def snap = state.fixtureSnapshots[expectedDni]
+        snap != null
+        snap.powerSwitch == 1
+        snap.workMode    == "manual"
+        snap.virtualLevel == 3
+
+        and: "synthesizeStatusResponse uses double-wrapped v2 envelope"
+        def response = driver.synthesizeStatusResponse(expectedDni, "LEH-S601S")
+        response.code == 0
+        response.result?.code == 0
+        response.result?.result?.workMode == "manual"
+
+        when: "send setHumidityMode (workMode=autoPro) — v2_humidifier mutator"
+        testLog.reset()
+        def child = childRegistry[expectedDni]
+        driver.sendBypassRequest(child, [
+            method: "setHumidityMode",
+            source: "APP",
+            data  : [workMode: "autoPro"]
+        ], { resp -> /* closure */ })
+
+        then: "canonical snapshot reflects workMode=autoPro"
+        state.fixtureSnapshots[expectedDni]?.workMode == "autoPro"
+
+        and: "double-wrapped response carries updated workMode"
+        driver.synthesizeStatusResponse(expectedDni, "LEH-S601S").result.result.workMode == "autoPro"
+
+        and: "no errors"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 11: fan — LTF-F422S (Tower Fan)
+    // -------------------------------------------------------------------------
+
+    def "spawnFromFixture LTF-F422S creates Tower Fan child + setLevel updates manualSpeedLevel in canonical state"() {
+        given:
+        state.realParentDetected = false
+
+        when: "spawn Tower Fan child"
+        driver.spawnFromFixture("LTF-F422S", "My Tower Fan")
+
+        then: "child created with correct metadata"
+        def expectedDni = "VirtualVeSync-LTF-F422S-My-Tower-Fan"
+        childRegistry.containsKey(expectedDni)
+        childRegistry[expectedDni].name == "Levoit Tower Fan"
+        childRegistry[expectedDni].getDataValue("deviceType") == "LTF-F422S-WUS"
+
+        and: "fan family default state seeded (powerSwitch=1, workMode=normal, manualSpeedLevel=5)"
+        def snap = state.fixtureSnapshots[expectedDni]
+        snap != null
+        snap.powerSwitch      == 1
+        snap.workMode         == "normal"
+        snap.manualSpeedLevel == 5
+
+        and: "synthesizeStatusResponse uses single-wrapped fan envelope"
+        def response = driver.synthesizeStatusResponse(expectedDni, "LTF-F422S")
+        response.code == 0
+        response.result != null
+        response.result.powerSwitch == 1
+        // fan is single-wrapped — no nested result.result
+        !(response.result instanceof Map && response.result.containsKey("result"))
+
+        when: "send setLevel (manualSpeedLevel=10) — fan mutator"
+        testLog.reset()
+        def child = childRegistry[expectedDni]
+        driver.sendBypassRequest(child, [
+            method: "setLevel",
+            source: "APP",
+            data  : [levelIdx: 0, levelType: "wind", manualSpeedLevel: 10]
+        ], { resp -> /* closure */ })
+
+        then: "canonical snapshot reflects manualSpeedLevel=10"
+        state.fixtureSnapshots[expectedDni]?.manualSpeedLevel == 10
+
+        and: "response carries updated manualSpeedLevel"
+        driver.synthesizeStatusResponse(expectedDni, "LTF-F422S").result.manualSpeedLevel == 10
+
+        and: "no errors"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 12: canonicalDefaultState for unknown fixture returns empty map
+    // (defensive guard — updateCanonicalState also logs WARN on unknown family)
+    // -------------------------------------------------------------------------
+
+    def "spawnFromFixture with unknown fixture logs ERROR and creates no child"() {
+        given:
+        state.realParentDetected = false
+
+        when:
+        driver.spawnFromFixture("NoSuchFixture", "ShouldFail")
+
+        then: "no child created"
+        childRegistry.isEmpty()
+
+        and: "ERROR logged mentioning unknown fixture"
+        testLog.errors.any { it.contains("Unknown fixture") && it.contains("NoSuchFixture") }
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 13: fan — LTF-F422S setTowerFanMode round-trip
+    // Regression guard for BLOCKING #1 fix: verifies the fan-mode-setter
+    // (driver-side extension absent from pyvesync's upstream YAML) is now
+    // reachable through FIXTURE_OPS and updates canonical state correctly.
+    // -------------------------------------------------------------------------
+
+    def "sendBypassRequest setTowerFanMode on LTF-F422S updates workMode and logs DEBUG not ERROR"() {
+        given: "Tower Fan child spawned"
+        state.realParentDetected = false
+        driver.spawnFromFixture("LTF-F422S", "FanModeTest")
+        String dni = "VirtualVeSync-LTF-F422S-FanModeTest"
+        def child = childRegistry[dni]
+        testLog.reset()
+
+        when: "send setTowerFanMode (workMode=sleep) — extension method added in virtual_parent_extensions.json"
+        driver.sendBypassRequest(child, [
+            method: "setTowerFanMode",
+            source: "APP",
+            data  : [workMode: "sleep"]
+        ], { resp -> /* closure */ })
+
+        then: "canonical snapshot reflects workMode=sleep"
+        state.fixtureSnapshots[dni]?.workMode == "sleep"
+
+        and: "synthesizeStatusResponse carries updated workMode in fan envelope"
+        def response = driver.synthesizeStatusResponse(dni, "LTF-F422S")
+        response.result.workMode == "sleep"
+
+        and: "no ERROR logged (method is now found in FIXTURE_OPS)"
+        testLog.errors.isEmpty()
+
+        and: "DEBUG logged confirming payload validated"
+        testLog.debugs.any { it.contains("Payload validated") && it.contains("setTowerFanMode") }
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 14: fan — LPF-R423S setFanMode round-trip
+    // Companion regression guard: pedestal fan mode-setter extension.
+    // -------------------------------------------------------------------------
+
+    def "sendBypassRequest setFanMode on LPF-R423S updates workMode and logs DEBUG not ERROR"() {
+        given: "Pedestal Fan child spawned"
+        state.realParentDetected = false
+        driver.spawnFromFixture("LPF-R423S", "PedestalModeTest")
+        String dni = "VirtualVeSync-LPF-R423S-PedestalModeTest"
+        def child = childRegistry[dni]
+        testLog.reset()
+
+        when: "send setFanMode (workMode=auto) — extension method added in virtual_parent_extensions.json"
+        driver.sendBypassRequest(child, [
+            method: "setFanMode",
+            source: "APP",
+            data  : [workMode: "auto"]
+        ], { resp -> /* closure */ })
+
+        then: "canonical snapshot reflects workMode=auto"
+        state.fixtureSnapshots[dni]?.workMode == "auto"
+
+        and: "synthesizeStatusResponse carries updated workMode in fan envelope"
+        def response = driver.synthesizeStatusResponse(dni, "LPF-R423S")
+        response.result.workMode == "auto"
+
+        and: "no ERROR logged"
+        testLog.errors.isEmpty()
+
+        and: "DEBUG logged confirming payload validated"
+        testLog.debugs.any { it.contains("Payload validated") && it.contains("setFanMode") }
     }
 }
