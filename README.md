@@ -35,11 +35,11 @@ A Hubitat Elevation driver pack for **Levoit smart home devices** (air purifiers
 
 ¹ `LAP-V201-AUSR` (no `S` after `V201`) is an intentional typo SKU — this is the literal model code the VeSync cloud API emits for AU-market V201S hardware, as documented in pyvesync `device_map.py`. If your Hubitat log shows `LAP-V201-AUSR` as unrecognized, update to v2.2 or later.
 
-*Preview drivers* are v2.1+ drivers built without maintainer hardware, validated against canonical pyvesync fixtures + Home Assistant + SmartThings/Homebridge community drivers. Each carries inline `CROSS-CHECK` comment blocks documenting every contentious decision. If your device behaves differently, please [open an issue](https://github.com/level99/Hubitat-VeSync/issues) with a `captureDiagnostics` paste and a debug log.
+*Preview drivers* are built without maintainer hardware, validated against canonical pyvesync fixtures + Home Assistant + community TypeScript ports (tsvesync, spkesDE) + the [`PyvesyncCoverageSpec`](src/test/groovy/PyvesyncCoverageSpec.groovy) automated CI gate. Each carries inline `CROSS-CHECK` comment blocks documenting every contentious decision. If your device behaves differently, please [open an issue](https://github.com/level99/Hubitat-VeSync/issues) with a `captureDiagnostics` paste and a debug log.
 
 For per-device attribute and command details: [`Drivers/Levoit/readme.md`](Drivers/Levoit/readme.md).
 
-For upcoming devices beyond v2.2: [`ROADMAP.md`](ROADMAP.md).
+For upcoming devices beyond v2.3: [`ROADMAP.md`](ROADMAP.md).
 
 ## Install via Hubitat Package Manager
 

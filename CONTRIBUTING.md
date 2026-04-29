@@ -33,6 +33,12 @@ Hubitat-VeSync/
 │   ├── LevoitOasisMist450S.groovy        ← extends Classic 300S with warm mist
 │   ├── LevoitLV600S.groovy               ← v2.2 preview, warm-mist humidifier (LUH-A602S)
 │   ├── LevoitDual200S.groovy             ← v2.2 preview, mist 1-2 humidifier (LUH-D301S)
+│   ├── LevoitClassic200S.groovy          ← v2.3 preview, VeSyncHumid200S (Classic200S — naming-trap vs Classic 300S)
+│   ├── LevoitLV600SHubConnect.groovy     ← v2.3 preview, VeSyncLV600S (LUH-A603S — naming-trap vs A602S)
+│   ├── LevoitOasisMist1000S.groovy       ← v2.3 preview, VeSyncHumid1000S (LUH-M101S US + EU)
+│   ├── LevoitSproutHumidifier.groovy     ← v2.3 preview, VeSyncSproutHumid (LEH-B381S, color-temp nightlight EU)
+│   ├── LevoitSproutAir.groovy            ← v2.3 preview, VeSyncAirSprout (LAP-B851S, full AQ suite)
+│   ├── LevoitEverestAir.groovy           ← v2.3 preview, VeSyncAirBaseV2 EL551S (TURBO + VENT_ANGLE first-of-kind)
 │   ├── LevoitTowerFan.groovy             ← v2.1 fan (single-axis oscillation)
 │   ├── LevoitPedestalFan.groovy          ← v2.1 fan (2-axis oscillation, range)
 │   ├── LevoitGeneric.groovy              ← fall-through diagnostic driver

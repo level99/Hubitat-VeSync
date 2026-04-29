@@ -8,7 +8,7 @@
       "name": "Levoit Air Purifiers, Humidifiers, and Fans",
       "category": "Integrations",
       "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/levoitManifest.json",
-      "description": "Hubitat drivers for Levoit smart devices via VeSync cloud API. Supports air purifiers (Core 200S/300S/400S/600S, Vital 100S/200S), humidifiers (Classic 300S, Superior 6000S, OasisMist 450S, LV600S, Dual 200S), and fans (Tower, Pedestal). EU region support (preview).",
+      "description": "Hubitat drivers for Levoit smart devices via VeSync cloud API. Supports air purifiers (Core 200S/300S/400S/600S, Vital 100S/200S, Sprout Air, EverestAir), humidifiers (Classic 200S/300S, Superior 6000S, OasisMist 450S/1000S, LV600S, LV600S Hub Connect, Dual 200S, Sprout), and fans (Tower, Pedestal). EU region support.",
       "tags": ["Cloud", "Air Quality", "Humidifier", "Air Purifier", "Fan"]
     }
   ]

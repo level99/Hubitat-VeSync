@@ -93,7 +93,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Sprout Humidifier (LEH-B381S-WUS/-WEU) — mist 1-2, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display, child lock, drying mode, nightlight (brightness + color temp). pyvesync VeSyncSproutHumid class; V2-style payloads. Auto mode wire value: 'autoPro' (not 'auto' — contrast OasisMist 1000S).",
-        version: "2.2.1",
+        version: "2.3",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"

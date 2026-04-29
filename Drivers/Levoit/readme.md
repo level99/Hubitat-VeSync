@@ -11,6 +11,12 @@ This is a **community fork** of [NiklasGustafsson/Hubitat](https://github.com/Ni
 - **Levoit OasisMist 450S Smart Humidifier** (LUH-O451S, LUH-O601S) — mist 1-9 + warm mist 0-3, auto-stop *(v2.1)*. EU variant `LUH-O451S-WEU` adds RGB color nightlight via standard Hubitat ColorControl *(v2.2)*
 - **Levoit LV600S Humidifier** (LUH-A602S, all 6 regional variants) — mist 1-9, warm mist 0-3, target humidity 30-80, auto-stop *(v2.2)*
 - **Levoit Dual 200S Humidifier** (LUH-D301S, all 5 regional variants) — mist 1-2 (2-level hardware), target humidity 30-80, auto/manual modes only *(v2.2)*
+- **Levoit Classic 200S Humidifier** (Classic200S) — VeSyncHumid200S class, mist 1-9, auto-stop, no nightlight *(v2.3 preview)*
+- **Levoit LV600S Hub Connect Humidifier** (LUH-A603S-WUS) — VeSyncLV600S class, V2 payloads, warm mist 0-3 *(v2.3 preview)*
+- **Levoit OasisMist 1000S Humidifier** (LUH-M101S, US + EU) — VeSyncHumid1000S class, EU adds nightlight *(v2.3 preview)*
+- **Levoit Sprout Humidifier** (LEH-B381S) — VeSyncSproutHumid, drying mode, color-temp nightlight (EU only) *(v2.3 preview)*
+- **Levoit Sprout Air Purifier** (LAP-B851S, LAP-BAY-MAX01S) — VeSyncAirSprout, full AQ suite (PM2.5/PM1/PM10/VOC/CO2) *(v2.3 preview)*
+- **Levoit EverestAir Air Purifier** (LAP-EL551S, all 4 regional variants) — VeSyncAirBaseV2, first TURBO mode + VENT_ANGLE feature *(v2.3 preview)*
 - **Levoit Tower Fan** (LTF-F422S) — 12-speed fan, oscillation, mute, ambient temperature *(v2.1)*
 - **Levoit Pedestal Fan** (LPF-R432S) — 12-speed fan, 2-axis oscillation with range control, ambient temperature *(v2.1)*
 - **EU region support** — `VeSync API region` parent preference (US/EU) routes API calls to the appropriate VeSync cloud host *(v2.2 preview)*

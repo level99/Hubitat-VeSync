@@ -64,7 +64,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.2] Levoit LV600S (LUH-A602S-WUSR/-WUS/-WEUR/-WEU/-WJP/-WUSC) — mist 1-9, warm mist 0-3, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display; no night-light; canonical pyvesync payloads. NOTE: auto-mode may use 'humidity' payload on some firmware -- see pyvesync PR #505 and driver source CROSS-CHECK.",
-        version: "2.2.1",
+        version: "2.3",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
