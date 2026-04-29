@@ -1950,7 +1950,9 @@ private void warnIfGenericMigration(String dni, String newDriverName) {
             "v2.3 has a proper driver: '${newDriverName}'. To upgrade: Hubitat UI → device page → " +
             "'Type' dropdown → '${newDriverName}' → Save Preferences. Your DNI, label, room, and " +
             "automations are preserved; only the driver code changes."
-    state.genericMigrationWarnings.add(dni)
+    def warnings = state.genericMigrationWarnings
+    warnings.add(dni)
+    state.genericMigrationWarnings = warnings
 }
 
 private safeAddChildDevice(String driverName, String dni, Map opts, String installUrl) {
@@ -1967,7 +1969,11 @@ private safeAddChildDevice(String driverName, String dni, Map opts, String insta
                 "Add via HPM → Modify → 'Levoit Air Purifiers, Humidifiers, and Fans' → " +
                 "check '${driverName}' → Next. Or paste from ${installUrl}. " +
                 "Then click Resync Equipment again."
-            if (state.warnedMissingDrivers != null) state.warnedMissingDrivers.add(driverName)
+            if (state.warnedMissingDrivers != null) {
+                def warned = state.warnedMissingDrivers
+                warned.add(driverName)
+                state.warnedMissingDrivers = warned
+            }
         }
         return null
     }
