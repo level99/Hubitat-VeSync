@@ -68,6 +68,7 @@ def rule_ids(findings):
 # ---------------------------------------------------------------------------
 
 from lint_rules.groovy_javadoc_terminator import check_rule26_javadoc_terminator
+from lint_rules.bp18_null_guard import check_rule27_bp18_null_guard
 from lint_rules.bug_patterns import (
     check_bp1_missing_2arg_update,
     check_bp2_hardcoded_purifier_method,
@@ -1070,6 +1071,179 @@ class TestExemptionMechanism:
         assert bp1_findings == [], \
             "BP1 finding on Light driver should be suppressed by exemption"
         assert count >= 1
+
+
+# ---------------------------------------------------------------------------
+# RULE27 — BP18 null guard on set* commands
+# ---------------------------------------------------------------------------
+
+class TestRule27NullGuardOnSetCommands:
+    """
+    RULE27 (Bug Pattern #18): set* command methods must have an explicit
+    ``if (arg == null)`` guard before any normalization call on the parameter.
+
+    10 tests: 5 PASS, 4 FAIL, 1 finding-quality.
+    """
+
+    # --- PASS cases ---
+
+    PASS_EXPLICIT_GUARD = textwrap.dedent("""\
+        def setMode(mode) {
+            logDebug "setMode(${mode})"
+            if (mode == null) { logWarn "setMode called with null mode; ignoring"; return }
+            String m = (mode as String).toLowerCase()
+            if (!(m in ["auto","manual"])) { logError "bad mode: ${m}"; return }
+        }
+    """)
+
+    PASS_GUARD_YODA = textwrap.dedent("""\
+        def setMode(mode) {
+            if (null == mode) { logWarn "null mode; ignoring"; return }
+            String m = (mode as String).toLowerCase()
+        }
+    """)
+
+    PASS_NO_NORMALIZATION = textwrap.dedent("""\
+        def setChildLock(enabled) {
+            def val = enabled ? 1 : 0
+            hubBypass("setChildLock", [childLockSwitch: val], "setChildLock")
+        }
+    """)
+
+    PASS_NON_DRIVER_FILE = textwrap.dedent("""\
+        def setMode(mode) {
+            String m = (mode as String).toLowerCase()
+        }
+    """)
+
+    # Method with a null-guard present AND a line comment that contains the
+    # vulnerable pattern as an example — rule must not fire on the comment.
+    PASS_COMMENT_WITH_FAKE_PATTERN = textwrap.dedent("""\
+        def setMode(mode) {
+            logDebug "setMode(${mode})"
+            if (mode == null) { logWarn "setMode called with null mode; ignoring"; return }
+            // Note: (mode as String).toLowerCase() would NPE if mode is null (Bug Pattern #18)
+            String m = (mode as String).toLowerCase()
+            if (!(m in ["auto","manual"])) { logError "bad mode"; return }
+        }
+    """)
+
+    # --- FAIL cases ---
+
+    FAIL_NO_GUARD_CAST_LOWER = textwrap.dedent("""\
+        def setMode(mode) {
+            logDebug "setMode(${mode})"
+            String m = (mode as String).toLowerCase()
+            if (!(m in ["auto","manual"])) { logError "bad mode"; return }
+        }
+    """)
+
+    FAIL_NO_GUARD_DIRECT_LOWER = textwrap.dedent("""\
+        def setSpeed(spd) {
+            String s = spd.toLowerCase()
+            if (s == "off") { off(); return }
+        }
+    """)
+
+    FAIL_NO_GUARD_TO_INTEGER = textwrap.dedent("""\
+        def setLevel(level) {
+            int lvl = level.toInteger()
+            hubBypass("setLevel", [level: lvl], "setLevel")
+        }
+    """)
+
+    FAIL_GUARD_AFTER_VULN = textwrap.dedent("""\
+        def setMode(mode) {
+            String m = (mode as String).toLowerCase()
+            if (mode == null) { logWarn "null; ignoring"; return }
+        }
+    """)
+
+    def test_pass_explicit_guard(self):
+        """Guard before normalization: no finding."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.PASS_EXPLICIT_GUARD)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27 == [], f"Expected no RULE27 findings, got: {rule27}"
+
+    def test_pass_guard_yoda(self):
+        """Yoda-style ``null == arg`` guard is also accepted."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.PASS_GUARD_YODA)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27 == [], f"Expected no RULE27 findings for Yoda-style guard, got: {rule27}"
+
+    def test_pass_no_normalization(self):
+        """set* method with no normalization call: no finding."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.PASS_NO_NORMALIZATION)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27 == [], f"Expected no RULE27 findings on non-normalizing method, got: {rule27}"
+
+    def test_pass_non_driver_file(self):
+        """Files outside Drivers/Levoit/ are out of scope — no finding."""
+        findings = run_rule(
+            check_rule27_bp18_null_guard,
+            self.PASS_NON_DRIVER_FILE,
+            fname="TestDevice.groovy",
+        )
+        # make_fake_path puts it in Drivers/Levoit/ — use a path outside that dir
+        from lint_rules.bp18_null_guard import check_rule27_bp18_null_guard as rule_fn
+        from lint_rules.groovy_lite import clean_source
+        fake_path = REPO_ROOT / "src" / "test" / "groovy" / "support" / "TestDevice.groovy"
+        raw_lines = self.PASS_NON_DRIVER_FILE.splitlines()
+        _, cleaned_lines = clean_source(self.PASS_NON_DRIVER_FILE)
+        result = rule_fn(
+            path=fake_path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=self.PASS_NON_DRIVER_FILE,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+        assert result == [], f"Expected no RULE27 findings for out-of-scope file, got: {result}"
+
+    def test_pass_comment_with_fake_pattern(self):
+        """Line comment containing the vulnerable pattern is not flagged when a real guard exists."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.PASS_COMMENT_WITH_FAKE_PATTERN)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27 == [], (
+            f"Expected no RULE27 findings when vulnerable pattern appears only in a // comment, "
+            f"got: {rule27}"
+        )
+
+    def test_fail_no_guard_cast_lower(self):
+        """``(mode as String).toLowerCase()`` with no null-guard: FAIL."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.FAIL_NO_GUARD_CAST_LOWER)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27, "Expected RULE27 FAIL on unguarded (mode as String).toLowerCase()"
+        assert all(f['severity'] == 'FAIL' for f in rule27)
+
+    def test_fail_no_guard_direct_lower(self):
+        """``spd.toLowerCase()`` with no null-guard: FAIL."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.FAIL_NO_GUARD_DIRECT_LOWER)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27, "Expected RULE27 FAIL on unguarded spd.toLowerCase()"
+        assert all(f['severity'] == 'FAIL' for f in rule27)
+
+    def test_fail_no_guard_to_integer(self):
+        """``level.toInteger()`` with no null-guard: FAIL."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.FAIL_NO_GUARD_TO_INTEGER)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27, "Expected RULE27 FAIL on unguarded level.toInteger()"
+        assert all(f['severity'] == 'FAIL' for f in rule27)
+
+    def test_fail_guard_after_vuln(self):
+        """Guard that appears AFTER the vulnerable line does not prevent FAIL."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.FAIL_GUARD_AFTER_VULN)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27, "Expected RULE27 FAIL when guard comes after the normalization call"
+        assert all(f['severity'] == 'FAIL' for f in rule27)
+
+    def test_finding_includes_method_name_and_line(self):
+        """Finding message includes the method name; line number is set and positive."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.FAIL_NO_GUARD_CAST_LOWER)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27
+        assert any('setMode' in f['title'] for f in rule27)
+        assert all(f['line'] > 0 for f in rule27)
 
 
 # ---------------------------------------------------------------------------

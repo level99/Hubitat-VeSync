@@ -139,13 +139,13 @@ def _collect_per_file_rules():
     from lint_rules import (
         bug_patterns, logging_discipline, sandbox_safety, pii_scan, reentrance,
         driver_app_only_api, agent_pointer_integrity, bp16_watchdog_call_site,
-        groovy_javadoc_terminator,
+        groovy_javadoc_terminator, bp18_null_guard,
     )
     rules = []
     for module in [
         bug_patterns, logging_discipline, sandbox_safety, pii_scan, reentrance,
         driver_app_only_api, agent_pointer_integrity, bp16_watchdog_call_site,
-        groovy_javadoc_terminator,
+        groovy_javadoc_terminator, bp18_null_guard,
     ]:
         rules.extend(module.ALL_RULES)
     return rules
