@@ -1,0 +1,98 @@
+# pyvesync canonical request fixtures — LUH-M101S-WUS (OasisMist 1000S Humidifier)
+# Source: https://github.com/webdjoe/pyvesync
+# Tag: 3.4.2 (commit 01196b9 — 2026-04-16)
+# Original path: src/tests/api/vesynchumidifier/LUH-M101S-WUS.yaml
+#
+# Note: mist level method is 'virtualLevel' (NOT 'setVirtualLevel') — this is a
+# VeSyncHumid1000S-specific override from the VeSyncHumid200300S base class.
+
+set_auto_mode:
+  json_object:
+    payload:
+      data:
+        workMode: auto
+      method: setHumidityMode
+      source: APP
+
+set_humidity:
+  json_object:
+    payload:
+      data:
+        targetHumidity: 50
+      method: setTargetHumidity
+      source: APP
+
+set_manual_mode:
+  json_object:
+    payload:
+      data:
+        workMode: manual
+      method: setHumidityMode
+      source: APP
+
+set_mist_level:
+  json_object:
+    payload:
+      data:
+        levelIdx: 0
+        levelType: mist
+        virtualLevel: 3
+      method: virtualLevel
+      source: APP
+
+turn_off:
+  json_object:
+    payload:
+      data:
+        powerSwitch: 0
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+turn_off_automatic_stop:
+  json_object:
+    payload:
+      data:
+        autoStopSwitch: 0
+      method: setAutoStopSwitch
+      source: APP
+
+turn_off_display:
+  json_object:
+    payload:
+      data:
+        screenSwitch: 0
+      method: setDisplay
+      source: APP
+
+turn_on:
+  json_object:
+    payload:
+      data:
+        powerSwitch: 1
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+turn_on_automatic_stop:
+  json_object:
+    payload:
+      data:
+        autoStopSwitch: 1
+      method: setAutoStopSwitch
+      source: APP
+
+turn_on_display:
+  json_object:
+    payload:
+      data:
+        screenSwitch: 1
+      method: setDisplay
+      source: APP
+
+update:
+  json_object:
+    payload:
+      data: {}
+      method: getHumidifierStatus
+      source: APP

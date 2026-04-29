@@ -5,6 +5,8 @@ on:
     paths:
       - 'Drivers/**'
       - 'src/test/**'
+      - 'tests/fixtures/**'
+      - 'tests/pyvesync-fixtures/**'
       - 'build.gradle'
       - 'settings.gradle'
       - 'gradle/**'
