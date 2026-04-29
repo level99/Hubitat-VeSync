@@ -125,16 +125,6 @@ manifest_excluded_files:
 # from the rule, and what prevents the exception from masking real bugs.
 
 exemptions:
-  - rule_id: "RULE21_driver_not_in_readme"
-    file: "Drivers/Levoit/VeSyncIntegrationVirtual.groovy"
-    reason: >
-      VeSyncIntegrationVirtual.groovy is a contributor dev tool, not a device driver
-      for end users. It is intentionally excluded from the README.md 'Supported devices'
-      table (user-facing hardware documentation) and documented instead under the
-      '## For contributors' subsection in README.md and Drivers/Levoit/readme.md.
-      Including it in the device table would mislead users into thinking it is hardware
-      support rather than a test harness.
-
   - rule_id: "BP1_missing_2arg_update"
     file: "Drivers/Levoit/LevoitCore200S Light.groovy"
     reason: >

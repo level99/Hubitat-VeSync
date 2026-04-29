@@ -44,8 +44,8 @@ import groovy.transform.Field
 // ---------------------------------------------------------------------------
 // Fixture-to-driver metadata maps
 // ---------------------------------------------------------------------------
-// The driver name strings MUST match the real child driver's metadata `name`
-// field exactly — Hubitat resolves child drivers by name string on addChildDevice().
+// The driver name strings MUST match the real child driver's definition(name:)
+// exactly — Hubitat resolves child drivers by name string on addChildDevice().
 
 @Field static final Map FIXTURE_TO_DRIVER = [
     "Classic200S"    : "Levoit Classic 200S Humidifier",

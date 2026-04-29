@@ -57,15 +57,27 @@ def _extract_definition_block(source: str):
 
     Returns the *interior* of the parens (everything between the '(' and the
     closing ')') so callers can regex-search it for named args.
+
+    Line comments (`// ...`) are stripped before the regex match so that
+    incidental `definition(` tokens inside docstrings or explanatory comments
+    don't confuse the parser. Surfaced 2026-04-29 by VeSyncIntegrationVirtual.groovy
+    where a comment `// ... definition(name:) ...` followed (much later) by an
+    unrelated `if (cond) {` was matched as a single sprawling block, masking
+    the real version: field in the actual metadata block. `re.sub` preserves
+    newline positions (`$` in multiline mode anchors before `\n`), so line
+    numbers computed against the stripped source remain accurate.
     """
+    stripped = re.sub(r'(?m)^\s*//.*$', '', source)
     pattern = re.compile(r'(?s)definition\s*\((.+?)\)\s*\{')
-    m = pattern.search(source)
+    m = pattern.search(stripped)
     if not m:
         return None, 1
     block_interior = m.group(1)
-    # Calculate line number of the 'definition(' token
+    # Calculate line number of the 'definition(' token. Newlines preserved
+    # by the comment-stripping substitution above, so line counts match the
+    # original source.
     start_pos = m.start()
-    start_line = source[:start_pos].count('\n') + 1
+    start_line = stripped[:start_pos].count('\n') + 1
     return block_interior, start_line
 
 

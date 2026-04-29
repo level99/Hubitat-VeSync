@@ -1247,6 +1247,94 @@ class TestRule27NullGuardOnSetCommands:
 
 
 # ---------------------------------------------------------------------------
+# RULE20 version_lockstep — _extract_definition_block parser robustness
+# ---------------------------------------------------------------------------
+
+class TestExtractDefinitionBlock:
+    """Regression tests for _extract_definition_block — the parser that locates
+    the metadata definition() block before extracting the version: field.
+
+    Surfaced 2026-04-29: when a driver source contains a `// definition(name:)`
+    line comment followed (much later) by an unrelated `if (cond) {` closure
+    block, the original regex matched the comment's `definition(` token and
+    extended through the unrelated `) {` — capturing a sprawling 'interior'
+    that did NOT include the real metadata block, masking the real version: field.
+    Fix: strip line comments (`re.sub` with `(?m)^\\s*//.*$`) before the match.
+    """
+
+    def test_normal_definition_block_is_extracted(self):
+        """Happy path: standard driver source — version field found correctly."""
+        from lint_rules.version_lockstep import _extract_definition_block, _extract_version_from_block
+        source = '''
+import groovy.transform.Field
+
+metadata {
+    definition(
+        name: "Example",
+        namespace: "level99",
+        version: "2.3"
+    ) {
+        capability "Refresh"
+    }
+}
+'''
+        interior, lineno = _extract_definition_block(source)
+        assert interior is not None
+        assert _extract_version_from_block(interior) == "2.3"
+
+    def test_comment_with_definition_token_does_not_confuse_parser(self):
+        """Regression: line comment containing `definition(name:)` followed
+        later by an unrelated `if (cond) {` must NOT capture the comment as
+        the start of the definition block. The real definition block at the
+        bottom must still be located and its version extracted.
+        """
+        from lint_rules.version_lockstep import _extract_definition_block, _extract_version_from_block
+        source = '''
+import groovy.transform.Field
+
+// The driver name strings MUST match the real child driver's definition(name:)
+// exactly — Hubitat resolves child drivers by name string on addChildDevice().
+
+@Field static final Map FIXTURE_TO_DRIVER = ["x": "y"]
+
+private void example() {
+    if (data?.containsKey("level")) {
+        // unrelated closure body; this `) {` would have terminated the
+        // bogus interior captured by the comment-confused regex.
+    }
+}
+
+metadata {
+    definition(
+        name: "Example",
+        namespace: "level99",
+        version: "2.3"
+    ) {
+        capability "Refresh"
+    }
+}
+'''
+        interior, lineno = _extract_definition_block(source)
+        assert interior is not None, "definition block should be found despite comment confusion"
+        version = _extract_version_from_block(interior)
+        assert version == "2.3", (
+            f"version: '2.3' should be extracted from the real definition block; "
+            f"got {version!r} (interior len={len(interior)})"
+        )
+
+    def test_no_definition_block_returns_none(self):
+        """Source without any definition() block returns (None, 1)."""
+        from lint_rules.version_lockstep import _extract_definition_block
+        source = '''
+// Just a comment with definition(name:)
+def helper() {}
+'''
+        interior, lineno = _extract_definition_block(source)
+        assert interior is None
+        assert lineno == 1
+
+
+# ---------------------------------------------------------------------------
 # Integration: lint.py exit codes
 # ---------------------------------------------------------------------------
 
