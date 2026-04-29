@@ -321,19 +321,22 @@ def input(Object... a)    { /* no-op */  }
     }
 
     /**
-     * Build a single-wrapped status response map (purifier shape).
-     * Simulates what the parent driver passes to child.update() after a getPurifierStatus call.
+     * Build a single-wrapped status response map (V2-API shape).
+     * Simulates what the parent driver passes to child.update() after a V2-API status call
+     * (getPurifierStatus, getHumidifierStatus with single-wrap, etc.).
      *
      * The parent calls `resp.data.result` and passes that to `dev.update(status, nightLight)`.
-     * So `status` is `resp.data.result`, which for a purifier is:
+     * So `status` is `resp.data.result`, which for a V2-API device is:
      *   { code: 0, result: { <actual device fields> }, traceId: ... }
      *
      * The child's `applyStatus` then does `r = status?.result` to get device fields.
      * This helper wraps deviceData in that single envelope layer.
      *
-     * NOTE: This is NOT the double-wrapped humidifier shape. For that, use humidifierStatusEnvelope().
+     * Used by both purifier specs (Vital, EverestAir, Sprout Air) and any humidifier
+     * spec that does NOT use the Superior 6000S double-wrap shape.
+     * NOTE: For the double-wrapped humidifier shape, use humidifierStatusEnvelope().
      */
-    protected Map purifierStatusEnvelope(Map deviceData) {
+    protected Map v2StatusEnvelope(Map deviceData) {
         return [
             code: 0,
             result: deviceData,

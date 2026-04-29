@@ -1,0 +1,81 @@
+# pyvesync canonical request fixtures — Core300S (Core 300S Air Purifier)
+# Source: https://github.com/webdjoe/pyvesync
+# Tag: 3.4.2 (commit 01196b9 — 2026-04-16)
+# Original path: src/tests/api/vesyncpurifier/Core300S.yaml
+
+set_auto_mode:
+  json_object:
+    payload:
+      data:
+        mode: auto
+      method: setPurifierMode
+      source: APP
+
+set_fan_speed:
+  json_object:
+    payload:
+      data:
+        id: 0
+        level: 3
+        type: wind
+      method: setLevel
+      source: APP
+
+set_manual_mode:
+  json_object:
+    payload:
+      data:
+        id: 0
+        level: 1
+        type: wind
+      method: setLevel
+      source: APP
+
+set_sleep_mode:
+  json_object:
+    payload:
+      data:
+        mode: sleep
+      method: setPurifierMode
+      source: APP
+
+turn_off:
+  json_object:
+    payload:
+      data:
+        enabled: false
+        id: 0
+      method: setSwitch
+      source: APP
+
+turn_off_display:
+  json_object:
+    payload:
+      data:
+        state: false
+      method: setDisplay
+      source: APP
+
+turn_on:
+  json_object:
+    payload:
+      data:
+        enabled: true
+        id: 0
+      method: setSwitch
+      source: APP
+
+turn_on_display:
+  json_object:
+    payload:
+      data:
+        state: true
+      method: setDisplay
+      source: APP
+
+update:
+  json_object:
+    payload:
+      data: {}
+      method: getPurifierStatus
+      source: APP

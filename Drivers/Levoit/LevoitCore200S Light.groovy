@@ -46,7 +46,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S / 300S air purifiers' night light capability",
-        version: "2.2.1",
+        version: "2.3",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -78,7 +78,7 @@ def updated() {
 
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
-        runIn(1800, logDebugOff)
+        runIn(1800, "logDebugOff")
         state.debugEnabledAt = now()
     } else {
         state.remove("debugEnabledAt")

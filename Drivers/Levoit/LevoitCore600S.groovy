@@ -25,6 +25,14 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-28: v2.3 (community fork, level99/Hubitat-VeSync, by Dan Cox)
+//                  - Added childLock attribute + setChildLock command (Core-line "Display Lock")
+//                  - Added display read-back attribute (was write-only)
+//                  - Added setTimer / cancelTimer commands + timerRemain attribute
+//                  - Added resetFilter command
+//                  - Added pm25 attribute (raw µg/m³ from air_quality_value, previously buried in info HTML)
+//                  - Added airQualityIndex attribute (Levoit categorical 1-4 from air_quality field)
+//                  - Added AirQuality capability declaration
 // 2026-04-25: v2.0 (community fork, level99/Hubitat-VeSync, by Dan Cox)
 //                  - Added descriptionTextEnable preference (default true) and gated logInfo helper
 //                  - Added INFO logging at state-change transitions (power, mode, speed, filter alerts)
@@ -48,29 +56,39 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson and elfege (contributor)",
         description: "Supports controlling the Levoit 600S air purifier",
-        version: "2.2.1",
+        version: "2.3",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
             capability "FanControl"
             capability "Actuator"
             capability "SwitchLevel"
+            capability "AirQuality"
 
             attribute "filter", "number";                              // Filter status (0-100%)
-            attribute "mode", "string";                                // Purifier mode 
+            attribute "mode", "string";                                // Purifier mode
+            attribute "childLock", "string";                           // Front-panel button lock (VeSync app calls it "Display Lock" for Core line)
+            attribute "display", "string";                             // Front-panel display state
+            attribute "timerRemain", "number";                         // Auto-off timer remaining (seconds; 0 when no timer)
+            attribute "pm25", "number";                                // Raw PM2.5 reading (µg/m³)
+            attribute "airQualityIndex", "number";                     // Levoit categorical AQ index (1-4); distinct from computed US-AQI 'aqi'
 
             attribute "aqi", "number";                                 // AQI (0-500)
             attribute "aqiDanger", "string";                           // AQI danger level
             attribute "aqiColor", "string";                            // AQI HTML color
-            
+
             attribute "info", "string";                               // HTML
 
             command "setDisplay", [[name:"Display*", type: "ENUM", description: "Display", constraints: ["on", "off"] ] ]
             command "setSpeed", [[name:"Speed*", type: "ENUM", description: "Speed", constraints: ["off", "sleep", "auto", "low", "medium", "high", "max"] ] ]
             command "setMode",  [[name:"Mode*", type: "ENUM", description: "Mode", constraints: ["manual", "sleep", "auto"] ] ]
             command "setAutoMode",  [
-                [name:"Mode*", type: "ENUM", description: "Mode", constraints: ["default", "quiet", "eco", "efficient"] ],  
+                [name:"Mode*", type: "ENUM", description: "Mode", constraints: ["default", "quiet", "eco", "efficient"] ],
                 [ name:"Room Size", type: "NUMBER", description: "Room size in square feet" ] ]
+            command "setChildLock", [[name: "On/Off*", type: "ENUM", description: "Display Lock (Child Lock)", constraints: ["on", "off"] ] ]
+            command "setTimer", [[name: "Seconds*", type: "NUMBER", description: "Auto-off seconds (1-86400)"]]
+            command "cancelTimer"
+            command "resetFilter"
             command "toggle"
             command "update"
         }
@@ -92,11 +110,11 @@ def updated() {
     unschedule()
 	initialize()
 
-    runIn(3, update)
+    runIn(3, "update")
 
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
-        runIn(1800, logDebugOff)
+        runIn(1800, "logDebugOff")
         state.debugEnabledAt = now()
     } else {
         state.remove("debugEnabledAt")
@@ -517,7 +535,20 @@ def update(status, nightLight)
             break;
     }
 
-    updateAQIandFilter(status.result.air_quality_value.toString(), status.result.filter_life)
+    // New v2.3 fields: child_lock, display, timer, pm25, airQualityIndex
+    if (status.result?.child_lock != null)
+        handleEvent("childLock", status.result.child_lock ? "on" : "off")
+    if (status.result?.display != null)
+        handleEvent("display", status.result.display ? "on" : "off")
+    if (status.result?.extension?.timer_remain != null)
+        handleEvent("timerRemain", status.result.extension.timer_remain as Integer)
+    if (status.result?.air_quality_value != null)
+        handleEvent("pm25", status.result.air_quality_value as Integer)
+    if (status.result?.air_quality != null)
+        handleEvent("airQualityIndex", status.result.air_quality as Integer)
+
+    if (status.result?.air_quality_value != null)
+        updateAQIandFilter(status.result.air_quality_value.toString(), status.result.filter_life)
 }
 
 private void handleEvent(name, val)
@@ -607,7 +638,79 @@ private BigDecimal convertRange(BigDecimal val, BigDecimal inMin, BigDecimal inM
   return (val);
 }
 
-def handleDisplayOn(displayOn) 
+def setChildLock(value) {
+    // Core-line API uses child_lock (boolean); Vital-line API uses childLockSwitch (integer). Intentional divergence per pyvesync class hierarchy.
+    logDebug "setChildLock(${value})"
+    def result = false
+    parent.sendBypassRequest(device, [
+                data: [ child_lock: (value == "on") ],
+                "method": "setChildLock",
+                "source": "APP"
+            ]) { resp ->
+        if (checkHttpResponse("setChildLock", resp)) {
+            device.sendEvent(name: "childLock", value: value)
+            logInfo "Child lock (Display Lock): ${value}"
+            result = true
+        }
+    }
+    return result
+}
+
+def setTimer(seconds) {
+    int secs = (seconds as Integer) ?: 0
+    logDebug "setTimer(${secs}s)"
+    if (secs <= 0) { cancelTimer(); return }
+    def result = false
+    parent.sendBypassRequest(device, [
+                data: [ action: "off", total: secs ],
+                "method": "addTimer",
+                "source": "APP"
+            ]) { resp ->
+        if (checkHttpResponse("setTimer", resp)) {
+            def tid = resp?.data?.result?.id
+            if (tid != null) state.timerId = tid
+            logInfo "Timer set: power off in ${secs}s (id=${tid})"
+            result = true
+        }
+    }
+    return result
+}
+
+def cancelTimer() {
+    logDebug "cancelTimer()"
+    if (!state.timerId) { logDebug "No active timer to cancel"; return }
+    def result = false
+    parent.sendBypassRequest(device, [
+                data: [ id: state.timerId ],
+                "method": "delTimer",
+                "source": "APP"
+            ]) { resp ->
+        if (checkHttpResponse("cancelTimer", resp)) {
+            state.remove("timerId")
+            logInfo "Timer cancelled"
+            result = true
+        }
+    }
+    return result
+}
+
+def resetFilter() {
+    logDebug "resetFilter()"
+    def result = false
+    parent.sendBypassRequest(device, [
+                data: [:],
+                "method": "resetFilter",
+                "source": "APP"
+            ]) { resp ->
+        if (checkHttpResponse("resetFilter", resp)) {
+            logInfo "Filter life reset"
+            result = true
+        }
+    }
+    return result
+}
+
+def handleDisplayOn(displayOn)
 {
     logDebug "handleDisplayOn()"
 

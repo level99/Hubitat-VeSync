@@ -48,7 +48,7 @@
 /*
  *  Levoit Pedestal Fan (LPF-R432S) — Hubitat driver
  *
- *  Targets:    LPF-R432S-AEU, LPF-R432S-AUS
+ *  Targets:    LPF-R432S-AEU, LPF-R432S-AUS, LPF-R432S-AUK
  *  Marketing:  Levoit Smart Pedestal Fan
  *  Reference:  pyvesync VeSyncPedestalFan + LPF-R423S.yaml fixture (note typo in filename)
  *              https://github.com/webdjoe/pyvesync
@@ -117,8 +117,8 @@ metadata {
         name: "Levoit Pedestal Fan",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
-        description: "[PREVIEW v2.1] Levoit Pedestal Fan (LPF-R432S-AEU/AUS) — power, fan speed 1-12, modes (normal/turbo/eco/sleep), 2-axis oscillation with range control, mute, display, ambient temperature; canonical pyvesync payloads",
-        version: "2.2.1",
+        description: "[PREVIEW v2.1] Levoit Pedestal Fan (LPF-R432S-AEU/AUS/AUK) — power, fan speed 1-12, modes (normal/turbo/eco/sleep), 2-axis oscillation with range control, mute, display, ambient temperature; canonical pyvesync payloads",
+        version: "2.3",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -273,6 +273,7 @@ def setSpeed(spd){
         return
     }
     // Enum string (FanControl capability path)
+    if (spd == null) { logWarn "setSpeed called with null spd (likely empty Rule Machine action parameter); ignoring"; return }
     String s = (spd as String).toLowerCase()
     if (s == "off")  { off(); return }
     if (s == "on")   { on(); return }   // Hubitat FanControl spec: "on" resumes at prior/default speed
@@ -324,6 +325,7 @@ def setLevel(val){
 //     add "auto" as an alias or replace "eco" with "auto".
 def setMode(mode){
     logDebug "setMode(${mode})"
+    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (mode as String).toLowerCase()
     if (!(m in ["normal","turbo","eco","sleep"])) {
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|eco|sleep"
@@ -714,6 +716,7 @@ private Integer levelFromPercent(Integer pct){
 // ---------- Logging ----------
 def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
 def logError(msg){ log.error msg }
+def logWarn(msg){ log.warn msg }
 def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
 void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
 

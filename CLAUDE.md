@@ -154,6 +154,77 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
 
 10. **Honest pushback on disagreements.** If the developer thinks QA's feedback would cause a regression, surface the disagreement to the human user; don't rubber-stamp.
 
+11. **NITs are not optional unless explicitly deferred.** When QA returns a NIT alongside (or without) a BLOCKING, the default action is to fix it in the same round as any BLOCKING — same dispatch to dev, same re-review by QA. A NIT is "nice-to-fix" in the sense that it doesn't block production correctness; it is NOT "skip silently." Skipping a NIT is allowed only when the orchestrator (you, main session) makes an explicit decision to defer:
+    - Surface the deferral to the user with rationale ("Deferring NIT 2 to v<next>: cosmetic helper-name; no shipping risk")
+    - Record it as a TaskCreate entry naming the next-release target
+    - Add a v<next>-candidate item to TODO.md (or ROADMAP.md if user-facing)
+
+    Silent skipping is a process bug. The v2.2.1 cycle had a NIT almost lost between QA round 2 and round 3 — that triggered the TaskCreate-for-multi-fix-releases discipline; this rule extends that lesson into a hard default. Bias toward fixing; require an explicit decision to defer.
+
+---
+
+## Workflow optimizations (lessons learned)
+
+These rules came out of the v2.2 / v2.2.1 release cycles where the orchestrator (main session) drifted from the pipeline rules above and burned user time on rework. They reinforce the existing pipeline rather than replace it.
+
+### TMI rules for outbound text
+
+When drafting commit messages, release notes, PR bodies, or community-forum posts, omit by default:
+
+- **References to the maintainer's hub or production environment** ("the maintainer's hub", "production hub", "post-deploy on dev1064"). Replace with neutral phrasing ("post-deploy", "in production") or drop entirely.
+- **Pipeline-process detail** (number of dev/QA/tester rounds, agent dispatches, "QA APPROVE'd through 3 rounds", model choices). The audience reads diffs and CHANGELOG, not pipeline state.
+- **Implementation jargon users won't recognize** in HPM popups / community posts (`MissingPropertyException`, `sanitize()` routing, helper-extraction patterns, lint rule numbers, exception class FQNs). Reword to symptom-and-fix in plain language.
+- **HPM upgrade boilerplate** in `levoitManifest.json releaseNotes`: `"Existing v<prev> users upgrade in place via HPM; no device re-pairing required."` is understood by HPM users and adds noise. Skip unless the release has a NON-trivial migration step (v2.0's Vital 200S / Superior 6000S Device Type re-pick is the bar — that's worth keeping).
+- **Hardware-specific test details** in user-facing release notes ("verified on Vital 200S 1847 + Superior 6000S 1848 deploys"). Generalize to "Live-verified on hub post-deploy" or drop.
+
+Self-check before showing draft for approval: would dropping this line confuse a future user reading the CHANGELOG / release notes a year from now? If no, drop it.
+
+### TaskCreate discipline for multi-fix releases
+
+When a release cycle accumulates >2 distinct bugs/items tracked across multiple pipeline rounds (e.g., 6 bugs + 2 NITs + Gemini finding in v2.2.1), use TaskCreate to maintain state. Update task status (in_progress when starting, completed when done) as each item moves through dev → QA → tester → ops.
+
+Why: prevents re-narrating "where are we?" at every handoff. Chat narrative gets long; a task list is the canonical state. Surfaces dropped items earlier (a NIT was almost lost between QA round 2 and round 3 of v2.2.1).
+
+When NOT to use: single-bug fixes, doc-only changes, single-round commits. Threshold is roughly 3+ items or 2+ pipeline rounds.
+
+### Batch fix-rounds, audit-first when triaging
+
+Default to batch dispatch over sequential when:
+
+- **Multiple bugs surface in close session window** — hold ~1 round before dispatching dev; consolidate. v2.2.1 dispatched dev 4 times (Bugs 1/2/3 → +Bug 4/5/1b/6 → NITs → Gemini fix); could've been 2 with consolidation.
+- **One bug surfaces in an actively-reviewed area** (e.g., user is reading logs, just bought new hardware, just installed via HPM) — spawn an audit agent BEFORE dev to find related issues, then dispatch dev with the bundled scope. The Core line childLock observation is the canonical example: user flagged one missing feature; an audit-first agent found 5 more in the same drivers.
+
+Why: each dev round = SendMessage cost + QA + tester re-runs downstream + ops re-verify. Compounds badly.
+
+When NOT to batch: critical-path bugs blocking production (ship the fix immediately, batch the polish separately). Or when bug surfaces are fundamentally unrelated.
+
+### Pre-flight before any tester dispatch
+
+Before dispatching tester (or sending SendMessage to resume tester), confirm:
+
+(a) QA has APPROVE'd the EXACT current diff state, OR
+(b) The tester run is a standalone sanity check on already-QA'd / already-committed code (e.g., pre-PR baseline run after a rebase)
+
+If neither holds — STOP. Dispatch QA first.
+
+Drift pattern observed in v2.2.1: dev returned with fix → orchestrator went directly to tester to save round-trip → user caught the missing QA step → had to backfill QA. The QA step is cheap (Sonnet, small diff); skipping creates rework when QA finds something tester wouldn't catch (logging discipline, design quality, cross-pattern interactions, PII routing).
+
+### HPM stale-state recovery (maintainer-only)
+
+When ops verification deploys a release-candidate driver to the maintainer's hub via MCP `update_driver_code` BEFORE the cut commit / squash-merge / HPM publish, HPM's internal tracking falls behind reality. The hub's source is post-target-version, but HPM still records the prior released version.
+
+When the user later clicks HPM Update for that release, HPM tries to upgrade `<old-version> → <new-version>`, hits a state-mismatch check (the source is already past `<old-version>`), and fails with: *"Failed to upgrade driver ... Be sure the package is not in use with devices."*
+
+Recovery sequence (order matters):
+
+1. **HPM → Repair** → select "Levoit Air Purifiers, Humidifiers, and Fans". Repair re-fetches the manifest and reconciles HPM's tracking.
+2. After Repair, the parent driver's polling cron may not re-arm cleanly. **Run `forceReinitialize` on the parent device** to re-establish the BP14 schedule() cron + reset the BP12 pref-seed state. Verify via `get_attribute heartbeat` returning `"synced"`.
+3. If heartbeat doesn't recover within ~60s, click Save Preferences on the parent (re-runs `updated()` → `initialize()` directly).
+
+Avoidance: don't deploy uncommitted working-tree code via MCP to the maintainer's hub if that hub is also where HPM updates are tested. Either keep the maintainer's hub on HPM-published versions only, or accept the post-cut Repair routine as standard.
+
+This is a **maintainer-only** scenario; end users never trip this because they only get drivers via HPM. Mention this in the cut-release post-flight if HPM testing is part of the verification step.
+
 ---
 
 ## QA dispatch: model selection

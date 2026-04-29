@@ -33,6 +33,12 @@ Hubitat-VeSync/
 │   ├── LevoitOasisMist450S.groovy        ← extends Classic 300S with warm mist
 │   ├── LevoitLV600S.groovy               ← v2.2 preview, warm-mist humidifier (LUH-A602S)
 │   ├── LevoitDual200S.groovy             ← v2.2 preview, mist 1-2 humidifier (LUH-D301S)
+│   ├── LevoitClassic200S.groovy          ← v2.3 preview, VeSyncHumid200S (Classic200S — naming-trap vs Classic 300S)
+│   ├── LevoitLV600SHubConnect.groovy     ← v2.3 preview, VeSyncLV600S (LUH-A603S — naming-trap vs A602S)
+│   ├── LevoitOasisMist1000S.groovy       ← v2.3 preview, VeSyncHumid1000S (LUH-M101S US + EU)
+│   ├── LevoitSproutHumidifier.groovy     ← v2.3 preview, VeSyncSproutHumid (LEH-B381S, color-temp nightlight EU)
+│   ├── LevoitSproutAir.groovy            ← v2.3 preview, VeSyncAirSprout (LAP-B851S, full AQ suite)
+│   ├── LevoitEverestAir.groovy           ← v2.3 preview, VeSyncAirBaseV2 EL551S (TURBO + VENT_ANGLE first-of-kind)
 │   ├── LevoitTowerFan.groovy             ← v2.1 fan (single-axis oscillation)
 │   ├── LevoitPedestalFan.groovy          ← v2.1 fan (2-axis oscillation, range)
 │   ├── LevoitGeneric.groovy              ← fall-through diagnostic driver
@@ -54,6 +60,14 @@ Hubitat-VeSync/
     ├── agents/*.md                        ← AI-contributor agent specs (referenced from CLAUDE.md)
     └── commands/cut-release.md            ← /cut-release slash command spec
 ```
+
+### Note on `Notification Tile.groovy`
+
+This driver exists in `Drivers/Levoit/` but is **intentionally not listed in `levoitManifest.json`**. It is a generic dashboard-tile companion utility inherited from upstream [thebearmay/hubitat](https://github.com/thebearmay/hubitat). Users add it as a virtual device manually (Hubitat UI → Devices → Add Virtual Device → select "Notification Tile"). HPM "Install" of the VeSync package would not give the user a working tile device — the driver alone doesn't auto-create one — so a manifest entry would be misleading rather than helpful.
+
+The lint rule RULE18 (manifest ↔ files reconciliation) would normally flag this as a gap; the `manifest_excluded_files` entry in `tests/lint_config.yaml` records it as an intentional exception with an explanatory comment. If you see RULE18 pass cleanly for `Notification Tile.groovy`, that is expected behavior — not a lint oversight.
+
+Do not add a manifest entry for this driver. If you ship a new driver that genuinely belongs in HPM (i.e., users install it as a child device via device discovery, not manually), it does need a manifest entry — see step 8 of "Adding a new device driver" above.
 
 ### Architecture in one paragraph
 
@@ -211,6 +225,8 @@ The Spock harness + 22 lint rules catch a long tail of regressions. Most of thes
 | **No app-only API in drivers** | BP15 | `subscribe(location, ...)` and `unsubscribe()` are app-sandbox-only. They throw `MissingMethodException` in driver context. Use `schedule()` for recurring work instead. |
 | **Debug auto-disable watchdog** | BP16 | `runIn(1800, "logDebugOff")` in `updated()` evaporates on hub reboot; `debugOutput` persists and spam runs forever. Fix: `updated()` records `state.debugEnabledAt = now()` on debug-enable; `ensureDebugWatchdog()` at top of every poll/command entry auto-disables when elapsed > 30 min. Both layers coexist — `runIn` covers the happy path, watchdog covers the post-reboot path. |
 | **V2-API field discipline** | BP4 | V2-API drivers (Vital, Tower Fan, Pedestal Fan, Superior 6000S) must use `levelIdx` / `levelType` / `manualSpeedLevel` field names — NOT the legacy Core-line `id` / `type` / `level`. |
+| **TURBO mode as a mode value** | Convention | Drivers for devices that expose a TURBO operating mode (e.g. EverestAir) implement it as a `setMode("turbo")` call, NOT as a separate `setTurbo()` toggle command. The wire payload is `setPurifierMode { workMode: "turbo" }` — identical path to `auto`/`sleep`. The `mode` attribute type is `string` and includes `"turbo"` in its ENUM constraint list. Reason: pyvesync's `VeSyncAirBaseV2` treats turbo as a workMode value; no separate bypassV2 method exists. Canonical example: `LevoitEverestAir.groovy`. |
+| **Passive-read-only attributes** | Convention | Some device features expose a sensor value that has no user-writable counterpart (e.g. EverestAir's `fanRotateAngle` vent position). These are declared as `attribute "ventAngle", "number"` and populated in `applyStatus` only — no `setVentAngle` command is defined. Attempting to call the missing setter throws `MissingMethodException`; a Spock spec test using `then: thrown(MissingMethodException)` documents the intentional absence. Reason: pyvesync's `_set_state()` reads the field but no setter method exists anywhere in the class hierarchy. Canonical example: `LevoitEverestAir.groovy` `ventAngle` attribute. |
 | **Logging gates** | Convention | INFO logs gate on `descriptionTextEnable`; DEBUG logs gate on `debugOutput`; both default to user choice (`descriptionTextEnable` on, `debugOutput` off with 30-min auto-disable). PII auto-redacts via parent's `sanitize()`. |
 
 ### Full lint rule list

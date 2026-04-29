@@ -1,0 +1,55 @@
+# pyvesync canonical request fixtures — LTF-F422S (Tower Fan)
+# Source: https://github.com/webdjoe/pyvesync
+# Tag: 3.4.2 (commit 01196b9 — 2026-04-16)
+# Original path: src/tests/api/vesyncfan/LTF-F422S.yaml
+
+set_fan_speed:
+  json_object:
+    payload:
+      data:
+        levelIdx: 0
+        levelType: wind
+        manualSpeedLevel: 3
+      method: setLevel
+      source: APP
+
+turn_off:
+  json_object:
+    payload:
+      data:
+        powerSwitch: 0
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+turn_off_mute:
+  json_object:
+    payload:
+      data:
+        muteSwitch: 0
+      method: setMuteSwitch
+      source: APP
+
+turn_off_oscillation:
+  json_object:
+    payload:
+      data:
+        oscillationSwitch: 0
+      method: setOscillationSwitch
+      source: APP
+
+turn_on:
+  json_object:
+    payload:
+      data:
+        powerSwitch: 1
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+update:
+  json_object:
+    payload:
+      data: {}
+      method: getTowerFanStatus
+      source: APP

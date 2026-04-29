@@ -67,6 +67,8 @@ def rule_ids(findings):
 # Import all rules at module level (avoids class-binding pitfalls)
 # ---------------------------------------------------------------------------
 
+from lint_rules.groovy_javadoc_terminator import check_rule26_javadoc_terminator
+from lint_rules.bp18_null_guard import check_rule27_bp18_null_guard
 from lint_rules.bug_patterns import (
     check_bp1_missing_2arg_update,
     check_bp2_hardcoded_purifier_method,
@@ -87,6 +89,10 @@ from lint_rules.logging_discipline import (
 from lint_rules.sandbox_safety import check_rule17_sandbox_forbidden
 from lint_rules.pii_scan import check_rule16_pii_scan
 from lint_rules.reentrance import check_rule20_reentrance_guards
+from lint_rules.whitelist_parity import (
+    _extract_regex_prefix_cases,
+    _all_regex_cases_are_prefix_anchored,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -125,16 +131,27 @@ class TestBP1Missing2ArgUpdate:
 # ---------------------------------------------------------------------------
 
 class TestBP2HardcodedPurifierMethod:
+    # v2.3+: BP2 is now a positive assertion — updateDevices() MUST call deviceMethodFor().
+    # Pre-v2.3 GOOD snippet used typeName.contains(); that pattern is now the BAD case.
     GOOD = textwrap.dedent("""\
         def updateDevices() {
-            String method = typeName.contains("Humidifier") ? "getHumidifierStatus" : "getPurifierStatus"
+            String method = deviceMethodFor(dev)
             sendBypassRequest(dev, ["method": method, "data": {}])
         }
     """)
 
-    BAD = textwrap.dedent("""\
+    # Missing deviceMethodFor() — inline hardcoded method (old pattern, regression risk)
+    BAD_HARDCODED = textwrap.dedent("""\
         def updateDevices() {
             sendBypassRequest(dev, ["method": "getPurifierStatus", "data": {}])
+        }
+    """)
+
+    # Missing deviceMethodFor() — old typeName.contains() pattern (also bad: re-inlines routing)
+    BAD_TYPENAME_CONTAINS = textwrap.dedent("""\
+        def updateDevices() {
+            String method = typeName.contains("Humidifier") ? "getHumidifierStatus" : "getPurifierStatus"
+            sendBypassRequest(dev, ["method": method, "data": {}])
         }
     """)
 
@@ -142,12 +159,17 @@ class TestBP2HardcodedPurifierMethod:
         findings = run_rule(check_bp2_hardcoded_purifier_method, self.GOOD, "VeSyncIntegration")
         assert findings == []
 
-    def test_bad_fails(self):
-        findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD, "VeSyncIntegration")
-        assert any(f['rule_id'] == 'BP2_hardcoded_purifier_method' for f in findings)
+    def test_bad_hardcoded_fails(self):
+        findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD_HARDCODED, "VeSyncIntegration")
+        assert any(f['rule_id'] == 'BP2_missing_deviceMethodFor_call' for f in findings)
+
+    def test_bad_typename_contains_fails(self):
+        # The old "correct" pattern is now also a violation — it re-inlines routing
+        findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD_TYPENAME_CONTAINS, "VeSyncIntegration")
+        assert any(f['rule_id'] == 'BP2_missing_deviceMethodFor_call' for f in findings)
 
     def test_not_checked_for_children(self):
-        findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD, "LevoitVital200S")
+        findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD_HARDCODED, "LevoitVital200S")
         assert findings == []
 
 
@@ -658,6 +680,234 @@ class TestRule20ReentranceGuards:
 
 
 # ---------------------------------------------------------------------------
+# Rule 26 — Javadoc terminator detector
+# ---------------------------------------------------------------------------
+
+class TestRule26JavadocTerminator:
+    """
+    RULE26: detect `*/` embedded inside Groovy `/**` Javadoc blocks.
+
+    An embedded `*/` causes Groovy to close the block comment prematurely.
+    Everything between the embedded `*/` and the intended close is then
+    parsed as live code, producing a compile error. This bit the codebase
+    twice (v2.1 fe4d723 and v2.2 PR#4) before the rule was added.
+
+    Note: RULE26 operates on raw_text (NOT cleaned_lines) because
+    groovy_lite.clean_source already strips block comments. The run_rule()
+    helper passes raw_text correctly via its internal clean_source call.
+    """
+
+    # --- PASS cases ---
+
+    CLEAN_JAVADOC = textwrap.dedent("""\
+        /**
+         * Sets the purifier mode.
+         * @param mode one of: auto, sleep, manual
+         * @return void
+         */
+        def setMode(String mode) { }
+    """)
+
+    EMPTY_JAVADOC = textwrap.dedent("""\
+        /**/
+        def noop() { }
+    """)
+
+    LINE_COMMENT_WITH_STAR_SLASH = textwrap.dedent("""\
+        // This line has */ in a line comment — not inside a block comment
+        def someMethod() { return 42 }
+    """)
+
+    STRING_LITERAL_WITH_STAR_SLASH = textwrap.dedent("""\
+        def getCron() {
+            return "0 */5 * * * ?"
+        }
+    """)
+
+    # --- FAIL cases ---
+
+    # v2.1 reproducer: model-code list with */ inside a Javadoc block
+    V21_REPRODUCER = textwrap.dedent("""\
+        /**
+         * Supported models: LUH-O451S-*/LUH-O601S-*
+         * Use this driver for either variant.
+         */
+        def applyStatus(status) { }
+    """)
+
+    # v2.2 reproducer: cron string with */ inside a Javadoc block
+    V22_REPRODUCER = textwrap.dedent("""\
+        /**
+         * Sets up the poll schedule. Example cron: "0 */${minutes} * * * ?"
+         * @param minutes poll interval in minutes
+         */
+        def setupPollSchedule(int minutes) { }
+    """)
+
+    # Nested /* inner */ inside /** ... */ — inner */ closes the outer block
+    NESTED_BLOCK_INSIDE_JAVADOC = textwrap.dedent("""\
+        /**
+         * Main doc.
+         * /* inner block comment */
+         * More doc that now parses as live code.
+         */
+        def foo() { }
+    """)
+
+    def test_clean_javadoc_passes(self):
+        findings = run_rule(check_rule26_javadoc_terminator, self.CLEAN_JAVADOC)
+        assert findings == [], f"Expected no findings on clean Javadoc, got: {findings}"
+
+    def test_empty_javadoc_passes(self):
+        # /**/  — open immediately followed by close; no embedded */ inside
+        findings = run_rule(check_rule26_javadoc_terminator, self.EMPTY_JAVADOC)
+        assert findings == [], f"Expected no findings on empty /**/, got: {findings}"
+
+    def test_line_comment_with_star_slash_passes(self):
+        # */ in a // line comment — not inside a block comment; should not trigger
+        findings = run_rule(
+            check_rule26_javadoc_terminator, self.LINE_COMMENT_WITH_STAR_SLASH
+        )
+        assert findings == [], (
+            f"Expected no findings for */ in line comment, got: {findings}"
+        )
+
+    def test_string_literal_with_star_slash_passes(self):
+        # */ inside a string literal in live code — no Javadoc block present; PASS
+        findings = run_rule(
+            check_rule26_javadoc_terminator, self.STRING_LITERAL_WITH_STAR_SLASH
+        )
+        assert findings == [], (
+            f"Expected no findings for */ in string literal outside Javadoc, got: {findings}"
+        )
+
+    def test_v21_reproducer_fails(self):
+        # LUH-O451S-*/LUH-O601S-* inside Javadoc — the */ after LUH-O451S-
+        # terminates the block; rest of the block content is live code.
+        findings = run_rule(check_rule26_javadoc_terminator, self.V21_REPRODUCER)
+        rule26 = [f for f in findings if f['rule_id'] == 'RULE26_javadoc_terminator']
+        assert rule26, "Expected RULE26 finding on v2.1 reproducer"
+        assert all(f['severity'] == 'FAIL' for f in rule26)
+
+    def test_v22_reproducer_fails(self):
+        # "0 */${minutes} * * * ?" inside Javadoc — the */ in the cron string
+        # terminates the block early.
+        findings = run_rule(check_rule26_javadoc_terminator, self.V22_REPRODUCER)
+        rule26 = [f for f in findings if f['rule_id'] == 'RULE26_javadoc_terminator']
+        assert rule26, "Expected RULE26 finding on v2.2 reproducer"
+        assert all(f['severity'] == 'FAIL' for f in rule26)
+
+    def test_nested_block_inside_javadoc_fails(self):
+        # /* inner */ inside /** ... */ — the inner */ terminates the outer block
+        findings = run_rule(
+            check_rule26_javadoc_terminator, self.NESTED_BLOCK_INSIDE_JAVADOC
+        )
+        rule26 = [f for f in findings if f['rule_id'] == 'RULE26_javadoc_terminator']
+        assert rule26, "Expected RULE26 finding on nested /* */ inside /** */"
+        assert all(f['severity'] == 'FAIL' for f in rule26)
+
+    def test_non_groovy_file_skipped(self):
+        # RULE26 only checks .groovy files; .py files should produce no findings
+        findings = run_rule(
+            check_rule26_javadoc_terminator,
+            self.V21_REPRODUCER,
+            fname="some_script.py",
+        )
+        assert findings == [], (
+            "RULE26 should not check non-.groovy files"
+        )
+
+    def test_finding_includes_line_number(self):
+        # The embedded */ in the v2.1 reproducer is on line 2; verify lineno is set
+        findings = run_rule(check_rule26_javadoc_terminator, self.V21_REPRODUCER)
+        rule26 = [f for f in findings if f['rule_id'] == 'RULE26_javadoc_terminator']
+        assert rule26, "Expected at least one RULE26 finding"
+        assert all(f['line'] > 0 for f in rule26), "line number must be positive"
+
+
+# ---------------------------------------------------------------------------
+# RULE22 — whitelist parity regex prefix extraction
+# ---------------------------------------------------------------------------
+
+class TestRule22RegexPrefixExtraction:
+    """
+    Unit tests for the RULE22 regex-case resolution helpers added in v2.3.
+
+    _extract_regex_prefix_cases() resolves prefix-anchored Groovy regex cases
+    (``case ~/^PREFIX-.*$/:`` form) to literal prefix strings.
+
+    _all_regex_cases_are_prefix_anchored() returns True only when every
+    ``case ~/.../:`` pattern in the body was resolved by the extractor.
+    """
+
+    # Body with a single clean prefix-anchored regex case
+    BODY_SINGLE_PREFIX = "switch(code) { case ~/^LAP-.*$/: return 'EL551S' }"
+
+    # Body with two distinct prefix-anchored regex cases
+    BODY_TWO_PREFIXES = (
+        "switch(code) { "
+        "case ~/^LAP-.*$/: return 'LAP' "
+        "case ~/^LEH-.*$/: return 'LEH' "
+        "}"
+    )
+
+    # Body without trailing $ (also valid anchored form)
+    BODY_NO_DOLLAR = "switch(code) { case ~/^LAP-.*/:  return 'EL551S' }"
+
+    # Body with a non-prefix-anchored regex (character class) -- not resolvable
+    BODY_CHAR_CLASS = "switch(code) { case ~/^LEH-S60[12]S-.*$/: return 'Humidifier' }"
+
+    # Body with one resolvable + one unresolvable regex
+    BODY_MIXED = (
+        "switch(code) { "
+        "case ~/^LAP-.*$/: return 'LAP' "
+        "case ~/^LEH-S60[12]S-.*$/: return 'LEH_special' "
+        "}"
+    )
+
+    # Body with no regex cases at all
+    BODY_NO_REGEX = 'switch(code) { case "LAP-EL551S-WUS": return "EL551S" }'
+
+    def test_single_prefix_extracted(self):
+        result = _extract_regex_prefix_cases(self.BODY_SINGLE_PREFIX)
+        assert result == {"LAP-"}
+
+    def test_two_prefixes_extracted(self):
+        result = _extract_regex_prefix_cases(self.BODY_TWO_PREFIXES)
+        assert result == {"LAP-", "LEH-"}
+
+    def test_no_dollar_anchor_extracted(self):
+        # Trailing $ is optional in the pattern; should still resolve
+        result = _extract_regex_prefix_cases(self.BODY_NO_DOLLAR)
+        assert result == {"LAP-"}
+
+    def test_char_class_not_extracted(self):
+        # Character class [12] breaks the simple prefix anchor form -- not resolved
+        result = _extract_regex_prefix_cases(self.BODY_CHAR_CLASS)
+        assert result == set()
+
+    def test_no_regex_returns_empty(self):
+        result = _extract_regex_prefix_cases(self.BODY_NO_REGEX)
+        assert result == set()
+
+    def test_all_anchored_when_all_resolve(self):
+        # Both regex cases in BODY_TWO_PREFIXES are prefix-anchored -- all resolved
+        resolved = _extract_regex_prefix_cases(self.BODY_TWO_PREFIXES)
+        assert _all_regex_cases_are_prefix_anchored(self.BODY_TWO_PREFIXES, resolved) is True
+
+    def test_not_all_anchored_when_one_unresolvable(self):
+        # BODY_MIXED has 2 regex cases but only 1 is prefix-anchored
+        resolved = _extract_regex_prefix_cases(self.BODY_MIXED)
+        assert len(resolved) == 1  # only LAP- resolved
+        assert _all_regex_cases_are_prefix_anchored(self.BODY_MIXED, resolved) is False
+
+    def test_all_anchored_on_body_with_no_regex(self):
+        # No regex cases at all -- vacuously True (0 == 0)
+        resolved = _extract_regex_prefix_cases(self.BODY_NO_REGEX)
+        assert _all_regex_cases_are_prefix_anchored(self.BODY_NO_REGEX, resolved) is True
+
+
+# ---------------------------------------------------------------------------
 # Exemption mechanism
 # ---------------------------------------------------------------------------
 
@@ -821,6 +1071,179 @@ class TestExemptionMechanism:
         assert bp1_findings == [], \
             "BP1 finding on Light driver should be suppressed by exemption"
         assert count >= 1
+
+
+# ---------------------------------------------------------------------------
+# RULE27 — BP18 null guard on set* commands
+# ---------------------------------------------------------------------------
+
+class TestRule27NullGuardOnSetCommands:
+    """
+    RULE27 (Bug Pattern #18): set* command methods must have an explicit
+    ``if (arg == null)`` guard before any normalization call on the parameter.
+
+    10 tests: 5 PASS, 4 FAIL, 1 finding-quality.
+    """
+
+    # --- PASS cases ---
+
+    PASS_EXPLICIT_GUARD = textwrap.dedent("""\
+        def setMode(mode) {
+            logDebug "setMode(${mode})"
+            if (mode == null) { logWarn "setMode called with null mode; ignoring"; return }
+            String m = (mode as String).toLowerCase()
+            if (!(m in ["auto","manual"])) { logError "bad mode: ${m}"; return }
+        }
+    """)
+
+    PASS_GUARD_YODA = textwrap.dedent("""\
+        def setMode(mode) {
+            if (null == mode) { logWarn "null mode; ignoring"; return }
+            String m = (mode as String).toLowerCase()
+        }
+    """)
+
+    PASS_NO_NORMALIZATION = textwrap.dedent("""\
+        def setChildLock(enabled) {
+            def val = enabled ? 1 : 0
+            hubBypass("setChildLock", [childLockSwitch: val], "setChildLock")
+        }
+    """)
+
+    PASS_NON_DRIVER_FILE = textwrap.dedent("""\
+        def setMode(mode) {
+            String m = (mode as String).toLowerCase()
+        }
+    """)
+
+    # Method with a null-guard present AND a line comment that contains the
+    # vulnerable pattern as an example — rule must not fire on the comment.
+    PASS_COMMENT_WITH_FAKE_PATTERN = textwrap.dedent("""\
+        def setMode(mode) {
+            logDebug "setMode(${mode})"
+            if (mode == null) { logWarn "setMode called with null mode; ignoring"; return }
+            // Note: (mode as String).toLowerCase() would NPE if mode is null (Bug Pattern #18)
+            String m = (mode as String).toLowerCase()
+            if (!(m in ["auto","manual"])) { logError "bad mode"; return }
+        }
+    """)
+
+    # --- FAIL cases ---
+
+    FAIL_NO_GUARD_CAST_LOWER = textwrap.dedent("""\
+        def setMode(mode) {
+            logDebug "setMode(${mode})"
+            String m = (mode as String).toLowerCase()
+            if (!(m in ["auto","manual"])) { logError "bad mode"; return }
+        }
+    """)
+
+    FAIL_NO_GUARD_DIRECT_LOWER = textwrap.dedent("""\
+        def setSpeed(spd) {
+            String s = spd.toLowerCase()
+            if (s == "off") { off(); return }
+        }
+    """)
+
+    FAIL_NO_GUARD_TO_INTEGER = textwrap.dedent("""\
+        def setLevel(level) {
+            int lvl = level.toInteger()
+            hubBypass("setLevel", [level: lvl], "setLevel")
+        }
+    """)
+
+    FAIL_GUARD_AFTER_VULN = textwrap.dedent("""\
+        def setMode(mode) {
+            String m = (mode as String).toLowerCase()
+            if (mode == null) { logWarn "null; ignoring"; return }
+        }
+    """)
+
+    def test_pass_explicit_guard(self):
+        """Guard before normalization: no finding."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.PASS_EXPLICIT_GUARD)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27 == [], f"Expected no RULE27 findings, got: {rule27}"
+
+    def test_pass_guard_yoda(self):
+        """Yoda-style ``null == arg`` guard is also accepted."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.PASS_GUARD_YODA)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27 == [], f"Expected no RULE27 findings for Yoda-style guard, got: {rule27}"
+
+    def test_pass_no_normalization(self):
+        """set* method with no normalization call: no finding."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.PASS_NO_NORMALIZATION)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27 == [], f"Expected no RULE27 findings on non-normalizing method, got: {rule27}"
+
+    def test_pass_non_driver_file(self):
+        """Files outside Drivers/Levoit/ are out of scope — no finding."""
+        findings = run_rule(
+            check_rule27_bp18_null_guard,
+            self.PASS_NON_DRIVER_FILE,
+            fname="TestDevice.groovy",
+        )
+        # make_fake_path puts it in Drivers/Levoit/ — use a path outside that dir
+        from lint_rules.bp18_null_guard import check_rule27_bp18_null_guard as rule_fn
+        from lint_rules.groovy_lite import clean_source
+        fake_path = REPO_ROOT / "src" / "test" / "groovy" / "support" / "TestDevice.groovy"
+        raw_lines = self.PASS_NON_DRIVER_FILE.splitlines()
+        _, cleaned_lines = clean_source(self.PASS_NON_DRIVER_FILE)
+        result = rule_fn(
+            path=fake_path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=self.PASS_NON_DRIVER_FILE,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+        assert result == [], f"Expected no RULE27 findings for out-of-scope file, got: {result}"
+
+    def test_pass_comment_with_fake_pattern(self):
+        """Line comment containing the vulnerable pattern is not flagged when a real guard exists."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.PASS_COMMENT_WITH_FAKE_PATTERN)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27 == [], (
+            f"Expected no RULE27 findings when vulnerable pattern appears only in a // comment, "
+            f"got: {rule27}"
+        )
+
+    def test_fail_no_guard_cast_lower(self):
+        """``(mode as String).toLowerCase()`` with no null-guard: FAIL."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.FAIL_NO_GUARD_CAST_LOWER)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27, "Expected RULE27 FAIL on unguarded (mode as String).toLowerCase()"
+        assert all(f['severity'] == 'FAIL' for f in rule27)
+
+    def test_fail_no_guard_direct_lower(self):
+        """``spd.toLowerCase()`` with no null-guard: FAIL."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.FAIL_NO_GUARD_DIRECT_LOWER)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27, "Expected RULE27 FAIL on unguarded spd.toLowerCase()"
+        assert all(f['severity'] == 'FAIL' for f in rule27)
+
+    def test_fail_no_guard_to_integer(self):
+        """``level.toInteger()`` with no null-guard: FAIL."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.FAIL_NO_GUARD_TO_INTEGER)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27, "Expected RULE27 FAIL on unguarded level.toInteger()"
+        assert all(f['severity'] == 'FAIL' for f in rule27)
+
+    def test_fail_guard_after_vuln(self):
+        """Guard that appears AFTER the vulnerable line does not prevent FAIL."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.FAIL_GUARD_AFTER_VULN)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27, "Expected RULE27 FAIL when guard comes after the normalization call"
+        assert all(f['severity'] == 'FAIL' for f in rule27)
+
+    def test_finding_includes_method_name_and_line(self):
+        """Finding message includes the method name; line number is set and positive."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.FAIL_NO_GUARD_CAST_LOWER)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27
+        assert any('setMode' in f['title'] for f in rule27)
+        assert all(f['line'] > 0 for f in rule27)
 
 
 # ---------------------------------------------------------------------------

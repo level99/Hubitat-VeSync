@@ -1,0 +1,314 @@
+# pyvesync canonical API fixtures for OasisMist 1000S (LUH-M101S-* series)
+# Source: https://github.com/webdjoe/pyvesync
+# Commit: c98729c45860cc765d63d49a9a02bbc18de090c4 (2026-04-16)
+# Retrieved: 2026-04-28
+#
+# Upstream fixtures:
+#   src/tests/api/vesynchumidifier/LUH-M101S-WUS.yaml   (US/WUSR)
+#   src/tests/api/vesynchumidifier/LUH-M101S-WEUR.yaml  (EU -- adds nightlight requests/responses)
+#
+# Device: VeSyncHumid1000S class (inherits VeSyncHumid200300S; overrides key methods)
+# Model codes:
+#   LUH-M101S-WUS   -- US standard      (features: AUTO_STOP)
+#   LUH-M101S-WUSR  -- US retail        (features: AUTO_STOP)
+#   LUH-M101S-WEUR  -- EU               (features: NIGHTLIGHT, NIGHTLIGHT_BRIGHTNESS, AUTO_STOP)
+#   All three route to the Levoit OasisMist 1000S Humidifier driver.
+#
+# CRITICAL payload divergences from VeSyncHumid200300S (Classic 300S, OasisMist 450S, LV600S A602S):
+#   - Switch: {powerSwitch: int, switchIdx: 0}  NOT  {enabled: bool, id: 0}
+#   - Mode: {workMode: value}                   NOT  {mode: value}
+#   - Mist level: API method 'virtualLevel' (not 'setVirtualLevel'),
+#     payload {levelIdx: 0, virtualLevel: N, levelType: 'mist'}
+#     NOT {id: 0, level: N, type: 'mist'}
+#   - Target humidity: {targetHumidity: N}  NOT  nested {configuration.auto_target_humidity}
+#   - Display: {screenSwitch: int}          NOT  {state: bool}
+#   - Auto-stop: method setAutoStopSwitch, {autoStopSwitch: int}
+#     NOT method setAutomaticStop, {enabled: bool}
+#
+# Response shape: camelCase top-level (powerSwitch, workMode, virtualLevel, targetHumidity,
+#   waterLacksState, screenSwitch, screenState) with nested nightLight sub-object (WEUR only).
+#   NOT snake_case (no configuration.auto_target_humidity, no mist_virtual_level, etc.)
+#
+# Envelope: single-wrapped (one peel iteration typical). Same as Classic 300S family.
+#
+# Mist modes (from device_map.py mist_modes for VeSyncHumid1000S):
+#   auto    -> 'auto'   (NOT 'humidity' -- contrast with VeSyncLV600S / A603S)
+#   sleep   -> 'sleep'
+#   manual  -> 'manual'
+#
+# AUTO_STOP: via setAutoStopSwitch {autoStopSwitch: int} (NOT setAutomaticStop {enabled: bool})
+
+# REQUEST payloads -- as sent to /cloud/v2/deviceManaged/bypassV2
+
+requests:
+  turn_on:
+    payload:
+      data:
+        powerSwitch: 1
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  turn_off:
+    payload:
+      data:
+        powerSwitch: 0
+        switchIdx: 0
+      method: setSwitch
+      source: APP
+
+  set_auto_mode:
+    payload:
+      data:
+        workMode: auto
+      method: setHumidityMode
+      source: APP
+
+  set_sleep_mode:
+    payload:
+      data:
+        workMode: sleep
+      method: setHumidityMode
+      source: APP
+
+  set_manual_mode:
+    payload:
+      data:
+        workMode: manual
+      method: setHumidityMode
+      source: APP
+
+  # NOTE: API method is 'virtualLevel' (not 'setVirtualLevel' used by VeSyncHumid200300S)
+  # Payload field names also differ: levelIdx/virtualLevel/levelType (not id/level/type)
+  set_mist_level:
+    payload:
+      data:
+        levelIdx: 0
+        virtualLevel: 5
+        levelType: mist
+      method: virtualLevel
+      source: APP
+
+  # NOTE: {targetHumidity: N} top-level camelCase -- NOT nested snake_case
+  set_humidity:
+    payload:
+      data:
+        targetHumidity: 50
+      method: setTargetHumidity
+      source: APP
+
+  # NOTE: {screenSwitch: int} -- NOT {state: bool} (VeSyncHumid200300S style)
+  turn_on_display:
+    payload:
+      data:
+        screenSwitch: 1
+      method: setDisplay
+      source: APP
+
+  turn_off_display:
+    payload:
+      data:
+        screenSwitch: 0
+      method: setDisplay
+      source: APP
+
+  # NOTE: method=setAutoStopSwitch, field=autoStopSwitch:int
+  # Different from VeSyncHumid200300S: method=setAutomaticStop, field=enabled:bool
+  turn_on_automatic_stop:
+    payload:
+      data:
+        autoStopSwitch: 1
+      method: setAutoStopSwitch
+      source: APP
+
+  turn_off_automatic_stop:
+    payload:
+      data:
+        autoStopSwitch: 0
+      method: setAutoStopSwitch
+      source: APP
+
+  # WEUR only: nightlight on/off
+  turn_on_nightlight:
+    payload:
+      data:
+        nightLightSwitch: 1
+      method: setNightLightStatus
+      source: APP
+
+  turn_off_nightlight:
+    payload:
+      data:
+        nightLightSwitch: 0
+      method: setNightLightStatus
+      source: APP
+
+  # WEUR only: nightlight brightness (also controls on/off via nightLightSwitch field)
+  set_nightlight_brightness:
+    payload:
+      data:
+        brightness: 70
+        nightLightSwitch: 1
+      method: setLightStatus
+      source: APP
+
+  update:
+    payload:
+      data: {}
+      method: getHumidifierStatus
+      source: APP
+
+# RESPONSE device data -- what the OasisMist 1000S returns after envelope peel.
+# Shape: Levoit1000SResult (pyvesync models) -- camelCase top-level, no configuration sub-object.
+#
+# Fields (camelCase, top-level except nightLight):
+#   powerSwitch (int), workMode (string), humidity (int), targetHumidity (int),
+#   mistLevel (int), virtualLevel (int), waterLacksState (int|bool), waterTankLifted (int|bool),
+#   autoStopSwitch (int), autoStopState (int), screenSwitch (int), screenState (int),
+#   nightLight: {nightLightSwitch: int, brightness: int}  -- present on WEUR, absent on US/WUSR
+#
+# NO: warm_level, warm_enabled (1000S has no warm mist hardware)
+# NO: configuration.auto_target_humidity (targetHumidity is top-level)
+# NO: mist_virtual_level (uses virtualLevel directly)
+
+responses:
+  # Canonical: device on, manual mode, mist=5, US/WUSR variant (no nightLight key)
+  device_on_manual_canonical:
+    powerSwitch: 1
+    workMode: manual
+    humidity: 42
+    targetHumidity: 55
+    mistLevel: 5
+    virtualLevel: 5
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+
+  # Auto mode, US variant
+  device_on_auto_mode:
+    powerSwitch: 1
+    workMode: auto
+    humidity: 60
+    targetHumidity: 65
+    mistLevel: 4
+    virtualLevel: 4
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+
+  # Sleep mode
+  device_on_sleep_mode:
+    powerSwitch: 1
+    workMode: sleep
+    humidity: 55
+    targetHumidity: 60
+    mistLevel: 2
+    virtualLevel: 2
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 0
+    screenState: 0
+
+  # Device off -- virtualLevel may retain last-set value; driver clamps to 0 (BP#6)
+  device_off:
+    powerSwitch: 0
+    workMode: manual
+    humidity: 48
+    targetHumidity: 55
+    mistLevel: 5
+    virtualLevel: 5
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 0
+    screenState: 0
+
+  # Water reservoir empty
+  device_water_lacks:
+    powerSwitch: 1
+    workMode: auto
+    humidity: 28
+    targetHumidity: 55
+    mistLevel: 3
+    virtualLevel: 3
+    waterLacksState: 1
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+
+  # Tank lifted (waterTankLifted=1 -- treated same as waterLacks)
+  device_tank_lifted:
+    powerSwitch: 0
+    workMode: manual
+    humidity: 35
+    targetHumidity: 50
+    mistLevel: 0
+    virtualLevel: 0
+    waterLacksState: 0
+    waterTankLifted: 1
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 0
+    screenState: 0
+
+  # Auto-stop reached (target humidity hit, device shut mist off)
+  device_auto_stop_reached:
+    powerSwitch: 0
+    workMode: auto
+    humidity: 66
+    targetHumidity: 65
+    mistLevel: 0
+    virtualLevel: 0
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 1
+    screenSwitch: 0
+    screenState: 0
+
+  # WEUR variant: nightLight sub-object present, nightlight on at brightness=70
+  device_weur_nightlight_on:
+    powerSwitch: 1
+    workMode: manual
+    humidity: 50
+    targetHumidity: 55
+    mistLevel: 4
+    virtualLevel: 4
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+    nightLight:
+      nightLightSwitch: 1
+      brightness: 70
+
+  # WEUR variant: nightlight off (brightness=0)
+  device_weur_nightlight_off:
+    powerSwitch: 1
+    workMode: auto
+    humidity: 52
+    targetHumidity: 60
+    mistLevel: 5
+    virtualLevel: 5
+    waterLacksState: 0
+    waterTankLifted: 0
+    autoStopSwitch: 1
+    autoStopState: 0
+    screenSwitch: 1
+    screenState: 1
+    nightLight:
+      nightLightSwitch: 0
+      brightness: 0

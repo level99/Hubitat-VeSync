@@ -296,29 +296,32 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Bug Pattern #2: updateDevices() branches by typeName
+    // Bug Pattern #2: updateDevices() dtype-based routing via deviceMethodFor()
+    // (v2.3: routing moved from typeName substring-matching to deviceMethodFor(),
+    //  which reads child's stored raw model code via getDataValue("deviceType").)
     // Issue 2: `result = dev.update(...)` was dropped — no longer throws
     //          MissingPropertyException on every poll cycle.
     // -------------------------------------------------------------------------
 
     def "updateDevices() uses getPurifierStatus for purifier device (Bug Pattern #2)"() {
-        given: "state has a purifier device"
+        given: "state has a purifier device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
         state.deviceList = ["PURIFIER-CID": "test-config-module"]
 
-        // Wire a mock child device with purifier typeName
+        // deviceMethodFor() reads getDataValue("deviceType"), not typeName.
+        // Must set the raw model code explicitly so routing resolves correctly.
         def purifierDevice = new TestDevice()
         purifierDevice.typeName = "Levoit Vital 200S Air Purifier"
-        // Mock its update(status, nightLight) method via metaClass
+        purifierDevice.updateDataValue("deviceType", "LAP-V201S-WUS")  // dtype → V200S → getPurifierStatus
         purifierDevice.metaClass.update = { Map st, nl -> true }
         childDevices["PURIFIER-CID"] = purifierDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getPurifierStatus"
+        then: "deviceMethodFor() resolved V200S dtype → getPurifierStatus"
         def purifierBody = capturedBypassBodies.find { b ->
             b.payload?.method == "getPurifierStatus"
         }
@@ -326,22 +329,23 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     def "updateDevices() uses getHumidifierStatus for humidifier device (Bug Pattern #2)"() {
-        given: "state has a humidifier device"
+        given: "state has a humidifier device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
         state.deviceList = ["HUMIDIFIER-CID": "test-config-module"]
 
-        // Wire a mock child device with humidifier typeName
+        // deviceMethodFor() reads getDataValue("deviceType") — must set raw model code.
         def humDevice = new TestDevice()
         humDevice.typeName = "Levoit Superior 6000S Humidifier"
+        humDevice.updateDataValue("deviceType", "LEH-S601S-WUS")  // dtype → V601S → getHumidifierStatus
         humDevice.metaClass.update = { Map st, nl -> true }
         childDevices["HUMIDIFIER-CID"] = humDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getHumidifierStatus"
+        then: "deviceMethodFor() resolved V601S dtype → getHumidifierStatus"
         def humBody = capturedBypassBodies.find { b ->
             b.payload?.method == "getHumidifierStatus"
         }
@@ -349,7 +353,7 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     def "updateDevices() correctly branches both devices in same deviceList (Bug Pattern #2)"() {
-        given: "state has both a purifier and a humidifier"
+        given: "state has both a purifier and a humidifier, each with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -360,21 +364,23 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         def purifierDevice = new TestDevice()
         purifierDevice.typeName = "Levoit Core 400S Air Purifier"
+        purifierDevice.updateDataValue("deviceType", "LAP-C401S-WJP")  // dtype → 400S → getPurifierStatus
         purifierDevice.metaClass.update = { Map st, nl -> true }
         childDevices["PURIFIER-CID"] = purifierDevice
 
         def humDevice = new TestDevice()
         humDevice.typeName = "Levoit Superior 6000S Humidifier"
+        humDevice.updateDataValue("deviceType", "LEH-S601S-WUS")  // dtype → V601S → getHumidifierStatus
         humDevice.metaClass.update = { Map st, nl -> true }
         childDevices["HUMIDIFIER-CID"] = humDevice
 
         when:
         driver.updateDevices()
 
-        then: "getPurifierStatus was sent for the purifier"
+        then: "deviceMethodFor() sent getPurifierStatus for the purifier"
         capturedBypassBodies.any { it.payload?.method == "getPurifierStatus" }
 
-        and: "getHumidifierStatus was sent for the humidifier"
+        and: "deviceMethodFor() sent getHumidifierStatus for the humidifier"
         capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
     }
 
@@ -1347,14 +1353,22 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // H: updateDevices() method routing — v2.1 fan types
+    // H: updateDevices() method routing — dtype-based (v2.3 refactor)
     //
-    // Tower Fan -> getTowerFanStatus, Pedestal Fan -> getFanStatus.
-    // Existing Humidifier and purifier fallthrough must remain unchanged.
+    // Routing is now done via deviceMethodFor(child), which reads the child's
+    // stored raw model code (getDataValue("deviceType")), maps it through
+    // deviceType() to a dtype string, then dispatches dtype → API method.
+    // typeName is no longer used for routing — tests must set updateDataValue
+    // ("deviceType", rawModelCode) to exercise the correct branch.
+    //
+    // Tower Fan   -> getTowerFanStatus  (dtype TOWERFAN)
+    // Pedestal Fan -> getFanStatus      (dtype PEDESTALFAN)
+    // Humidifiers -> getHumidifierStatus (dtypes V601S/A601S/O451S/A602S/D301S)
+    // All others  -> getPurifierStatus  (all purifier dtypes + GENERIC)
     // -------------------------------------------------------------------------
 
     def "updateDevices() uses getTowerFanStatus for Tower Fan device (H1)"() {
-        given: "state has a Tower Fan device"
+        given: "state has a Tower Fan device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -1362,18 +1376,19 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         def fanDevice = new TestDevice()
         fanDevice.typeName = "Levoit Tower Fan"
+        fanDevice.updateDataValue("deviceType", "LTF-F422S-WUS")  // dtype → TOWERFAN
         fanDevice.metaClass.update = { Map st, nl -> true }
         childDevices["TOWERFAN-CID"] = fanDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getTowerFanStatus"
+        then: "deviceMethodFor() resolved TOWERFAN dtype → getTowerFanStatus"
         capturedBypassBodies.any { it.payload?.method == "getTowerFanStatus" }
     }
 
     def "updateDevices() uses getFanStatus for Pedestal Fan device (H2)"() {
-        given: "state has a Pedestal Fan device"
+        given: "state has a Pedestal Fan device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -1381,18 +1396,19 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         def fanDevice = new TestDevice()
         fanDevice.typeName = "Levoit Pedestal Fan"
+        fanDevice.updateDataValue("deviceType", "LPF-R432S-AEU")  // dtype → PEDESTALFAN
         fanDevice.metaClass.update = { Map st, nl -> true }
         childDevices["PEDESTALFAN-CID"] = fanDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getFanStatus"
+        then: "deviceMethodFor() resolved PEDESTALFAN dtype → getFanStatus"
         capturedBypassBodies.any { it.payload?.method == "getFanStatus" }
     }
 
     def "updateDevices() uses getPurifierStatus for Vital 100S device (H3 -- purifier fallthrough)"() {
-        given: "state has a Vital 100S purifier device"
+        given: "state has a Vital 100S purifier device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -1400,18 +1416,19 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         def purifierDevice = new TestDevice()
         purifierDevice.typeName = "Levoit Vital 100S Air Purifier"
+        purifierDevice.updateDataValue("deviceType", "LAP-V102S-WUS")  // dtype → V100S → default branch
         purifierDevice.metaClass.update = { Map st, nl -> true }
         childDevices["V100S-CID"] = purifierDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getPurifierStatus (fallthrough -- no 'Humidifier', 'Tower Fan', or 'Pedestal Fan' in typeName)"
+        then: "deviceMethodFor() resolved V100S dtype → getPurifierStatus (default branch)"
         capturedBypassBodies.any { it.payload?.method == "getPurifierStatus" }
     }
 
     def "updateDevices() uses getHumidifierStatus for Classic 300S device (H4 -- humidifier branch)"() {
-        given: "state has a Classic 300S humidifier device"
+        given: "state has a Classic 300S humidifier device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -1419,18 +1436,19 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         def humDevice = new TestDevice()
         humDevice.typeName = "Levoit Classic 300S Humidifier"
+        humDevice.updateDataValue("deviceType", "LUH-A601S-WUSB")  // dtype → A601S → getHumidifierStatus
         humDevice.metaClass.update = { Map st, nl -> true }
         childDevices["A601S-CID"] = humDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getHumidifierStatus"
+        then: "deviceMethodFor() resolved A601S dtype → getHumidifierStatus"
         capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
     }
 
     def "updateDevices() uses getHumidifierStatus for OasisMist 450S device (H5 -- humidifier branch)"() {
-        given: "state has an OasisMist 450S humidifier device"
+        given: "state has an OasisMist 450S humidifier device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -1438,18 +1456,19 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         def humDevice = new TestDevice()
         humDevice.typeName = "Levoit OasisMist 450S Humidifier"
+        humDevice.updateDataValue("deviceType", "LUH-O451S-WUS")  // dtype → O451S → getHumidifierStatus
         humDevice.metaClass.update = { Map st, nl -> true }
         childDevices["O451S-CID"] = humDevice
 
         when:
         driver.updateDevices()
 
-        then: "the bypass request body used getHumidifierStatus"
+        then: "deviceMethodFor() resolved O451S dtype → getHumidifierStatus"
         capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
     }
 
     def "updateDevices() routes all 5 v2.1 devices correctly in a single deviceList (H6 -- combined)"() {
-        given: "state has all 5 new v2.1 device types"
+        given: "state has all 5 new v2.1 device types, each with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
@@ -1461,15 +1480,18 @@ class VeSyncIntegrationSpec extends HubitatSpec {
             "PEDESTAL-CID":   "cm-pedestal"
         ]
 
+        // Each device must carry the raw model code so deviceMethodFor() can resolve
+        // the correct dtype via deviceType(). typeName is no longer used for routing.
         [
-            ["V100S-CID",    "Levoit Vital 100S Air Purifier"],
-            ["A601S-CID",    "Levoit Classic 300S Humidifier"],
-            ["O451S-CID",    "Levoit OasisMist 450S Humidifier"],
-            ["TOWERFAN-CID", "Levoit Tower Fan"],
-            ["PEDESTAL-CID", "Levoit Pedestal Fan"]
-        ].each { cid, typeName ->
+            ["V100S-CID",    "Levoit Vital 100S Air Purifier",    "LAP-V102S-WUS"],
+            ["A601S-CID",    "Levoit Classic 300S Humidifier",    "LUH-A601S-WUSB"],
+            ["O451S-CID",    "Levoit OasisMist 450S Humidifier",  "LUH-O451S-WUS"],
+            ["TOWERFAN-CID", "Levoit Tower Fan",                   "LTF-F422S-WUS"],
+            ["PEDESTAL-CID", "Levoit Pedestal Fan",                "LPF-R432S-AEU"]
+        ].each { cid, tn, rawCode ->
             def dev = new TestDevice()
-            dev.typeName = typeName
+            dev.typeName = tn
+            dev.updateDataValue("deviceType", rawCode)
             dev.metaClass.update = { Map st, nl -> true }
             childDevices[cid] = dev
         }
@@ -2671,5 +2693,267 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         and: "no explicit logInfo heartbeat entry -- driver relies on Hubitat auto-log from descriptionText, not logInfo()"
         testLog.infos.count { it.contains("Heartbeat: synced") } == 0
+    }
+
+    // =========================================================================
+    // Section N — Bug Pattern #17: stale configModule self-heal
+    //
+    // When VeSync pushes a firmware update the device's configModule value may
+    // change. state.deviceList holds a snapshot from the last getDevices() call;
+    // if that snapshot is stale the bypassV2 request returns an empty result,
+    // generating "No status returned from getPurifierStatus" at every poll cycle.
+    //
+    // Two-part fix:
+    //   Fix A — deviceMethodFor() typeName fallback: when rawCode is absent or
+    //            maps to GENERIC, infer the poll method from child's typeName.
+    //            Prevents mis-routing that compounds the empty-result problem.
+    //
+    //   Fix B — ensurePollHealth() watchdog: counts consecutive empty results
+    //            per DNI in state.consecutiveEmpty; triggers getDevices() when
+    //            any DNI reaches the 5-consecutive threshold.
+    //
+    // Tests:
+    //   N1 — deviceMethodFor() returns getHumidifierStatus for typeName "Humidifier"
+    //         when rawCode is absent (empty getDataValue)
+    //   N2 — deviceMethodFor() returns getPurifierStatus for unrecognized typeName
+    //         when rawCode is absent
+    //   N3 — deviceMethodFor() returns getHumidifierStatus for rawCode V601S
+    //         (regression check: existing dtype-based path still works)
+    //   N4 — updateDevices() increments state.consecutiveEmpty on null-result poll
+    //   N5 — updateDevices() clears state.consecutiveEmpty[dni] on successful poll
+    //   N6 — ensurePollHealth() triggers getDevices() when any DNI reaches 5
+    // =========================================================================
+
+    def "deviceMethodFor() returns getHumidifierStatus when typeName contains 'Humidifier' and rawCode is absent (N1 -- BP17 Fix A)"() {
+        // N1: typeName fallback path. When a child's getDataValue("deviceType") is empty
+        // (e.g. the field was never written, or a phantom handle), deviceMethodFor() falls
+        // through the switch (dtype = GENERIC) and must use typeName substring matching
+        // to avoid defaulting everything to getPurifierStatus.
+        given: "child device with no stored rawCode but a typeName containing 'Humidifier'"
+        def child = new TestDevice()
+        child.typeName = "Levoit Superior 6000S Humidifier"
+        // Deliberately leave deviceType data value absent (TestDevice default returns null/"")
+        child.metaClass.update = { Map st, nl -> true }
+
+        expect: "deviceMethodFor() resolves getHumidifierStatus via typeName fallback"
+        driver.deviceMethodFor(child) == "getHumidifierStatus"
+    }
+
+    def "deviceMethodFor() returns getPurifierStatus when typeName is unrecognized and rawCode is absent (N2 -- BP17 Fix A)"() {
+        // N2: unrecognized typeName fallback — no "Tower Fan", "Pedestal Fan", or "Humidifier"
+        // substring present. Must default to getPurifierStatus (safe fallback per comment in driver).
+        given: "child device with no stored rawCode and an unrecognized typeName"
+        def child = new TestDevice()
+        child.typeName = "Levoit Generic Device"
+        // Deliberately leave deviceType data value absent.
+        child.metaClass.update = { Map st, nl -> true }
+
+        expect: "deviceMethodFor() falls back to getPurifierStatus"
+        driver.deviceMethodFor(child) == "getPurifierStatus"
+    }
+
+    def "deviceMethodFor() returns getHumidifierStatus for rawCode V601S (N3 -- dtype-path regression)"() {
+        // N3: regression check — the dtype-based switch path must not be broken by the
+        // BP17 fallback addition. V601S (Superior 6000S) must still resolve via switch.
+        given: "child device with LEH-S601S-WUS rawCode stored"
+        def child = new TestDevice()
+        child.typeName = "Levoit Superior 6000S Humidifier"
+        child.updateDataValue("deviceType", "LEH-S601S-WUS")  // dtype → V601S → getHumidifierStatus
+        child.metaClass.update = { Map st, nl -> true }
+
+        expect: "deviceMethodFor() uses the dtype switch (V601S → getHumidifierStatus)"
+        driver.deviceMethodFor(child) == "getHumidifierStatus"
+    }
+
+    def "updateDevices() increments state.consecutiveEmpty on null-result poll (N4 -- BP17 Fix B)"() {
+        // N4: tracking increments. When the poll callback receives status==null (simulating
+        // stale configModule returning empty result), state.consecutiveEmpty[dni] must be
+        // incremented so the watchdog can detect the pattern.
+        given: "one device in deviceList; httpPost returns HTTP 200 with result==null"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        state.deviceList = ["empty-cid": "stale-config-module"]
+
+        def mockDev = new TestDevice()
+        mockDev.typeName = "Levoit Vital 200S Air Purifier"
+        mockDev.updateDataValue("deviceType", "LAP-V201S-WUS")
+        mockDev.metaClass.update = { Map st, nl -> true }
+        childDevices["empty-cid"] = mockDev
+
+        // Return HTTP 200 with outer code 0 but result == null (stale configModule symptom)
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [code: 0, result: null, traceId: "test-trace"]
+            callback(r)
+        }
+
+        when:
+        driver.updateDevices()
+
+        then: "state.consecutiveEmpty['empty-cid'] was set to 1"
+        state.consecutiveEmpty != null
+        (state.consecutiveEmpty["empty-cid"] as Integer) == 1
+
+        and: "an error log was emitted (the null-status branch ran)"
+        testLog.errors.any { it.contains("No status returned from") }
+    }
+
+    def "updateDevices() clears state.consecutiveEmpty[dni] on successful poll (N5 -- BP17 Fix B)"() {
+        // N5: counter reset on success. After a stale-configModule run is resolved
+        // (by getDevices() refreshing configModule, or by the API returning data),
+        // the first successful poll must clear the counter for that DNI so the watchdog
+        // does not trigger a redundant Resync.
+        given: "device has a prior consecutiveEmpty count of 3; next poll succeeds"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        state.consecutiveEmpty = ["success-cid": 3]  // pre-load a partial count
+        state.deviceList = ["success-cid": "fresh-config-module"]
+
+        def mockDev = new TestDevice()
+        mockDev.typeName = "Levoit Vital 200S Air Purifier"
+        mockDev.updateDataValue("deviceType", "LAP-V201S-WUS")
+        mockDev.metaClass.update = { Map st, nl -> true }
+        childDevices["success-cid"] = mockDev
+
+        // Return a successful result (non-null status)
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [
+                code: 0,
+                result: [code: 0, result: [powerSwitch: 1], traceId: "test-trace"],
+                traceId: "test-trace"
+            ]
+            callback(r)
+        }
+
+        when:
+        driver.updateDevices()
+
+        then: "state.consecutiveEmpty no longer contains 'success-cid'"
+        !(state.consecutiveEmpty?.containsKey("success-cid"))
+
+        and: "no error log was emitted (success path taken)"
+        !testLog.errors.any { it.contains("No status returned from") }
+    }
+
+    def "ensurePollHealth() schedules getDevices() via runIn when any DNI count reaches 5 (N6 -- BP17 Fix B)"() {
+        // N6: watchdog fires. When state.consecutiveEmpty contains a DNI with count >= 5,
+        // ensurePollHealth() must schedule a getDevices() Resync via runIn(2, "getDevices")
+        // (async, to avoid blocking the poll cron thread on retryableHttp delays) and reset
+        // the counters. Direct getDevices() call is intentionally NOT expected here.
+        given: "state.consecutiveEmpty has one DNI at count 5 (threshold reached)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.consecutiveEmpty = ["stale-cid": 5]
+        List<List<Object>> runInCalls = []
+
+        // Capture runIn calls — ensurePollHealth() fires runIn(2, "getDevices")
+        driver.metaClass.runIn = { int delay, String handler ->
+            runInCalls << [delay, handler]
+        }
+
+        when:
+        driver.ensurePollHealth()
+
+        then: "runIn was called with delay=2 and handler='getDevices'"
+        runInCalls.size() == 1
+        runInCalls[0][0] == 2
+        runInCalls[0][1] == "getDevices"
+
+        and: "state.consecutiveEmpty is reset before the Resync (cleared so watchdog doesn't re-fire)"
+        state.consecutiveEmpty == [:]
+
+        and: "an INFO log was emitted naming the affected DNI"
+        testLog.infos.any { it.contains("BP17 poll-health") && it.contains("stale-cid") }
+    }
+
+    // =========================================================================
+    // Section O — Generic-driver migration hint
+    //
+    // When an existing child is on "Levoit Generic Device" and getDevices()
+    // would now assign it a proper driver, warnIfGenericMigration() logs an
+    // actionable INFO message naming the device, proper driver, and upgrade
+    // steps. Deduplicated per DNI per Resync via state.genericMigrationWarnings.
+    //
+    // Tests:
+    //   O1 — INFO logged when child typeName is "Levoit Generic Device"
+    //   O2 — no INFO logged when child is already on the proper driver
+    //   O3 — dedup: second call for same DNI in same Resync does not repeat INFO
+    // =========================================================================
+
+    def "warnIfGenericMigration() logs INFO when existing child is on Generic fallback driver (O1)"() {
+        // O1: golden path — an existing child whose typeName is "Levoit Generic Device"
+        // should trigger the migration hint mentioning the proper driver name and steps.
+        given: "an existing child device on the Generic fallback driver"
+        settings.descriptionTextEnable = true
+        def genericChild = new TestDevice()
+        genericChild.typeName = "Levoit Generic Device"
+        genericChild.label = "My OasisMist 1000S"
+        childDevices["om1000s-cid"] = genericChild
+
+        // warnIfGenericMigration reads getChildDevice(), initialize the dedup list
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        state.genericMigrationWarnings = [] as List
+
+        when:
+        driver.warnIfGenericMigration("om1000s-cid", "Levoit OasisMist 1000S Humidifier")
+
+        then: "INFO log was emitted naming the device and the proper driver"
+        testLog.infos.any { it.contains("My OasisMist 1000S") && it.contains("Levoit OasisMist 1000S Humidifier") }
+
+        and: "INFO log mentions the upgrade steps"
+        testLog.infos.any { it.contains("Type") && it.contains("Save Preferences") }
+    }
+
+    def "warnIfGenericMigration() does NOT log when child is already on the proper driver (O2)"() {
+        // O2: negative path — an existing child already running the proper driver (typeName
+        // is not "Levoit Generic Device") must not produce any migration hint. The common
+        // case: user already migrated, or the device was added with the proper driver from
+        // the start.
+        given: "an existing child device on the proper driver (not Generic)"
+        settings.descriptionTextEnable = true
+        def properChild = new TestDevice()
+        properChild.typeName = "Levoit OasisMist 1000S Humidifier"
+        properChild.label = "My OasisMist 1000S"
+        childDevices["om1000s-cid-proper"] = properChild
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        state.genericMigrationWarnings = [] as List
+
+        when:
+        driver.warnIfGenericMigration("om1000s-cid-proper", "Levoit OasisMist 1000S Humidifier")
+
+        then: "no migration INFO log was emitted"
+        !testLog.infos.any { it.contains("Migration available") }
+    }
+
+    def "warnIfGenericMigration() logs INFO only once per DNI per Resync — dedup on second call (O3)"() {
+        // O3: dedup — if the same DNI appears more than once in a Resync run (shouldn't
+        // happen in practice, but guards against accidental double-call), the INFO must
+        // fire exactly once, not twice.
+        given: "an existing Generic child device"
+        settings.descriptionTextEnable = true
+        def genericChild = new TestDevice()
+        genericChild.typeName = "Levoit Generic Device"
+        genericChild.label = "My Sprout Humidifier"
+        childDevices["sprout-cid"] = genericChild
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        state.genericMigrationWarnings = [] as List
+
+        when: "warnIfGenericMigration is called twice for the same DNI"
+        driver.warnIfGenericMigration("sprout-cid", "Levoit Sprout Humidifier")
+        driver.warnIfGenericMigration("sprout-cid", "Levoit Sprout Humidifier")
+
+        then: "exactly one migration INFO log was emitted (not two)"
+        testLog.infos.count { it.contains("My Sprout Humidifier") && it.contains("Levoit Sprout Humidifier") } == 1
     }
 }

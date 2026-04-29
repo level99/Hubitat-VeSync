@@ -137,17 +137,27 @@ def check_bp1_missing_2arg_update(path, raw_lines, cleaned_lines, raw_text, conf
 
 
 # ---------------------------------------------------------------------------
-# BP2 — Hardcoded getPurifierStatus in parent
+# BP2 — Missing deviceMethodFor() routing helper call in updateDevices()
 # ---------------------------------------------------------------------------
 
 def check_bp2_hardcoded_purifier_method(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
     """
-    In VeSyncIntegration.groovy, the updateDevices() method must not contain
-    a hardcoded "getPurifierStatus" string outside a device-type branch.
+    In VeSyncIntegration.groovy, the updateDevices() method must delegate
+    API-method selection to the deviceMethodFor() helper (v2.3+).
 
-    Heuristic: find any literal "getPurifierStatus" in updateDevices() body.
-    If it appears AND there's no nearby humidifier branch check, flag it.
-    The current correct implementation branches on typeName.contains("Humidifier").
+    Positive assertion: updateDevices() body must contain a call to
+    deviceMethodFor(...). If it does NOT, flag FAIL — someone re-inlined
+    routing logic (or the helper was accidentally removed).
+
+    Pre-v2.3 the check was a negative assertion (look for "getPurifierStatus"
+    without a humidifier branch). That approach was replaced because:
+      (a) the literal moved to deviceMethodFor(), making the old check vacuous, and
+      (b) the old fix: suggestion pointed to the deprecated typeName.contains()
+          pattern, which would re-introduce exactly the regression this rule guards.
+
+    The positive-assertion form is more robust: it fires on any regression
+    where updateDevices() stops delegating to the helper, regardless of what
+    inline approach the regressor chose.
     """
     findings = []
     if path.name != PARENT_DRIVER:
@@ -155,31 +165,25 @@ def check_bp2_hardcoded_purifier_method(path, raw_lines, cleaned_lines, raw_text
 
     bodies = find_method_bodies(raw_text, "updateDevices")
     for (start_line, body) in bodies:
-        # Find occurrences of getPurifierStatus
-        for m in re.finditer(r'"getPurifierStatus"', body):
-            # Count chars before this match to find line offset within body
-            pre = body[:m.start()]
-            line_offset = pre.count('\n')
-            abs_line = start_line + line_offset
-
-            # Check if a humidifier branch exists in the same body
-            has_branch = bool(re.search(
-                r'(contains\s*\(\s*"Humidifier"\s*\)|getHumidifierStatus)',
-                body
+        has_helper_call = bool(re.search(r'\bdeviceMethodFor\s*\(', body))
+        if not has_helper_call:
+            findings.append(_making_finding(
+                severity="FAIL",
+                rule_id="BP2_missing_deviceMethodFor_call",
+                title="updateDevices() does not call deviceMethodFor() for API-method routing",
+                path=path, rel_base=rel_base, lineno=start_line, lines=raw_lines,
+                why="Bug Pattern #2: the VeSync API uses different status-read methods per device "
+                    "family (getPurifierStatus / getHumidifierStatus / getTowerFanStatus / "
+                    "getFanStatus). Routing must be delegated to deviceMethodFor(child), which "
+                    "maps raw model codes through deviceType() to the correct method. Inlining "
+                    "routing logic in updateDevices() (e.g. typeName.contains() or hardcoding "
+                    "a method name) silently fails for some device families.",
+                fix="In updateDevices() loop: `String method = deviceMethodFor(dev)` — then use "
+                    "`method` in the command Map. Do not inline routing logic. See "
+                    "VeSyncIntegration.groovy deviceMethodFor() for the canonical dtype→method "
+                    "dispatch switch.",
             ))
-            if not has_branch:
-                findings.append(_making_finding(
-                    severity="FAIL",
-                    rule_id="BP2_hardcoded_purifier_method",
-                    title="Hardcoded getPurifierStatus without humidifier branch in updateDevices()",
-                    path=path, rel_base=rel_base, lineno=abs_line, lines=raw_lines,
-                    why="Bug Pattern #2: humidifier devices silently fail when the parent sends "
-                        "getPurifierStatus to them (returns inner code -1). Parent must branch by "
-                        "device type and send getHumidifierStatus for humidifiers.",
-                    fix='Branch inside updateDevices() loop: '
-                        'String method = typeName.contains("Humidifier") ? "getHumidifierStatus" : "getPurifierStatus"',
-                ))
-            break  # one finding per updateDevices body is enough
+        break  # one finding per updateDevices body is enough
 
     return findings
 

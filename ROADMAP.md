@@ -6,40 +6,30 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 ---
 
-## v2.3 — next release (TBD)
+## v2.4 — next release (TBD)
 
-### New driver coverage planned for v2.3
+### Hardware-pending items (carryforward from v2.3)
 
-| Driver | Model code(s) | pyvesync class | Tier | Notes |
-|---|---|---|---|---|
-| OasisMist 1000S US | `LUH-M101S-WUS`, `-WUSR` | `VeSyncHumid1000S` | 2 | New class; payload conventions differ from `VeSyncHumid200300S`. Pull pyvesync's class in full before drafting. |
-| OasisMist 1000S EU / Vibe Mini | `LUH-M101S-WEUR` | `VeSyncHumid1000S` | 3 | EU variant adds nightlight features. Low effort after 1000S US lands. |
-| EverestAir / EverestAir-P | `LAP-EL551S-AUS/-AEUR/-WEU/-WUS` (+ `-WUSB`, `-AUSR` per retailer listings) | `VeSyncAirBaseV2` | 3 | New TURBO mode + VENT_ANGLE feature; new payload methods beyond Vital 200S. |
-| Sprout Air Purifier | `LAP-B851S-WUS/-WEU/-WNA/-AEUR/-AUS`, `LAP-BAY-MAX01S` | `VeSyncAirSprout` | 3 | New class with night light + air-quality. Note unusual `LAP-BAY-MAX01S` model code shape (baby-themed bundle SKU; no `LAP-` prefix on the `MAX01S` segment). |
-| Sprout Humidifier | `LEH-B381S-WUS`, `-WEU` | `VeSyncSproutHumid` | 3 | New class, less external doc. Plan: build by direct pyvesync class read + canonical fixture, like Dual 200S. |
-| Classic 200S | `Classic200S` | `VeSyncHumid200S` | 3 | **Naming trap** — different class from Classic 300S (`VeSyncHumid200S` vs `VeSyncHumid200300S`). Mist 1-9, auto/manual only, no nightlight, no warm mist. |
-| LV600S Hub Connect | `LUH-A603S-WUS` | `VeSyncLV600S` | 3 | **Naming trap** — same marketing name "LV600S" as `LUH-A602S` but different pyvesync class with different mode-name conventions (`mode: "humidity"` instead of `auto`). Added in pyvesync 3.4.0 (Jan 2026). |
+- **Pedestal Fan write-path completion** — `setDisplay`, `setMute`, `setChildLock`, timer payload. Awaiting maintainer's Pedestal Fan arrival to capture canonical request shapes.
+- **Tower Fan `displayingType` semantics resolution** — currently a 0/1 toggle of unknown function. Toggle in mobile app, observe device behavior + status field, document, decide whether to expose as user-facing command.
 
-### Polish + completion items planned for v2.3
+### Upstream-pending items (carryforward from v2.3)
 
-- **Pedestal Fan write-path completion** — `setDisplay`, `setMute`, `setChildLock`, timer payload (hardware-pending; pending Pedestal Fan arrival)
-- **Tower Fan `displayingType` semantics resolution** — currently a 0/1 toggle of unknown function; toggle in mobile app, observe device behavior + status field, document, decide whether to expose as user-facing command
-- **Whole-repo `runIn` hygiene pass** — bare-identifier sweep + reboot-survival audit (combined):
-  - Bare-identifier sweep: convert remaining bare-identifier `runIn(N, handlerName)` calls to string-literal form for portability between Hubitat sandbox and the test classloader. ~14 instances across 8 files.
-  - Reboot-survival audit: classify every `runIn`/`runInMillis` call site by reboot-survival risk. Empirical pattern (BP14 polling chain + BP16 debug auto-disable) is that load-bearing `runIn` timers don't survive hub reboots. Catalog each remaining call as (a) one-shot user-action-triggered (low risk), (b) load-bearing recurring with watchdog (BP14/BP16 already covered), (c) load-bearing one-shot vulnerable (apply watchdog). Sites not yet audited: `runIn(15, "initialize")`, `runIn(10, "updateDevices")` post-discovery kick, `runIn(5 * settings.refreshInterval, "timeOutLevoit")` watchdog, `runInMillis(500, "configureOnState")`, `runIn(3, "refresh")` in preview-driver `updated()`.
-- **Routing refactor — finish issue #3** — v2.2 partially addressed via option (a): centralized routing into the `TYPENAME_TO_METHOD` `@Field` map (commit `c31c14c`). Single source of truth achieved, but the underlying substring coupling (`typeName.contains(...)`) remains inside the lookup closure. v2.3 should pursue option (b) extend `deviceType()` to expose API method per family, OR option (c) per-child `state.deviceFamily` constant set in `installed()` — to fully decouple routing from human-readable driver names. Suggested by Gemini Code Assist on PR #2.
-- **Opportunistic regional code adds:**
-  - PlasmaPro 400S-P black (`LAP-C401S-KUSR`) — likely already works via parent's substring routing; one-line readme.md note to confirm coverage.
-  - UK Pedestal Fan (`LPF-R432S-AUK`) — one-line add to Pedestal Fan child driver enumeration.
+- **Pyvesync PR #502 fold-in** once upstream merges — reconcile RGB nightlight `colorSliderLocation` anchor table + re-verify HSV-brightness adjustment against pyvesync's `_apply_brightness_to_rgb`.
 - **Upstream pyvesync PR — regional code roll-up.** Single PR contributing model codes back upstream that we cover but pyvesync's `device_map.py` doesn't enumerate: `LAP-V201S-WUSR`, `LAP-V201S-WEUR` (Vital 200S), `LAP-C201S-WUSR` (Core 200S), `LAP-C401S-KUSR` (PlasmaPro 400S-P black), `LPF-R432S-AUK` (UK Pedestal Fan), `LTF-F362S-WUSR` (36-inch Tower Fan, with note that hardware is sibling of F422S). Low-controversy patch; eliminates 6 of our enumeration gaps in one upstream merge.
 - **BP16 live-verified footer** — analogous to BP14's footer in `qa-agent.md`; add after first community report confirms post-reboot self-heal.
 - **Plain (non-RGB) brightness nightlight for `LUH-O451S-WUSR`** — per pyvesync issue #500 refutation of the v2.1 "no nightlight (hardware lacks it)" CROSS-CHECK decision. WUSR variant DOES have a nightlight per the user report; investigate, capture/validate, re-add nightlight conditionally for that specific variant.
-- **Pyvesync PR #502 fold-in** once upstream merges — reconcile RGB nightlight `colorSliderLocation` anchor table + re-verify HSV-brightness adjustment against pyvesync's `_apply_brightness_to_rgb`.
-- **`Notification Tile.groovy` manifest entry decision** — the file exists in `Drivers/Levoit/` but has no `levoitManifest.json` entry; lint exempts it. Predates v2.0. Decide: (a) leave as-is (parent-instantiated, not user-installable via HPM), (b) add a manifest entry with `required: false` for completeness, (c) document the rationale in CONTRIBUTING.md as an intentional exception.
+
+### v2.3 post-cut WATCH items (queued during the v2.3 cut-release pre-flight + cross-source validation)
+
+- **`getPurifierStatus` empty-response ERROR log dedup/downgrade** — pre-existing v2.0+ behavior; one offline child drives ~1 ERROR/min when the device is unplugged or off the VeSync cloud. Surfaced by the v2.3 production-log audit. Downgrade to WARN or dedup per-device per session so the log doesn't spam an error per minute for a known-offline scenario.
+- **OasisMist 1000S WEUR nightlight payload fallback** — only if community reports failure with the current pyvesync-class pattern. Pyvesync's WEUR fixture doesn't actually exercise nightlight, leaving the payload underspecified upstream. Fallback: switch to spkesDE's single-method `setNightLightBrightness {nightLightBrightness: N}` pattern (1-line change in `LevoitOasisMist1000S.groovy:setNightlight`).
+- **Sprout Air VOC/CO2 attribute population verification** — driver declares `voc` + `co2` attributes (Sprout Air is Levoit's air-quality flagship per marketing) but pyvesync's device_map.py doesn't list explicit VOC/CO2 features. Driver is null-safe — attributes stay null if API doesn't return them. Action if community reports null values: confirm pyvesync feature gap + drop attributes (or document as marketing-aspirational).
+- **EverestAir `setTimer`/`clearTimer` commands** — pyvesync `VeSyncAirBaseV2` exposes `set_timer`/`clear_timer`; v2.3 driver doesn't surface them. Cookie-cutter port from Tower Fan timer pattern.
 
 ---
 
-## Beyond v2.3 — unscheduled
+## Beyond v2.4 — unscheduled
 
 Items below are not yet locked to a release. They're available for community pickup or maintainer prioritization as time permits.
 
@@ -73,9 +63,10 @@ Community hardware reports (a debug log showing the model code + `captureDiagnos
 
 ### Tooling & dev experience
 
-- **Full pyvesync compatibility audit** — manual side-by-side pass through every supported driver against pyvesync's canonical fixtures + class implementations, plus an automated `PyvesyncCoverageSpec` CI gate that re-runs on pyvesync upstream refresh. Catches the entire class of "VeSync API drifted, our driver silently wrong" bugs before they reach users.
+- **PyvesyncCoverageSpec — auto-refresh PR bot.** The MVP gate ships in v2.3 (pinned pyvesync 3.4.2; manual refresh on upstream version bumps). v2.4 follow-on: scheduled GitHub Action that detects new pyvesync tags via API, fetches the 19 vendored YAMLs from the new tag, opens a "chore: bump pyvesync to <tag>" PR. CI runs the existing `PyvesyncCoverageSpec` against the bumped fixtures; failures = real divergence surfaced for human review. Trade-off: the spec stays hermetic (no live network at test time) while refresh becomes effectively automatic. Same pattern Dependabot/Renovate use for arbitrary-source tracking.
+- **PyvesyncCoverageSpec — class-source introspection (post-MVP).** Current MVP is fixture-vs-fixture parity (method name + data key set). Misses: payload data values, response field coverage, structural depth, and class-source-vs-port mismatches like the OasisMist 1000S WEUR nightlight ambiguity (pyvesync class CODE has the split but the FIXTURE doesn't exercise it). v2.4+ extension: parse pyvesync's `vesyncfan.py` symbolically, compare method signatures + payload-builder logic against our drivers, surface gaps the fixture-only gate can't see.
 - **Virtual test parent driver** — sibling driver to `VeSyncIntegration.groovy` that returns canned pyvesync-fixture data instead of talking to the cloud. Lets contributors exercise child-driver parser paths end-to-end without owning the hardware. Worth building if hardware coverage expands or if multiple new device types need to land in succession.
-- **Pyvesync local Python harness** — small Python script that diff's our driver payloads against pyvesync's canonical request/response shapes. Useful as a CI gate; skip until CI is the limiting factor.
+- **Pyvesync local Python harness** — small Python script that diff's our driver payloads against pyvesync's canonical request/response shapes. Useful as a CI gate; partly subsumed by the v2.3 PyvesyncCoverageSpec — revisit after the auto-refresh PR bot lands to decide whether a Python-side complement adds value.
 - **Release automation Tier 1** — `scripts/release.sh` plus seeded `CHANGELOG.md`. The `/cut-release` slash command (in `.claude/commands/cut-release.md`) implements the Claude-driven flow; a complementary shell script for non-Claude releases would close the loop.
 
 ### Speculative / unresolved API questions

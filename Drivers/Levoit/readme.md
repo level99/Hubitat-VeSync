@@ -11,6 +11,12 @@ This is a **community fork** of [NiklasGustafsson/Hubitat](https://github.com/Ni
 - **Levoit OasisMist 450S Smart Humidifier** (LUH-O451S, LUH-O601S) — mist 1-9 + warm mist 0-3, auto-stop *(v2.1)*. EU variant `LUH-O451S-WEU` adds RGB color nightlight via standard Hubitat ColorControl *(v2.2)*
 - **Levoit LV600S Humidifier** (LUH-A602S, all 6 regional variants) — mist 1-9, warm mist 0-3, target humidity 30-80, auto-stop *(v2.2)*
 - **Levoit Dual 200S Humidifier** (LUH-D301S, all 5 regional variants) — mist 1-2 (2-level hardware), target humidity 30-80, auto/manual modes only *(v2.2)*
+- **Levoit Classic 200S Humidifier** (Classic200S) — VeSyncHumid200S class, mist 1-9, auto-stop, no nightlight *(v2.3 preview)*
+- **Levoit LV600S Hub Connect Humidifier** (LUH-A603S-WUS) — VeSyncLV600S class, V2 payloads, warm mist 0-3 *(v2.3 preview)*
+- **Levoit OasisMist 1000S Humidifier** (LUH-M101S, US + EU) — VeSyncHumid1000S class, EU adds nightlight *(v2.3 preview)*
+- **Levoit Sprout Humidifier** (LEH-B381S) — VeSyncSproutHumid, drying mode, color-temp nightlight (EU only) *(v2.3 preview)*
+- **Levoit Sprout Air Purifier** (LAP-B851S, LAP-BAY-MAX01S) — VeSyncAirSprout, full AQ suite (PM2.5/PM1/PM10/VOC/CO2) *(v2.3 preview)*
+- **Levoit EverestAir Air Purifier** (LAP-EL551S, all 4 regional variants) — VeSyncAirBaseV2, first TURBO mode + VENT_ANGLE feature *(v2.3 preview)*
 - **Levoit Tower Fan** (LTF-F422S) — 12-speed fan, oscillation, mute, ambient temperature *(v2.1)*
 - **Levoit Pedestal Fan** (LPF-R432S) — 12-speed fan, 2-axis oscillation with range control, ambient temperature *(v2.1)*
 - **EU region support** — `VeSync API region` parent preference (US/EU) routes API calls to the appropriate VeSync cloud host *(v2.2 preview)*
@@ -50,6 +56,12 @@ Copy the relevant `.groovy` files from the `Drivers/Levoit/` directory into Hubi
 | `LevoitOasisMist450S.groovy` | Levoit OasisMist 450S Smart Humidifier (US) *(v2.1 preview)* |
 | `LevoitLV600S.groovy` | Levoit LV600S Humidifier *(v2.2 preview)* |
 | `LevoitDual200S.groovy` | Levoit Dual 200S Humidifier *(v2.2 preview)* |
+| `LevoitClassic200S.groovy` | Levoit Classic 200S Humidifier *(v2.3 preview)* |
+| `LevoitLV600SHubConnect.groovy` | Levoit LV600S Hub Connect Humidifier (LUH-A603S) *(v2.3 preview)* |
+| `LevoitOasisMist1000S.groovy` | Levoit OasisMist 1000S Humidifier (LUH-M101S) *(v2.3 preview)* |
+| `LevoitSproutHumidifier.groovy` | Levoit Sprout Humidifier (LEH-B381S-WUS, LEH-B381S-WEU) *(v2.3 preview)* |
+| `LevoitSproutAir.groovy` | Levoit Sprout Air Purifier (LAP-B851S-*, LAP-BAY-MAX01S) *(v2.3 preview)* |
+| `LevoitEverestAir.groovy` | Levoit EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) *(v2.3 preview)* |
 | `LevoitTowerFan.groovy` | Levoit Tower Fan *(v2.1 preview)* |
 | `LevoitPedestalFan.groovy` | Levoit Pedestal Fan *(v2.1 preview)* |
 | `LevoitGeneric.groovy` | **Fall-through diagnostic driver** — any unrecognized Levoit model code. Best-effort power control + `captureDiagnostics()` for filing new-device-support requests. |
@@ -98,9 +110,18 @@ The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing
 | --- | --- | --- |
 | filter | 0-100 | Remaining filter life (%) |
 | mode | manual, sleep | Current mode |
+| childLock | on, off | Front-panel button-lock state. Called "Display Lock" in the VeSync mobile app for Core line. |
+| display | on, off | Front-panel display state. |
+| timerRemain | seconds | Auto-off timer remaining (0 if no timer set). |
 | info | HTML | Dashboard-tile-friendly summary |
 | switch | on, off | Power state |
 | speed | off, low, medium, high | Fan speed |
+
+Commands: `setDisplay`, `setSpeed`, `setMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`.
+
+Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
+
+**Timer units:** `setTimer` accepts seconds for Core line (matches the Levoit V1 API). The Vital line's `setTimer` accepts minutes — be aware if you have both device families.
 
 ### Core 300S
 
@@ -109,6 +130,11 @@ The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing
 | filter | 0-100 | Filter life (%) |
 | mode | manual, sleep, auto | Current mode |
 | auto_mode | default, quiet, efficient | Auto-mode preference |
+| childLock | on, off | Front-panel button-lock state. Called "Display Lock" in the VeSync mobile app for Core line. |
+| display | on, off | Front-panel display state. |
+| timerRemain | seconds | Auto-off timer remaining (0 if no timer set). |
+| pm25 | µg/m³ | Real-time PM2.5 reading. |
+| airQualityIndex | 1-4 | Levoit's categorical air-quality (1=excellent, 4=very bad). Distinct from the driver-computed US AQI (`aqi` attribute). |
 | aqi | 0-500 | US-formula AQI |
 | aqiDanger | string | Risk level for tile display |
 | aqiColor | hex | Color for HTML |
@@ -116,13 +142,29 @@ The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing
 | switch | on, off | Power |
 | speed | off, sleep, low, medium, high | Fan speed |
 
+Commands: `setDisplay`, `setSpeed`, `setMode`, `setAutoMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`.
+
+Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
+
+**Timer units:** `setTimer` accepts seconds for Core line (matches the Levoit V1 API). The Vital line's `setTimer` accepts minutes — be aware if you have both device families.
+
 ### Core 400S
 
-Same as 300S except `speed` adds `max`.
+Same as Core 300S except `speed` adds `max`.
+
+Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
+
+**Timer units:** `setTimer` accepts seconds for Core line (matches the Levoit V1 API). The Vital line's `setTimer` accepts minutes — be aware if you have both device families.
+
+**Model codes:** `Core400S`, `LAP-C401S-WJP`, `LAP-C401S-WUSR`, `LAP-C401S-WAAA`, `LAP-C401S-KUSR` (PlasmaPro 400S-P black variant, v2.3). All use the same VeSyncAirBypass API class.
 
 ### Core 600S
 
-Same as 400S; `auto_mode` adds `eco`.
+Same as Core 400S; `auto_mode` adds `eco`.
+
+Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
+
+**Timer units:** `setTimer` accepts seconds for Core line (matches the Levoit V1 API). The Vital line's `setTimer` accepts minutes — be aware if you have both device families.
 
 ### Vital 200S (LAP-V201S-*, LAP-V201-AUSR¹)
 
@@ -298,6 +340,194 @@ Covers all 5 model codes: `Dual200S` (literal device type reported by some firmw
 
 Commands: `setMode` (auto/manual), `setMistLevel` (1-2), `setHumidity` (30-80), `setDisplay`, `setAutoStop`, `toggle`. (No `setNightLight` — feature flag absent; no `setWarmMistLevel` — hardware absent.)
 
+### Classic 200S Humidifier (`Classic200S`) *— v2.3 preview*
+
+pyvesync class: `VeSyncHumid200S` (subclass of `VeSyncHumid200300S`). The **one** meaningful difference from Classic 300S / LV600S (A602S) is the display command: Classic 200S uses `setIndicatorLightSwitch {enabled: bool, id: 0}` rather than `setDisplay {state: bool}`. All other modes, mist levels, target-humidity, and auto-stop behavior are inherited from the VeSyncHumid200300S base class and match Classic 300S conventions.
+
+**CROSS-CHECK — Classic 200S vs Classic 300S naming trap:**
+- `Classic200S` (this driver) → `VeSyncHumid200S`; device code literal `Classic200S`; display = `setIndicatorLightSwitch`; modes auto/manual only; no night-light command.
+- `Classic300S` (separate `LevoitClassic300S.groovy`) → `VeSyncHumid200300S` base class; device codes `LUH-A601S-*`; display = `setDisplay`; modes auto/sleep/manual; 3-step night-light.
+Do NOT add LUH-A601S codes to this driver and do NOT add `Classic200S` to the Classic 300S driver.
+
+Modes: auto and manual only (no sleep per `device_map.py`). Mist levels 1-9.
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| mode | auto, manual | Current mode (auto/manual only; sleep not supported per device_map.py) |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 30-80 | Auto-mode target humidity |
+| mistLevel | 0-9 | Reported mist level (0 = inactive) |
+| waterLacks | yes, no | Water-tank low/empty indicator |
+| displayOn | on, off | Front-panel display state |
+| autoStopEnabled | on, off | Auto-stop-when-target-reached config |
+| autoStopReached | yes, no | Whether auto-stop is currently active |
+| nightLightBrightness | 0, 50, 100 | Night-light brightness from API (read-only passive; no setter) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/manual), `setMistLevel` (1-9), `setHumidity` (30-80), `setDisplay`, `setAutoStop`, `toggle`. (No `setNightLight` — feature flag absent per `device_map.py`; no `setWarmMistLevel` — hardware absent.)
+
+### LV600S Hub Connect Humidifier (LUH-A603S-WUS) *— v2.3 preview*
+
+pyvesync class: `VeSyncLV600S` — **distinct from `VeSyncHumid200300S`** used by the existing `LevoitLV600S.groovy` (A602S). Despite both being marketed as "LV600S", A603S and A602S use entirely different API conventions.
+
+**CROSS-CHECK — A603S vs A602S naming trap:**
+- `LUH-A603S-WUS` (this driver) → `VeSyncLV600S`; V2-style payload conventions (camelCase, `powerSwitch`/`switchIdx`, `workMode`, `levelIdx`/`virtualLevel`/`levelType`); auto mode wire value = `"humidity"`; no `setAutoStop` (device_map.py features=[WARM_MIST]); `setWarmMistLevel` uses API method `setLevel`.
+- `LUH-A602S-*` (separate `LevoitLV600S.groovy`) → `VeSyncHumid200300S`; V1-style payload conventions (snake_case, `enabled`/`id`, `mode`, `id`/`level`/`type`); auto mode wire value = `"auto"`; has `setAutoStop`.
+Do NOT add `LUH-A603S` to `LevoitLV600S.groovy` and do NOT add `LUH-A602S` codes to this driver.
+
+Auto mode sends `workMode: "humidity"` on the wire (normalized to `"auto"` in the driver's state and events). Warm mist 0-3. No auto-stop command (feature flag absent; `autoStopSwitch`/`autoStopState` from status are exposed as passive read-only attributes).
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| mode | auto, sleep, manual | Current mode (`"humidity"` on wire normalized to `"auto"` in state/events) |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 30-80 | Auto-mode target humidity |
+| mistLevel | 0-9 | Reported mist level (0 = inactive) |
+| warmMistLevel | 0-3 | Warm-mist level (0 = warm-mist off) |
+| warmMistEnabled | on, off | Boolean derived from warmMistLevel (on if 1-3, off if 0) |
+| waterLacks | yes, no | Water-tank low/empty indicator |
+| displayOn | on, off | Front-panel display state |
+| autoStopEnabled | on, off | Auto-stop config (passive read from `autoStopSwitch` — no setter) |
+| autoStopReached | yes, no | Whether auto-stop is currently active (passive read from `autoStopState`) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/sleep/manual), `setMistLevel` (1-9), `setWarmMistLevel` (0-3), `setHumidity` (30-80), `setDisplay`, `toggle`. (No `setAutoStop` — WARM_MIST is the only feature flag per `device_map.py`.)
+
+### OasisMist 1000S Humidifier (LUH-M101S-WUS, LUH-M101S-WUSR, LUH-M101S-WEUR) *— v2.3 preview*
+
+pyvesync class: `VeSyncHumid1000S` (inherits `VeSyncHumid200300S`; overrides key write methods). All three model codes route to this single driver. EU variant (`LUH-M101S-WEUR`) adds nightlight hardware.
+
+**CROSS-CHECK — OasisMist 1000S vs sibling classes:**
+- vs `VeSyncHumid200300S` (Classic 300S, OasisMist 450S, LV600S A602S, Dual 200S): switch uses `powerSwitch/switchIdx` (not `enabled/id`); mode uses `workMode` field (not `mode`); mist level uses API method `virtualLevel` with `levelIdx/virtualLevel/levelType` payload (not `setVirtualLevel` + `id/level/type`); target humidity is camelCase top-level `targetHumidity` (not nested `configuration.auto_target_humidity`); display uses `screenSwitch` integer (not `state: bool`); auto-stop uses `setAutoStopSwitch` method (not `setAutomaticStop`).
+- vs `VeSyncLV600S` (LV600S Hub Connect LUH-A603S): both use V2-style payloads; 1000S auto mode wire value is `'auto'` (A603S uses `'humidity'`); 1000S has nightlight (WEUR only); A603S has warm mist; 1000S has auto-stop, A603S does not.
+- vs `VeSyncHumid200S` (Classic 200S): same V2-payload divergences from 200300S base, but Classic 200S display is `setIndicatorLightSwitch`; 1000S display is `setDisplay {screenSwitch}`.
+
+Nightlight gating: US/WUSR variants have `AUTO_STOP` feature only — no nightlight hardware. WEUR variant adds `NIGHTLIGHT + NIGHTLIGHT_BRIGHTNESS`. The `setNightlight` command is declared for all variants (Hubitat static-metadata limitation); it no-ops with an INFO log on US/WUSR.
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power |
+| mode | auto, sleep, manual | Current mode |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 30-80 | Auto-mode target humidity |
+| mistLevel | 0-9 | Reported mist level (0 = inactive) |
+| waterLacks | yes, no | Water-tank low/empty or tank removed |
+| displayOn | on, off | Front-panel display state |
+| autoStopEnabled | on, off | Auto-stop-when-target-reached config |
+| autoStopReached | yes, no | Whether auto-stop is currently active |
+| nightlightOn | on, off | Nightlight power state (**WEUR only**; passive read on US/WUSR) |
+| nightlightBrightness | 0-100 | Nightlight brightness (**WEUR only**; passive read on US/WUSR) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/sleep/manual), `setMistLevel` (1-9), `setHumidity` (30-80), `setDisplay`, `setAutoStop`, `setNightlight` (on/off + brightness 0-100; **WEUR only** — no-ops with INFO log on US/WUSR), `toggle`. (No `setWarmMistLevel` — 1000S has no warm mist hardware.)
+
+### Sprout Humidifier (LEH-B381S-WUS, LEH-B381S-WEU) *— v2.3 preview*
+
+pyvesync class: `VeSyncSproutHumid` (inherits `BypassV2Mixin` + `VeSyncHumidifier` directly — **not** a subclass of `VeSyncHumid200300S`). V2-style payload conventions (camelCase field names, `powerSwitch`/`switchIdx`). Both WUS and WEU model codes are supported by this single driver; WEU adds nightlight hardware with full color-temperature control.
+
+**CROSS-CHECK — Sprout Humidifier vs siblings:**
+- Auto mode wire value is `"autoPro"` (NOT `"auto"` — different from Classic/LV600S A602S/Dual 200S). Driver normalizes `"autoPro"` → `"auto"` in state and events.
+- Mist API method is `setVirtualLevel` (NOT `virtualLevel` as used by OasisMist 1000S). Payload: `{levelIdx:0, virtualLevel:1-2, levelType:"mist"}`.
+- Mist range: **1-2 only** (2-level hardware per pyvesync `device_map.py`).
+- Nightlight API: `setLightStatus {brightness, colorTemperature, nightLightSwitch}` — colorTemperature in Kelvin (2000-3500). This is distinct from OasisMist 1000S nightlight which omits colorTemperature.
+- No warm mist hardware.
+- No auto-stop command.
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power state |
+| mode | auto, sleep, manual | Current mode (`"autoPro"` on wire normalized to `"auto"` in state/events) |
+| humidity | % | Current ambient humidity |
+| targetHumidity | 30-80 | Auto-mode target humidity |
+| mistLevel | 1-2 | Active mist level (0 when device is off) |
+| waterLacks | yes, no | Water-tank low/empty indicator |
+| displayOn | on, off | Front-panel display state |
+| childLock | on, off | Child-lock state |
+| autoStopEnabled | on, off | Auto-stop config (passive read — no setter) |
+| autoStopReached | yes, no | Whether auto-stop is currently active (passive read) |
+| dryingEnabled | on, off | Whether auto-drying mode is enabled |
+| filterLife | 0-100 | Primary filter life (%) |
+| hepaFilterLife | 0-100 | HEPA filter life (%), if separately tracked by firmware |
+| nightlightOn | on, off | Nightlight power state (**WEU only**; passive read on WUS) |
+| nightlightBrightness | 0-100 | Nightlight brightness (**WEU only**; passive read on WUS) |
+| nightlightColorTemp | 2000-3500 | Nightlight color temperature in Kelvin (**WEU only**) |
+| temperature | °F | Ambient temperature from onboard sensor (raw value / 10) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/sleep/manual), `setMistLevel` (1-2), `setHumidity` (30-80), `setDisplay`, `setChildLock`, `setAutoStop`, `setDryingMode` (on/off), `setNightlight` (on/off + optional brightness 0-100 + optional colorTemp 2000-3500; **WEU only** — no-ops with INFO log on WUS), `toggle`.
+
+### Sprout Air Purifier (LAP-B851S-*, LAP-BAY-MAX01S) *— v2.3 preview*
+
+pyvesync class: `VeSyncAirSprout` (inherits `VeSyncAirBaseV2` → `VeSyncAirBypass`). V2-style payload conventions. Supports all 6 model codes: `LAP-B851S-WEU`, `LAP-B851S-WNA`, `LAP-B851S-AEUR`, `LAP-B851S-AUS`, `LAP-B851S-WUS`, `LAP-BAY-MAX01S`.
+
+**CROSS-CHECK — Sprout Air vs Vital line:**
+- Manual mode is established via `setLevel` (fan speed) — **NOT** `setPurifierMode {workMode:"manual"}`. pyvesync `VeSyncAirBaseV2.set_mode()` delegates `manual` to `set_fan_speed(1)`. Calling `setPurifierMode` with `workMode:"manual"` returns inner code -1.
+- Fan speed range: **1-3** (Sprout hardware). Different from Vital 200S (1-4) and Core 600S (1-5).
+- Nightlight uses `setNightLight {night_light: "on"|"off"|"dim"|"auto"}` string enum via inherited `VeSyncAirBypass.set_nightlight_mode()`. This is **completely different** from humidifier nightlight (`setLightStatus`).
+- Mode `"turbo"` is hardware-supported (listed in pyvesync `PurifierModes` for this class).
+- Full AQ sensor suite: AQLevel (1-4), PM2.5, PM1.0, PM10, VOC, CO2 (where available in response).
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power state |
+| mode | auto, manual, sleep, turbo, pet | Current mode |
+| fanSpeed | 0-3 | Active fan speed (0 when device is off; 255 sentinel mapped to 0) |
+| airQualityIndex | 1-4 | Levoit categorical AQ index (1=excellent, 4=very bad) |
+| pm25 | µg/m³ | Real-time PM2.5 reading |
+| pm1 | µg/m³ | Real-time PM1.0 reading (if present in response) |
+| pm10 | µg/m³ | Real-time PM10 reading (if present in response) |
+| aqi | 0-500 | US-formula AQI computed from PM2.5 |
+| voc | number | VOC level (if present in response) |
+| co2 | ppm | CO2 level (if present in response) |
+| displayOn | on, off | Front-panel display state |
+| childLock | on, off | Child-lock state |
+| nightlightOn | on, off | Nightlight power state (on if mode is `on` or `dim`) |
+| nightlightBrightness | 0-100 | Nightlight brightness (100 for `on`, 50 for `dim`, 0 for `off`) |
+| humidity | % | Ambient humidity from onboard sensor (if present in response) |
+| temperature | °F | Ambient temperature from onboard sensor (if present in response) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/sleep/turbo/pet — manual mode use `setFanSpeed` instead), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setNightlightMode` (on/off/dim/auto), `toggle`.
+
+### EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) *— v2.3 preview*
+
+pyvesync class: `VeSyncAirBaseV2` — same base class as Vital 200S and Sprout Air. No separate VeSyncAirEverest class exists in pyvesync; all four regional model codes map directly to `VeSyncAirBaseV2`. Single driver for all variants. "EverestAir-P" is a marketing name, not a distinct API class.
+
+**CROSS-CHECK — EverestAir vs sibling VeSyncAirBaseV2 purifiers:**
+- vs Vital 200S: EverestAir adds TURBO mode and VENT_ANGLE; Vital 200S has PET mode and LIGHT_DETECT instead. Fan range 1–3 vs 1–4.
+- vs Vital 100S: same as Vital 200S comparison; EverestAir additionally has LIGHT_DETECT (Vital 100S intentionally omits it despite API field being present).
+- vs Sprout Air: EverestAir has TURBO + VENT_ANGLE + LIGHT_DETECT; Sprout Air has NIGHTLIGHT. Both have AIR_QUALITY and fan levels 1–3.
+- vs Core line (VeSyncAirBypass): EverestAir uses V2-style payloads (`powerSwitch`/`switchIdx`, `workMode`, `manualSpeedLevel`/`levelIdx`/`levelType`). Core line uses V1 conventions (`switch`/`id`, `mode`, `level`/`id`/`type`).
+
+**TURBO mode** (first in this codebase): `workMode:"turbo"` via `setPurifierMode` — the same pathway as auto/sleep. No separate `setTurbo` command exists in pyvesync or this driver. Convention: turbo-as-mode is handled by `setMode("turbo")`.
+
+**VENT_ANGLE** (first in this codebase): `fanRotateAngle` is a **passive read-only** status field. pyvesync `VeSyncAirBaseV2._set_state()` reads it but no setter method exists anywhere in the class hierarchy. The driver exposes it as a `ventAngle` NUMBER attribute for dashboard observation. Exact unit (degrees or discrete position enum) TBD pending community hardware reports. If a write payload is discovered, a `setVentAngle` command can be added in a patch release.
+
+**LIGHT_DETECT**: `setLightDetection {lightDetectionSwitch: int}` — same API as Vital 200S. Two attributes: `lightDetection` (feature enabled/disabled) and `lightDetected` (whether ambient light is currently sensed).
+
+| event | Values | Description |
+| --- | --- | --- |
+| switch | on, off | Power state |
+| mode | auto, sleep, manual, turbo | Current mode (`"turbo"` is first new mode value in this codebase) |
+| fanSpeed | 0-3 | Active fan speed (0 when device is off; 255 sentinel mapped to 0) |
+| airQualityIndex | 1-4 | Levoit categorical AQ index (1=excellent, 4=very bad) |
+| pm25 | µg/m³ | Real-time PM2.5 reading |
+| pm1 | µg/m³ | Real-time PM1.0 reading (if present in response) |
+| pm10 | µg/m³ | Real-time PM10 reading (if present in response) |
+| aqPercent | 0-100 | Levoit's own AQ percent index (AQPercent field) |
+| filterLife | 0-100 | Filter life (%) |
+| timerRemain | seconds | Auto-off timer remaining (0 if no timer) |
+| displayOn | on, off | Front-panel display state |
+| childLock | on, off | Child-lock state |
+| lightDetection | on, off | Whether light-detection feature is enabled (user setting) |
+| lightDetected | yes, no | Whether ambient light is currently detected (passive read) |
+| ventAngle | number | Vent/fan rotation angle from `fanRotateAngle` response field (**passive read only** — no write path in pyvesync; exact unit TBD) |
+| info | HTML | Tile summary |
+
+Commands: `setMode` (auto/sleep/manual/turbo), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setLightDetection` (on/off), `resetFilter`, `toggle`. (No `setVentAngle` — no write path in pyvesync. No `setNightlightMode` — NIGHTLIGHT feature flag absent. No timer commands — not in device_map.py EverestAir entry.)
+
 ### Tower Fan (LTF-F422S) *— v2.1 preview*
 
 First fan device supported by this fork. Mode `sleep` maps to API literal `advancedSleep` internally; users see/use `sleep`. Temperature is divided by 10 from the raw response (e.g. `717` → `71.7°F`, matching the HA fixture's empirical reading).
@@ -324,7 +554,7 @@ Commands: `setMode`, `setSpeed` (1-12), `setOscillation`, `setMute`, `setDisplay
 
 2-axis oscillation (horizontal + vertical, controlled separately). Mode `sleep` maps to `advancedSleep` like Tower Fan; mode `eco` is the Pedestal Fan's auto-equivalent (Tower Fan has `auto`; do not confuse). `childLock` is read-only — pyvesync has no setter and ST/HB community drivers also expose no write path. Timer is omitted in v2.1 (no community-confirmed payload).
 
-Covers LPF-R432S-AEU and LPF-R432S-AUS. (pyvesync's fixture filename is a typo — `LPF-R423S.yaml` — but real device codes are `LPF-R432S`.)
+Covers LPF-R432S-AEU, LPF-R432S-AUS, and LPF-R432S-AUK (UK market variant, v2.3). (pyvesync's fixture filename is a typo — `LPF-R423S.yaml` — but real device codes are `LPF-R432S`.)
 
 | event | Values | Description |
 | --- | --- | --- |

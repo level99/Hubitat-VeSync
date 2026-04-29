@@ -242,4 +242,76 @@ class LevoitCore200SSpec extends HubitatSpec {
         and: "BP16 INFO log emitted"
         testLog.infos.any { it.contains("BP16 watchdog") }
     }
+
+    // -------------------------------------------------------------------------
+    // v2.3 new features: childLock, display, timer, resetFilter
+    // -------------------------------------------------------------------------
+
+    def "setChildLock('on') sends setChildLock with child_lock=true"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("on")
+
+        then: "setChildLock request sent with child_lock=true"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.child_lock == true
+    }
+
+    def "setChildLock('off') sends setChildLock with child_lock=false"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("off")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.child_lock == false
+    }
+
+    def "update() parses child_lock=true from fixture and emits childLock='on'"() {
+        given:
+        settings.descriptionTextEnable = true
+        // device_on_manual_speed1 has child_lock: true
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def status = fixture.responses.device_on_manual_speed1 as Map
+        assert status.result.child_lock == true
+
+        when:
+        driver.update(status, null)
+
+        then:
+        lastEventValue("childLock") == "on"
+    }
+
+    def "setTimer(300) sends addTimer with action='off' and total=300"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTimer(300)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "addTimer" }
+        req != null
+        req.data.action == "off"
+        req.data.total == 300
+    }
+
+    def "resetFilter sends resetFilter method with empty data"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.resetFilter()
+
+        then:
+        def req = testParent.allRequests.find { it.method == "resetFilter" }
+        req != null
+        (req.data == null || req.data == [:])
+    }
 }

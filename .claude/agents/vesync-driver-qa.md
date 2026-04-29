@@ -110,7 +110,7 @@ The 2-arg signature is the failure point for many community-reported "device dis
 ### F. Metadata, manifest, readme consistency
 
 1. New driver added → entry in `levoitManifest.json` with fresh UUID + correct path.
-2. Manifest version bumped + `dateReleased` updated + `releaseNotes` reflects the change.
+2. **Version policy (RULE20 lockstep, NOT preemptive bumps).** On feature branches, the manifest top-level `version` and `dateReleased` stay at the LAST RELEASED value (the maintainer renumbers on merge). Per-driver `definition(version: "X.Y.Z")` fields MUST match the manifest top-level (RULE20 lint enforces this). For NEW drivers added on a feature branch, declare `version:` matching the current manifest top-level — NOT the next anticipated release version. Lint will FAIL otherwise. **Do NOT flag the lockstep state as inconsistency.** A new preview driver showing `version: "2.2.1"` while the branch is named `release/v2.3` is CORRECT — it matches `levoitManifest.json` `"version": "2.2.1"`. The driver `description` field may say `[PREVIEW v2.3]` (a release-candidate marker) — that's fine and does not contradict the version field. Only flag as ISSUE if (a) the per-driver `version:` does NOT match `levoitManifest.json` top-level `version` (true RULE20 violation), or (b) the manifest itself was bumped on a feature branch (preemptive-bump policy violation).
 3. `readme.md` driver-list table includes the new file.
 4. `readme.md` events table per-device shows new attributes.
 5. Driver `name` metadata field NOT changed for existing-deployed drivers (breaks device association). For NEW drivers, use clean name; for legacy drivers, preserve original name even if descriptive misleading.
@@ -488,6 +488,56 @@ Call sites:
 **Live-verified:** pending (no live deploy completed at time of writing — v2.2 task 9 diff).
 
 **Flag this pattern** whenever a driver diff adds a `runIn(1800, "logDebugOff")` without the accompanying `state.debugEnabledAt = now()` state-tracking. It is BLOCKING — the fix is incomplete without the timestamp.
+
+---
+
+### 17. Stale `state.deviceList` configModule causes silent empty-result polls
+
+`state.deviceList` is a map of `{DNI → configModule}` built during `getDevices()` (Resync). When VeSync pushes a firmware update to a device, or the device is re-paired in the VeSync mobile app, the device's `configModule` value can change server-side. The cached value in `state.deviceList` becomes stale. Every subsequent `bypassV2` request uses the stale `configModule`; the VeSync cloud returns an empty result (`resp.data.result == null`), and `updateDevices()` logs `ERROR: No status returned from getPurifierStatus:` once per poll cycle until the user manually triggers Resync.
+
+**Same shape as BP14:** bug accumulates over time, self-heals on Save Preferences (because `updated()` → `initialize()` → `getDevices()` rebuilds `state.deviceList` with fresh configModules). Fix pattern is also the same — auto-detect + auto-heal.
+
+**Compound symptom:** if the child device also lost its `deviceType` data value (e.g. a re-add scenario, or the child predates the v2.2 plumbing and never self-seeded), `deviceMethodFor()` maps `rawCode = ""` → `dtype = "GENERIC"` → falls through to the default `getPurifierStatus` branch even for humidifiers. Wrong method + stale configModule both contribute to the empty result.
+
+**Fix A — typeName fallback in `deviceMethodFor()`:** make the dtype switch exhaustive for KNOWN dtypes (every purifier dtype gets an explicit `case`, not just the implicit default). For GENERIC or unmapped dtypes, fall through to typeName substring matching: `"Tower Fan"` → `getTowerFanStatus`, `"Pedestal Fan"` → `getFanStatus`, `"Humidifier"` → `getHumidifierStatus`, default → `getPurifierStatus`. This catches misconfigured children whose `deviceType` data value is missing or no longer in the switch.
+
+**Fix B — `state.consecutiveEmpty` watchdog:** in the `sendBypassRequest` callback, increment `state.consecutiveEmpty[dni]` on null result and remove the entry on success. New `ensurePollHealth()` private method runs at the top of `updateDevices()` (immediately after `ensureDebugWatchdog()`); when any DNI reaches the threshold (5 consecutive empty results, ~5 min at 60s interval), log INFO naming the affected DNIs, reset counters, and trigger `getDevices()` async via `runIn(2, "getDevices")` to refresh state.deviceList (and force a fresh login if needed).
+
+**Live-evidence:** surfaced 2026-04-28 during v2.3 cut-release pre-flight production-log audit on the maintainer's hub. v2.3 parent (commit `9f3cf2f`, deployed at 12:17 MDT) generated `ERROR: No status returned from getPurifierStatus:` at 1/min for at least 6 hours; resolved immediately on `update_device` triggering `updated()`. Pre-v2.3 substring-name routing happened to be more forgiving because Hubitat refreshes `dev.typeName` automatically when a driver is updated, while `state.deviceList` only refreshes on Resync. The v2.2.1 → v2.3 transition exposed the underlying fragility.
+
+**Flag this pattern** whenever a driver or parent change touches the `status == null` error branch in `updateDevices()` without the counter-increment + per-DNI clear, OR adds a new dtype mapping in `deviceMethodFor()` without an explicit case (the implicit default routes everything to `getPurifierStatus`, hiding new-driver mistakes). It is BLOCKING — the self-heal mechanism is incomplete without the tracking, and the routing is fragile without the typeName fallback.
+
+---
+
+### 18. NullPointerException on `(arg as String).toLowerCase()` for null command parameter
+
+`set*` command methods (`setMode`, `setSpeed`, `setNightLight`, etc.) commonly normalize their incoming argument via `String m = (arg as String).toLowerCase()` at the top of the method body. In Groovy, `(null as String)` returns `null`; `null.toLowerCase()` throws `NullPointerException`. Hubitat's driver sandbox catches and discards driver exceptions silently from the sandbox's perspective, but the user gets a confusing stack trace in the device's log instead of an actionable warning, and the misconfigured automation continues to misfire.
+
+**Caller sources of null arg:**
+- Rule Machine "Run Custom Action" with empty parameter slot
+- Apps invoking the command without the required arg
+- Maker API external commands with missing parameter
+
+All common in real installs; not an edge case.
+
+**Symptom:** ERROR log of the form `java.lang.NullPointerException: Cannot invoke method toLowerCase() on null object on line N (method setMode)` whenever a misconfigured automation fires. The driver swallows the call (no API send), but the user gets a stack trace not a hint, and the misconfigured automation continues to misfire.
+
+**Canonical fix:** insert at the top of each affected `set*` method, immediately before the `(arg as String).toLowerCase()` line:
+
+```groovy
+if (mode == null) {
+    logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"
+    return
+}
+```
+
+Substitute actual arg name (`mode`, `spd`, `level`, `nlMode`) and method name (`setMode`, `setSpeed`, `setNightLight`, `setNightlightMode`). The WARN level reflects "user input bad, not driver bug" and points the user at the likely Rule Machine source. Do NOT silently swallow null without a log — silent swallowing hides misconfigured automations from the user.
+
+If the driver lacks a `logWarn` helper, add `private logWarn(msg) { log.warn msg }` alongside the existing `logInfo`/`logDebug`/`logError` trio.
+
+**Live-evidence:** surfaced 2026-04-28 during v2.3 cut-release pre-flight production-log audit. A Superior 6000S deployment logged the NPE pattern at `LevoitSuperior6000S.groovy:134`. Fork-wide audit found 17 vulnerable sites across 13 drivers (`setMode` in 13 drivers; `setSpeed` in PedestalFan + TowerFan; `setNightLight` in Classic300S; `setNightlightMode` in SproutAir); all fixed in the same fold-in commit.
+
+**Flag this pattern** whenever a new driver adds a `set*` command method without a null-guard at entry, OR uses `(arg as String).toLowerCase()` / `(arg as Integer)` style normalization without first guarding. It is BLOCKING — null is a routine real-world value via Rule Machine misconfiguration, not an edge case.
 
 ---
 

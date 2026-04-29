@@ -12,6 +12,7 @@ Run these in parallel and report any failure:
 - `./gradlew test --no-daemon` — Spock harness must PASS. (If `JAVA_HOME` isn't set on the host, set it to a JDK 17 install or rely on the Gradle wrapper's toolchain auto-provisioning.)
 - `uv run --python 3.12 tests/lint.py --strict` — lint must PASS clean. (Requires `uv` on PATH — install via [astral.sh/uv](https://docs.astral.sh/uv/) if not already present.)
 - `git rev-parse --abbrev-ref HEAD` — confirm the branch (typically `release/v<version>` or `main`).
+- **Production-log audit (if Hubitat MCP available).** Run `mcp__hubitat__manage_logs get_hub_logs level:error limit:50` on the maintainer's hub. Compare error timestamps to the previous release tag's date — any new ERROR-level entries since the last release that aren't accounted for by an in-flight fix should be triaged BEFORE this cut. Catches "production has been silently throwing X for days" bugs in batch instead of trickling out post-release. v2.2.1 cycle would have caught BP1 / resp.msg / cron-syntax in one pass via this check; without it they surfaced one-by-one across 4-5 user-flag rounds. Surface findings as a "production triage" report; if any are real, hold the cut and run dev/QA/tester rounds to fix before proceeding.
 
 If any pre-flight fails, stop and report. Do not proceed.
 

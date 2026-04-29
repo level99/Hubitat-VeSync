@@ -89,7 +89,7 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
             dryingMode: [dryingState: 0, autoDryingSwitch: 0, dryingLevel: 1, dryingRemain: 0],
             waterPump: [cleanStatus: 0, remainTime: 0, totalTime: 3600]
         ]
-        def status = purifierStatusEnvelope(deviceData)  // single-wrap
+        def status = v2StatusEnvelope(deviceData)  // single-wrap
 
         when:
         driver.applyStatus(status)
@@ -426,5 +426,16 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setSwitch" }
         req != null
         req.data.powerSwitch == 1
+    }
+
+    // ---- BP18: null-arg guard ----
+
+    def "setMode(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setMode(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setMode") && it.contains("null") }
+        testParent.allRequests.isEmpty()
     }
 }

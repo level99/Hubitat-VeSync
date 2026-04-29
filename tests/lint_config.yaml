@@ -33,6 +33,12 @@ frozen_driver_names:
   LevoitOasisMist450S.groovy:      "Levoit OasisMist 450S Humidifier"
   LevoitLV600S.groovy:             "Levoit LV600S Humidifier"
   LevoitDual200S.groovy:           "Levoit Dual 200S Humidifier"
+  LevoitClassic200S.groovy:        "Levoit Classic 200S Humidifier"
+  LevoitLV600SHubConnect.groovy:   "Levoit LV600S Hub Connect Humidifier"
+  LevoitOasisMist1000S.groovy:     "Levoit OasisMist 1000S Humidifier"
+  LevoitSproutHumidifier.groovy:   "Levoit Sprout Humidifier"
+  LevoitSproutAir.groovy:          "Levoit Sprout Air Purifier"
+  LevoitEverestAir.groovy:         "Levoit EverestAir Air Purifier"
   LevoitTowerFan.groovy:           "Levoit Tower Fan"
   LevoitPedestalFan.groovy:        "Levoit Pedestal Fan"
   LevoitGeneric.groovy:            "Levoit Generic Device"
@@ -93,6 +99,11 @@ pii_token_allowlist:
 # Filenames (basename only) that intentionally have no manifest entry.
 
 manifest_excluded_files:
+  # Notification Tile is a generic-utility virtual driver inherited from
+  # upstream thebearmay/hubitat. Users instantiate it manually as a virtual
+  # device — HPM "Install" wouldn't give a usable device since the driver
+  # alone doesn't auto-create one. Intentional exception, not a packaging gap.
+  # See CONTRIBUTING.md "Codebase orientation" for the full rationale.
   - "Notification Tile.groovy"
 
 

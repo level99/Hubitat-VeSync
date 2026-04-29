@@ -55,7 +55,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         given: "a single-wrapped Dual 200S status (device on, manual, mist=1)"
         def fixture = loadYamlFixture("LUH-D301S.yaml")
         def deviceData = fixture.responses.device_on_manual_canonical as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when: "parent calls update(status, nightLight) with null nightLight (Dual 200S has no nightlight command)"
         def result = driver.update(status, null)
@@ -69,7 +69,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         given:
         def fixture = loadYamlFixture("LUH-D301S.yaml")
         def deviceData = fixture.responses.device_on_manual_canonical as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         def result = driver.update(status)
@@ -87,7 +87,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         given: "status map as parent passes it: {code:0, result:{<device fields>}}"
         def fixture = loadYamlFixture("LUH-D301S.yaml")
         def deviceData = fixture.responses.device_on_manual_canonical as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -129,7 +129,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-D301S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_off as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_off as Map)
 
         when:
         driver.applyStatus(status)
@@ -149,7 +149,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         assert !state.prefsSeeded
 
         def fixture = loadYamlFixture("LUH-D301S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_canonical as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_canonical as Map)
 
         when:
         driver.applyStatus(status)
@@ -166,7 +166,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
 
         def fixture = loadYamlFixture("LUH-D301S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_canonical as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_canonical as Map)
 
         when:
         driver.applyStatus(status)
@@ -182,7 +182,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         settings.descriptionTextEnable = null
 
         def fixture = loadYamlFixture("LUH-D301S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_canonical as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_canonical as Map)
 
         when:
         driver.applyStatus(status)
@@ -202,7 +202,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LUH-D301S.yaml")
         def deviceData = fixture.responses.device_on_manual_canonical as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -248,7 +248,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-D301S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_auto_mist2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_auto_mist2 as Map)
 
         when:
         driver.applyStatus(status)
@@ -567,7 +567,7 @@ class LevoitDual200SSpec extends HubitatSpec {
                           display: true, automatic_stop_reach_target: false,
                           night_light_brightness: 0,
                           configuration: [auto_target_humidity: 50, display: true, automatic_stop: false]]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -585,7 +585,7 @@ class LevoitDual200SSpec extends HubitatSpec {
                           display: true, automatic_stop_reach_target: false,
                           night_light_brightness: 0,
                           configuration: [auto_target_humidity: 50, display: true, automatic_stop: false]]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -648,7 +648,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-D301S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_canonical as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_canonical as Map)
 
         when:
         driver.applyStatus(status)
@@ -661,7 +661,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-D301S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_legacy_display_alias as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_legacy_display_alias as Map)
 
         when:
         driver.applyStatus(status)
@@ -683,7 +683,7 @@ class LevoitDual200SSpec extends HubitatSpec {
                           display: true, automatic_stop_reach_target: false,
                           night_light_brightness: 50,  // dim
                           configuration: [auto_target_humidity: 50, display: true, automatic_stop: false]]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -693,16 +693,11 @@ class LevoitDual200SSpec extends HubitatSpec {
     }
 
     def "driver declares no setNightLight command (nightlight command absent per feature flag)"() {
-        when: "attempting to call setNightLight -- should throw MissingMethodException"
-        def thrown = null
-        try {
-            driver.setNightLight("dim")
-        } catch (MissingMethodException e) {
-            thrown = e
-        }
+        when:
+        driver.setNightLight("dim")
 
-        then: "setNightLight is not defined -- MissingMethodException confirms absence"
-        thrown != null
+        then:
+        thrown(MissingMethodException)
     }
 
     // -------------------------------------------------------------------------
@@ -710,16 +705,11 @@ class LevoitDual200SSpec extends HubitatSpec {
     // -------------------------------------------------------------------------
 
     def "driver declares no setWarmMistLevel command (warm mist hardware absent)"() {
-        when: "attempting to call setWarmMistLevel -- should throw MissingMethodException"
-        def thrown = null
-        try {
-            driver.setWarmMistLevel(2)
-        } catch (MissingMethodException e) {
-            thrown = e
-        }
+        when:
+        driver.setWarmMistLevel(2)
 
-        then: "setWarmMistLevel is not defined -- MissingMethodException confirms absence"
-        thrown != null
+        then:
+        thrown(MissingMethodException)
     }
 
     // -------------------------------------------------------------------------
@@ -731,7 +721,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         state.lastWaterLacks = "no"
         def fixture = loadYamlFixture("LUH-D301S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_water_lacks as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_water_lacks as Map)
 
         when:
         driver.applyStatus(status)
@@ -746,12 +736,23 @@ class LevoitDual200SSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         state.lastWaterLacks = "no"
         def fixture = loadYamlFixture("LUH-D301S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_canonical as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_canonical as Map)
 
         when:
         driver.applyStatus(status)
 
         then: "water is fine and was fine before -- no 'Water reservoir empty' INFO message"
         !testLog.infos.any { it.contains("reservoir") }
+    }
+
+    // ---- BP18: null-arg guard ----
+
+    def "setMode(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setMode(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setMode") && it.contains("null") }
+        testParent.allRequests.isEmpty()
     }
 }

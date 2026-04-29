@@ -39,7 +39,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         given: "a single-wrapped purifier status response (device on, manual, speed 2)"
         def fixture = loadYamlFixture("LAP-V201S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when: "parent calls update(status, nightLight) with null nightLight"
         def result = driver.update(status, null)
@@ -53,7 +53,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         given: "a single-wrapped purifier status response"
         def fixture = loadYamlFixture("LAP-V201S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         def result = driver.update(status)
@@ -73,7 +73,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
         // Parent passes resp.data.result to child.update().
         // For purifiers, resp.data.result = { code:0, result:{device fields}, traceId:... }
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when: "applyStatus is called with the single-wrapped envelope"
         driver.applyStatus(status)
@@ -210,7 +210,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         // device_off fixture: powerSwitch=0, fanSpeedLevel=255, manualSpeedLevel=3
         assert deviceData.powerSwitch == 0
         assert deviceData.manualSpeedLevel == 3 : "fixture must have non-255 manualSpeedLevel to test #6"
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -225,7 +225,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LAP-V201S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
         assert deviceData.powerSwitch == 1
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -246,7 +246,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         assert testDevice.events.isEmpty()
         def fixture = loadYamlFixture("LAP-V201S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when: "applyStatus is called — sendEvent fires and info HTML is built"
         driver.applyStatus(status)
@@ -272,7 +272,7 @@ class LevoitVital200SSpec extends HubitatSpec {
 
         when: "applyStatus is called (pref-seed is at the top of applyStatus)"
         def fixture = loadYamlFixture("LAP-V201S.yaml")
-        driver.applyStatus(purifierStatusEnvelope(fixture.responses.device_on_manual_speed2 as Map))
+        driver.applyStatus(v2StatusEnvelope(fixture.responses.device_on_manual_speed2 as Map))
 
         then: "updateSetting was called to seed descriptionTextEnable=true"
         def seedCall = testDevice.settingsUpdates.find { it.name == "descriptionTextEnable" }
@@ -288,7 +288,7 @@ class LevoitVital200SSpec extends HubitatSpec {
 
         when:
         def fixture = loadYamlFixture("LAP-V201S.yaml")
-        driver.applyStatus(purifierStatusEnvelope(fixture.responses.device_on_manual_speed2 as Map))
+        driver.applyStatus(v2StatusEnvelope(fixture.responses.device_on_manual_speed2 as Map))
 
         then: "updateSetting NOT called for descriptionTextEnable (user setting preserved)"
         def seedCall = testDevice.settingsUpdates.find { it.name == "descriptionTextEnable" }
@@ -301,7 +301,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         given: "settings has descriptionTextEnable=null"
         settings.descriptionTextEnable = null
         def fixture = loadYamlFixture("LAP-V201S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_manual_speed2 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_manual_speed2 as Map)
 
         when: "applyStatus is called twice"
         driver.applyStatus(status)
@@ -321,7 +321,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LAP-V201S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -368,7 +368,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LAP-V201S.yaml")
         def deviceData = fixture.responses.device_on_auto_mode as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -391,7 +391,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LAP-V201S.yaml")
         def deviceData = fixture.responses.device_pet_mode as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -408,7 +408,7 @@ class LevoitVital200SSpec extends HubitatSpec {
 
         def fixture = loadYamlFixture("LAP-V201S.yaml")
         def deviceData = fixture.responses.device_filter_low as Map  // filterLifePercent=8
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -422,7 +422,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LAP-V201S.yaml")
         def deviceData = fixture.responses.device_on_manual_speed2 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)

@@ -66,7 +66,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         given: "a single-wrapped Pedestal Fan status response"
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         def result = driver.update(status)
@@ -80,7 +80,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         given: "a single-wrapped Pedestal Fan status response"
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when: "parent calls update(status, null) -- Pedestal Fan has no nightlight hardware"
         def result = driver.update(status, null)
@@ -98,7 +98,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         given: "single-wrapped status: {code:0, result:{device fields}}"
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -228,7 +228,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def deviceData = fixture.responses.device_off as Map
         assert deviceData.powerSwitch == 0
         assert deviceData.manualSpeedLevel == 5 : "fixture must have non-zero manualSpeedLevel to exercise BP#6"
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -243,7 +243,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
         assert deviceData.powerSwitch == 1
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -265,7 +265,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
 
         when:
         def fixture = loadYamlFixture("LPF-R432S.yaml")
-        driver.applyStatus(purifierStatusEnvelope(fixture.responses.device_on_normal_speed5 as Map))
+        driver.applyStatus(v2StatusEnvelope(fixture.responses.device_on_normal_speed5 as Map))
 
         then: "updateSetting was called to seed descriptionTextEnable=true"
         def seedCall = testDevice.settingsUpdates.find { it.name == "descriptionTextEnable" }
@@ -281,7 +281,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
 
         when:
         def fixture = loadYamlFixture("LPF-R432S.yaml")
-        driver.applyStatus(purifierStatusEnvelope(fixture.responses.device_on_normal_speed5 as Map))
+        driver.applyStatus(v2StatusEnvelope(fixture.responses.device_on_normal_speed5 as Map))
 
         then: "updateSetting NOT called for descriptionTextEnable (user choice preserved)"
         def seedCall = testDevice.settingsUpdates.find { it.name == "descriptionTextEnable" }
@@ -293,7 +293,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         given: "descriptionTextEnable=null"
         settings.descriptionTextEnable = null
         def fixture = loadYamlFixture("LPF-R432S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
 
         when: "applyStatus called twice"
         driver.applyStatus(status)
@@ -313,7 +313,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -407,7 +407,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_advanced_sleep as Map
         assert deviceData.workMode == "advancedSleep"
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -460,7 +460,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_eco_mode as Map
         assert deviceData.workMode == "eco"
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -551,7 +551,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
         assert deviceData.temperature == 750
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -570,7 +570,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_high_speed_turbo as Map
         assert deviceData.temperature == 850
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -587,7 +587,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
                           horizontalOscillationState: 0, verticalOscillationState: 0,
                           muteSwitch: 0, muteState: 0, screenSwitch: 1, screenState: 1,
                           childLock: 0]
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -733,7 +733,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_with_childLock as Map
         assert deviceData.childLock == 1
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -747,7 +747,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
         assert deviceData.childLock == 0
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -837,7 +837,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
         assert deviceData.sleepPreference?.sleepPreferenceType == "default"
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -851,7 +851,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_off as Map
         assert deviceData.sleepPreference == null
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -870,7 +870,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def deviceData = fixture.responses.device_on_normal_speed5 as Map
         assert deviceData.oscillationCoordinate?.yaw   == 45
         assert deviceData.oscillationCoordinate?.pitch == 10
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -888,7 +888,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         assert deviceData.oscillationRange?.right  == 95
         assert deviceData.oscillationRange?.top    == 10
         assert deviceData.oscillationRange?.bottom == 85
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -905,7 +905,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_off as Map
         assert deviceData.oscillationCoordinate == null
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -919,7 +919,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_off as Map
         assert deviceData.oscillationRange == null
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -934,7 +934,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def deviceData = fixture.responses.device_oscillation_full_range as Map
         assert deviceData.horizontalOscillationState == 1
         assert deviceData.verticalOscillationState   == 1
-        def status = purifierStatusEnvelope(deviceData)
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -997,7 +997,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         assert testDevice.events.isEmpty()
         settings.descriptionTextEnable = true
         def fixture = loadYamlFixture("LPF-R432S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
 
         when:
         driver.applyStatus(status)
@@ -1014,7 +1014,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LPF-R432S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
 
         when:
         driver.applyStatus(status)
@@ -1028,7 +1028,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LPF-R432S.yaml")
-        def status = purifierStatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
+        def status = v2StatusEnvelope(fixture.responses.device_on_normal_speed5 as Map)
 
         when:
         driver.applyStatus(status)
@@ -1036,5 +1036,25 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         then: "info HTML contains temperature value (75.0)"
         def infoVal = lastEventValue("info") as String
         infoVal.contains("Temp") || infoVal.contains("75")
+    }
+
+    // ---- BP18: null-arg guard ----
+
+    def "setSpeed(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setSpeed(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setSpeed") && it.contains("null") }
+        testParent.allRequests.isEmpty()
+    }
+
+    def "setMode(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setMode(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setMode") && it.contains("null") }
+        testParent.allRequests.isEmpty()
     }
 }

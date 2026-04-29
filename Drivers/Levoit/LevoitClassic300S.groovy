@@ -47,7 +47,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Classic 300S (LUH-A601S) humidifier — mist 1-9, target humidity, auto/sleep/manual modes, night-light (off/dim/bright), auto-stop, display; canonical pyvesync payloads",
-        version: "2.2.1",
+        version: "2.3",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -129,6 +129,7 @@ def toggle(){
 // ---------- Mode ----------
 def setMode(mode){
     logDebug "setMode(${mode})"
+    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (mode as String).toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m}"; return }
     // Classic 300S uses {mode: <value>}, NOT {workMode: <value>} (Superior 6000S difference)
@@ -227,6 +228,7 @@ def setAutoStop(onOff){
 // Request payload: {night_light_brightness: 0|50|100}
 def setNightLight(level){
     logDebug "setNightLight(${level})"
+    if (level == null) { logWarn "setNightLight called with null level (likely empty Rule Machine action parameter); ignoring"; return }
     String lvlStr = (level as String).toLowerCase()
     // Night-light is discrete 3-step only (HA finding #9 -- physical device constraint)
     Map nlNameToInt = [off: 0, dim: 50, bright: 100]
@@ -433,6 +435,7 @@ def applyStatus(status){
 // ---------- Internal helpers ----------
 def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
 def logError(msg){ log.error msg }
+def logWarn(msg){ log.warn msg }
 def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
 void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
 
