@@ -163,6 +163,13 @@
       "namespace": "NiklasGustafsson",
       "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitPedestalFan.groovy",
       "required": false
+    },
+    {
+      "id": "f3ce4dab-de16-49d8-ac5a-5c29bbb24864",
+      "name": "VeSync Virtual Test Parent",
+      "namespace": "level99",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/VeSyncIntegrationVirtual.groovy",
+      "required": false
     }
   ]
 }

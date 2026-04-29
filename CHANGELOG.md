@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Pyvesync upstream-tracking automation** (`.github/workflows/pyvesync-tracker.yml` + `tools/pyvesync-tracker/`). Weekly scheduled job detects when `webdjoe/pyvesync` ships a new release tag and: (A) opens a `chore: bump pyvesync to <tag>` PR refreshing the vendored fixture set used by `PyvesyncCoverageSpec` — existing CI gates the merge; (B) if pyvesync added new Levoit device codes, opens a `new-device-support` triage issue listing them with class assignments. Replaces manual upstream-watching that gated the v2.3 fixture pin.
+- **Virtual test parent driver** (`Drivers/Levoit/VeSyncIntegrationVirtual.groovy`). Sibling to the real `VeSyncIntegration.groovy` parent. Serves canned pyvesync fixture responses to child drivers instead of HTTP-ing to the VeSync cloud — lets contributors and the maintainer exercise child driver parser paths end-to-end on a real Hubitat hub without owning the hardware. Ships in HPM as opt-in (`required: false`) with explicit dev-tool labeling; pre-flight refuses to spawn children if the real parent is installed on the same hub. Phase 1 covers Core 200S; remaining drivers land in a follow-up commit. See "For contributors" subsections in `README.md` and `Drivers/Levoit/readme.md` for usage.
 
 ## [2.3] - 2026-04-28
 

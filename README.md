@@ -42,6 +42,10 @@ For per-device attribute and command details: [`Drivers/Levoit/readme.md`](Drive
 
 For upcoming devices beyond v2.3: [`ROADMAP.md`](ROADMAP.md).
 
+## For contributors
+
+`VeSyncIntegrationVirtual.groovy` is a fixture-driven virtual test parent shipped as an optional driver in this package. It lets contributors exercise child driver parser paths on a real Hubitat hub without owning the hardware: spawn a child device backed by a canned pyvesync API response, send commands, and verify attribute output — all without a VeSync account or a real device. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup instructions and usage. **Do not install this driver for normal use** — it does not connect to the VeSync cloud and is not useful outside a development workflow.
+
 ## Install via Hubitat Package Manager
 
 ### First-time install (no Levoit drivers yet)

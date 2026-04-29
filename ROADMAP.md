@@ -8,13 +8,31 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 ## v2.4 — next release (TBD)
 
-### Tooling — primary v2.4 work item
+### Tooling — primary v2.4 work items
 
 - **Pyvesync upstream-tracking automation** — IN-FLIGHT on `release/v2.4`. Scheduled GitHub Actions workflow at `.github/workflows/pyvesync-tracker.yml` with implementation in `tools/pyvesync-tracker/`. Two outputs sharing a single weekly cron run:
   - **Output A — auto-refresh PR.** When pyvesync ships a new tag, the bot opens a `chore: bump pyvesync to <tag>` PR that refreshes the 19 vendored YAMLs in `tests/pyvesync-fixtures/` and updates the pinned-commit reference. Existing CI (Lint + Spock + PyvesyncCoverageSpec) runs on the PR — green = safe to merge, red = real upstream divergence flagged for investigation. Removes the manual refresh step that v2.3 left as the only weak point in the CoverageSpec design.
   - **Output B — new-device-detect issue.** Same bot diffs pyvesync's `device_map.py` between old and new tag, filtered to Levoit prefixes (`LAP-`, `LUH-`, `LEH-`, `LTF-`, `LPF-`, `LV-`) plus the literal device types we recognize. If new Levoit entries appear, opens an issue tagged `auto-filed`, `new-device-support`, `upstream-tracking` — body lists new model codes + their pyvesync class assignments + diff link. Tier 2 grep filter; maintainer does the fold-in-vs-new-driver call from the surfaced issue.
 
   Activates on default-branch merge: schedule fires once `release/v2.4` merges to `main`. See `tools/pyvesync-tracker/README.md` for the entry-points + dry-run instructions.
+
+- **Virtual test parent driver — `VeSyncIntegrationVirtual.groovy`.** Sibling to the real `VeSyncIntegration.groovy` parent. Serves canned responses from `tests/pyvesync-fixtures/*.yaml` instead of HTTP-ing to the VeSync cloud, letting contributors (and the maintainer) exercise child-driver parser paths end-to-end on a real Hubitat hub without owning the hardware. Closes the "ship preview without hardware → can't verify on-hub end-to-end" gap that's been the norm since v2.1 (v2.1 fans, v2.2 LV600S/Dual 200S/RGB EU, v2.3 Classic 200S/LV600S Hub Connect/OasisMist 1000S/Sprout family/EverestAir all shipped preview without maintainer hardware). Catches a class of Hubitat-runtime bugs Spock can't see — sandbox quirks, async callback ordering, real `addChildDevice` lifecycle, `schedule()`/`runIn()` cron mechanics (BP14/BP16/BP17 pattern fingerprint).
+
+  **HPM packaging — ships as opt-in `required: false`** in `levoitManifest.json` with explicit dev-tool labeling ("Developer test harness. Do NOT install for normal use."). Mirrors the `Notification Tile.groovy` opt-in pattern. HPM Modify users see it under Optional Drivers; consent is at install time. `repository.json` description does NOT mention it — end-user HPM keyword search stays clean. Top-level `README.md` supported-devices table excludes it; only mentioned under a "For contributors" subsection.
+
+  **Safeguards in the driver:**
+  - Pre-flight refuses to spawn children if the real `VeSync Integration` parent is installed on the same hub (prevents device cross-wiring).
+  - Distinct driver name ("VeSync Virtual Test Parent"), same `level99` namespace.
+  - Driver source header + `definition(description: ...)` both lead with `[DEV TOOL]`.
+
+  **Pipeline integration scope** (the bigger half of the work):
+  - `.claude/agents/vesync-driver-operations.md` — fixture-mode dispatch protocol; two-mode PASS criteria; new log markers.
+  - `CLAUDE.md` "Two deployment contexts" — split A (with MCP) into A1 (real hardware via real parent) / A2 (virtual parent via fixture). For preview drivers, A2 becomes the standard pre-ship gate.
+  - `CONTRIBUTING.md` — "Live-test" guidance covers the virtual-parent path; add row to the "Conventions enforced by tests" table for the runtime-vs-static distinction.
+  - Bug-pattern catalog annotations (`vesync-driver-qa.md`) — each BP tagged with which test layer catches it (Spock / virtual parent / real hardware).
+  - PR template — checkbox: "Verified on: [ ] real hardware [ ] virtual parent [ ] preview-only (Spock + manual review)".
+
+  Total scope ~9-12 hr. Pays back across every preview driver from then on.
 
 ### Hardware-pending items (carryforward from v2.3)
 
@@ -72,9 +90,7 @@ Community hardware reports (a debug log showing the model code + `captureDiagnos
 ### Tooling & dev experience
 
 - **PyvesyncCoverageSpec — class-source introspection (post-MVP).** Current MVP is fixture-vs-fixture parity (method name + data key set). Misses: payload data values, response field coverage, structural depth, and class-source-vs-port mismatches like the OasisMist 1000S WEUR nightlight ambiguity (pyvesync class CODE has the split but the FIXTURE doesn't exercise it). Extension after the v2.4 auto-tracking bot lands: parse pyvesync's `vesyncfan.py` symbolically, compare method signatures + payload-builder logic against our drivers, surface gaps the fixture-only gate can't see. Higher build cost than the v2.4 bot; queue for v2.5+ depending on whether Output A/B output reveals a need.
-- **Virtual test parent driver** — sibling driver to `VeSyncIntegration.groovy` that returns canned pyvesync-fixture data instead of talking to the cloud. Lets contributors exercise child-driver parser paths end-to-end without owning the hardware. Worth building if hardware coverage expands or if multiple new device types need to land in succession.
 - **Pyvesync local Python harness** — small Python script that diff's our driver payloads against pyvesync's canonical request/response shapes. Useful as a CI gate; partly subsumed by the v2.3 PyvesyncCoverageSpec — revisit after the v2.4 auto-tracking bot lands to decide whether a Python-side complement adds value.
-- **Release automation Tier 1** — `scripts/release.sh` plus seeded `CHANGELOG.md`. The `/cut-release` slash command (in `.claude/commands/cut-release.md`) implements the Claude-driven flow; a complementary shell script for non-Claude releases would close the loop.
 
 ### Speculative / unresolved API questions
 
@@ -90,6 +106,12 @@ Open questions about VeSync API behavior that we haven't fully resolved. If you 
 
 - **Alexa-aware capability surfaces.** Drivers currently expose standard capabilities (Switch, SwitchLevel, AudioVolume, etc.) — Alexa interprets these via Hubitat's Echo Skill but with limited semantic richness. Adding richer capabilities like `MediaInputSource` might give voice-control polish. Worth a research pass + pilot on one driver.
 - **Migration guide for users coming from a Home Assistant + Homebridge bridge.** Some community users used HA-as-bridge to get Vital 200S working before our v2.0 native support; a migration-from-bridge guide could ease their transition.
+
+### Far backlog — maybe (not committed)
+
+Items that have been considered but aren't priorities. Recorded so they don't get re-proposed without context. Build only if a specific need emerges.
+
+- **Release automation Tier 1 — `scripts/release.sh`.** A bash/Python implementation of the mechanical parts of the `/cut-release` slash command (version bumps + lockstep + manifest reconciliation + drift detection). Doesn't replace the prose-generation parts (releaseNotes content, CHANGELOG bullets, PR body) which still need a human or Claude session. Maintainer always uses the Claude-driven flow today, so this only matters if the maintainer wants to cut releases outside Claude OR a non-Claude fork wants its own release flow. ~2-3 hr build cost; net ROI low at current scale.
 
 ---
 

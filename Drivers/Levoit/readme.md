@@ -88,6 +88,10 @@ The refresh interval (default 30 s) determines how often the drivers poll device
 | Enable debug logging | false | Internal trace + raw API response dump. Auto-disables after 30 min. |
 | Verbose API response logging | false | Full request/response body on every call. Use only when triaging API drift. |
 
+## For contributors
+
+`VeSyncIntegrationVirtual.groovy` is a fixture-driven virtual test parent included in this package as an optional dev tool. It spawns child devices backed by canned pyvesync API responses, letting contributors verify child driver attribute parsing on a real Hubitat hub without owning the target hardware. See [`CONTRIBUTING.md`](../../CONTRIBUTING.md) for setup and usage. **Do not install this driver for normal use** — it does not connect to the VeSync cloud.
+
 ## Migration from legacy hand-installed drivers
 
 If you previously hand-pasted "Levoit Vital200S/V201S Air Purifier (...)" or "Levoit 600S Humidifier" drivers into your hub, the new drivers in this fork have different metadata names. To migrate:
