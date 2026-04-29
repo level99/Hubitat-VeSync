@@ -1012,6 +1012,9 @@ private Boolean getDevices() {
                 // produce exactly 1 actionable message (not N). Cleared in finally so
                 // cleanup runs on both normal exit and any unhandled exception in the loop.
                 state.warnedMissingDrivers = [] as Set
+                // Generic-migration hint dedup: track which DNIs have already been warned
+                // this Resync so a device doesn't get the same migration INFO every poll.
+                state.genericMigrationWarnings = [] as List
 
                 try { for (device in resp.data.result.list) {
                     def dtype = deviceType(device.deviceType);
@@ -1023,6 +1026,7 @@ private Boolean getDevices() {
                         if (equip2 == null) {
                             // Note: a null return from safeAddChildDevice means the Light driver is not installed.
                             // This is non-fatal for the 200S branch — we continue to add the main purifier device.
+                            warnIfGenericMigration(device.cid+"-nl", "Levoit Core200S Air Purifier Light")
                             equip2 = safeAddChildDevice("Levoit Core200S Air Purifier Light", device.cid+"-nl",
                                 [name: device.deviceName + " Light", label: device.deviceName + " Light", isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore200S%20Light.groovy")
@@ -1053,6 +1057,7 @@ private Boolean getDevices() {
 
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Core200S Air Purifier")
                             equip1 = safeAddChildDevice("Levoit Core200S Air Purifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore200S.groovy")
@@ -1081,6 +1086,7 @@ private Boolean getDevices() {
                     else if (dtype == "300S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Core300S Air Purifier")
                             equip1 = safeAddChildDevice("Levoit Core300S Air Purifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore300S.groovy")
@@ -1108,6 +1114,7 @@ private Boolean getDevices() {
                     else if (dtype == "400S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Core400S Air Purifier")
                             equip1 = safeAddChildDevice("Levoit Core400S Air Purifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore400S.groovy")
@@ -1135,6 +1142,7 @@ private Boolean getDevices() {
                     else if (dtype == "600S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Core600S Air Purifier")
                             equip1 = safeAddChildDevice("Levoit Core600S Air Purifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCore600S.groovy")
@@ -1162,6 +1170,7 @@ private Boolean getDevices() {
                     else if (dtype == "V200S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Vital 200S Air Purifier")
                             equip1 = safeAddChildDevice("Levoit Vital 200S Air Purifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitVital200S.groovy")
@@ -1189,6 +1198,7 @@ private Boolean getDevices() {
                     else if (dtype == "V601S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Superior 6000S Humidifier")
                             equip1 = safeAddChildDevice("Levoit Superior 6000S Humidifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitSuperior6000S.groovy")
@@ -1216,6 +1226,7 @@ private Boolean getDevices() {
                     else if (dtype == "V100S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Vital 100S Air Purifier")
                             equip1 = safeAddChildDevice("Levoit Vital 100S Air Purifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitVital100S.groovy")
@@ -1243,6 +1254,7 @@ private Boolean getDevices() {
                     else if (dtype == "A601S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Classic 300S Humidifier")
                             equip1 = safeAddChildDevice("Levoit Classic 300S Humidifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitClassic300S.groovy")
@@ -1270,6 +1282,7 @@ private Boolean getDevices() {
                     else if (dtype == "O451S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit OasisMist 450S Humidifier")
                             equip1 = safeAddChildDevice("Levoit OasisMist 450S Humidifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitOasisMist450S.groovy")
@@ -1297,6 +1310,7 @@ private Boolean getDevices() {
                     else if (dtype == "A602S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit LV600S Humidifier")
                             equip1 = safeAddChildDevice("Levoit LV600S Humidifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitLV600S.groovy")
@@ -1324,6 +1338,7 @@ private Boolean getDevices() {
                     else if (dtype == "D301S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Dual 200S Humidifier")
                             equip1 = safeAddChildDevice("Levoit Dual 200S Humidifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitDual200S.groovy")
@@ -1351,6 +1366,7 @@ private Boolean getDevices() {
                     else if (dtype == "C200S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Classic 200S Humidifier")
                             equip1 = safeAddChildDevice("Levoit Classic 200S Humidifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitClassic200S.groovy")
@@ -1377,6 +1393,7 @@ private Boolean getDevices() {
                     else if (dtype == "A603S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit LV600S Hub Connect Humidifier")
                             equip1 = safeAddChildDevice("Levoit LV600S Hub Connect Humidifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitLV600SHubConnect.groovy")
@@ -1403,6 +1420,7 @@ private Boolean getDevices() {
                     else if (dtype == "OM1000S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit OasisMist 1000S Humidifier")
                             equip1 = safeAddChildDevice("Levoit OasisMist 1000S Humidifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitOasisMist1000S.groovy")
@@ -1429,6 +1447,7 @@ private Boolean getDevices() {
                     else if (dtype == "B381S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Sprout Humidifier")
                             equip1 = safeAddChildDevice("Levoit Sprout Humidifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitSproutHumidifier.groovy")
@@ -1455,6 +1474,7 @@ private Boolean getDevices() {
                     else if (dtype == "B851S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Sprout Air Purifier")
                             equip1 = safeAddChildDevice("Levoit Sprout Air Purifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitSproutAir.groovy")
@@ -1481,6 +1501,7 @@ private Boolean getDevices() {
                     else if (dtype == "EL551S") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit EverestAir Air Purifier")
                             equip1 = safeAddChildDevice("Levoit EverestAir Air Purifier", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitEverestAir.groovy")
@@ -1507,6 +1528,7 @@ private Boolean getDevices() {
                     else if (dtype == "TOWERFAN") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Tower Fan")
                             equip1 = safeAddChildDevice("Levoit Tower Fan", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitTowerFan.groovy")
@@ -1534,6 +1556,7 @@ private Boolean getDevices() {
                     else if (dtype == "PEDESTALFAN") {
                         if (equip1 == null) {
                             logDebug "Adding ${device.deviceName}"
+                            warnIfGenericMigration(device.cid, "Levoit Pedestal Fan")
                             equip1 = safeAddChildDevice("Levoit Pedestal Fan", device.cid,
                                 [name: device.deviceName, label: device.deviceName, isComponent: false],
                                 "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitPedestalFan.groovy")
@@ -1594,6 +1617,7 @@ private Boolean getDevices() {
                     // Removing it from state avoids persisting a stale set on disk.
                     // finally{} ensures cleanup runs even if the loop throws unexpectedly.
                     state.remove('warnedMissingDrivers')
+                    state.remove('genericMigrationWarnings')
                 }
 
                 state.deviceList = newList
@@ -1898,6 +1922,37 @@ private String getLocationTimeZone() {
  * @param installUrl  Raw GitHub URL for the driver file (shown in the INFO log)
  * @return            The new child device, or null if the driver is not installed
  */
+/**
+ * Detect Generic-driver → proper-driver migration opportunities.
+ *
+ * When a user originally installed a device whose model code was unrecognized,
+ * the parent fell back to "Levoit Generic Device" for that DNI. If a later release
+ * adds a proper driver for that model code, Hubitat does NOT auto-migrate the
+ * existing child device — addChildDevice() with an existing DNI returns the existing
+ * handle unchanged. The user must manually re-pick the driver via:
+ *   Hubitat UI → device page → Type dropdown → Save
+ *
+ * This helper logs one INFO message per affected device per Resync, naming the
+ * device, the proper driver name, and the migration steps. Deduped via
+ * state.genericMigrationWarnings (same lifecycle as state.warnedMissingDrivers:
+ * initialized before the device-add loop, removed in the finally block).
+ *
+ * Call BEFORE every safeAddChildDevice() site in getDevices().
+ */
+private void warnIfGenericMigration(String dni, String newDriverName) {
+    def existing = getChildDevice(dni)
+    if (existing == null) return
+    if (existing.typeName != "Levoit Generic Device") return
+    if (state.genericMigrationWarnings == null) return  // initialized in getDevices() loop preamble
+    if (state.genericMigrationWarnings.contains(dni)) return  // already warned this Resync
+    String label = existing.label ?: existing.name ?: dni
+    logInfo "Migration available: '${label}' (${dni}) is currently using the Generic fallback driver. " +
+            "v2.3 has a proper driver: '${newDriverName}'. To upgrade: Hubitat UI → device page → " +
+            "'Type' dropdown → '${newDriverName}' → Save Preferences. Your DNI, label, room, and " +
+            "automations are preserved; only the driver code changes."
+    state.genericMigrationWarnings.add(dni)
+}
+
 private safeAddChildDevice(String driverName, String dni, Map opts, String installUrl) {
     try {
         return addChildDevice(driverName, dni, opts)

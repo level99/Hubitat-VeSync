@@ -19,8 +19,9 @@ package support
  * on the driver instance).
  */
 class TestDevice {
-    String id   = "test-device-001"
-    String name = "Test Device"
+    String id    = "test-device-001"
+    String name  = "Test Device"
+    String label = null  // mirrors real Hubitat: label overrides name in the UI; null means use name
 
     // Ordered list of all events sent via sendEvent during a test.
     // Specs assert on this: events.find { it.name == "switch" }?.value == "on"

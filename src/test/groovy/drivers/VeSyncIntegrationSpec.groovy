@@ -2874,4 +2874,86 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         and: "an INFO log was emitted naming the affected DNI"
         testLog.infos.any { it.contains("BP17 poll-health") && it.contains("stale-cid") }
     }
+
+    // =========================================================================
+    // Section O — Generic-driver migration hint
+    //
+    // When an existing child is on "Levoit Generic Device" and getDevices()
+    // would now assign it a proper driver, warnIfGenericMigration() logs an
+    // actionable INFO message naming the device, proper driver, and upgrade
+    // steps. Deduplicated per DNI per Resync via state.genericMigrationWarnings.
+    //
+    // Tests:
+    //   O1 — INFO logged when child typeName is "Levoit Generic Device"
+    //   O2 — no INFO logged when child is already on the proper driver
+    //   O3 — dedup: second call for same DNI in same Resync does not repeat INFO
+    // =========================================================================
+
+    def "warnIfGenericMigration() logs INFO when existing child is on Generic fallback driver (O1)"() {
+        // O1: golden path — an existing child whose typeName is "Levoit Generic Device"
+        // should trigger the migration hint mentioning the proper driver name and steps.
+        given: "an existing child device on the Generic fallback driver"
+        settings.descriptionTextEnable = true
+        def genericChild = new TestDevice()
+        genericChild.typeName = "Levoit Generic Device"
+        genericChild.label = "My OasisMist 1000S"
+        childDevices["om1000s-cid"] = genericChild
+
+        // warnIfGenericMigration reads getChildDevice(), initialize the dedup list
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        state.genericMigrationWarnings = [] as List
+
+        when:
+        driver.warnIfGenericMigration("om1000s-cid", "Levoit OasisMist 1000S Humidifier")
+
+        then: "INFO log was emitted naming the device and the proper driver"
+        testLog.infos.any { it.contains("My OasisMist 1000S") && it.contains("Levoit OasisMist 1000S Humidifier") }
+
+        and: "INFO log mentions the upgrade steps"
+        testLog.infos.any { it.contains("Type") && it.contains("Save Preferences") }
+    }
+
+    def "warnIfGenericMigration() does NOT log when child is already on the proper driver (O2)"() {
+        // O2: negative path — an existing child already running the proper driver (typeName
+        // is not "Levoit Generic Device") must not produce any migration hint. The common
+        // case: user already migrated, or the device was added with the proper driver from
+        // the start.
+        given: "an existing child device on the proper driver (not Generic)"
+        settings.descriptionTextEnable = true
+        def properChild = new TestDevice()
+        properChild.typeName = "Levoit OasisMist 1000S Humidifier"
+        properChild.label = "My OasisMist 1000S"
+        childDevices["om1000s-cid-proper"] = properChild
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        state.genericMigrationWarnings = [] as List
+
+        when:
+        driver.warnIfGenericMigration("om1000s-cid-proper", "Levoit OasisMist 1000S Humidifier")
+
+        then: "no migration INFO log was emitted"
+        !testLog.infos.any { it.contains("Migration available") }
+    }
+
+    def "warnIfGenericMigration() logs INFO only once per DNI per Resync — dedup on second call (O3)"() {
+        // O3: dedup — if the same DNI appears more than once in a Resync run (shouldn't
+        // happen in practice, but guards against accidental double-call), the INFO must
+        // fire exactly once, not twice.
+        given: "an existing Generic child device"
+        settings.descriptionTextEnable = true
+        def genericChild = new TestDevice()
+        genericChild.typeName = "Levoit Generic Device"
+        genericChild.label = "My Sprout Humidifier"
+        childDevices["sprout-cid"] = genericChild
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        state.genericMigrationWarnings = [] as List
+
+        when: "warnIfGenericMigration is called twice for the same DNI"
+        driver.warnIfGenericMigration("sprout-cid", "Levoit Sprout Humidifier")
+        driver.warnIfGenericMigration("sprout-cid", "Levoit Sprout Humidifier")
+
+        then: "exactly one migration INFO log was emitted (not two)"
+        testLog.infos.count { it.contains("My Sprout Humidifier") && it.contains("Levoit Sprout Humidifier") } == 1
+    }
 }
