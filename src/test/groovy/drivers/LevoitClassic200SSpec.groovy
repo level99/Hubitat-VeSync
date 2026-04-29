@@ -644,4 +644,15 @@ class LevoitClassic200SSpec extends HubitatSpec {
         then:
         !testLog.infos.any { it.contains("reservoir") }
     }
+
+    // ---- BP18: null-arg guard ----
+
+    def "setMode(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setMode(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setMode") && it.contains("null") }
+        testParent.allRequests.isEmpty()
+    }
 }

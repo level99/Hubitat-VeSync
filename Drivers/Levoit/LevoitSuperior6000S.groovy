@@ -131,6 +131,7 @@ def toggle(){
 // ---------- Mode ----------
 def setMode(mode){
     logDebug "setMode(${mode})"
+    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (mode as String).toLowerCase()
     if (!(m in ["auto","manual","sleep"])) { logError "Invalid mode: ${m}"; return }
     // autoPro is the canonical API value for "auto" on Superior 6000S
@@ -400,6 +401,7 @@ private int levelFromPercent(Integer pct){
 
 def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
 def logError(msg){ log.error msg }
+def logWarn(msg){ log.warn msg }
 def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
 void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
 

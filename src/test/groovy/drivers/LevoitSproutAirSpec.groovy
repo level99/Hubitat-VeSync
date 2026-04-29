@@ -494,4 +494,24 @@ class LevoitSproutAirSpec extends HubitatSpec {
         then:
         thrown(MissingMethodException)
     }
+
+    // ---- BP18: null-arg guard ----
+
+    def "setMode(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setMode(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setMode") && it.contains("null") }
+        testParent.allRequests.isEmpty()
+    }
+
+    def "setNightlightMode(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setNightlightMode(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setNightlightMode") && it.contains("null") }
+        testParent.allRequests.isEmpty()
+    }
 }

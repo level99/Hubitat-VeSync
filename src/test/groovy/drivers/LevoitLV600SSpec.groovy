@@ -945,4 +945,15 @@ class LevoitLV600SSpec extends HubitatSpec {
         infoVal.contains("Warm:")  // warm mist included in info when warm_level present
         infoVal.contains("L2")     // warm level 2
     }
+
+    // ---- BP18: null-arg guard ----
+
+    def "setMode(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setMode(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setMode") && it.contains("null") }
+        testParent.allRequests.isEmpty()
+    }
 }

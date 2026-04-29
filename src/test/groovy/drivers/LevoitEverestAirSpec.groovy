@@ -589,4 +589,15 @@ class LevoitEverestAirSpec extends HubitatSpec {
         then:
         lastEventValue("filterLife") == 72
     }
+
+    // ---- BP18: null-arg guard ----
+
+    def "setMode(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setMode(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setMode") && it.contains("null") }
+        testParent.allRequests.isEmpty()
+    }
 }

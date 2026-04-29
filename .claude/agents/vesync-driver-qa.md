@@ -509,6 +509,38 @@ Call sites:
 
 ---
 
+### 18. NullPointerException on `(arg as String).toLowerCase()` for null command parameter
+
+`set*` command methods (`setMode`, `setSpeed`, `setNightLight`, etc.) commonly normalize their incoming argument via `String m = (arg as String).toLowerCase()` at the top of the method body. In Groovy, `(null as String)` returns `null`; `null.toLowerCase()` throws `NullPointerException`. Hubitat's driver sandbox catches and discards driver exceptions silently from the sandbox's perspective, but the user gets a confusing stack trace in the device's log instead of an actionable warning, and the misconfigured automation continues to misfire.
+
+**Caller sources of null arg:**
+- Rule Machine "Run Custom Action" with empty parameter slot
+- Apps invoking the command without the required arg
+- Maker API external commands with missing parameter
+
+All common in real installs; not an edge case.
+
+**Symptom:** ERROR log of the form `java.lang.NullPointerException: Cannot invoke method toLowerCase() on null object on line N (method setMode)` whenever a misconfigured automation fires. The driver swallows the call (no API send), but the user gets a stack trace not a hint, and the misconfigured automation continues to misfire.
+
+**Canonical fix:** insert at the top of each affected `set*` method, immediately before the `(arg as String).toLowerCase()` line:
+
+```groovy
+if (mode == null) {
+    logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"
+    return
+}
+```
+
+Substitute actual arg name (`mode`, `spd`, `level`, `nlMode`) and method name (`setMode`, `setSpeed`, `setNightLight`, `setNightlightMode`). The WARN level reflects "user input bad, not driver bug" and points the user at the likely Rule Machine source. Do NOT silently swallow null without a log — silent swallowing hides misconfigured automations from the user.
+
+If the driver lacks a `logWarn` helper, add `private logWarn(msg) { log.warn msg }` alongside the existing `logInfo`/`logDebug`/`logError` trio.
+
+**Live-evidence:** surfaced 2026-04-28 during v2.3 cut-release pre-flight production-log audit. A Superior 6000S deployment logged the NPE pattern at `LevoitSuperior6000S.groovy:134`. Fork-wide audit found 17 vulnerable sites across 13 drivers (`setMode` in 13 drivers; `setSpeed` in PedestalFan + TowerFan; `setNightLight` in Classic300S; `setNightlightMode` in SproutAir); all fixed in the same fold-in commit.
+
+**Flag this pattern** whenever a new driver adds a `set*` command method without a null-guard at entry, OR uses `(arg as String).toLowerCase()` / `(arg as Integer)` style normalization without first guarding. It is BLOCKING — null is a routine real-world value via Rule Machine misconfiguration, not an edge case.
+
+---
+
 ## Report format
 
 Return ONE of:

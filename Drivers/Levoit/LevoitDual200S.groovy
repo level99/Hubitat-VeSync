@@ -200,6 +200,7 @@ def toggle(){
 // Payload: {mode: <value>} -- NOT {workMode: <value>} (Superior 6000S difference)
 def setMode(mode){
     logDebug "setMode(${mode})"
+    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (mode as String).toLowerCase()
     // CROSS-CHECK: only auto and manual are valid for Dual 200S (no sleep per device_map.py)
     if (!(m in ["auto","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, manual (sleep not supported on Dual 200S)"; return }
@@ -529,6 +530,7 @@ def applyStatus(status){
 // ---------- Internal helpers ----------
 def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
 def logError(msg){ log.error msg }
+def logWarn(msg){ log.warn msg }
 def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
 void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
 

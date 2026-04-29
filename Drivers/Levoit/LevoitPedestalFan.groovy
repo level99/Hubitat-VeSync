@@ -273,6 +273,7 @@ def setSpeed(spd){
         return
     }
     // Enum string (FanControl capability path)
+    if (spd == null) { logWarn "setSpeed called with null spd (likely empty Rule Machine action parameter); ignoring"; return }
     String s = (spd as String).toLowerCase()
     if (s == "off")  { off(); return }
     if (s == "on")   { on(); return }   // Hubitat FanControl spec: "on" resumes at prior/default speed
@@ -324,6 +325,7 @@ def setLevel(val){
 //     add "auto" as an alias or replace "eco" with "auto".
 def setMode(mode){
     logDebug "setMode(${mode})"
+    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (mode as String).toLowerCase()
     if (!(m in ["normal","turbo","eco","sleep"])) {
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|eco|sleep"
@@ -714,6 +716,7 @@ private Integer levelFromPercent(Integer pct){
 // ---------- Logging ----------
 def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
 def logError(msg){ log.error msg }
+def logWarn(msg){ log.warn msg }
 def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
 void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
 

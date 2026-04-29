@@ -740,4 +740,24 @@ class LevoitClassic300SSpec extends HubitatSpec {
         then:
         lastEventValue("autoStopEnabled") == "on"
     }
+
+    // ---- BP18: null-arg guard ----
+
+    def "setMode(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setMode(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setMode") && it.contains("null") }
+        testParent.allRequests.isEmpty()
+    }
+
+    def "setNightLight(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setNightLight(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setNightLight") && it.contains("null") }
+        testParent.allRequests.isEmpty()
+    }
 }

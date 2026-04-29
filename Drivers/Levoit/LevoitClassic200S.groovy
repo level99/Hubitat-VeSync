@@ -180,6 +180,7 @@ def toggle(){
 // Payload: {mode: <value>} -- same as Classic 300S, NOT {workMode: <value>} (V2-class devices)
 def setMode(mode){
     logDebug "setMode(${mode})"
+    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (mode as String).toLowerCase()
     // CROSS-CHECK: only auto and manual are valid for Classic 200S (no sleep per device_map.py)
     if (!(m in ["auto","manual"])) {
@@ -434,6 +435,7 @@ def applyStatus(status){
 // ---------- Internal helpers ----------
 def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
 def logError(msg){ log.error msg }
+def logWarn(msg){ log.warn msg }
 def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
 void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
 

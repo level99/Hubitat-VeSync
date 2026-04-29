@@ -1037,4 +1037,24 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def infoVal = lastEventValue("info") as String
         infoVal.contains("Temp") || infoVal.contains("75")
     }
+
+    // ---- BP18: null-arg guard ----
+
+    def "setSpeed(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setSpeed(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setSpeed") && it.contains("null") }
+        testParent.allRequests.isEmpty()
+    }
+
+    def "setMode(null) does not throw and emits a WARN log (BP18)"() {
+        when:
+        driver.setMode(null)
+        then:
+        noExceptionThrown()
+        testLog.warns.any { it.contains("setMode") && it.contains("null") }
+        testParent.allRequests.isEmpty()
+    }
 }
