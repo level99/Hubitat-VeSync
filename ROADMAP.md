@@ -8,6 +8,14 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 ## v2.4 — next release (TBD)
 
+### Tooling — primary v2.4 work item
+
+- **Pyvesync auto-tracking GitHub Actions bot** — single scheduled workflow with two outputs:
+  - **Output A — auto-refresh PR.** When pyvesync ships a new tag, the bot opens a `chore: bump pyvesync to <tag>` PR that refreshes the 19 vendored YAMLs in `tests/pyvesync-fixtures/` and updates the pinned-commit reference. Existing CI (Lint + Spock + PyvesyncCoverageSpec) runs on the PR — green = safe to merge, red = real upstream divergence flagged for investigation. Removes the manual refresh step that v2.3 left as the only weak point in the CoverageSpec design.
+  - **Output B — new-device-detect issue.** Same bot diffs pyvesync's `device_map.py` between old and new tag, filtered to Levoit prefixes (`LAP-`, `LUH-`, `LEH-`, `LTF-`, `LPF-`, `LV-`) plus the literal device types we recognize. If new Levoit entries appear, opens an issue tagged `auto-filed`, `new-device-support`, `upstream-tracking` — body lists new model codes + their pyvesync class assignments + diff link. Tier 2 grep filter (intentionally stops short of full AST classification — too brittle to pyvesync restructuring); maintainer does the fold-in-vs-new-driver call from the surfaced issue.
+
+  Total scope: one `.github/workflows/pyvesync-tracker.yml` + a small refresh/diff script + permissions block (`pull-requests: write`, `issues: write`). Runs on GitHub free CI minutes; no infrastructure cost; zero ongoing maintenance after build. Pattern: Dependabot/Renovate-style arbitrary-source dependency tracking, plus an upstream-aware new-feature-detection extension. Build cost: ~3 hr (Output A ~2 hr + Output B ~45 min).
+
 ### Hardware-pending items (carryforward from v2.3)
 
 - **Pedestal Fan write-path completion** — `setDisplay`, `setMute`, `setChildLock`, timer payload. Awaiting maintainer's Pedestal Fan arrival to capture canonical request shapes.
@@ -63,10 +71,9 @@ Community hardware reports (a debug log showing the model code + `captureDiagnos
 
 ### Tooling & dev experience
 
-- **PyvesyncCoverageSpec — auto-refresh PR bot.** The MVP gate ships in v2.3 (pinned pyvesync 3.4.2; manual refresh on upstream version bumps). v2.4 follow-on: scheduled GitHub Action that detects new pyvesync tags via API, fetches the 19 vendored YAMLs from the new tag, opens a "chore: bump pyvesync to <tag>" PR. CI runs the existing `PyvesyncCoverageSpec` against the bumped fixtures; failures = real divergence surfaced for human review. Trade-off: the spec stays hermetic (no live network at test time) while refresh becomes effectively automatic. Same pattern Dependabot/Renovate use for arbitrary-source tracking.
-- **PyvesyncCoverageSpec — class-source introspection (post-MVP).** Current MVP is fixture-vs-fixture parity (method name + data key set). Misses: payload data values, response field coverage, structural depth, and class-source-vs-port mismatches like the OasisMist 1000S WEUR nightlight ambiguity (pyvesync class CODE has the split but the FIXTURE doesn't exercise it). v2.4+ extension: parse pyvesync's `vesyncfan.py` symbolically, compare method signatures + payload-builder logic against our drivers, surface gaps the fixture-only gate can't see.
+- **PyvesyncCoverageSpec — class-source introspection (post-MVP).** Current MVP is fixture-vs-fixture parity (method name + data key set). Misses: payload data values, response field coverage, structural depth, and class-source-vs-port mismatches like the OasisMist 1000S WEUR nightlight ambiguity (pyvesync class CODE has the split but the FIXTURE doesn't exercise it). Extension after the v2.4 auto-tracking bot lands: parse pyvesync's `vesyncfan.py` symbolically, compare method signatures + payload-builder logic against our drivers, surface gaps the fixture-only gate can't see. Higher build cost than the v2.4 bot; queue for v2.5+ depending on whether Output A/B output reveals a need.
 - **Virtual test parent driver** — sibling driver to `VeSyncIntegration.groovy` that returns canned pyvesync-fixture data instead of talking to the cloud. Lets contributors exercise child-driver parser paths end-to-end without owning the hardware. Worth building if hardware coverage expands or if multiple new device types need to land in succession.
-- **Pyvesync local Python harness** — small Python script that diff's our driver payloads against pyvesync's canonical request/response shapes. Useful as a CI gate; partly subsumed by the v2.3 PyvesyncCoverageSpec — revisit after the auto-refresh PR bot lands to decide whether a Python-side complement adds value.
+- **Pyvesync local Python harness** — small Python script that diff's our driver payloads against pyvesync's canonical request/response shapes. Useful as a CI gate; partly subsumed by the v2.3 PyvesyncCoverageSpec — revisit after the v2.4 auto-tracking bot lands to decide whether a Python-side complement adds value.
 - **Release automation Tier 1** — `scripts/release.sh` plus seeded `CHANGELOG.md`. The `/cut-release` slash command (in `.claude/commands/cut-release.md`) implements the Claude-driven flow; a complementary shell script for non-Claude releases would close the loop.
 
 ### Speculative / unresolved API questions
