@@ -52,6 +52,68 @@ These are install-specific and not baked into this agent's knowledge.
 
 ---
 
+## Two dispatch modes
+
+The orchestrator dispatches you in one of two modes. The mode is named explicitly in the dispatch prompt — read it first to set expectations.
+
+### Mode A1: Real-hardware verification (canonical path)
+
+Used when the maintainer owns hardware for the driver under test. Dispatch prompt names the real `VeSync Integration` parent app-id, the child driverId, and real device-ids (e.g. live Vital 200S 1847, Superior 6000S 1848).
+
+Verify path:
+- Real parent → real VeSync cloud → real device → real status responses
+- All Step 3 test patterns below apply directly
+- Catches API-shape regressions (BP4 V201S field-name verification, BP13 token-expiry, response envelope shapes the fixture doesn't capture)
+
+PASS criteria includes: real cloud round-trip succeeded (`HTTP 200 inner=0`), `Heartbeat: synced`, attribute round-trip on real hardware.
+
+### Mode A2: Virtual-parent verification (preview drivers without hardware)
+
+Used for drivers shipped as preview without maintainer hardware (Tower/Pedestal Fans, LV600S, Dual 200S, Classic 200S, OasisMist 1000S, Sprout family, EverestAir, etc.). Dispatch prompt names the **virtual** parent's app-id (`VeSync Virtual Test Parent`), a fixture name (e.g. `Core200S`, `LAP-V102S`), and a virtual child label.
+
+Verify path:
+- Virtual parent (`VeSyncIntegrationVirtual.groovy`) intercepts `sendBypassRequest` calls from the spawned child
+- Validates payload data keys against `FIXTURE_OPS` (the regenerated map sourced from `tests/pyvesync-fixtures/<name>.yaml` + `tools/virtual_parent_extensions.json`)
+- Returns canned responses synthesized from the fixture's canonical default state, mutated by accumulated `set*` requests
+- All log lines from the virtual parent carry the `[DEV TOOL]` prefix
+
+Pre-flight extra: confirm the real `VeSync Integration` parent is NOT installed on the same hub — the virtual parent's spawn-children path refuses to run when both are present (prevents device cross-wiring). If `fixtureMode: blocked-real-parent-installed` shows up in attributes or logs, treat as UNCERTAIN and escalate to orchestrator.
+
+Verify steps:
+1. Check virtual parent's `fixtureMode` attribute is `ready`.
+2. Trigger `spawnFromFixture` command on the virtual parent with the fixture name + child label.
+3. Confirm child appears in `mcp__hubitat__list_devices` with the right driver name + DNI prefix `VirtualVeSync-`.
+4. Send commands via `send_command` to the spawned child.
+5. Read child attributes back via `get_attribute`.
+6. Pull logs and grep for `[DEV TOOL] Payload validated: <method>` (success) and `[DEV TOOL] Payload data keys mismatch` (FAIL signal).
+
+PASS criteria for A2:
+- `[DEV TOOL] Spawned child <dni> bound to fixture <name>` — spawn succeeded
+- `[DEV TOOL] Payload validated: <method> keys=[...]` — for each command exercised
+- Child attributes populated correctly (parser worked end-to-end)
+- No `[DEV TOOL] Payload data keys mismatch` in logs (would indicate field-name regression)
+- No exception traces
+
+What A2 does NOT catch (don't expect them in this mode): real VeSync API responses, `HTTP 200 inner=0` traces, `Heartbeat: synced` (no real polling), BP4 field-name regressions vs live API.
+
+If a driver covered by A2 is later acquired and tested via A1, that supersedes A2 for that specific driver.
+
+### Log markers specific to A2
+
+Healthy markers (all `[DEV TOOL]` prefixed):
+- `[DEV TOOL] Virtual parent installed.`
+- `[DEV TOOL] Spawned child <dni> bound to fixture <name>`
+- `[DEV TOOL] Payload validated: <method> keys=[...]`
+- `[DEV TOOL] sendBypassRequest from <dni>: method=<method>` — child invoked the virtual parent
+
+Failure markers:
+- `[DEV TOOL] Payload data keys mismatch for <method>: ours=[...], pyvesync=[...]` → field-name regression — FAIL
+- `[DEV TOOL] No fixture op for method '<method>'` → child invoked an unknown method (UNCERTAIN — could be a fixture gap or real bug; escalate)
+- `[DEV TOOL] sendBypassRequest from unbound child <dni>` → spawn-flow bug (FAIL)
+- `fixtureMode: blocked-real-parent-installed` (attribute) → pre-flight conflict — UNCERTAIN, escalate to orchestrator
+
+---
+
 ## Deploy workflow
 
 ### Step 1: Pre-flight

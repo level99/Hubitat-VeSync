@@ -266,9 +266,11 @@ Output is only ~3% of total. **Do not reduce verdict verbosity** — output fide
 
 ## Two deployment contexts
 
-### A. With Hubitat MCP server (maintainer setup)
+After QA approval, the operations layer verifies on a real Hubitat hub. Three sub-modes — pick based on whether MCP is available AND whether real device hardware is owned for the driver under test.
 
-After QA approval, dispatch the **vesync-driver-operations** agent. It handles the deploy + verify cycle and returns a structured PASS/FAIL/UNCERTAIN report. Pass it the source file path, driver ID (look up via `mcp__hubitat__manage_apps_drivers list_hub_drivers`), affected device IDs, and a test plan.
+### A1. With MCP + real hardware (canonical path for shipped-hardware drivers)
+
+Dispatch the **vesync-driver-operations** agent. It handles the deploy + verify cycle on real hardware (real `VeSync Integration` parent → real VeSync cloud → real device) and returns a structured PASS/FAIL/UNCERTAIN report. Pass it the source file path, driver ID (look up via `mcp__hubitat__manage_apps_drivers list_hub_drivers`), affected device IDs, and a test plan.
 
 You can also do the deploy yourself if the change is trivial:
 1. Upload source: `curl -F "uploadFile=@<file>" -F "folder=/" "http://<hub-IP>/hub/fileManager/upload"`
@@ -276,6 +278,24 @@ You can also do the deploy yourself if the change is trivial:
 3. Verify: trigger `refresh` on the affected device, inspect `applyStatus raw r ...` log lines, confirm attributes populated.
 
 Use the operations agent when: you want structured PASS/FAIL evidence in the work item, the test plan is non-trivial, or you want to keep the main session's context lean (operations is Haiku, much cheaper than Opus on log-heavy verification).
+
+This is the only mode that exercises the real cloud round-trip — required for catching API-shape regressions (BP4 V201S field-name verification, BP13 token-expiry, response envelope shapes the fixture doesn't capture).
+
+### A2. With MCP + virtual test parent (preview drivers without hardware)
+
+For drivers shipped as preview without maintainer hardware (the default since v2.1 — Tower/Pedestal Fans, LV600S, Dual 200S, Classic 200S, OasisMist 1000S, Sprout family, EverestAir, etc.), real-hardware verification isn't available. The **virtual test parent** (`Drivers/Levoit/VeSyncIntegrationVirtual.groovy`, ships `required: false` in HPM) replaces the real parent with a fixture-driven harness that serves canned pyvesync responses to children.
+
+Dispatch flow:
+
+1. Deploy the virtual parent + new child driver via MCP `update_driver_code`.
+2. Configure the virtual parent's preferences to spawn the relevant fixture's child (UI step, or direct settings update via MCP).
+3. Send commands to the spawned child via `mcp__hubitat__send_command` — virtual parent intercepts, validates payload data keys against `FIXTURE_OPS`, returns a canned response asynchronously.
+4. Read attributes (`mcp__hubitat__get_attribute`) and logs (`mcp__hubitat__manage_logs`) to verify the child's parser populated state correctly.
+5. Operations agent returns PASS/FAIL/UNCERTAIN with `[DEV TOOL]` log markers as evidence.
+
+What this catches that A1 doesn't (because no hardware to test on): Hubitat sandbox runtime quirks, async callback ordering, real `addChildDevice` lifecycle, `schedule()`/`runIn()` cron mechanics — the BP14/BP16/BP17 pattern fingerprint. What it does NOT catch (no real cloud): BP4 field-name regressions vs live API, BP13 token expiry, response envelope shapes pyvesync didn't capture.
+
+For preview drivers, A2 is the standard pre-ship gate. If a driver is later acquired and tested via A1, that supersedes A2 for that specific driver.
 
 ### B. Without Hubitat MCP (typical contributor)
 
@@ -286,7 +306,8 @@ The pipeline still works — you just stop at the local-file-edit step. Push you
    - In Hubitat UI: **Drivers Code** → find the driver → **Edit** → paste new content → **Save**.
    - Open the affected child device's page → click **Refresh**.
    - Check **Logs** for `applyStatus raw r ...` lines.
-4. Open a PR with the diff + test plan + manual verification notes.
+   - For drivers without hardware, install the virtual test parent (HPM Modify → opt in to "VeSync Virtual Test Parent") and run a fixture-driven verification on your hub before opening the PR.
+4. Open a PR with the diff + test plan + manual verification notes (call out which sub-mode you used: real hardware / virtual parent / Spock-only).
 
 You don't have to deploy to merge — code review + spec-conformance via the dev/QA pipeline is sufficient gate. The maintainer will deploy on the live hub before/during merge.
 

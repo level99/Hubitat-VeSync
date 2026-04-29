@@ -165,6 +165,27 @@ If you don't have the device yourself but pyvesync covers it cleanly, you can sh
 
 Hardware reports refuting blind decisions are then tracked back to the `CROSS-CHECK` source citation, validated, and the prefix gets stripped in the next release cut.
 
+### On-hub validation without owning the hardware (virtual test parent)
+
+If you don't own the hardware, the **virtual test parent** (`Drivers/Levoit/VeSyncIntegrationVirtual.groovy`) lets you exercise child driver parser paths end-to-end on a real Hubitat hub. It replaces the real `VeSync Integration` parent app with a fixture-driven harness — children call `parent.sendBypassRequest(...)` and the virtual parent serves canned pyvesync responses validated against `tests/pyvesync-fixtures/<name>.yaml`.
+
+Setup:
+
+1. **Install via HPM Modify.** Open the Levoit package in HPM, click **Modify**, opt in to "VeSync Virtual Test Parent" (description leads with `[DEV TOOL] Do NOT install for normal use`). HPM downloads the source automatically.
+2. **Verify the real parent is uninstalled.** The virtual parent's pre-flight refuses to spawn children if the real `VeSync Integration` parent app is on the same hub (prevents device cross-wiring). Either uninstall the real parent first, or use a separate development hub.
+3. **Add as a virtual device.** Devices → Add Device → Virtual → pick "VeSync Virtual Test Parent" from the User Devices type list → Save.
+4. **Spawn a fixture-bound child.** On the virtual parent's device page, run the `spawnFromFixture` command. Pick the fixture matching your driver under test (e.g. `Core200S` for the Levoit Core 200S driver). Provide a child label.
+5. **Exercise the child.** Click commands on the spawned child (`on`, `off`, `setSpeed`, etc.). Watch Hubitat Logs for `[DEV TOOL] Payload validated: <method>` (success) and `[DEV TOOL] Payload data keys mismatch` (your driver's payload diverges from pyvesync canonical — fix it).
+6. **Verify attribute population.** Confirm the spawned child's attributes (switch, level, mode, etc.) populate correctly after the canned response delivers — this validates the parser end-to-end.
+
+What this catches: Hubitat-runtime bugs that Spock can't (sandbox quirks, async callback ordering, real `addChildDevice` lifecycle, schedule()/runIn() cron mechanics — the BP14/BP16/BP17 fingerprint), plus payload field-name regressions (BP4-style).
+
+What this does NOT catch: real cloud round-trip behaviors (live VeSync API responses, BP4 field-name verification vs live API, BP13 token-expiry, response envelope shapes the fixture doesn't capture). For drivers where you own the hardware, the real parent + real cloud is still the gold standard.
+
+Phase 1 of the virtual parent (shipped in v2.4) only supports the Core 200S fixture for end-to-end spawning; payload validation works for all 19 fixtures via the regenerated `FIXTURE_OPS` map. Other fixtures gain spawnable end-to-end coverage as their `canonicalDefaultState` + `STATE_MUTATORS` get extended in subsequent commits.
+
+In your PR description, call out which sub-mode you used: `[ ] real hardware [ ] virtual parent [ ] preview-only (Spock + manual review)`.
+
 ### EU region support (v2.2 preview)
 
 The parent driver's `VeSync API region` preference (added in v2.2) routes all API calls to `smartapi.vesync.eu` when set to `EU`. This ships as **preview** — the maintainer has no EU hardware. If you're an EU contributor:

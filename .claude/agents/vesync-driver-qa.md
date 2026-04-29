@@ -184,6 +184,33 @@ This applies to ALL committed files: driver source, specs, fixtures, agent defin
 
 When reviewing changes, scan for these specific anti-patterns. Each is a real bug that was found and fixed during v2.0 development:
 
+### Test-layer coverage matrix
+
+Use this when reviewing a diff in the absence of one or more verification layers (e.g. preview driver without hardware → no Real-hardware row). A bug pattern only caught by Real-hardware needs explicit caveat in your APPROVE: *"Approve subject to A1 verification when hardware is acquired."*
+
+| BP | Static lint | Spock harness | Virtual parent (A2) | Real hardware (A1) |
+|---|:-:|:-:|:-:|:-:|
+| 1 — Missing 2-arg update | ✓ | ✓ | ✓ | ✓ |
+| 2 — Hardcoded getPurifierStatus | — | ✓ | ✓ | ✓ |
+| 3 — Envelope peel | — | ✓ | ✓ | ✓ |
+| 4 — V201S setLevel field-name | — | ✓ (PyvesyncCoverageSpec) | ✓ (FIXTURE_OPS) | ✓ |
+| 5 — V201S manual-mode wrong method | — | ✓ (PyvesyncCoverageSpec) | ✓ (FIXTURE_OPS) | ✓ |
+| 6 — Speed reports while off | — | ✓ | ✓ | ✓ |
+| 7 — Info HTML async race | — | — (mock is sync) | ✓ | ✓ |
+| 8 — Drying state mapped as boolean | — | ✓ | ✓ | ✓ |
+| 9 — Driver name change | ✓ (RULE19) | — | ✓ | ✓ |
+| 10 — SmartThings icon URL | ✓ | — | — | — |
+| 11 — Wrong documentationLink | ✓ | — | — | — |
+| 12 — Pref-seed missing | ✓ | ✓ | ✓ | ✓ |
+| 13 — Token-expiry silent failure | — | — | — | ✓ |
+| 14 — Hub-reboot drops runIn cron | ✓ | ✓ | ✓ (schedule fires on hub) | ✓ |
+| 15 — Driver uses app-only API | ✓ (RULE23) | ✓ (fail-fast mock) | ✓ | ✓ |
+| 16 — debugOutput stuck after reboot | ✓ (RULE25) | ✓ | ✓ | ✓ |
+| 17 — Stale state.deviceList configModule | — | ✓ | — (no real polling) | ✓ |
+| 18 — NPE on (null as String).toLowerCase() | ✓ (RULE27) | ✓ | ✓ | ✓ |
+
+Read: a `✓` means the layer would catch the regression. `—` means the layer cannot detect it (either by design — e.g. lint can't catch runtime async races — or by missing test coverage). The two BPs caught only by Real-hardware (BP13, and partially BP17) are the cases where a preview driver's A2 verification is insufficient and the maintainer's hardware sweep before cut is load-bearing.
+
 ### 1. Missing 2-arg `update(status, nightLight)` signature on a child
 
 **Symptom:** Every parent poll throws `MissingMethodException: No signature of method: <child_class>.update() applicable for argument types: (LazyMap, null)`. Status attributes never populate; the only data shown is whatever was set before the breakage. Community users report "device discovered but data retrieval fails."
