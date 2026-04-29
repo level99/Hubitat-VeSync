@@ -154,6 +154,13 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
 
 10. **Honest pushback on disagreements.** If the developer thinks QA's feedback would cause a regression, surface the disagreement to the human user; don't rubber-stamp.
 
+11. **NITs are not optional unless explicitly deferred.** When QA returns a NIT alongside (or without) a BLOCKING, the default action is to fix it in the same round as any BLOCKING — same dispatch to dev, same re-review by QA. A NIT is "nice-to-fix" in the sense that it doesn't block production correctness; it is NOT "skip silently." Skipping a NIT is allowed only when the orchestrator (you, main session) makes an explicit decision to defer:
+    - Surface the deferral to the user with rationale ("Deferring NIT 2 to v<next>: cosmetic helper-name; no shipping risk")
+    - Record it as a TaskCreate entry naming the next-release target
+    - Add a v<next>-candidate item to TODO.md (or ROADMAP.md if user-facing)
+
+    Silent skipping is a process bug. The v2.2.1 cycle had a NIT almost lost between QA round 2 and round 3 — that triggered the TaskCreate-for-multi-fix-releases discipline; this rule extends that lesson into a hard default. Bias toward fixing; require an explicit decision to defer.
+
 ---
 
 ## Workflow optimizations (lessons learned)

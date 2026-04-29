@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — v2.3
 
+### Fixed
+
+- **Stale configModule no longer causes indefinite "No status returned" error bursts (Bug Pattern #17).** After a VeSync firmware update the device's `configModule` value can change server-side while `state.deviceList` still holds the old snapshot. Every subsequent poll call used the stale value, received an empty result, and logged `ERROR: No status returned from getPurifierStatus` every 30 seconds until the user manually triggered Resync. Fixed with two additions: (A) `deviceMethodFor()` now includes a typeName-based fallback for devices whose `deviceType` data value is absent or unrecognized, preventing the compound mis-routing problem; (B) `updateDevices()` tracks consecutive empty results per DNI in `state.consecutiveEmpty` and the new `ensurePollHealth()` watchdog triggers an automatic `getDevices()` Resync when any DNI reaches 5 consecutive empties (~2.5 min at default 30s interval). On success, fresh `configModule` values restore normal polling without user action.
+
 ### Added
 
 - **Core line feature back-fill** (Core 200S/300S/400S/600S). Closes long-standing gaps inherited from the original Niklas upstream where the Core drivers exposed less than the underlying VeSync API supports. New attributes and commands per driver:

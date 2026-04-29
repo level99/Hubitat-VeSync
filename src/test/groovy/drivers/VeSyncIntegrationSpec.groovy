@@ -2694,4 +2694,184 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         and: "no explicit logInfo heartbeat entry -- driver relies on Hubitat auto-log from descriptionText, not logInfo()"
         testLog.infos.count { it.contains("Heartbeat: synced") } == 0
     }
+
+    // =========================================================================
+    // Section N — Bug Pattern #17: stale configModule self-heal
+    //
+    // When VeSync pushes a firmware update the device's configModule value may
+    // change. state.deviceList holds a snapshot from the last getDevices() call;
+    // if that snapshot is stale the bypassV2 request returns an empty result,
+    // generating "No status returned from getPurifierStatus" at every poll cycle.
+    //
+    // Two-part fix:
+    //   Fix A — deviceMethodFor() typeName fallback: when rawCode is absent or
+    //            maps to GENERIC, infer the poll method from child's typeName.
+    //            Prevents mis-routing that compounds the empty-result problem.
+    //
+    //   Fix B — ensurePollHealth() watchdog: counts consecutive empty results
+    //            per DNI in state.consecutiveEmpty; triggers getDevices() when
+    //            any DNI reaches the 5-consecutive threshold.
+    //
+    // Tests:
+    //   N1 — deviceMethodFor() returns getHumidifierStatus for typeName "Humidifier"
+    //         when rawCode is absent (empty getDataValue)
+    //   N2 — deviceMethodFor() returns getPurifierStatus for unrecognized typeName
+    //         when rawCode is absent
+    //   N3 — deviceMethodFor() returns getHumidifierStatus for rawCode V601S
+    //         (regression check: existing dtype-based path still works)
+    //   N4 — updateDevices() increments state.consecutiveEmpty on null-result poll
+    //   N5 — updateDevices() clears state.consecutiveEmpty[dni] on successful poll
+    //   N6 — ensurePollHealth() triggers getDevices() when any DNI reaches 5
+    // =========================================================================
+
+    def "deviceMethodFor() returns getHumidifierStatus when typeName contains 'Humidifier' and rawCode is absent (N1 -- BP17 Fix A)"() {
+        // N1: typeName fallback path. When a child's getDataValue("deviceType") is empty
+        // (e.g. the field was never written, or a phantom handle), deviceMethodFor() falls
+        // through the switch (dtype = GENERIC) and must use typeName substring matching
+        // to avoid defaulting everything to getPurifierStatus.
+        given: "child device with no stored rawCode but a typeName containing 'Humidifier'"
+        def child = new TestDevice()
+        child.typeName = "Levoit Superior 6000S Humidifier"
+        // Deliberately leave deviceType data value absent (TestDevice default returns null/"")
+        child.metaClass.update = { Map st, nl -> true }
+
+        expect: "deviceMethodFor() resolves getHumidifierStatus via typeName fallback"
+        driver.deviceMethodFor(child) == "getHumidifierStatus"
+    }
+
+    def "deviceMethodFor() returns getPurifierStatus when typeName is unrecognized and rawCode is absent (N2 -- BP17 Fix A)"() {
+        // N2: unrecognized typeName fallback — no "Tower Fan", "Pedestal Fan", or "Humidifier"
+        // substring present. Must default to getPurifierStatus (safe fallback per comment in driver).
+        given: "child device with no stored rawCode and an unrecognized typeName"
+        def child = new TestDevice()
+        child.typeName = "Levoit Generic Device"
+        // Deliberately leave deviceType data value absent.
+        child.metaClass.update = { Map st, nl -> true }
+
+        expect: "deviceMethodFor() falls back to getPurifierStatus"
+        driver.deviceMethodFor(child) == "getPurifierStatus"
+    }
+
+    def "deviceMethodFor() returns getHumidifierStatus for rawCode V601S (N3 -- dtype-path regression)"() {
+        // N3: regression check — the dtype-based switch path must not be broken by the
+        // BP17 fallback addition. V601S (Superior 6000S) must still resolve via switch.
+        given: "child device with LEH-S601S-WUS rawCode stored"
+        def child = new TestDevice()
+        child.typeName = "Levoit Superior 6000S Humidifier"
+        child.updateDataValue("deviceType", "LEH-S601S-WUS")  // dtype → V601S → getHumidifierStatus
+        child.metaClass.update = { Map st, nl -> true }
+
+        expect: "deviceMethodFor() uses the dtype switch (V601S → getHumidifierStatus)"
+        driver.deviceMethodFor(child) == "getHumidifierStatus"
+    }
+
+    def "updateDevices() increments state.consecutiveEmpty on null-result poll (N4 -- BP17 Fix B)"() {
+        // N4: tracking increments. When the poll callback receives status==null (simulating
+        // stale configModule returning empty result), state.consecutiveEmpty[dni] must be
+        // incremented so the watchdog can detect the pattern.
+        given: "one device in deviceList; httpPost returns HTTP 200 with result==null"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        state.deviceList = ["empty-cid": "stale-config-module"]
+
+        def mockDev = new TestDevice()
+        mockDev.typeName = "Levoit Vital 200S Air Purifier"
+        mockDev.updateDataValue("deviceType", "LAP-V201S-WUS")
+        mockDev.metaClass.update = { Map st, nl -> true }
+        childDevices["empty-cid"] = mockDev
+
+        // Return HTTP 200 with outer code 0 but result == null (stale configModule symptom)
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [code: 0, result: null, traceId: "test-trace"]
+            callback(r)
+        }
+
+        when:
+        driver.updateDevices()
+
+        then: "state.consecutiveEmpty['empty-cid'] was set to 1"
+        state.consecutiveEmpty != null
+        (state.consecutiveEmpty["empty-cid"] as Integer) == 1
+
+        and: "an error log was emitted (the null-status branch ran)"
+        testLog.errors.any { it.contains("No status returned from") }
+    }
+
+    def "updateDevices() clears state.consecutiveEmpty[dni] on successful poll (N5 -- BP17 Fix B)"() {
+        // N5: counter reset on success. After a stale-configModule run is resolved
+        // (by getDevices() refreshing configModule, or by the API returning data),
+        // the first successful poll must clear the counter for that DNI so the watchdog
+        // does not trigger a redundant Resync.
+        given: "device has a prior consecutiveEmpty count of 3; next poll succeeds"
+        settings.refreshInterval = 30
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        state.consecutiveEmpty = ["success-cid": 3]  // pre-load a partial count
+        state.deviceList = ["success-cid": "fresh-config-module"]
+
+        def mockDev = new TestDevice()
+        mockDev.typeName = "Levoit Vital 200S Air Purifier"
+        mockDev.updateDataValue("deviceType", "LAP-V201S-WUS")
+        mockDev.metaClass.update = { Map st, nl -> true }
+        childDevices["success-cid"] = mockDev
+
+        // Return a successful result (non-null status)
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            def r = new Expando()
+            r.status = 200
+            r.data = [
+                code: 0,
+                result: [code: 0, result: [powerSwitch: 1], traceId: "test-trace"],
+                traceId: "test-trace"
+            ]
+            callback(r)
+        }
+
+        when:
+        driver.updateDevices()
+
+        then: "state.consecutiveEmpty no longer contains 'success-cid'"
+        !(state.consecutiveEmpty?.containsKey("success-cid"))
+
+        and: "no error log was emitted (success path taken)"
+        !testLog.errors.any { it.contains("No status returned from") }
+    }
+
+    def "ensurePollHealth() schedules getDevices() via runIn when any DNI count reaches 5 (N6 -- BP17 Fix B)"() {
+        // N6: watchdog fires. When state.consecutiveEmpty contains a DNI with count >= 5,
+        // ensurePollHealth() must schedule a getDevices() Resync via runIn(2, "getDevices")
+        // (async, to avoid blocking the poll cron thread on retryableHttp delays) and reset
+        // the counters. Direct getDevices() call is intentionally NOT expected here.
+        given: "state.consecutiveEmpty has one DNI at count 5 (threshold reached)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.consecutiveEmpty = ["stale-cid": 5]
+        List<List<Object>> runInCalls = []
+
+        // Capture runIn calls — ensurePollHealth() fires runIn(2, "getDevices")
+        driver.metaClass.runIn = { int delay, String handler ->
+            runInCalls << [delay, handler]
+        }
+
+        when:
+        driver.ensurePollHealth()
+
+        then: "runIn was called with delay=2 and handler='getDevices'"
+        runInCalls.size() == 1
+        runInCalls[0][0] == 2
+        runInCalls[0][1] == "getDevices"
+
+        and: "state.consecutiveEmpty is reset before the Resync (cleared so watchdog doesn't re-fire)"
+        state.consecutiveEmpty == [:]
+
+        and: "an INFO log was emitted naming the affected DNI"
+        testLog.infos.any { it.contains("BP17 poll-health") && it.contains("stale-cid") }
+    }
 }

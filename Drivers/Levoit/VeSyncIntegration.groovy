@@ -394,6 +394,34 @@ private void ensureDebugWatchdog() {
 }
 
 /**
+ * BP17 poll-health watchdog.
+ *
+ * A stale configModule in state.deviceList (caused by a VeSync-side firmware update)
+ * makes every bypassV2 status call return an empty result, generating one
+ * ERROR log per device per poll cycle indefinitely. The symptom is:
+ *   ERROR: No status returned from getPurifierStatus
+ *
+ * This watchdog counts consecutive empty results per DNI via state.consecutiveEmpty.
+ * If any DNI reaches the threshold (5 consecutive empties), a full getDevices() is
+ * triggered to refresh configModule values from the VeSync cloud. On success, the
+ * fresh configModule values restore normal polling without user action.
+ *
+ * Threshold of 5: ~2.5 min at 30s interval — fast enough to self-heal before the
+ * user notices, slow enough to avoid spurious Resyncs on transient API blips.
+ */
+private void ensurePollHealth() {
+    if (!state.consecutiveEmpty) return
+    int threshold = 5
+    boolean anyExceeded = state.consecutiveEmpty.any { dni, count -> (count as Integer) >= threshold }
+    if (anyExceeded) {
+        def offendingDnis = state.consecutiveEmpty.findAll { k, v -> (v as Integer) >= threshold }.keySet()
+        logInfo "BP17 poll-health: ${offendingDnis.size()} device(s) returned ≥${threshold} consecutive empty results (${offendingDnis}). Scheduling getDevices() to refresh configModule."
+        state.consecutiveEmpty = [:]  // reset counters before Resync to avoid re-triggering immediately
+        runIn(2, "getDevices")  // async — keeps current poll thread from blocking on retryableHttp delays
+    }
+}
+
+/**
  * Returns the configured API region ("US" or "EU").
  * Reads from settings?.deviceRegion; defaults to "US" when preference is unset
  * (preserves backwards compatibility for existing installs).
@@ -512,6 +540,12 @@ def Boolean updateDevices()
     // timer evaporated) and auto-disables. Idempotent once debug is off.
     ensureDebugWatchdog()
 
+    // BP17 poll-health watchdog -- detects DNIs that have returned ≥5 consecutive empty
+    // results (symptom of stale configModule after VeSync-side firmware update) and
+    // triggers a full getDevices() Resync to refresh configModule values. Idempotent
+    // once all DNI counters are cleared.
+    ensurePollHealth()
+
     // Stop if driver is reloading
     if (state.driverReloading) {
         logDebug "Skipping updateDevices - driver reloading"
@@ -583,10 +617,26 @@ def Boolean updateDevices()
                 if (checkHttpResponse("update", resp))
                 {
                     def status = resp.data.result
-                    if (status == null)
+                    if (status == null) {
                         logError "No status returned from ${method}: ${resp?.hasProperty('msg') ? resp.msg : ''}"
-                    else
+                        // BP17: track consecutive empty results per DNI so ensurePollHealth()
+                        // can trigger a full Resync when configModule drifts post-firmware-update.
+                        // Whole-map-reassignment required: Hubitat state is a JSON-backed proxy;
+                        // bracket-notation writes (state.foo[k]=v) operate on a snapshot and do
+                        // NOT persist. Only top-level assignment (state.foo = newMap) writes back.
+                        def counts = (state.consecutiveEmpty ?: [:]) as Map
+                        counts[dni] = ((counts[dni] ?: 0) as Integer) + 1
+                        state.consecutiveEmpty = counts
+                    } else {
+                        // Successful poll — clear the stale-configModule counter for this DNI.
+                        // Same whole-map-reassignment discipline: remove on snapshot, then reassign.
+                        if (state.consecutiveEmpty?.containsKey(dni)) {
+                            def counts = state.consecutiveEmpty as Map
+                            counts.remove(dni)
+                            state.consecutiveEmpty = counts
+                        }
                         dev.update(status, getChildDevice(dni+"-nl"))
+                    }
                 }
             }
         }
@@ -626,43 +676,47 @@ def Boolean updateDevices()
 /**
  * Returns the VeSync API poll method for the given child device (v2.3).
  *
- * Routing is dtype-based: reads the raw model code from the child's stored
+ * Primary routing is dtype-based: reads the raw model code from the child's stored
  * deviceType dataValue, maps it through deviceType() to a dtype string, then
- * maps dtype → API method. This eliminates the old TYPENAME_TO_METHOD
- * substring-matching approach (issue #3 AC #3) which could silently mis-route
- * if a driver's metadata name changed or a new driver's name didn't contain
- * the expected substring.
+ * dispatches dtype → method via switch. This eliminates the old TYPENAME_TO_METHOD
+ * substring-matching approach (issue #3 AC #3) which could silently mis-route if a
+ * driver's metadata name changed or a new driver's name didn't contain the expected
+ * substring.
+ *
+ * BP17 fallback: when rawCode is absent or maps to GENERIC (e.g. stale deviceType
+ * dataValue after a VeSync firmware update), falls back to typeName substring matching
+ * so humidifiers and fans still receive the correct poll method instead of defaulting
+ * to getPurifierStatus and compounding the empty-result problem.
  *
  * Method mapping by device family:
  *   Tower Fan   (TOWERFAN)                                  → getTowerFanStatus
  *   Pedestal Fan (PEDESTALFAN)                              → getFanStatus
- *   Humidifiers (V601S, A601S, O451S, A602S, D301S, C200S, A603S) → getHumidifierStatus
- *   Air purifiers + Generic (all other dtypes)             → getPurifierStatus
+ *   Humidifiers (V601S, A601S, O451S, A602S, D301S, C200S, A603S, OM1000S, B381S) → getHumidifierStatus
+ *   Air purifiers (EL551S, B851S, 200S, 300S, 400S, 600S, V200S, V100S)           → getPurifierStatus
+ *   Fallback: typeName contains "Humidifier"/"Tower Fan"/"Pedestal Fan"            → respective method
+ *   Default (unrecognized)                                                         → getPurifierStatus
  */
 private String deviceMethodFor(child) {
     String rawCode = child?.getDataValue("deviceType") ?: ""
     String dtype = rawCode ? deviceType(rawCode) : "GENERIC"
     switch (dtype) {
-        case "TOWERFAN":
-            return "getTowerFanStatus"
-        case "PEDESTALFAN":
-            return "getFanStatus"
-        case "V601S":
-        case "A601S":
-        case "O451S":
-        case "A602S":
-        case "D301S":
-        case "C200S":
-        case "A603S":
-        case "OM1000S":
-        case "B381S":
+        case "TOWERFAN":    return "getTowerFanStatus"
+        case "PEDESTALFAN": return "getFanStatus"
+        case "V601S": case "A601S": case "O451S": case "A602S":
+        case "D301S": case "C200S": case "A603S": case "OM1000S": case "B381S":
             return "getHumidifierStatus"
-        case "EL551S":
-            return "getPurifierStatus"
-        default:
-            // All purifier dtypes (200S, 300S, 400S, 600S, V200S, V100S) + GENERIC
+        case "EL551S": case "B851S": case "200S": case "300S":
+        case "400S": case "600S": case "V200S": case "V100S":
             return "getPurifierStatus"
     }
+    // BP17 fallback: rawCode was empty or mapped to GENERIC (stale/unknown deviceType dataValue).
+    // Infer the correct method from the child's driver typeName — avoids 1/min log-error bursts
+    // when state.deviceList configModule drifts after a VeSync-side firmware update.
+    String typeName = child?.typeName ?: child?.name ?: ""
+    if (typeName.contains("Tower Fan"))    return "getTowerFanStatus"
+    if (typeName.contains("Pedestal Fan")) return "getFanStatus"
+    if (typeName.contains("Humidifier"))   return "getHumidifierStatus"
+    return "getPurifierStatus"
 }
 
 private deviceType(code) {
@@ -710,8 +764,14 @@ private deviceType(code) {
         case "LAP-V102S-AJPR":
         case "LAP-V102S-AEUR":
             return "V100S";
-        // Superior 6000S — pyvesync VeSyncSuperior6000S supports LEH-S601S-WUS/-WUSR/-WEUR and LEH-S602S-WUS
-        case ~/LEH-S60[12]S-(WUS|WUSR|WEUR)/:
+        // Superior 6000S — pyvesync VeSyncSuperior6000S. Listed literally (not via regex) so RULE22 lint can verify
+        // isLevoitClimateDevice() coverage statically. Preserves prior `~/LEH-S60[12]S-(WUS|WUSR|WEUR)/` matching surface.
+        case "LEH-S601S-WUS":
+        case "LEH-S601S-WUSR":
+        case "LEH-S601S-WEUR":
+        case "LEH-S602S-WUS":
+        case "LEH-S602S-WUSR":
+        case "LEH-S602S-WEUR":
             return "V601S";
         // Classic 300S Humidifier — pyvesync VeSyncHumid200300S, dev_types Classic300S + LUH-A601S-*
         case "Classic300S":

@@ -491,6 +491,24 @@ Call sites:
 
 ---
 
+### 17. Stale `state.deviceList` configModule causes silent empty-result polls
+
+`state.deviceList` is a map of `{DNI → configModule}` built during `getDevices()` (Resync). When VeSync pushes a firmware update to a device, or the device is re-paired in the VeSync mobile app, the device's `configModule` value can change server-side. The cached value in `state.deviceList` becomes stale. Every subsequent `bypassV2` request uses the stale `configModule`; the VeSync cloud returns an empty result (`resp.data.result == null`), and `updateDevices()` logs `ERROR: No status returned from getPurifierStatus:` once per poll cycle until the user manually triggers Resync.
+
+**Same shape as BP14:** bug accumulates over time, self-heals on Save Preferences (because `updated()` → `initialize()` → `getDevices()` rebuilds `state.deviceList` with fresh configModules). Fix pattern is also the same — auto-detect + auto-heal.
+
+**Compound symptom:** if the child device also lost its `deviceType` data value (e.g. a re-add scenario, or the child predates the v2.2 plumbing and never self-seeded), `deviceMethodFor()` maps `rawCode = ""` → `dtype = "GENERIC"` → falls through to the default `getPurifierStatus` branch even for humidifiers. Wrong method + stale configModule both contribute to the empty result.
+
+**Fix A — typeName fallback in `deviceMethodFor()`:** make the dtype switch exhaustive for KNOWN dtypes (every purifier dtype gets an explicit `case`, not just the implicit default). For GENERIC or unmapped dtypes, fall through to typeName substring matching: `"Tower Fan"` → `getTowerFanStatus`, `"Pedestal Fan"` → `getFanStatus`, `"Humidifier"` → `getHumidifierStatus`, default → `getPurifierStatus`. This catches misconfigured children whose `deviceType` data value is missing or no longer in the switch.
+
+**Fix B — `state.consecutiveEmpty` watchdog:** in the `sendBypassRequest` callback, increment `state.consecutiveEmpty[dni]` on null result and remove the entry on success. New `ensurePollHealth()` private method runs at the top of `updateDevices()` (immediately after `ensureDebugWatchdog()`); when any DNI reaches the threshold (5 consecutive empty results, ~5 min at 60s interval), log INFO naming the affected DNIs, reset counters, and trigger `getDevices()` async via `runIn(2, "getDevices")` to refresh state.deviceList (and force a fresh login if needed).
+
+**Live-evidence:** surfaced 2026-04-28 during v2.3 cut-release pre-flight production-log audit on the maintainer's hub. v2.3 parent (commit `9f3cf2f`, deployed at 12:17 MDT) generated `ERROR: No status returned from getPurifierStatus:` at 1/min for at least 6 hours; resolved immediately on `update_device` triggering `updated()`. Pre-v2.3 substring-name routing happened to be more forgiving because Hubitat refreshes `dev.typeName` automatically when a driver is updated, while `state.deviceList` only refreshes on Resync. The v2.2.1 → v2.3 transition exposed the underlying fragility.
+
+**Flag this pattern** whenever a driver or parent change touches the `status == null` error branch in `updateDevices()` without the counter-increment + per-DNI clear, OR adds a new dtype mapping in `deviceMethodFor()` without an explicit case (the implicit default routes everything to `getPurifierStatus`, hiding new-driver mistakes). It is BLOCKING — the self-heal mechanism is incomplete without the tracking, and the routing is fragile without the typeName fallback.
+
+---
+
 ## Report format
 
 Return ONE of:
