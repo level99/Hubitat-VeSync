@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Pyvesync upstream-tracking automation** (`.github/workflows/pyvesync-tracker.yml` + `tools/pyvesync-tracker/`). Weekly scheduled job detects when `webdjoe/pyvesync` ships a new release tag and: (A) opens a `chore: bump pyvesync to <tag>` PR refreshing the vendored fixture set used by `PyvesyncCoverageSpec` — existing CI gates the merge; (B) if pyvesync added new Levoit device codes, opens a `new-device-support` triage issue listing them with class assignments. Replaces manual upstream-watching that gated the v2.3 fixture pin.
+
 ## [2.3] - 2026-04-28
 
 ### Fixed

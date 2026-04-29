@@ -2,6 +2,7 @@
 
 [![Lint](https://github.com/level99/Hubitat-VeSync/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/level99/Hubitat-VeSync/actions/workflows/lint.yml)
 [![Spock](https://github.com/level99/Hubitat-VeSync/actions/workflows/spock.yml/badge.svg?branch=main)](https://github.com/level99/Hubitat-VeSync/actions/workflows/spock.yml)
+[![Pyvesync tracker](https://github.com/level99/Hubitat-VeSync/actions/workflows/pyvesync-tracker.yml/badge.svg?branch=main)](https://github.com/level99/Hubitat-VeSync/actions/workflows/pyvesync-tracker.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/level99/Hubitat-VeSync?label=version)](https://github.com/level99/Hubitat-VeSync/releases)
 [![Last commit](https://img.shields.io/github/last-commit/level99/Hubitat-VeSync)](https://github.com/level99/Hubitat-VeSync/commits/main)

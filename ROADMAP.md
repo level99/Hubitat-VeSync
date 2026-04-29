@@ -10,11 +10,11 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 ### Tooling — primary v2.4 work item
 
-- **Pyvesync auto-tracking GitHub Actions bot** — single scheduled workflow with two outputs:
+- **Pyvesync upstream-tracking automation** — IN-FLIGHT on `release/v2.4`. Scheduled GitHub Actions workflow at `.github/workflows/pyvesync-tracker.yml` with implementation in `tools/pyvesync-tracker/`. Two outputs sharing a single weekly cron run:
   - **Output A — auto-refresh PR.** When pyvesync ships a new tag, the bot opens a `chore: bump pyvesync to <tag>` PR that refreshes the 19 vendored YAMLs in `tests/pyvesync-fixtures/` and updates the pinned-commit reference. Existing CI (Lint + Spock + PyvesyncCoverageSpec) runs on the PR — green = safe to merge, red = real upstream divergence flagged for investigation. Removes the manual refresh step that v2.3 left as the only weak point in the CoverageSpec design.
-  - **Output B — new-device-detect issue.** Same bot diffs pyvesync's `device_map.py` between old and new tag, filtered to Levoit prefixes (`LAP-`, `LUH-`, `LEH-`, `LTF-`, `LPF-`, `LV-`) plus the literal device types we recognize. If new Levoit entries appear, opens an issue tagged `auto-filed`, `new-device-support`, `upstream-tracking` — body lists new model codes + their pyvesync class assignments + diff link. Tier 2 grep filter (intentionally stops short of full AST classification — too brittle to pyvesync restructuring); maintainer does the fold-in-vs-new-driver call from the surfaced issue.
+  - **Output B — new-device-detect issue.** Same bot diffs pyvesync's `device_map.py` between old and new tag, filtered to Levoit prefixes (`LAP-`, `LUH-`, `LEH-`, `LTF-`, `LPF-`, `LV-`) plus the literal device types we recognize. If new Levoit entries appear, opens an issue tagged `auto-filed`, `new-device-support`, `upstream-tracking` — body lists new model codes + their pyvesync class assignments + diff link. Tier 2 grep filter; maintainer does the fold-in-vs-new-driver call from the surfaced issue.
 
-  Total scope: one `.github/workflows/pyvesync-tracker.yml` + a small refresh/diff script + permissions block (`pull-requests: write`, `issues: write`). Runs on GitHub free CI minutes; no infrastructure cost; zero ongoing maintenance after build. Pattern: Dependabot/Renovate-style arbitrary-source dependency tracking, plus an upstream-aware new-feature-detection extension. Build cost: ~3 hr (Output A ~2 hr + Output B ~45 min).
+  Activates on default-branch merge: schedule fires once `release/v2.4` merges to `main`. See `tools/pyvesync-tracker/README.md` for the entry-points + dry-run instructions.
 
 ### Hardware-pending items (carryforward from v2.3)
 
