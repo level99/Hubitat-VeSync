@@ -218,6 +218,27 @@ def main() -> int:
 
     update_readme(new_tag, sha, date)
     print(f"Updated README pinned reference to {new_tag} (commit {sha}, {date})")
+
+    # Regenerate the FIXTURE_OPS @Field block in VeSyncIntegrationVirtual.groovy
+    # so the virtual test parent's payload-validation map stays synchronized
+    # with the refreshed pyvesync fixtures. Imports the regenerator as a module
+    # to share refresh.py's already-loaded pyyaml env (avoids spawning a nested
+    # uv subprocess just to re-resolve the same PEP 723 deps).
+    regenerator_path = REPO_ROOT / "tools" / "regenerate_virtual_parent.py"
+    if regenerator_path.is_file():
+        print("Regenerating FIXTURE_OPS in VeSyncIntegrationVirtual.groovy...")
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        try:
+            import regenerate_virtual_parent  # noqa: PLC0415 — deferred import
+            rc = regenerate_virtual_parent.main()
+            if rc != 0:
+                print(f"Regenerator returned non-zero ({rc})", file=sys.stderr)
+                return rc
+        finally:
+            sys.path.pop(0)
+    else:
+        print(f"  SKIP regenerator (not found at {regenerator_path})")
+
     return 0
 
 

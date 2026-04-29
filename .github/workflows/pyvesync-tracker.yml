@@ -111,6 +111,7 @@ jobs:
 
           - Vendored YAML fixtures in \`tests/pyvesync-fixtures/\` refreshed from upstream.
           - Pinned-tag reference updated in \`tests/pyvesync-fixtures/README.md\`.
+          - \`FIXTURE_OPS\` @Field block in \`Drivers/Levoit/VeSyncIntegrationVirtual.groovy\` regenerated to match (via \`tools/regenerate_virtual_parent.py\`).
 
           CI (Lint + Spock + PyvesyncCoverageSpec) runs on this PR. Green = safe to merge; red = real divergence between this fork's drivers and upstream — investigate per failure.
 

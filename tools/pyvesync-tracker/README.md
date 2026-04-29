@@ -10,10 +10,13 @@ release tag past the version pinned in `tests/pyvesync-fixtures/README.md`.
 When a newer tag is found, the bot does up to two things in the same run:
 
 - **Output A** — opens a `chore: bump pyvesync to <tag>` PR that refreshes the
-  vendored YAML fixtures in `tests/pyvesync-fixtures/` to the new tag. Lint,
-  Spock, and `PyvesyncCoverageSpec` run on the PR via existing CI; green = safe
-  to merge; red = real divergence between this fork's drivers and pyvesync,
-  triaged per failure.
+  vendored YAML fixtures in `tests/pyvesync-fixtures/` to the new tag AND
+  regenerates the `FIXTURE_OPS` `@Field` block in
+  `Drivers/Levoit/VeSyncIntegrationVirtual.groovy` (via the local
+  `tools/regenerate_virtual_parent.py` script). Lint, Spock, and
+  `PyvesyncCoverageSpec` run on the PR via existing CI; green = safe to merge;
+  red = real divergence between this fork's drivers and pyvesync, triaged per
+  failure.
 - **Output B** — if any new Levoit device codes appeared in pyvesync's
   `device_map.py`, opens a `new-device-support` issue listing them with their
   pyvesync class assignments and triage hints.
