@@ -87,12 +87,19 @@ Verify steps:
 5. Read child attributes back via `get_attribute`.
 6. Pull logs and grep for `[DEV TOOL] Payload validated: <method>` (success) and `[DEV TOOL] Payload data keys mismatch` (FAIL signal).
 
+**Cleanup (always do this; even on FAIL/UNCERTAIN):**
+
+7. **Always run `send_command <virtualParentId> resetAllChildren` at the end of the test.** `resetAllChildren` calls `deleteChildDevice` on every spawned virtual child, so `VirtualVeSync-` devices get removed from the hub — they are throwaway test artifacts, never long-lived. Wait ~2s, then verify via `list_devices` that no `VirtualVeSync-` DNIs remain.
+8. **Do NOT delete the virtual parent device or the virtual parent driver.** Both are maintainer-installed and stay across test cycles. Cleanup is per-test-run, not per-session. Repeat A2 dispatches reuse the same parent device + driver.
+9. If the user manually exposed a spawned child to MCP for command access, the MCP exposure entry becomes stale after `resetAllChildren` deletes the underlying device. That's local config (not on-hub state); user can clean up the exposure list later. Just note it in your final report.
+
 PASS criteria for A2:
 - `[DEV TOOL] Spawned child <dni> bound to fixture <name>` — spawn succeeded
 - `[DEV TOOL] Payload validated: <method> keys=[...]` — for each command exercised
 - Child attributes populated correctly (parser worked end-to-end)
 - No `[DEV TOOL] Payload data keys mismatch` in logs (would indicate field-name regression)
 - No exception traces
+- `resetAllChildren` ran and `[DEV TOOL] All virtual children removed.` log marker present — children cleaned up
 
 What A2 does NOT catch (don't expect them in this mode): real VeSync API responses, `HTTP 200 inner=0` traces, `Heartbeat: synced` (no real polling), BP4 field-name regressions vs live API.
 
@@ -106,6 +113,7 @@ Healthy markers (all `[DEV TOOL]` prefixed):
 - `[DEV TOOL] Payload validated: <method> keys=[...]`
 - `[DEV TOOL] sendBypassRequest from <dni>: method=<method>` — child invoked the virtual parent
 - `[DEV TOOL] Real 'VeSync Integration' parent app detected on this hub.` — coexistence WARN (informational; spawn proceeds normally)
+- `[DEV TOOL] All virtual children removed.` — `resetAllChildren` cleanup confirmation; expected at end of every A2 dispatch
 
 Failure markers:
 - `[DEV TOOL] Payload data keys mismatch for <method>: ours=[...], pyvesync=[...]` → field-name regression — FAIL
