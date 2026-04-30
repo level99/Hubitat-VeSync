@@ -190,6 +190,17 @@ SOFTWARE.
 // 2022-07-18: v1.1 Support for Levoit Air Purifier Core 600S.
 //                  Split into separate files for each device.
 //                  Support for 'SwitchLevel' capability.
+// 2026-04-30: v2.4  Bug Pattern #19 — existing-child configModule refresh on Resync.
+//                  getDevices() else-branches (existing-child update path) previously
+//                  refreshed only name, label, and deviceType; configModule, cid, and
+//                  uuid were never updated. When VeSync changed a device's configModule
+//                  server-side (e.g. firmware update), sendBypassRequest still read the
+//                  stale value from the child data store, and every poll returned empty.
+//                  The BP17 watchdog correctly fired and scheduled a Resync, but Resync
+//                  hit the else-branch and did not propagate the fresh configModule, so
+//                  polling continued to fail indefinitely. All 21 else-branches (20 equip1
+//                  + 1 equip2 for Core200S Light) now update configModule, cid, and uuid
+//                  before deviceType, matching the new-child if-branch pattern.
 // 2026-04-29: v2.4  Phase 5 — per-device captureDiagnostics + error ring-buffer.
 //                  - #include level99.LevoitDiagnostics: library provides
 //                    recordError() ring-buffer (last 10 per device, FIFO), and
@@ -1081,6 +1092,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} Light / " + dtype;
                             equip2.name = device.deviceName + " Light";
                             equip2.label = device.deviceName + " Light";
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip2.updateDataValue("configModule", device.configModule);
+                            equip2.updateDataValue("cid", device.cid);
+                            equip2.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip2.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1109,6 +1124,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1137,6 +1156,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1165,6 +1188,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1193,6 +1220,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1221,6 +1252,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1249,6 +1284,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1277,6 +1316,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1305,6 +1348,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1333,6 +1380,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1361,6 +1412,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1389,6 +1444,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1417,6 +1476,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
@@ -1444,6 +1507,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
@@ -1471,6 +1538,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
@@ -1498,6 +1569,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
@@ -1525,6 +1600,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
@@ -1552,6 +1631,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
@@ -1579,6 +1662,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1607,6 +1694,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1635,6 +1726,10 @@ private Boolean getDevices() {
                                 logDebug "Updating ${device.deviceName} / " + dtype;
                                 equip1.name = device.deviceName;
                                 equip1.label = device.deviceName;
+                                // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                                equip1.updateDataValue("configModule", device.configModule);
+                                equip1.updateDataValue("cid", device.cid);
+                                equip1.updateDataValue("uuid", device.uuid);
                                 // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                                 equip1.updateDataValue("deviceType", device.deviceType);
                             }

@@ -34,6 +34,10 @@ import support.TestDevice
  *   Section L       — Bug Pattern #16 (debug auto-disable watchdog, parent):
  *                     updated() timestamp set/clear, ensureDebugWatchdog() no-op below
  *                     threshold, fires above threshold, called from updateDevices()
+ *   Section P       — Bug Pattern #19 (existing-child configModule refresh on Resync):
+ *                     Core 200S else-branch refreshes configModule/cid/uuid (P1),
+ *                     Superior 6000S same coverage (P2), Core 200S Light equip2 (P3),
+ *                     name+label preserved (P4), deviceType backfill preserved (P5)
  *
  * ARCHITECTURE NOTE: The parent driver is NOT a child — it runs differently.
  * It calls httpPost (for login/getDevices), not parent.sendBypassRequest.
@@ -2955,5 +2959,304 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         then: "exactly one migration INFO log was emitted (not two)"
         testLog.infos.count { it.contains("My Sprout Humidifier") && it.contains("Levoit Sprout Humidifier") } == 1
+    }
+
+    // =========================================================================
+    // Section P — Bug Pattern #19: existing-child configModule refresh on Resync
+    //
+    // When getDevices() discovers a device whose child already exists, it hits
+    // the else-branch of the if(equip1 == null) guard. Prior to BP19 fix, this
+    // else-branch only updated name, label, and deviceType — it never refreshed
+    // configModule, cid, or uuid. When VeSync changed configModule server-side
+    // (firmware update), the stale child-side value caused every subsequent poll
+    // to return empty. The BP17 watchdog fired and called getDevices() (Resync),
+    // but Resync hit the same else-branch and failed to heal the root cause.
+    //
+    // Tests:
+    //   P1 — Core 200S existing child: configModule, cid, uuid refreshed on Resync
+    //   P2 — Superior 6000S existing child: same refresh; proves coverage across
+    //         device families (purifier vs humidifier branch)
+    //   P3 — Core 200S Light (equip2): Light child configModule/cid/uuid also refreshed
+    //   P4 — name and label are still updated (existing behavior preserved)
+    //   P5 — deviceType is still updated (BP12 backfill preserved)
+    // =========================================================================
+
+    /** Helper: returns a getDevices()-shaped httpPost response with one device entry. */
+    private Expando getDevicesWithDevice(Map device) {
+        def r = new Expando()
+        r.status = 200
+        r.data = [
+            code: 0,
+            result: [
+                code : 0,
+                list : [device],
+                total: 1
+            ],
+            traceId: "test-trace"
+        ]
+        return r
+    }
+
+    /** Helper: returns a getDevices() response with two devices in the list. */
+    private Expando getDevicesWithDevices(List<Map> devices) {
+        def r = new Expando()
+        r.status = 200
+        r.data = [
+            code: 0,
+            result: [
+                code : 0,
+                list : devices,
+                total: devices.size()
+            ],
+            traceId: "test-trace"
+        ]
+        return r
+    }
+
+    def "getDevices() existing-child else-branch refreshes configModule/cid/uuid for Core 200S (BP19 P1)"() {
+        // P1: Core 200S purifier — existing child has STALE configModule from a prior
+        // Resync. Server returns FRESH values. After getDevices(), the child's data
+        // values must reflect the fresh values so sendBypassRequest uses the new
+        // configModule on subsequent polls.
+        given: "a Core 200S child already exists with stale configModule"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-p1"
+        state.accountID = "acc-p1"
+        state.prefsSeeded = true
+
+        // Existing child device with stale data values
+        def existingChild = new TestDevice()
+        existingChild.typeName = "Levoit Core200S Air Purifier"
+        existingChild.updateDataValue("configModule", "STALE-configModule-200S")
+        existingChild.updateDataValue("cid", "STALE-cid-200S")
+        existingChild.updateDataValue("uuid", "STALE-uuid-200S")
+        existingChild.updateDataValue("deviceType", "Core200S")
+        childDevices["fresh-cid-200S"] = existingChild
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> [] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevice([
+                deviceType  : "Core200S",
+                deviceName  : "Living Room Purifier",
+                cid         : "fresh-cid-200S",
+                configModule: "FRESH-configModule-200S",
+                uuid        : "FRESH-uuid-200S",
+                macID       : "AA:BB:CC:DD:EE:01"
+            ]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "configModule data value reflects fresh value from server (not stale)"
+        existingChild.getDataValue("configModule") == "FRESH-configModule-200S"
+
+        and: "cid data value is refreshed"
+        existingChild.getDataValue("cid") == "fresh-cid-200S"
+
+        and: "uuid data value is refreshed"
+        existingChild.getDataValue("uuid") == "FRESH-uuid-200S"
+    }
+
+    def "getDevices() existing-child else-branch refreshes configModule/cid/uuid for Superior 6000S (BP19 P2)"() {
+        // P2: Superior 6000S humidifier — same BP19 regression but the humidifier branch
+        // (dtype V601S). Proves the fix is uniform across device families, not just
+        // purifier branches.
+        given: "a Superior 6000S child already exists with stale configModule"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-p2"
+        state.accountID = "acc-p2"
+        state.prefsSeeded = true
+
+        def existingChild = new TestDevice()
+        existingChild.typeName = "Levoit Superior 6000S Humidifier"
+        existingChild.updateDataValue("configModule", "STALE-configModule-6000S")
+        existingChild.updateDataValue("cid", "STALE-cid-6000S")
+        existingChild.updateDataValue("uuid", "STALE-uuid-6000S")
+        existingChild.updateDataValue("deviceType", "LEH-S601S-WUS")
+        childDevices["fresh-cid-6000S"] = existingChild
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> [] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevice([
+                deviceType  : "LEH-S601S-WUS",
+                deviceName  : "Bedroom Humidifier",
+                cid         : "fresh-cid-6000S",
+                configModule: "FRESH-configModule-6000S",
+                uuid        : "FRESH-uuid-6000S",
+                macID       : "AA:BB:CC:DD:EE:02"
+            ]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "configModule data value reflects fresh value from server (not stale)"
+        existingChild.getDataValue("configModule") == "FRESH-configModule-6000S"
+
+        and: "cid data value is refreshed"
+        existingChild.getDataValue("cid") == "fresh-cid-6000S"
+
+        and: "uuid data value is refreshed"
+        existingChild.getDataValue("uuid") == "FRESH-uuid-6000S"
+    }
+
+    def "getDevices() existing Core 200S Light child (equip2) refreshes configModule/cid/uuid (BP19 P3)"() {
+        // P3: Core 200S Light child (equip2 in the 200S dtype branch). The Light child
+        // is a separate getChildDevice lookup keyed by cid+"-nl". Its else-branch had
+        // the same BP19 regression. Verify the fix covers equip2 as well.
+        given: "a Core 200S Light child already exists with stale configModule"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-p3"
+        state.accountID = "acc-p3"
+        state.prefsSeeded = true
+
+        // Light child (DNI = cid + "-nl")
+        def existingLight = new TestDevice()
+        existingLight.typeName = "Levoit Core200S Air Purifier Light"
+        existingLight.updateDataValue("configModule", "STALE-configModule-light")
+        existingLight.updateDataValue("cid", "STALE-cid-light")
+        existingLight.updateDataValue("uuid", "STALE-uuid-light")
+        existingLight.updateDataValue("deviceType", "Core200S")
+        childDevices["cid-200S-p3-nl"] = existingLight
+
+        // Main purifier child (DNI = cid) — also exists so both take the else-branch
+        def existingPurifier = new TestDevice()
+        existingPurifier.typeName = "Levoit Core200S Air Purifier"
+        existingPurifier.updateDataValue("configModule", "STALE-configModule-200S-p3")
+        existingPurifier.updateDataValue("cid", "STALE-cid-200S-p3")
+        existingPurifier.updateDataValue("uuid", "STALE-uuid-200S-p3")
+        existingPurifier.updateDataValue("deviceType", "Core200S")
+        childDevices["cid-200S-p3"] = existingPurifier
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> [] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevice([
+                deviceType  : "Core200S",
+                deviceName  : "Den Purifier",
+                cid         : "cid-200S-p3",
+                configModule: "FRESH-configModule-200S-p3",
+                uuid        : "FRESH-uuid-200S-p3",
+                macID       : "AA:BB:CC:DD:EE:03"
+            ]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "Light child (equip2) configModule is refreshed to fresh value"
+        existingLight.getDataValue("configModule") == "FRESH-configModule-200S-p3"
+
+        and: "Light child uuid is refreshed"
+        existingLight.getDataValue("uuid") == "FRESH-uuid-200S-p3"
+
+        and: "Main purifier child (equip1) configModule is also refreshed"
+        existingPurifier.getDataValue("configModule") == "FRESH-configModule-200S-p3"
+    }
+
+    def "getDevices() existing-child else-branch still updates name and label (BP19 P4)"() {
+        // P4: regression guard — the else-branch's existing behavior (name + label update)
+        // must be preserved after adding the BP19 configModule refresh lines.
+        given: "a Superior 6000S child exists with an old device name"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-p4"
+        state.accountID = "acc-p4"
+        state.prefsSeeded = true
+
+        def existingChild = new TestDevice()
+        existingChild.typeName = "Levoit Superior 6000S Humidifier"
+        existingChild.name  = "Old Name"
+        existingChild.label = "Old Label"
+        existingChild.updateDataValue("configModule", "old-cm")
+        existingChild.updateDataValue("cid", "cid-p4")
+        existingChild.updateDataValue("uuid", "old-uuid")
+        existingChild.updateDataValue("deviceType", "LEH-S601S-WUS")
+        childDevices["cid-p4"] = existingChild
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> [] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevice([
+                deviceType  : "LEH-S601S-WUS",
+                deviceName  : "New Device Name",
+                cid         : "cid-p4",
+                configModule: "new-cm",
+                uuid        : "new-uuid",
+                macID       : "AA:BB:CC:DD:EE:04"
+            ]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "device name is updated to the value from VeSync server"
+        existingChild.name == "New Device Name"
+
+        and: "device label is updated"
+        existingChild.label == "New Device Name"
+
+        and: "configModule is also updated (BP19)"
+        existingChild.getDataValue("configModule") == "new-cm"
+    }
+
+    def "getDevices() existing-child else-branch still updates deviceType (BP19 P5)"() {
+        // P5: regression guard — deviceType backfill (for v2.1->v2.2 upgrades) must
+        // still be present in the else-branch after adding the BP19 lines before it.
+        given: "a Core 400S child exists with no deviceType set (pre-v2.2 state)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-p5"
+        state.accountID = "acc-p5"
+        state.prefsSeeded = true
+
+        def existingChild = new TestDevice()
+        existingChild.typeName = "Levoit Core400S Air Purifier"
+        existingChild.updateDataValue("configModule", "old-cm-400s")
+        existingChild.updateDataValue("cid", "cid-p5")
+        existingChild.updateDataValue("uuid", "old-uuid-400s")
+        // intentionally no deviceType set — simulates pre-v2.2 child
+        childDevices["cid-p5"] = existingChild
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> [] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevice([
+                deviceType  : "LAP-C401S-WUS",
+                deviceName  : "Office Purifier",
+                cid         : "cid-p5",
+                configModule: "new-cm-400s",
+                uuid        : "new-uuid-400s",
+                macID       : "AA:BB:CC:DD:EE:05"
+            ]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "deviceType data value is set (v2.2 backfill preserved)"
+        existingChild.getDataValue("deviceType") == "LAP-C401S-WUS"
+
+        and: "configModule is also updated (BP19)"
+        existingChild.getDataValue("configModule") == "new-cm-400s"
+
+        and: "uuid is also updated (BP19)"
+        existingChild.getDataValue("uuid") == "new-uuid-400s"
     }
 }

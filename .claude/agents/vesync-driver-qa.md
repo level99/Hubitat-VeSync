@@ -568,6 +568,20 @@ If the driver lacks a `logWarn` helper, add `private logWarn(msg) { log.warn msg
 
 ---
 
+### 19. Self-heal logic refreshes intermediate state but not the load-bearing data value
+
+A common pattern: a watchdog detects symptom (e.g. empty polls), schedules a recovery action (e.g. Resync), but the recovery action operates on intermediate state (e.g. `state.deviceList`) without propagating the refreshed value to the load-bearing call site (e.g. `equipment.getDataValue("configModule")` used in `sendBypassRequest`). The watchdog appears to fire correctly; logs show "scheduling Resync"; but the actual API call still uses the stale value. Self-heal looks fixed but isn't.
+
+**Symptom:** ERROR fires every poll cycle, watchdog message appears periodically (e.g. `[BP17 poll-health] N device(s) returned ≥5 consecutive empty results`), but errors don't stop. ERROR pattern persists indefinitely.
+
+**Canonical fix:** ensure recovery code path updates BOTH the intermediate state AND the load-bearing call-site source (typically a child device data value). For VeSyncIntegration's getDevices() existing-child branches: refresh `configModule`, `cid`, and `uuid` data values, not just `deviceType`.
+
+**Live-evidence:** surfaced 2026-04-30 via static review triggered by community bug report — Core 200S user on v2.3 reported "No status returned from getPurifierStatus" every hour after upgrading. Self-heal logged but didn't fix; root cause was getDevices() existing-child else-branch never refreshing configModule data value. The v2.3 BP17 fix correctly added the consecutiveEmpty counter + ensurePollHealth watchdog + Resync trigger; the gap was the Resync's existing-child update path. Fix folded into v2.4 (21 else-branches updated, 63 lines added).
+
+**Flag this pattern** whenever a watchdog/self-heal mechanism is added: review every line of the recovery action and confirm each load-bearing call-site source (every `getDataValue` / state read used in subsequent API calls) is updated by the recovery, not just the intermediate state. Resync-style recovery is most prone — there are typically 20+ device-type branches and any missed one creates partial-recovery bugs. It is BLOCKING — silent self-heal failure is worse than no self-heal because users don't know to take manual action.
+
+---
+
 ## Report format
 
 Return ONE of:

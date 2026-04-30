@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **BP19 polling self-heal regression — existing-child configModule refresh.** When a device's VeSync configModule changed server-side (firmware update or device re-pair), the v2.3 BP17 self-heal would correctly detect 5 consecutive empty polls and trigger a Resync, but the Resync's existing-child update path never propagated the fresh configModule to the child device's data values. `sendBypassRequest` reads `configModule` from the child's data value, so polling continued to fail with the same `No status returned from getPurifierStatus` ERROR every cycle indefinitely. The fix updates the child's `configModule`, `cid`, and `uuid` data values on every Resync (not just `deviceType`), matching the new-child branch pattern. Symptom for affected v2.3 users: hourly ERROR log spam combined with stale fan speed / mode / sensor attributes that never refresh from polled responses.
+
 ### Added
 
 - **Pyvesync upstream-tracking automation** (`.github/workflows/pyvesync-tracker.yml` + `tools/pyvesync-tracker/`). Weekly scheduled job detects when `webdjoe/pyvesync` ships a new release tag and: (A) opens a `chore: bump pyvesync to <tag>` PR refreshing the vendored fixture set used by `PyvesyncCoverageSpec` — existing CI gates the merge; (B) if pyvesync added new Levoit device codes, opens a `new-device-support` triage issue listing them with class assignments. Replaces manual upstream-watching that gated the v2.3 fixture pin.
