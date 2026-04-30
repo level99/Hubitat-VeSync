@@ -841,17 +841,28 @@ def spawnFromFixture(String fixtureName, String childLabel) {
     String deviceType = FIXTURE_TO_DEVICETYPE[fixtureName]
     String configModule = FIXTURE_TO_CONFIGMODULE[fixtureName]
 
+
     sendEvent(name: "fixtureMode", value: "spawning")
 
     def child
-    try {
-        child = addChildDevice("level99", driverName, virtualDni,
-                               [label: childLabel ?: fixtureName, isComponent: false])
-    } catch (Exception e) {
-        logError "[DEV TOOL] addChildDevice failed for '${driverName}': ${e.message}. " +
-                 "Ensure the driver '${driverName}' is installed on this hub."
-        sendEvent(name: "fixtureMode", value: "ready")
-        return
+    List<String> namespacesToTry = ["NiklasGustafsson", "level99"]
+    for (String ns : namespacesToTry) {
+        try {
+            child = addChildDevice(ns, driverName, virtualDni,
+                                   [label: childLabel ?: fixtureName, isComponent: false])
+            logDebug "[DEV TOOL] Successfully spawned child in namespace '${ns}'"
+            break
+        } catch (Exception e) {
+            logDebug "[DEV TOOL] Namespace '${ns}' failed: ${e.message}"
+            if (ns == namespacesToTry[-1]) {
+                // Last namespace failed
+                logError "[DEV TOOL] addChildDevice failed for '${driverName}': ${e.message}. " +
+                         "Ensure the driver '${driverName}' is installed on this hub."
+                sendEvent(name: "fixtureMode", value: "ready")
+                return
+            }
+            // Try next namespace
+        }
     }
 
     if (!child) {
@@ -907,7 +918,7 @@ def resetAllChildren() {
 def stepFixtureResponse(String childDni, String opName) {
     logDebug "stepFixtureResponse(${childDni}, ${opName})"
     ensureDebugWatchdog()
-    runIn(1, "deliverFixtureResponse", [data: [dni: childDni, fixtureName: state.childFixtures?[childDni]]])
+    runIn(1, "deliverFixtureResponse", [data: [dni: childDni, fixtureName: state.childFixtures?.get(childDni)]])
 }
 
 // ---------------------------------------------------------------------------
@@ -971,21 +982,20 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
     // The Core line's sendBypassRequest closure receives the raw HttpResponse.
     // We simulate an HTTP 200 OK with the bypassV2 success envelope.
     //
-    // Using groovy.util.Expando instead of an inner class: Hubitat's Groovy sandbox
-    // treats driver sources as Script subclasses and does not support inner class
-    // declarations. Expando is sandbox-safe and supports the same property access
-    // pattern (resp.status, resp.data) that Core 200S's checkHttpResponse() uses.
-    def vr = new Expando()
-    vr.status = 200
-    vr.data   = [
-        code: 0,
-        msg: "request success",
-        result: [
+    // Use a map instead of Expando (Hubitat sandbox restriction).
+    // Maps support the same property access syntax as our closure expects.
+    def vr = [
+        status: 200,
+        data: [
             code: 0,
-            result: [:],
+            msg: "request success",
+            result: [
+                code: 0,
+                result: [:],
+                traceId: "virtual-trace"
+            ],
             traceId: "virtual-trace"
-        ],
-        traceId: "virtual-trace"
+        ]
     ]
     try {
         closure(vr)
