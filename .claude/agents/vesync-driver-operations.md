@@ -77,7 +77,7 @@ Verify path:
 - Returns canned responses synthesized from the fixture's canonical default state, mutated by accumulated `set*` requests
 - All log lines from the virtual parent carry the `[DEV TOOL]` prefix
 
-Pre-flight extra: confirm the real `VeSync Integration` parent is NOT installed on the same hub — the virtual parent's spawn-children path refuses to run when both are present (prevents device cross-wiring). If `fixtureMode: blocked-real-parent-installed` shows up in attributes or logs, treat as UNCERTAIN and escalate to orchestrator.
+The virtual parent coexists safely with the real `VeSync Integration` parent on the same hub — no pre-flight removal required. Virtual children use the `VirtualVeSync-` DNI prefix and never talk to the VeSync cloud, so there is no cross-wiring risk. If both are installed, the virtual parent emits a WARN at spawn time (see Log markers below) but proceeds normally.
 
 Verify steps:
 1. Check virtual parent's `fixtureMode` attribute is `ready`.
@@ -105,12 +105,12 @@ Healthy markers (all `[DEV TOOL]` prefixed):
 - `[DEV TOOL] Spawned child <dni> bound to fixture <name>`
 - `[DEV TOOL] Payload validated: <method> keys=[...]`
 - `[DEV TOOL] sendBypassRequest from <dni>: method=<method>` — child invoked the virtual parent
+- `[DEV TOOL] Real 'VeSync Integration' parent app detected on this hub.` — coexistence WARN (informational; spawn proceeds normally)
 
 Failure markers:
 - `[DEV TOOL] Payload data keys mismatch for <method>: ours=[...], pyvesync=[...]` → field-name regression — FAIL
 - `[DEV TOOL] No fixture op for method '<method>'` → child invoked an unknown method (UNCERTAIN — could be a fixture gap or real bug; escalate)
 - `[DEV TOOL] sendBypassRequest from unbound child <dni>` → spawn-flow bug (FAIL)
-- `fixtureMode: blocked-real-parent-installed` (attribute) → pre-flight conflict — UNCERTAIN, escalate to orchestrator
 
 ---
 

@@ -9,8 +9,8 @@ import support.TestDevice
  * Covers:
  *   1. spawnFromFixture creates child device with correct DNI, label, driver name,
  *      deviceType, and configModule data values.
- *   2. spawnFromFixture is blocked when state.realParentDetected=true — child not
- *      created; fixtureMode attribute set to "blocked-real-parent-installed".
+ *   2. spawnFromFixture WARNs but proceeds when state.realParentDetected=true — child
+ *      IS created; WARN emitted; fixtureMode set to "ready".
  *   3. sendBypassRequest with matching payload keys logs DEBUG (not WARN/ERROR)
  *      and triggers deliverFixtureResponse.
  *   4. sendBypassRequest with mismatched data keys logs ERROR containing key diff.
@@ -189,27 +189,31 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Test 2: spawnFromFixture blocked when real parent detected
+    // Test 2: spawnFromFixture WARNs but proceeds when real parent detected
     // -------------------------------------------------------------------------
 
-    def "spawnFromFixture blocked when state.realParentDetected=true — no child created"() {
+    def "spawnFromFixture WARNs but proceeds when state.realParentDetected=true"() {
         given: "real parent simulated via state flag"
         state.realParentDetected = true
 
         when:
-        driver.spawnFromFixture("Core200S", "ShouldNotSpawn")
+        driver.spawnFromFixture("Core200S", "CoexistChild")
 
-        then: "no child device created"
-        childRegistry.isEmpty()
+        then: "child IS created despite real parent signal"
+        def expectedDni = "VirtualVeSync-Core200S-CoexistChild"
+        childRegistry.containsKey(expectedDni)
 
-        and: "fixtureMode reflects blocked state"
-        lastEventValue("fixtureMode") == "blocked-real-parent-installed"
+        and: "fixtureMode is 'ready' (spawn proceeded)"
+        lastEventValue("fixtureMode") == "ready"
 
-        and: "state.childFixtures not populated"
-        (state.childFixtures ?: [:]).isEmpty()
+        and: "WARN logged mentioning real VeSync Integration parent"
+        testLog.warns.any { it.contains("Real 'VeSync Integration' parent") }
+
+        and: "no ERROR logged (not a hard block)"
+        testLog.errors.isEmpty()
     }
 
-    def "spawnFromFixture blocked when detectRealParent heuristic fires (non-virtual child exists)"() {
+    def "spawnFromFixture WARNs but proceeds when detectRealParent heuristic fires (non-virtual child exists)"() {
         given: "a pre-existing non-virtual child device"
         def realChild = new TestDevice()
         realChild.deviceNetworkId = "some-real-vesync-device-cid"
@@ -219,13 +223,20 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
         state.realParentDetected = null
 
         when:
-        driver.spawnFromFixture("Core200S", "ShouldBeBlocked")
+        driver.spawnFromFixture("Core200S", "CoexistChild2")
 
-        then: "blocked"
-        lastEventValue("fixtureMode") == "blocked-real-parent-installed"
+        then: "virtual child created despite heuristic detecting real child"
+        def virtualDni = "VirtualVeSync-Core200S-CoexistChild2"
+        childRegistry.containsKey(virtualDni)
 
-        and: "no additional children created beyond the pre-existing one"
-        childRegistry.size() == 1
+        and: "fixtureMode is 'ready'"
+        lastEventValue("fixtureMode") == "ready"
+
+        and: "WARN logged"
+        testLog.warns.any { it.contains("Real 'VeSync Integration' parent") }
+
+        and: "total children = original real child + new virtual child"
+        childRegistry.size() == 2
     }
 
     // -------------------------------------------------------------------------

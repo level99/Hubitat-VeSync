@@ -295,6 +295,8 @@ Dispatch flow:
 
 What this catches that A1 doesn't (because no hardware to test on): Hubitat sandbox runtime quirks, async callback ordering, real `addChildDevice` lifecycle, `schedule()`/`runIn()` cron mechanics — the BP14/BP16/BP17 pattern fingerprint. What it does NOT catch (no real cloud): BP4 field-name regressions vs live API, BP13 token expiry, response envelope shapes pyvesync didn't capture.
 
+The virtual parent coexists safely with the real `VeSync Integration` parent on the same hub. Virtual children use the `VirtualVeSync-` DNI prefix and never touch the VeSync cloud, so there is no cross-wiring risk. If both parents are installed, a WARN is logged at spawn time (`[DEV TOOL] Real 'VeSync Integration' parent app detected`) — this is informational only and does not block spawn.
+
 For preview drivers, A2 is the standard pre-ship gate. If a driver is later acquired and tested via A1, that supersedes A2 for that specific driver.
 
 ### B. Without Hubitat MCP (typical contributor)

@@ -646,9 +646,8 @@ metadata {
         capability "Refresh"
 
         // Reflects current operational mode of the virtual parent.
-        // "ready"                       — no real parent detected, safe to spawn
-        // "blocked-real-parent-installed" — real VeSync Integration detected; spawn blocked
-        // "spawning"                    — spawnFromFixture in progress
+        // "ready"    — nominal; safe to spawn (coexists with real parent if present)
+        // "spawning" — spawnFromFixture in progress
         attribute "fixtureMode",          "string"
         attribute "lastFixtureLoaded",    "string"
         attribute "lastSendBypassMethod", "string"
@@ -762,17 +761,16 @@ def refresh() {
 // Scheduled by installed() and updated() — deferred so device is fully
 // initialized before we try to read child devices or send events.
 void runPreFlight() {
-    boolean conflict = detectRealParent()
-    if (conflict) {
-        sendEvent(name: "fixtureMode", value: "blocked-real-parent-installed")
-        logError "[DEV TOOL] Real VeSync Integration parent detected on this hub. " +
-                 "The virtual parent is blocked to prevent interference with live devices. " +
-                 "Uninstall VeSync Integration before using the virtual test parent, or " +
-                 "uninstall this virtual parent."
+    if (detectRealParent()) {
+        logWarn "[DEV TOOL] Real 'VeSync Integration' parent app detected on this hub. " +
+                "Virtual children use the 'VirtualVeSync-' DNI prefix and don't talk to " +
+                "the VeSync cloud, so coexistence is safe — but be careful not to confuse " +
+                "a virtual child with the real device of the same model during testing. " +
+                "Use distinct child labels and watch for the [DEV TOOL] log prefix."
     } else {
-        sendEvent(name: "fixtureMode", value: "ready")
         logInfo "[DEV TOOL] Pre-flight clear — no real parent detected."
     }
+    sendEvent(name: "fixtureMode", value: "ready")
 }
 
 /**
@@ -786,7 +784,7 @@ void runPreFlight() {
  * alphanumeric strings without the "VirtualVeSync-" prefix we assign.
  *
  * Simpler fallback: check state.realParentDetected flag, which tests can inject.
- * This allows specs to simulate the blocked state without needing real app introspection.
+ * This allows specs to simulate the coexistence signal without needing real app introspection.
  *
  * In production: we check getChildDevices() for any DNI NOT matching our own
  * "VirtualVeSync-" prefix — if any such child exists, another parent manages it.
@@ -794,14 +792,9 @@ void runPreFlight() {
  * NOTE: Hubitat drivers cannot introspect installed apps (that's an app API).
  * We use child-device DNI patterns as the practical detection signal.
  *
- * LIMITATION: this heuristic produces a false-negative when the real VeSync Integration
- * parent is installed but has not yet discovered/spawned any child devices (e.g. right
- * after first install before Resync Equipment is clicked). In that window,
- * detectRealParent() returns false and spawnFromFixture() proceeds. If you later run
- * Resync Equipment on the real parent, you will end up with both real and virtual
- * children on the hub — a confusing state. To avoid this: ensure the real VeSync
- * Integration parent is fully uninstalled (including all its child devices) before
- * using this virtual test parent. Do not install both on the same hub simultaneously.
+ * Detection result triggers a WARN only — coexistence is safe because virtual children
+ * use the "VirtualVeSync-" DNI prefix and never talk to the VeSync cloud. A false-negative
+ * (real parent installed but no children yet) simply means no WARN is emitted, which is fine.
  */
 private boolean detectRealParent() {
     // Spec-injectable override: tests set state.realParentDetected = true to simulate conflict
@@ -825,11 +818,16 @@ def spawnFromFixture(String fixtureName, String childLabel) {
     logDebug "spawnFromFixture(${fixtureName}, ${childLabel})"
     ensureDebugWatchdog()
 
-    // Pre-flight conflict check (also fires at installed/updated but re-verify here)
+    // Coexistence check: WARN if real parent detected, but always proceed.
+    // Virtual children use the "VirtualVeSync-" DNI prefix and never talk to the VeSync
+    // cloud, so running both parents on the same hub is safe. The WARN is just a reminder
+    // to use distinct labels to avoid mental-model confusion during testing.
     if (detectRealParent()) {
-        sendEvent(name: "fixtureMode", value: "blocked-real-parent-installed")
-        logError "[DEV TOOL] spawnFromFixture blocked — real VeSync Integration detected."
-        return
+        logWarn "[DEV TOOL] Real 'VeSync Integration' parent app detected on this hub. " +
+                "Virtual children use the 'VirtualVeSync-' DNI prefix and don't talk to " +
+                "the VeSync cloud, so coexistence is safe — but be careful not to confuse " +
+                "a virtual child with the real device of the same model during testing. " +
+                "Use distinct child labels and watch for the [DEV TOOL] log prefix."
     }
 
     if (!FIXTURE_TO_DRIVER.containsKey(fixtureName)) {

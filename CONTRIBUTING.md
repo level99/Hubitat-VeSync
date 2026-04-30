@@ -172,11 +172,10 @@ If you don't own the hardware, the **virtual test parent** (`Drivers/Levoit/VeSy
 Setup:
 
 1. **Install via HPM Modify.** Open the Levoit package in HPM, click **Modify**, opt in to "VeSync Virtual Test Parent" (description leads with `[DEV TOOL] Do NOT install for normal use`). HPM downloads the source automatically.
-2. **Verify the real parent is uninstalled.** The virtual parent's pre-flight refuses to spawn children if the real `VeSync Integration` parent app is on the same hub (prevents device cross-wiring). Either uninstall the real parent first, or use a separate development hub.
-3. **Add as a virtual device.** Devices → Add Device → Virtual → pick "VeSync Virtual Test Parent" from the User Devices type list → Save.
-4. **Spawn a fixture-bound child.** On the virtual parent's device page, run the `spawnFromFixture` command. Pick the fixture matching your driver under test (e.g. `Core200S` for the Levoit Core 200S driver). Provide a child label.
-5. **Exercise the child.** Click commands on the spawned child (`on`, `off`, `setSpeed`, etc.). Watch Hubitat Logs for `[DEV TOOL] Payload validated: <method>` (success) and `[DEV TOOL] Payload data keys mismatch` (your driver's payload diverges from pyvesync canonical — fix it).
-6. **Verify attribute population.** Confirm the spawned child's attributes (switch, level, mode, etc.) populate correctly after the canned response delivers — this validates the parser end-to-end.
+2. **Add as a virtual device.** Devices → Add Device → Virtual → pick "VeSync Virtual Test Parent" from the User Devices type list → Save. The virtual parent coexists safely with the real `VeSync Integration` parent app — virtual children use the `VirtualVeSync-` DNI prefix and never talk to the VeSync cloud, so there's no cross-wiring risk. If the real parent is also installed, you'll see a WARN at spawn time noting the coexistence (informational; spawn proceeds normally) — just be careful not to confuse virtual children with real ones during testing.
+3. **Spawn a fixture-bound child.** On the virtual parent's device page, run the `spawnFromFixture` command. Pick the fixture matching your driver under test (e.g. `Core200S` for the Levoit Core 200S driver). Provide a child label.
+4. **Exercise the child.** Click commands on the spawned child (`on`, `off`, `setSpeed`, etc.). Watch Hubitat Logs for `[DEV TOOL] Payload validated: <method>` (success) and `[DEV TOOL] Payload data keys mismatch` (your driver's payload diverges from pyvesync canonical — fix it).
+5. **Verify attribute population.** Confirm the spawned child's attributes (switch, level, mode, etc.) populate correctly after the canned response delivers — this validates the parser end-to-end.
 
 What this catches: Hubitat-runtime bugs that Spock can't (sandbox quirks, async callback ordering, real `addChildDevice` lifecycle, schedule()/runIn() cron mechanics — the BP14/BP16/BP17 fingerprint), plus payload field-name regressions (BP4-style).
 
