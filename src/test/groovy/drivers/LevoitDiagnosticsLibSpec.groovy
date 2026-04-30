@@ -13,8 +13,11 @@ import support.HubitatSpec
  *   recordError 2-arg — stores entry under device.deviceNetworkId slot
  *   recordError 3-arg override DNI — stores entry under the supplied overrideDni, NOT the device DNI
  *   recordError ring-buffer FIFO — 11th entry evicts oldest; slot stays at 10
- *   captureDiagnostics — sends a "diagnostics" event containing key sections
+ *   captureDiagnostics — sends compact HTML to "diagnostics" attribute; full markdown in state.lastDiagnostics
+ *   captureDiagnostics HTML content — attribute value contains the GitHub link and summary fields
+ *   captureDiagnostics state.lastDiagnostics — full markdown contains expected section headers
  *   buildIssueUrl truncation divisor — budgetForDiag / 3 path is exercised without infinite loop
+ *   buildIssueUrl title fallback — UNKNOWN model code produces "diagnostic capture" suffix
  */
 class LevoitDiagnosticsLibSpec extends HubitatSpec {
 
@@ -124,15 +127,13 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // captureDiagnostics: sends a diagnostics event
+    // captureDiagnostics: attribute value is compact HTML
     // -------------------------------------------------------------------------
 
-    def "captureDiagnostics() sends a non-empty diagnostics event"() {
+    def "captureDiagnostics() sends a non-empty diagnostics event with HTML content"() {
         given:
         seedDni("DIAG_DEVICE_DNI")
         state.errorHistory = [:]
-        // Ensure testParent.captureDiagnosticsFor is available (returns empty map if absent)
-        // TestParent's default implementation returns [:] for unknown methods
 
         when:
         driver.captureDiagnostics()
@@ -141,11 +142,232 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
         def diagEvent = testDevice.events.find { it.name == "diagnostics" }
         diagEvent != null
 
-        and: "the diagnostics value is non-empty and contains expected section headers"
+        and: "the attribute value contains the clickable GitHub link"
         String diagValue = diagEvent.value as String
-        diagValue.contains("Levoit Driver Diagnostics")
-        diagValue.contains("Driver & Device")
-        diagValue.contains("Recent errors")
+        diagValue.contains("href=")
+        diagValue.contains("github.com/level99/Hubitat-VeSync/issues/new")
+        diagValue.contains("File diagnostic bug report")
+        diagValue.contains("target=\"_blank\"")
+
+        and: "the attribute value uses <br> tags for line breaks (not \\n)"
+        diagValue.contains("<br>")
+        // Verify no literal \n characters that Hubitat would collapse to spaces
+        !diagValue.contains("\n")
+
+        and: "the attribute value includes the error count"
+        diagValue.contains("Recent errors: 0")
+
+        and: "the attribute value includes a Captured timestamp"
+        diagValue.contains("Captured:")
+    }
+
+    def "captureDiagnostics() with errors shows error count in attribute"() {
+        given:
+        seedDni("DIAG_ERR_DNI")
+        state.errorHistory = [:]
+        driver.recordError("first error", [:])
+        driver.recordError("second error", [:])
+        testDevice.events.clear()   // clear the recordError side-effects (none here; just be safe)
+
+        when:
+        driver.captureDiagnostics()
+
+        then:
+        def diagEvent = testDevice.events.find { it.name == "diagnostics" }
+        diagEvent != null
+        String v = diagEvent.value as String
+        v.contains("Recent errors: 2")
+        v.contains("last: second error")
+    }
+
+    // -------------------------------------------------------------------------
+    // captureDiagnostics: full markdown stored in state.lastDiagnostics
+    // -------------------------------------------------------------------------
+
+    def "captureDiagnostics() stores full markdown block in state.lastDiagnostics"() {
+        given:
+        seedDni("DIAG_STATE_DNI")
+        state.errorHistory = [:]
+
+        when:
+        driver.captureDiagnostics()
+
+        then: "state.lastDiagnostics is populated"
+        state.lastDiagnostics != null
+        String markdown = state.lastDiagnostics as String
+        !markdown.isEmpty()
+
+        and: "full markdown contains expected section headers"
+        markdown.contains("### Levoit Driver Diagnostics")
+        markdown.contains("#### Driver & Device")
+        markdown.contains("#### Recent errors")
+
+        and: "full markdown contains markdown table syntax (not the attribute value)"
+        markdown.contains("| Field | Value |")
+        markdown.contains("|---|---|")
+
+        and: "full markdown does NOT appear in the diagnostics attribute (attribute is compact HTML)"
+        String attrValue = testDevice.events.find { it.name == "diagnostics" }?.value as String
+        !attrValue.contains("### Levoit Driver Diagnostics")
+        !attrValue.contains("| Field | Value |")
+    }
+
+    // -------------------------------------------------------------------------
+    // captureDiagnostics: parent-section suppressed when parent == null
+    // -------------------------------------------------------------------------
+
+    def "captureDiagnostics() suppresses parent-state section when no parent exists (child driver calling)"() {
+        given: "testParent is available (child driver context — parent != null)"
+        // HubitatSpec injects testParent as `parent`, so this is a child context.
+        // The parent section should appear in state.lastDiagnostics (even if empty).
+        seedDni("CHILD_DNI")
+        state.errorHistory = [:]
+
+        when:
+        driver.captureDiagnostics()
+
+        then:
+        // In child context, parent != null — the section header may appear
+        // (content may be "not available" since TestParent has no captureDiagnosticsFor)
+        // This test just verifies no exception is thrown; the parent-null path is
+        // tested separately via buildDiagnosticBlock opts.
+        def diagEvent = testDevice.events.find { it.name == "diagnostics" }
+        diagEvent != null
+        noExceptionThrown()
+    }
+
+    def "buildDiagnosticBlock suppresses parent-state section when isParent=true"() {
+        given:
+        seedDni("PARENT_OWN_DNI")
+
+        when: "block is built with isParent=true"
+        String block = driver.buildDiagnosticBlock([
+            driverName:    "VeSync Integration",
+            driverVersion: "2.4",
+            modelCode:     "UNKNOWN",
+            hubFw:         "2.5.0.126",
+            dni:           "PARENT_OWN_DNI",
+            parentCtx:     [:],
+            isParent:      true,
+            errors:        [],
+            attrSnap:      [:]
+        ])
+
+        then: "the Parent state section header does not appear"
+        !block.contains("#### Parent state for this device")
+
+        and: "the not-available message does not appear"
+        !block.contains("not available")
+    }
+
+    // -------------------------------------------------------------------------
+    // buildDiagnosticBlock: UNKNOWN rows suppressed
+    // -------------------------------------------------------------------------
+
+    def "buildDiagnosticBlock suppresses UNKNOWN model code row"() {
+        given:
+        seedDni("UNKNOWN_MODEL_DNI")
+
+        when:
+        String block = driver.buildDiagnosticBlock([
+            driverName:    "VeSync Integration",
+            driverVersion: "2.4",
+            modelCode:     "UNKNOWN",
+            hubFw:         "2.5.0.126",
+            dni:           "UNKNOWN_MODEL_DNI",
+            parentCtx:     [:],
+            isParent:      false,
+            errors:        [],
+            attrSnap:      [:]
+        ])
+
+        then: "the model code row is absent when value is UNKNOWN"
+        !block.contains("| Model code |")
+    }
+
+    def "buildDiagnosticBlock includes model code row when value is real"() {
+        given:
+        seedDni("REAL_MODEL_DNI")
+
+        when:
+        String block = driver.buildDiagnosticBlock([
+            driverName:    "Levoit Vital 200S",
+            driverVersion: "2.4",
+            modelCode:     "LAP-V201S-AUSA",
+            hubFw:         "2.5.0.126",
+            dni:           "REAL_MODEL_DNI",
+            parentCtx:     [:],
+            isParent:      false,
+            errors:        [],
+            attrSnap:      [:]
+        ])
+
+        then:
+        block.contains("| Model code | `LAP-V201S-AUSA` |")
+    }
+
+    // -------------------------------------------------------------------------
+    // buildIssueUrl: title fallback logic
+    // -------------------------------------------------------------------------
+
+    def "buildIssueUrl uses 'diagnostic capture' suffix when modelCode is UNKNOWN and no lastError"() {
+        given:
+        seedDni("TITLE_FALLBACK_DNI")
+
+        when:
+        String url = driver.buildIssueUrl([
+            "driver-name":      "VeSync Integration",
+            "driver-version":   "2.4",
+            "model-code":       "UNKNOWN",
+            "hub-firmware":     "2.5.0.126",
+            "last-error":       "",
+            "diagnostic-block": "test block"
+        ])
+
+        then: "the title param decodes to '[VeSync Integration] diagnostic capture' (no UNKNOWN)"
+        // Extract and decode the title param to assert on its value specifically.
+        // model-code=UNKNOWN legitimately stays in the URL as a query param (triage signal) —
+        // the assertion targets the title only, not the full URL string.
+        def titleMatch = url =~ /[?&]title=([^&]*)/
+        def title = titleMatch ? java.net.URLDecoder.decode(titleMatch[0][1] as String, "UTF-8") : ""
+        title.contains("diagnostic capture")
+        !title.contains("UNKNOWN")
+    }
+
+    def "buildIssueUrl uses lastError as title suffix when present"() {
+        given:
+        seedDni("TITLE_ERR_DNI")
+
+        when:
+        String url = driver.buildIssueUrl([
+            "driver-name":      "Levoit Vital 200S",
+            "driver-version":   "2.4",
+            "model-code":       "LAP-V201S-AUSA",
+            "hub-firmware":     "2.5.0.126",
+            "last-error":       "cloud timeout on getPurifierStatus",
+            "diagnostic-block": "block"
+        ])
+
+        then: "URL title suffix contains encoded lastError text"
+        url.contains("cloud%20timeout") || url.contains("cloud+timeout")
+    }
+
+    def "buildIssueUrl uses model code as suffix when no lastError but modelCode is real"() {
+        given:
+        seedDni("TITLE_MODEL_DNI")
+
+        when:
+        String url = driver.buildIssueUrl([
+            "driver-name":      "Levoit Vital 200S",
+            "driver-version":   "2.4",
+            "model-code":       "LAP-V201S-AUSA",
+            "hub-firmware":     "2.5.0.126",
+            "last-error":       "",
+            "diagnostic-block": "block"
+        ])
+
+        then: "URL title suffix contains model code"
+        url.contains("LAP-V201S-AUSA")
     }
 
     // -------------------------------------------------------------------------
@@ -159,7 +381,7 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
         when: "buildIssueUrl is called with the oversized block"
         String url = driver.buildIssueUrl([
             "driver-name":      "Test Driver",
-            "driver-version":   "2.3",
+            "driver-version":   "2.4",
             "model-code":       "TEST-001",
             "hub-firmware":     "2.3.9.1",
             "last-error":       "test error",

@@ -16,32 +16,6 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
  */
 
-// LevoitDiagnostics — Hubitat library
-//
-// Shared captureDiagnostics() + error ring-buffer helpers for all Levoit drivers
-// (community fork v2.4+).
-//
-// Exports:
-//   captureDiagnostics()                                 — command entrypoint; builds & stores markdown dump
-//   recordError(String msg, Map ctx, String overrideDni) — ring-buffer recorder (last 10 per device, FIFO);
-//                                                          overrideDni allows parent to record under a child DNI
-//   buildIssueUrl(Map fields)                            — assembles pre-filled GitHub issue URL
-//   buildDiagnosticBlock(Map opts)                       — assembles the markdown dump
-//
-// GitHub issue template field IDs (these MUST match .github/ISSUE_TEMPLATE/bug_report.yml):
-//   driver-name, driver-version, model-code, hub-firmware, last-error, diagnostic-block
-//
-// URL truncation: diagnostic-block is trimmed when total URL > 7500 chars to stay
-// under browser/GitHub practical limits (~8KB). A truncation hint is appended.
-//
-// Project: https://github.com/level99/Hubitat-VeSync
-//
-// NOTE: this docs block uses // line comments rather than the conventional /* */ block
-// because Hubitat's library parser (verified on 2.4.4.156 AND 2.5.0.126) returns
-// "Internal error" on save when this specific /* */ block is present in the library
-// source. Single-line comments work around the platform bug. See TODO.md "File Hubitat
-// platform bug" entry for the bisection record + filing plan.
-
 library(
     name: "LevoitDiagnostics",
     namespace: "level99",
@@ -126,13 +100,20 @@ void captureDiagnostics() {
     String modelCode     = getModelCode()
     String hubFw         = getHubFirmware()
 
+    // Detect whether this driver IS the parent (has no parent of its own).
+    // When true, suppress the "Parent state for this device" section — it is
+    // meaningless for the parent and would always show "not available".
+    boolean isParent = (parent == null)
+
     // Gather parent-side context (children only — parent implements captureDiagnosticsFor itself)
     Map parentCtx = [:]
-    try {
-        if (parent?.respondsTo("captureDiagnosticsFor")) {
-            parentCtx = parent.captureDiagnosticsFor(dni) ?: [:]
-        }
-    } catch (ignored) {}
+    if (!isParent) {
+        try {
+            if (parent?.respondsTo("captureDiagnosticsFor")) {
+                parentCtx = parent.captureDiagnosticsFor(dni) ?: [:]
+            }
+        } catch (ignored) {}
+    }
 
     // Error history for this device
     List errors = getErrorHistory(dni)
@@ -140,7 +121,7 @@ void captureDiagnostics() {
     // Current attribute snapshot
     Map attrSnap = captureAttributeSnapshot()
 
-    // Assemble block
+    // Assemble the full markdown block (GitHub issue body + state backup)
     Map opts = [
         driverName:    driverName,
         driverVersion: driverVersion,
@@ -148,13 +129,49 @@ void captureDiagnostics() {
         hubFw:         hubFw,
         dni:           dni,
         parentCtx:     parentCtx,
+        isParent:      isParent,
         errors:        errors,
         attrSnap:      attrSnap
     ]
     String block = buildDiagnosticBlock(opts)
 
-    device.sendEvent(name: "diagnostics", value: block)
-    logInfo "[DIAG] captureDiagnostics complete — see diagnostics attribute (${driverName} v${driverVersion})"
+    // Stash full markdown for power-user inspection via State Variables panel
+    state.lastDiagnostics = block
+
+    // Build the pre-filled GitHub URL (uses the full markdown block as body)
+    String lastErrorMsg = errors ? (errors[-1]?.msg ?: "") as String : ""
+    String issueUrl = buildIssueUrl([
+        "driver-name":      driverName,
+        "driver-version":   driverVersion,
+        "model-code":       modelCode,
+        "hub-firmware":     hubFw,
+        "last-error":       lastErrorMsg,
+        "diagnostic-block": block
+    ])
+
+    // Assemble compact HTML summary for the "diagnostics" attribute.
+    // Hubitat renders attribute values as inner HTML (<br> preserved, \n collapsed).
+    String captured = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(new Date())
+    int errorCount = errors.size()
+    String errorSuffix = ""
+    if (errorCount > 0) {
+        String lastMsg = (lastErrorMsg ?: "").take(80)
+        if (lastMsg.length() < lastErrorMsg.length()) lastMsg += "…"
+        errorSuffix = " (last: ${lastMsg})"
+    }
+
+    def htmlSb = new StringBuilder()
+    htmlSb.append("<a href=\"${issueUrl}\" target=\"_blank\">File diagnostic bug report</a>")
+    htmlSb.append("<br><br>")
+    htmlSb.append("${driverName} v${driverVersion}<br>")
+    if (hubFw && hubFw != "?" && hubFw != "unknown") {
+        htmlSb.append("Hub: ${hubFw}<br>")
+    }
+    htmlSb.append("Recent errors: ${errorCount}${errorSuffix}<br>")
+    htmlSb.append("Captured: ${captured}")
+
+    device.sendEvent(name: "diagnostics", value: htmlSb.toString())
+    logInfo "[DIAG] captureDiagnostics complete — click the link in the 'diagnostics' attribute on the device page to file a bug report (${driverName} v${driverVersion})"
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +192,7 @@ String buildDiagnosticBlock(Map opts) {
     String hubFw         = opts.hubFw         ?: "?"
     String dni           = opts.dni           ?: "?"
     Map    parentCtx     = (opts.parentCtx    ?: [:]) as Map
+    boolean isParent     = opts.isParent      ?: false
     List   errors        = (opts.errors       ?: [])  as List
     Map    attrSnap      = (opts.attrSnap     ?: [:])  as Map
 
@@ -182,26 +200,37 @@ String buildDiagnosticBlock(Map opts) {
     sb.append("### Levoit Driver Diagnostics\n\n")
 
     // --- Driver / device metadata ---
+    // Rows with UNKNOWN or empty values are suppressed from the human-readable
+    // markdown to reduce noise. The same values are still passed to buildIssueUrl()
+    // as query params (useful triage signal even when empty).
     sb.append("#### Driver & Device\n\n")
     sb.append("| Field | Value |\n")
     sb.append("|---|---|\n")
     sb.append("| Driver | `${driverName}` |\n")
     sb.append("| Driver version | `${driverVersion}` |\n")
-    sb.append("| Model code | `${modelCode}` |\n")
-    sb.append("| Hub firmware | `${hubFw}` |\n")
+    if (modelCode && modelCode != "UNKNOWN") {
+        sb.append("| Model code | `${modelCode}` |\n")
+    }
+    if (hubFw && hubFw != "?" && hubFw != "unknown") {
+        sb.append("| Hub firmware | `${hubFw}` |\n")
+    }
     sb.append("| Device Network ID | `${dni}` |\n")
     sb.append("\n")
 
-    // --- Parent-side state ---
-    sb.append("#### Parent state for this device\n\n")
-    if (parentCtx) {
-        sb.append("| Key | Value |\n")
-        sb.append("|---|---|\n")
-        parentCtx.each { k, v -> sb.append("| ${k} | `${v}` |\n") }
-    } else {
-        sb.append("_(not available — parent not accessible or does not support captureDiagnosticsFor)_\n")
+    // --- Parent-side state (children only) ---
+    // Suppressed entirely when this driver IS the parent (isParent == true),
+    // because the parent has no parent and the section would always say "not available".
+    if (!isParent) {
+        sb.append("#### Parent state for this device\n\n")
+        if (parentCtx) {
+            sb.append("| Key | Value |\n")
+            sb.append("|---|---|\n")
+            parentCtx.each { k, v -> sb.append("| ${k} | `${v}` |\n") }
+        } else {
+            sb.append("_(not available — parent not accessible or does not support captureDiagnosticsFor)_\n")
+        }
+        sb.append("\n")
     }
-    sb.append("\n")
 
     // --- Error history ---
     sb.append("#### Recent errors (last ${errors.size()}, max 10)\n\n")
@@ -209,7 +238,7 @@ String buildDiagnosticBlock(Map opts) {
         sb.append("| Timestamp | Message | Context |\n")
         sb.append("|---|---|---|\n")
         errors.each { e ->
-            String ts  = e.ts  ? new Date(e.ts as Long).format("yyyy-MM-dd HH:mm:ss") : "?"
+            String ts  = e.ts  ? new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date(e.ts as Long)) : "?"
             String msg = (e.msg ?: "").take(200)
             String ctx = e.ctx ? e.ctx.toString().take(100) : ""
             sb.append("| ${ts} | ${msg} | ${ctx} |\n")
@@ -230,24 +259,14 @@ String buildDiagnosticBlock(Map opts) {
     }
     sb.append("\n")
 
-    // --- Footer with clickable issue URL ---
-    String lastError = errors ? (errors[-1]?.msg ?: "") as String : ""
-    String issueUrl = buildIssueUrl([
-        "driver-name":        driverName,
-        "driver-version":     driverVersion,
-        "model-code":         modelCode,
-        "hub-firmware":       hubFw,
-        "last-error":         lastError,
-        "diagnostic-block":   sb.toString()  // will be truncated inside if needed
-    ])
-
+    // --- Footer with filing instructions ---
     sb.append("---\n")
     sb.append("**Filing this report:**\n\n")
-    sb.append("- **GitHub issue (1-click, requires GitHub account):** [Open pre-filled issue](${issueUrl})\n")
+    sb.append("- **GitHub issue (1-click, requires GitHub account):** click the link in the 'diagnostics' attribute on the device page\n")
     sb.append("- **Hubitat community thread (no GitHub account needed):** copy this entire block ")
     sb.append("and post it as a reply on the [Levoit Air Purifiers, Humidifiers, and Fans thread]")
     sb.append("(https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499)\n")
-    sb.append("- **Without using the link above:** paste this block into the diagnostic-block field of ")
+    sb.append("- **Without using the link:** paste this block into the diagnostic-block field of ")
     sb.append("a [blank bug report](https://github.com/level99/Hubitat-VeSync/issues/new?template=bug_report.yml)\n")
 
     return sb.toString()
@@ -287,10 +306,20 @@ String buildIssueUrl(Map fields) {
     else if (driverName.toLowerCase().contains("fan"))   family = "fan"
     else if (driverName.toLowerCase().contains("purifier") || driverName.toLowerCase().contains("air")) family = "purifier"
 
-    // Build title
+    // Build title with smarter fallback:
+    // - Use last error if present
+    // - Else use model code (only when it's a real code, not UNKNOWN/empty)
+    // - Else fall back to "diagnostic capture" (avoids "[VeSync Integration] UNKNOWN")
     String modelCode  = (fields["model-code"] ?: "") as String
     String lastError  = (fields["last-error"]  ?: "") as String
-    String titleSuffix = lastError ? lastError.take(60) : (modelCode ?: driverName.take(40))
+    String titleSuffix
+    if (lastError) {
+        titleSuffix = lastError.take(60)
+    } else if (modelCode && modelCode != "UNKNOWN") {
+        titleSuffix = modelCode
+    } else {
+        titleSuffix = "diagnostic capture"
+    }
     String title = "[${driverName.take(30)}] ${titleSuffix}"
 
     // Build param map (without diagnostic-block first — we measure that separately)
@@ -316,7 +345,7 @@ String buildIssueUrl(Map fields) {
     String diagEncoded
     if (budgetForDiag <= 0) {
         // No room at all — skip diagnostic-block
-        diagEncoded = urlEncode("[diagnostic too long for URL — paste full block from diagnostics attribute]")
+        diagEncoded = urlEncode("[diagnostic too long for URL — paste full block from state.lastDiagnostics (State Variables panel)]")
     } else {
         String encoded = urlEncode(diagRaw)
         if (encoded.length() <= budgetForDiag) {
@@ -329,7 +358,7 @@ String buildIssueUrl(Map fields) {
             while (rawLen > 0 && urlEncode(diagRaw.take(rawLen)).length() > budgetForDiag - 80) {
                 rawLen = (int)(rawLen * 0.9)
             }
-            String hint = "\n…[diagnostic too long for URL — paste full block manually from diagnostics attribute]"
+            String hint = "\n…[diagnostic too long for URL — paste full block manually from state.lastDiagnostics (State Variables panel)]"
             diagEncoded = urlEncode(diagRaw.take(rawLen) + hint)
         }
     }
@@ -372,13 +401,16 @@ private List getErrorHistory(String dni) {
  */
 private String getDriverVersion() {
     try {
-        // Hubitat exposes device.getTypeName() — the driver name includes version in metadata.
-        // The cleanest path for a library is to look for a DRIVER_VERSION constant or
-        // fall back to the manifest version. Here we use a well-known fallback.
-        // Drivers that want to expose version can set state.driverVersion in updated().
         if (state.driverVersion) return state.driverVersion as String
     } catch (ignored) {}
-    return "2.3"
+    try {
+        String tn = device?.typeName as String
+        if (tn) {
+            def m = tn =~ /v?(\d+\.\d+(?:\.\d+)?)\s*$/
+            if (m) return m[0][1]
+        }
+    } catch (ignored) {}
+    return "2.4"
 }
 
 /**

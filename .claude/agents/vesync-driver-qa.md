@@ -580,19 +580,41 @@ A common pattern: a watchdog detects symptom (e.g. empty polls), schedules a rec
 
 **Flag this pattern** whenever a watchdog/self-heal mechanism is added: review every line of the recovery action and confirm each load-bearing call-site source (every `getDataValue` / state read used in subsequent API calls) is updated by the recovery, not just the intermediate state. Resync-style recovery is most prone — there are typically 20+ device-type branches and any missed one creates partial-recovery bugs. It is BLOCKING — silent self-heal failure is worse than no self-heal because users don't know to take manual action.
 
-### 20. Library file uses `/* */` block-comment doc header (Hubitat platform parser bug)
+### 20. Library file file-scope commentary triggers Hubitat parser "Internal error" (platform bug)
 
-Hubitat's library parser silently rejects library files containing `/* ... */` multi-line block comments at the top of the file (after the optional MIT/copyright header, before the `library(...)` declaration). `POST /library/saveOrUpdateJson` returns `{"success":false,"message":"Internal error"}` with no further detail in the JSON response or hub Logs. HPM hits the same endpoint, so end users see install failure with the same generic toast. **Confirmed reproduces on hub firmware 2.4.4.156 AND 2.5.0.126** (FW upgrade did not fix); this is the platform's library compiler, not a regression in any specific FW version. Single-line `// ...` comments work cleanly; same content, different syntax = saves vs fails.
+Hubitat's library parser silently rejects library source containing certain content shapes between the optional MIT header and the `library(...)` declaration. `POST /library/saveOrUpdateJson` returns `{"success":false,"message":"Internal error"}` with no further detail in the JSON response or hub Logs. HPM hits the same endpoint, so end users see install failure with the same generic toast. **Confirmed reproduces on hub firmware 2.4.4.156 AND 2.5.0.126** (FW upgrade did not fix); platform-side bug, not FW-specific.
+
+The trigger is **fuzzier than originally cataloged**. Two manifestations confirmed:
+
+1. **Original (2026-04-30 morning):** `/* */` multi-line block comments at file scope, after the optional MIT header, before `library(`. Strip the block, replace with one-line comment, or convert to `//` line comments → saves.
+2. **Update (2026-04-30 afternoon, during v2.4 UX refactor):** even `//` line-comment content can trigger when:
+   - The comments contain literal text `/* */` or `library(` as documentation (paraphrasing the workaround in a NOTE block triggered the parser when added to a previously-saving file)
+   - File-scope commentary is dense (e.g. 20+ line `//` doc-headers preceding `library(`)
+   - Multi-line section-divider commentary between functions accumulates beyond a fuzzy threshold
+
+No clean single-token trigger isolated for case 2. The trigger is a parser/tokenizer interaction with content shape — not a clean syntactic rule.
 
 **Symptom:** library not present on hub after import; "Internal error" toast on Save. No log line. No compile trace. HPM-installed packages partially deploy (drivers fine, library missing) and downstream `#include` resolution fails at driver compile time with `MissingMethodException` for any library-provided helper (e.g. `recordError`).
 
-**Canonical fix:** convert the file-scope `/* */` block to `//` line comments. Each line becomes a `// ` line. Same content, structurally equivalent. `/* */` blocks INSIDE method bodies (javadoc above each function) are NOT affected — the bug is specifically the file-scope block-comment form before the `library(` declaration. The MIT/copyright header at the very top of the file IS allowed (one `/* */` block before `library(` is fine; it's the SECOND one that triggers).
+**Canonical fix (and shipping convention):** keep file-scope content in library files between the MIT header and the `library(` declaration to **ZERO commentary** if possible. Don't add doc headers, NOTE blocks, or expanded section dividers to library files. If documentation is needed, put it in:
+- `CONTRIBUTING.md` (for contributor-facing rationale)
+- `CLAUDE.md` BP catalog entry (for AI-agent-facing rationale)
+- The dev agent spec (for behavioral guidance during driver/library work)
 
-**Lint enforcement:** RULE29 (`tests/lint_rules/library_no_top_block_comment.py`) FAILs on any library file containing a `/* */` block comment after the first one and before `library(`. The rule scopes via `is_library_file()` — driver files (which use `definition()`) are unaffected.
+NEVER inside the library source itself. Section dividers between functions inside library files: single `// ----` line, not multi-line `// header / // detail / // ---` blocks. Do NOT paraphrase the BP20 trigger pattern in `//` comments either — the literal text triggers the parser when matched. javadoc `/* */` blocks INSIDE method bodies (above each function) are NOT affected — bug is file-scope-only.
 
-**Live-evidence:** surfaced 2026-04-30 during v2.4 Phase 5 release prep — `LevoitDiagnosticsLib.groovy` (425 lines, 17.5 KB) consistently failed Save with "Internal error". ~30 in-browser variant tests via CodeMirror.setValue + Save + response capture isolated the trigger to the documentation block at lines 19-39 (a multi-line `/* */` block following the MIT header). Strip the block, replace with single-line `//` comments, OR shorten to a one-line `//` comment all save cleanly. No size threshold (the doc block at ~1,200 chars fails while a 7,000+ char single method body passes); the trigger is comment-syntax-specific. Workaround applied to `LevoitDiagnosticsLib.groovy`; in-source NOTE explains why; v2.4 ship unblocked. The bisection record + Hubitat-bug filing plan live in TODO.md (maintainer-private file).
+**Lint enforcement:** RULE29 (`tests/lint_rules/library_no_top_block_comment.py`) FAILs on any library file containing a `/* */` block comment after the first one (the optional MIT header) and before `library(`. Catches the original (case 1) trigger pattern. Does NOT catch case 2 manifestations (fuzzy `//` content) — those are caught by the runtime smoke test.
 
-**Flag this pattern** when reviewing any new library file added to the codebase, OR a diff that adds a `/* */` block at the top of an existing library. RULE29 catches this automatically, but flag it explicitly in the QA verdict so the developer understands WHY the // workaround exists and doesn't try to "clean up" the unconventional style. It is BLOCKING — broken library save = HPM install failure for all users = unshippable.
+**Runtime smoke test (deterministic catch):** `vesync-driver-operations` agent, on any library-file deploy, must POST the source to `/library/saveOrUpdateJson` and verify `success:true` in the response BEFORE reporting deployment success. If save fails, ops returns FAIL with the JSON body. This catches ANY trigger pattern at deploy time regardless of what slipped past lint or convention.
+
+**Live-evidence:** surfaced 2026-04-30 during v2.4 Phase 5 release prep — `LevoitDiagnosticsLib.groovy` (~425 lines / ~17.5 KB) consistently failed Save with "Internal error". ~30 in-browser variant tests (CodeMirror.setValue + Save + response capture) isolated the original `/* */` trigger. Workaround applied: convert doc block to `//` line comments. Then during the UX refactor a NOTE block of `// line comments` explaining the workaround was added — that ALSO triggered the bug despite being all-`//`. Removing the NOTE block restored save. Subsequent bisection of the dev-refactored 22 KB version showed the 4 modified function bodies save in any combination, but adding back the dev's expanded section comments tipped it back into failure. The shipped v2.4 library has ZERO file-scope commentary between the MIT header and `library(`; all explanation lives in CONTRIBUTING.md, this BP entry, and the dev/QA agent specs.
+
+**Flag this pattern** when reviewing any library file diff. Specifically flag:
+- Any addition of file-scope content between MIT header and `library(` (any `/* */` block, multi-line `//` block, NOTE block, or section divider that's more than one line of `// ----`)
+- Any text that paraphrases the BP20 workaround inside a comment (e.g. "uses // because /* */ is broken") — the literal text patterns themselves can trigger
+- Any expansion of section-divider commentary inside the library file
+
+It is BLOCKING — broken library save = HPM install failure for all users = unshippable. The runtime ops smoke-test is the final defense; lint + this BP review is the front-line catch.
 
 ---
 

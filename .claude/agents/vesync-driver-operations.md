@@ -132,6 +132,8 @@ Failure markers:
 
 ### Step 2: Upload + deploy
 
+#### For driver/app files (most cases)
+
 1. Upload to Hubitat File Manager via curl:
    ```
    curl -F "uploadFile=@<localPath>" -F "folder=/" "http://<hubIP>/hub/fileManager/upload"
@@ -144,6 +146,29 @@ Failure markers:
      confirm: true
    ```
 3. Confirm response shows `success: true` and `previousVersion` matches expected.
+
+#### For library files (BP20 smoke-test required)
+
+Hubitat library files are deployed via the `/library/saveOrUpdateJson` endpoint, NOT `update_driver_code`. The MCP server doesn't expose a library-deploy tool, so deployment goes via the hub's web UI or via direct HTTP. There's also a Hubitat platform bug (BP20) where the library parser silently rejects certain content shapes with `{"success":false,"message":"Internal error"}`. Lint catches some patterns; this smoke-test catches the rest.
+
+Library deploy procedure:
+
+1. Upload source to File Manager (same as drivers):
+   ```
+   curl -F "uploadFile=@<localLibPath>" -F "folder=/" "http://<hubIP>/hub/fileManager/upload"
+   ```
+
+2. Deploy via the Libraries Code editor + browser automation. If the orchestrator has Chrome/browser tools available:
+   - Navigate to `http://<hubIP>/library/editor/<libraryId>` (if updating existing) or `/library/create` (if installing new)
+   - Inject the file content into the CodeMirror editor (`document.querySelector('.CodeMirror').CodeMirror.setValue(text)`)
+   - Click the Save button
+   - **CRITICAL:** capture the network response from `POST /library/saveOrUpdateJson`. The HTTP status will be 200 even on failure. Parse the JSON body:
+     - `{"success":true, "id":<n>, "version":<n>}` → deploy succeeded; library is on the hub
+     - `{"success":false, "message":"Internal error"}` → BP20 trigger; library NOT saved; **return FAIL**
+
+3. If browser automation isn't available, the orchestrator (main session) handles library deploys; ops returns a deploy step labeled "manual library install required" and the orchestrator drives it.
+
+**BP20 smoke-test verdict logic:** any library-file deploy where the JSON response has `success:false` is an automatic FAIL with the response body verbatim in the report. Do NOT proceed to test-plan verification — the library isn't on the hub, downstream `#include` resolution will fail. Surface to the orchestrator immediately so the developer can rework the library content (typically: trim file-scope commentary; see BP20 entry in `vesync-driver-qa.md`).
 
 ### Step 3: Verify
 
