@@ -580,6 +580,20 @@ A common pattern: a watchdog detects symptom (e.g. empty polls), schedules a rec
 
 **Flag this pattern** whenever a watchdog/self-heal mechanism is added: review every line of the recovery action and confirm each load-bearing call-site source (every `getDataValue` / state read used in subsequent API calls) is updated by the recovery, not just the intermediate state. Resync-style recovery is most prone — there are typically 20+ device-type branches and any missed one creates partial-recovery bugs. It is BLOCKING — silent self-heal failure is worse than no self-heal because users don't know to take manual action.
 
+### 20. Library file uses `/* */` block-comment doc header (Hubitat platform parser bug)
+
+Hubitat's library parser silently rejects library files containing `/* ... */` multi-line block comments at the top of the file (after the optional MIT/copyright header, before the `library(...)` declaration). `POST /library/saveOrUpdateJson` returns `{"success":false,"message":"Internal error"}` with no further detail in the JSON response or hub Logs. HPM hits the same endpoint, so end users see install failure with the same generic toast. **Confirmed reproduces on hub firmware 2.4.4.156 AND 2.5.0.126** (FW upgrade did not fix); this is the platform's library compiler, not a regression in any specific FW version. Single-line `// ...` comments work cleanly; same content, different syntax = saves vs fails.
+
+**Symptom:** library not present on hub after import; "Internal error" toast on Save. No log line. No compile trace. HPM-installed packages partially deploy (drivers fine, library missing) and downstream `#include` resolution fails at driver compile time with `MissingMethodException` for any library-provided helper (e.g. `recordError`).
+
+**Canonical fix:** convert the file-scope `/* */` block to `//` line comments. Each line becomes a `// ` line. Same content, structurally equivalent. `/* */` blocks INSIDE method bodies (javadoc above each function) are NOT affected — the bug is specifically the file-scope block-comment form before the `library(` declaration. The MIT/copyright header at the very top of the file IS allowed (one `/* */` block before `library(` is fine; it's the SECOND one that triggers).
+
+**Lint enforcement:** RULE29 (`tests/lint_rules/library_no_top_block_comment.py`) FAILs on any library file containing a `/* */` block comment after the first one and before `library(`. The rule scopes via `is_library_file()` — driver files (which use `definition()`) are unaffected.
+
+**Live-evidence:** surfaced 2026-04-30 during v2.4 Phase 5 release prep — `LevoitDiagnosticsLib.groovy` (425 lines, 17.5 KB) consistently failed Save with "Internal error". ~30 in-browser variant tests via CodeMirror.setValue + Save + response capture isolated the trigger to the documentation block at lines 19-39 (a multi-line `/* */` block following the MIT header). Strip the block, replace with single-line `//` comments, OR shorten to a one-line `//` comment all save cleanly. No size threshold (the doc block at ~1,200 chars fails while a 7,000+ char single method body passes); the trigger is comment-syntax-specific. Workaround applied to `LevoitDiagnosticsLib.groovy`; in-source NOTE explains why; v2.4 ship unblocked. The bisection record + Hubitat-bug filing plan live in TODO.md (maintainer-private file).
+
+**Flag this pattern** when reviewing any new library file added to the codebase, OR a diff that adds a `/* */` block at the top of an existing library. RULE29 catches this automatically, but flag it explicitly in the QA verdict so the developer understands WHY the // workaround exists and doesn't try to "clean up" the unconventional style. It is BLOCKING — broken library save = HPM install failure for all users = unshippable.
+
 ---
 
 ## Report format

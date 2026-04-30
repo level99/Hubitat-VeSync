@@ -16,27 +16,31 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
  */
 
-/*
- *  LevoitDiagnostics — Hubitat library
- *
- *  Shared captureDiagnostics() + error ring-buffer helpers for all Levoit drivers
- *  (community fork v2.4+).
- *
- *  Exports:
- *    captureDiagnostics()                               — command entrypoint; builds & stores markdown dump
- *    recordError(String msg, Map ctx, String overrideDni) — ring-buffer recorder (last 10 per device, FIFO);
- *                                                           overrideDni allows parent to record under a child DNI
- *    buildIssueUrl(Map fields)                          — assembles pre-filled GitHub issue URL
- *    buildDiagnosticBlock(Map opts)                     — assembles the markdown dump
- *
- *  GitHub issue template field IDs (these MUST match .github/ISSUE_TEMPLATE/bug_report.yml):
- *    driver-name, driver-version, model-code, hub-firmware, last-error, diagnostic-block
- *
- *  URL truncation: diagnostic-block is trimmed when total URL > 7500 chars to stay
- *  under browser/GitHub practical limits (~8KB). A truncation hint is appended.
- *
- *  Project: https://github.com/level99/Hubitat-VeSync
- */
+// LevoitDiagnostics — Hubitat library
+//
+// Shared captureDiagnostics() + error ring-buffer helpers for all Levoit drivers
+// (community fork v2.4+).
+//
+// Exports:
+//   captureDiagnostics()                                 — command entrypoint; builds & stores markdown dump
+//   recordError(String msg, Map ctx, String overrideDni) — ring-buffer recorder (last 10 per device, FIFO);
+//                                                          overrideDni allows parent to record under a child DNI
+//   buildIssueUrl(Map fields)                            — assembles pre-filled GitHub issue URL
+//   buildDiagnosticBlock(Map opts)                       — assembles the markdown dump
+//
+// GitHub issue template field IDs (these MUST match .github/ISSUE_TEMPLATE/bug_report.yml):
+//   driver-name, driver-version, model-code, hub-firmware, last-error, diagnostic-block
+//
+// URL truncation: diagnostic-block is trimmed when total URL > 7500 chars to stay
+// under browser/GitHub practical limits (~8KB). A truncation hint is appended.
+//
+// Project: https://github.com/level99/Hubitat-VeSync
+//
+// NOTE: this docs block uses // line comments rather than the conventional /* */ block
+// because Hubitat's library parser (verified on 2.4.4.156 AND 2.5.0.126) returns
+// "Internal error" on save when this specific /* */ block is present in the library
+// source. Single-line comments work around the platform bug. See TODO.md "File Hubitat
+// platform bug" entry for the bisection record + filing plan.
 
 library(
     name: "LevoitDiagnostics",
