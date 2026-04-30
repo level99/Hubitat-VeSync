@@ -80,12 +80,15 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.2.1  Initial release. US + EU Sprout Humidifier in a single driver.
  *                        pyvesync VeSyncSproutHumid class. V2-style payload conventions.
  *                        Ships as [PREVIEW] — no maintainer hardware. Built from
  *                        pyvesync VeSyncSproutHumid class implementation and
  *                        device_map.py. See CROSS-CHECK above.
  */
+
+#include level99.LevoitDiagnostics
 
 metadata {
     definition(
@@ -130,6 +133,9 @@ metadata {
                                           [name:"Brightness", type:"NUMBER", description:"0-100"],
                                           [name:"ColorTemp",  type:"NUMBER", description:"2000-3500 K (warm-cool)"]]
         command "toggle"
+
+        attribute "diagnostics",     "string"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -143,6 +149,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.3"
     runIn(3, "refresh")
     if (settings?.debugOutput) {
         runIn(1800, "logDebugOff")
@@ -160,14 +167,14 @@ def on(){
     logDebug "on()"
     def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
     if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-    else logError "Power on failed"
+    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
 }
 
 def off(){
     logDebug "off()"
     def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
     if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
-    else logError "Power off failed"
+    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
 def toggle(){
@@ -185,7 +192,7 @@ def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (mode as String).toLowerCase()
-    if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; return }
+    if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     // Wire-value mapping: auto -> 'autoPro' (device_map.py mist_modes for Sprout)
     String wire = (m == "auto") ? "autoPro" : m
     def resp = hubBypass("setHumidityMode", [workMode: wire], "setHumidityMode(${wire})")
@@ -194,7 +201,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"
+        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
 
@@ -211,7 +218,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: lvl)
         logInfo "Mist level: ${lvl}"
     } else {
-        logError "Mist level write failed: ${lvl}"
+        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
     }
 }
 
@@ -227,7 +234,7 @@ def setHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"
+        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
     }
 }
 
@@ -241,7 +248,7 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: onOff)
         logInfo "Display: ${onOff}"
     } else {
-        logError "Display write failed"
+        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
 
@@ -255,7 +262,7 @@ def setChildLock(onOff){
         device.sendEvent(name:"childLock", value: onOff)
         logInfo "Child lock: ${onOff}"
     } else {
-        logError "Child lock write failed"
+        logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }
 }
 
@@ -269,7 +276,7 @@ def setAutoStop(onOff){
         device.sendEvent(name:"autoStopEnabled", value: onOff)
         logInfo "Auto-stop: ${onOff}"
     } else {
-        logError "Auto-stop write failed"
+        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"])
     }
 }
 
@@ -284,7 +291,7 @@ def setDryingMode(onOff){
         device.sendEvent(name:"dryingEnabled", value: onOff)
         logInfo "Drying mode: ${onOff}"
     } else {
-        logError "Drying mode write failed"
+        logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"])
     }
 }
 
@@ -316,7 +323,7 @@ def setNightlight(onOff, brightness = null, colorTemp = null){
         device.sendEvent(name:"nightlightColorTemp",  value: ct)
         logInfo "Nightlight: ${onOffStr}, brightness=${br}, colorTemp=${ct}K"
     } else {
-        logError "Nightlight write failed"
+        logError "Nightlight write failed"; recordError("Nightlight write failed", [method:"setLightStatus"])
     }
 }
 
@@ -329,7 +336,7 @@ def update(){
     def resp = hubBypass("getHumidifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getHumidifierStatus"
+        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"getHumidifierStatus"]) }
         else applyStatus(status)
     }
 }
@@ -535,7 +542,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

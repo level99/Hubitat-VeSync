@@ -85,6 +85,7 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.2.1  Initial release. All 4 LAP-EL551S model codes in a single driver.
  *                        pyvesync VeSyncAirBaseV2 class (same as Vital 200S/Sprout Air).
  *                        TURBO mode (first in codebase) via setPurifierMode {workMode:"turbo"}.
@@ -94,6 +95,8 @@
  *                        VeSyncAirBaseV2 class, device_map.py EverestAir entry, EL551S.yaml
  *                        fixture. See CROSS-CHECK above.
  */
+
+#include level99.LevoitDiagnostics
 
 metadata {
     definition(
@@ -136,6 +139,9 @@ metadata {
         command "setLightDetection",   [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         command "resetFilter"
         command "toggle"
+
+        attribute "diagnostics", "string"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -149,6 +155,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.3"
     runIn(3, "refresh")
     if (settings?.debugOutput) {
         runIn(1800, "logDebugOff")
@@ -167,14 +174,14 @@ def on(){
     logDebug "on()"
     def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
     if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-    else logError "Power on failed"
+    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
 }
 
 def off(){
     logDebug "off()"
     def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
     if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
-    else logError "Power off failed"
+    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
 def toggle(){
@@ -199,6 +206,7 @@ def setMode(mode){
     String m = (mode as String).toLowerCase()
     if (!(m in ["auto","sleep","manual","turbo"])) {
         logError "Invalid mode: ${m} -- must be: auto, sleep, manual, turbo"
+        recordError("Invalid mode: ${m}", [method:"setPurifierMode"])
         return
     }
     if (m == "manual") {
@@ -212,7 +220,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"
+        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setPurifierMode"])
     }
 }
 
@@ -231,7 +239,7 @@ def setFanSpeed(speed){
         device.sendEvent(name:"mode",     value: "manual")
         logInfo "Fan speed: ${spd}, mode: manual"
     } else {
-        logError "Fan speed write failed: ${spd}"
+        logError "Fan speed write failed: ${spd}"; recordError("Fan speed write failed: ${spd}", [method:"setLevel"])
     }
 }
 
@@ -245,7 +253,7 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: onOff)
         logInfo "Display: ${onOff}"
     } else {
-        logError "Display write failed"
+        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
 
@@ -259,7 +267,7 @@ def setChildLock(onOff){
         device.sendEvent(name:"childLock", value: onOff)
         logInfo "Child lock: ${onOff}"
     } else {
-        logError "Child lock write failed"
+        logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }
 }
 
@@ -276,7 +284,7 @@ def setLightDetection(onOff){
         device.sendEvent(name:"lightDetection", value: onOff)
         logInfo "Light detection: ${onOff}"
     } else {
-        logError "Light detection write failed"
+        logError "Light detection write failed"; recordError("Light detection write failed", [method:"setLightDetection"])
     }
 }
 
@@ -289,7 +297,7 @@ def resetFilter(){
         device.sendEvent(name:"filterLife", value: 100)
         logInfo "Filter reset to 100%"
     } else {
-        logError "Filter reset failed"
+        logError "Filter reset failed"; recordError("Filter reset failed", [method:"resetFilter"])
     }
 }
 
@@ -302,7 +310,7 @@ def update(){
     def resp = hubBypass("getPurifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getPurifierStatus"
+        if (!status?.result) { logError "No status returned from getPurifierStatus"; recordError("No status returned from getPurifierStatus", [method:"update"]) }
         else applyStatus(status)
     }
 }
@@ -477,7 +485,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

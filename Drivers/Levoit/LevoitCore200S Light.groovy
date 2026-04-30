@@ -25,6 +25,7 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
 // 2026-04-25: v2.0 (community fork, level99/Hubitat-VeSync, by Dan Cox)
 //                  - Added descriptionTextEnable preference (default true) and gated logInfo helper
 //                  - Added INFO logging at state-change transitions (night light on/off/dim)
@@ -40,6 +41,8 @@ SOFTWARE.
 // 2021-10-22: v1.0 Support for Levoit Air Purifier Core 200S / 400S
 
 
+#include level99.LevoitDiagnostics
+
 metadata {
     definition(
         name: "Levoit Core200S Air Purifier Light",
@@ -54,6 +57,8 @@ metadata {
 
             command "setNightLight", [[name:"Night Light*", type: "ENUM", description: "Display", constraints: ["on", "off", "dim"] ] ]
 
+            attribute "diagnostics",     "string"
+            command "captureDiagnostics"
         }
 
     preferences {
@@ -71,6 +76,7 @@ def updated() {
 	logDebug "Updated with settings: ${settings}"
 
     state.clear()
+    state.driverVersion = "2.3"
     unschedule()
 	initialize()
 
@@ -212,12 +218,12 @@ def checkHttpResponse(action, resp) {
 		return true
 	else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500)
 	{
-		log.error "${action}: ${resp.status} - ${resp.getData()}"
+		log.error "${action}: ${resp.status} - ${resp.getData()}"; recordError("${action}: HTTP ${resp.status}", [site:"checkHttpResponse"])
 		return false
 	}
 	else
 	{
-		log.error "${action}: unexpected HTTP response: ${resp.status}"
+		log.error "${action}: unexpected HTTP response: ${resp.status}"; recordError("${action}: unexpected HTTP ${resp.status}", [site:"checkHttpResponse"])
 		return false
 	}
 }

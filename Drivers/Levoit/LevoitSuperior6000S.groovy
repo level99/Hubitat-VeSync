@@ -27,6 +27,9 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-04-29: v2.4  Added captureDiagnostics command + diagnostics attribute via
+ *                      LevoitDiagnostics library. Added recordError() ring-buffer calls at
+ *                      all logError sites.
  *    2026-04-25: v2.0  Community fork initial release (Dan Cox). Full driver based on canonical
  *                      pyvesync payloads. Capabilities: Switch, SwitchLevel, RelativeHumidity-
  *                      Measurement, TemperatureMeasurement, Refresh, Actuator. Setters: setMode
@@ -38,6 +41,8 @@
  *                      wrapped bypassV2 envelope. Diagnostic raw-response logging gated by
  *                      debugOutput preference for ongoing field diagnostics.
  */
+
+#include level99.LevoitDiagnostics
 
 metadata {
     definition(
@@ -71,6 +76,7 @@ metadata {
         attribute "pumpCleanStatus", "string"    // cleaning | idle (water pump self-clean cycle)
         attribute "pumpCleanRemain", "number"    // seconds remaining in pump clean cycle
         attribute "info", "string"               // HTML summary
+        attribute "diagnostics", "string"        // captureDiagnostics() output
 
         command "setMode",            [[name:"Mode*",            type:"ENUM",   constraints:["auto","manual","sleep"]]]
         command "setMistLevel",       [[name:"Level*",           type:"NUMBER", description:"1-9"]]
@@ -80,6 +86,7 @@ metadata {
         command "setAutoStop",        [[name:"On/Off*",          type:"ENUM",   constraints:["on","off"]]]
         command "setDryingMode",      [[name:"On/Off*",          type:"ENUM",   constraints:["on","off"]]]
         command "toggle"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -92,6 +99,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.3"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -109,14 +117,14 @@ def on(){
     logDebug "on()"
     def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(power=1)")
     if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-    else logError "Power on failed"
+    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
 }
 
 def off(){
     logDebug "off()"
     def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(power=0)")
     if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-    else logError "Power off failed"
+    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
 // state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write
@@ -131,9 +139,9 @@ def toggle(){
 // ---------- Mode ----------
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
+    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }  // no recordError — not an error, just a guard
     String m = (mode as String).toLowerCase()
-    if (!(m in ["auto","manual","sleep"])) { logError "Invalid mode: ${m}"; return }
+    if (!(m in ["auto","manual","sleep"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     // autoPro is the canonical API value for "auto" on Superior 6000S
     String apiMode = (m == "auto") ? "autoPro" : m
     def resp = hubBypass("setHumidityMode", [workMode: apiMode], "setHumidityMode(${apiMode})")
@@ -143,6 +151,7 @@ def setMode(mode){
         logInfo "Mode: ${m}"
     } else {
         logError "Mode write failed: ${m}"
+        recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
 
@@ -159,6 +168,7 @@ def setMistLevel(level){
         logInfo "Mist level: ${lvl}"
     } else {
         logError "Mist level write failed: ${lvl}"
+        recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
     }
 }
 
@@ -182,6 +192,7 @@ def setTargetHumidity(percent){
         logInfo "Target humidity: ${p}%"
     } else {
         logError "Target humidity write failed: ${p}"
+        recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
     }
 }
 
@@ -191,7 +202,7 @@ def setDisplay(onOff){
     Integer v = (onOff == "on") ? 1 : 0
     def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
     if (httpOk(resp)) device.sendEvent(name:"display", value: onOff)
-    else logError "Display write failed"
+    else { logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"]) }
 }
 
 def setChildLock(onOff){
@@ -199,7 +210,7 @@ def setChildLock(onOff){
     Integer v = (onOff == "on") ? 1 : 0
     def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${onOff})")
     if (httpOk(resp)) device.sendEvent(name:"childLock", value: onOff)
-    else logError "Child lock write failed"
+    else { logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"]) }
 }
 
 def setAutoStop(onOff){
@@ -207,7 +218,7 @@ def setAutoStop(onOff){
     Integer v = (onOff == "on") ? 1 : 0
     def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${onOff})")
     if (httpOk(resp)) { device.sendEvent(name:"autoStopConfig", value: onOff); logInfo "Auto-stop: ${onOff}" }
-    else logError "Auto-stop write failed"
+    else { logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"]) }
 }
 
 def setDryingMode(onOff){
@@ -215,7 +226,7 @@ def setDryingMode(onOff){
     Integer v = (onOff == "on") ? 1 : 0
     def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
     if (httpOk(resp)) logInfo "Drying mode auto-switch set: ${onOff}"
-    else logError "Drying mode write failed"
+    else { logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"]) }
 }
 
 // ---------- Refresh ----------
@@ -228,7 +239,7 @@ def update(){
     def resp = hubBypass("getHumidifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getHumidifierStatus"
+        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"getHumidifierStatus"]) }
         else applyStatus(status)
     }
 }
@@ -439,6 +450,7 @@ private boolean httpOk(resp){
         return false
     }
     logError "HTTP ${st}"
+    recordError("HTTP ${st}", [method:"httpOk"])
     return false
 }
 

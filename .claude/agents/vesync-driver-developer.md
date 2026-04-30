@@ -233,10 +233,11 @@ When adding a new device-code (e.g. a regional variant of an existing model):
 3. Pull pyvesync class implementation for response field semantics + reverse-mappings.
 4. Copy the closest-existing driver as a template (Vital 200S for purifier-like, Superior 6000S for humidifier-like).
 5. Replace metadata, methods, and field parsing. Preserve the logging conventions, diagnostic line, and update-signature pattern.
-6. Update parent's `deviceType()` switch + `getDevices()` `addChildDevice` branch + `isLevoitClimateDevice()` whitelist (add the prefix or literal name; lint rule RULE22 enforces parity between the two functions — adding to one without the other will FAIL lint).
-7. Update HPM manifest (new entry + version bump).
-8. Update readme.md (driver table + events table for the new model).
-9. Test live before requesting QA review — verify power, status, and at least one configurable command work end-to-end.
+6. **Phase 5 standard plumbing — REQUIRED for every new child driver (enforced by lint RULE28).** Add at the top of the driver source: `#include level99.LevoitDiagnostics`. In the `metadata { definition(...) { ... } }` block, add `command "captureDiagnostics"` and `attribute "diagnostics", "string"`. Where the driver calls `log.error(...)`, add a parallel `recordError(message, [site:"<methodName>", ...])` call. The library exports `recordError`, `captureDiagnostics`, and ring-buffer state shared across all drivers — these are not optional. Lint RULE28 will FAIL on any driver missing the three plumbing pieces. See any v2.4+ child driver (e.g. `LevoitVital200S.groovy`) for the canonical pattern.
+7. Update parent's `deviceType()` switch + `getDevices()` `addChildDevice` branch + `isLevoitClimateDevice()` whitelist (add the prefix or literal name; lint rule RULE22 enforces parity between the two functions — adding to one without the other will FAIL lint).
+8. Update HPM manifest (new entry + version bump).
+9. Update readme.md (driver table + events table for the new model).
+10. Test live before requesting QA review — verify power, status, and at least one configurable command work end-to-end.
 
 ### Deployment workflow
 

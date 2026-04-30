@@ -25,6 +25,9 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-29: v2.4  Added captureDiagnostics command + diagnostics attribute via
+//                  LevoitDiagnostics library. Added recordError() ring-buffer calls at
+//                  all logError / log.error sites.
 // 2026-04-28: v2.3 (community fork, level99/Hubitat-VeSync, by Dan Cox)
 //                  - Added childLock attribute + setChildLock command (Core-line "Display Lock")
 //                  - Added display read-back attribute (was write-only)
@@ -46,6 +49,7 @@ SOFTWARE.
 //                  Support for 'SwitchLevel' capability.
 // 2021-10-22: v1.0 Support for Levoit Air Purifier Core 200S / 400S
 
+#include level99.LevoitDiagnostics
 
 metadata {
     definition(
@@ -68,6 +72,7 @@ metadata {
             attribute "timerRemain", "number";                         // Auto-off timer remaining (seconds; 0 when no timer)
 
             attribute "info", "string";                               // HTML
+            attribute "diagnostics", "string"
 
             command "setDisplay", [[name:"Display*", type: "ENUM", description: "Display", constraints: ["on", "off"] ] ]
             command "setSpeed", [[name:"Speed*", type: "ENUM", description: "Speed", constraints: ["off", "low", "medium", "high"] ] ]
@@ -77,6 +82,7 @@ metadata {
             command "cancelTimer"
             command "resetFilter"
             command "toggle"
+            command "captureDiagnostics"
         }
 
     preferences {
@@ -94,6 +100,7 @@ def updated() {
 	logDebug "Updated with settings: ${settings}"
 
     state.clear()
+    state.driverVersion = "2.3"
     unschedule()
 	initialize()
 
@@ -355,10 +362,11 @@ def update() {
 			if (checkHttpResponse("update", resp))
 			{
                 def status = resp.data.result
-                if (status == null)
+                if (status == null) {
                     logError "No status returned from getPurifierStatus: ${resp.msg}"
-                else
-                    result = update(status, nightLight)                
+                    recordError("No status returned from getPurifierStatus", [site:"update"])
+                } else
+                    result = update(status, nightLight)
 			}
 		}
     return result
@@ -525,11 +533,13 @@ def checkHttpResponse(action, resp) {
 	else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500)
 	{
 		log.error "${action}: ${resp.status} - ${resp.getData()}"
+		recordError("${action}: ${resp.status}", [site:"checkHttpResponse"])
 		return false
 	}
 	else
 	{
 		log.error "${action}: unexpected HTTP response: ${resp.status}"
+		recordError("${action}: unexpected HTTP response: ${resp.status}", [site:"checkHttpResponse"])
 		return false
 	}
 }

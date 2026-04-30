@@ -190,10 +190,25 @@ SOFTWARE.
 // 2022-07-18: v1.1 Support for Levoit Air Purifier Core 600S.
 //                  Split into separate files for each device.
 //                  Support for 'SwitchLevel' capability.
+// 2026-04-29: v2.4  Phase 5 — per-device captureDiagnostics + error ring-buffer.
+//                  - #include level99.LevoitDiagnostics: library provides
+//                    recordError() ring-buffer (last 10 per device, FIFO), and
+//                    captureDiagnostics() for the parent itself.
+//                  - Added captureDiagnosticsFor(String childDni) — returns
+//                    per-device parent-side context map for child diagnostic captures
+//                    (consecutiveEmpty, lastPollMethod, configModule, last error).
+//                  - updateDevices() now sets state.lastPollMethod[<dni>] before
+//                    calling dev.update() so captureDiagnosticsFor can report it.
+//                  - recordError() called alongside logError() at the 6 highest-value
+//                    call sites (login failure, poll-null, connection-pool, re-auth).
+//                  - Added attribute "diagnostics" + command "captureDiagnostics"
+//                    to metadata.
 // 2021-10-22: v1.0 Support for Levoit Air Purifier Core 200S / 400S
 
 import java.security.MessageDigest
 import groovy.transform.Field
+
+#include level99.LevoitDiagnostics
 
 // VeSync API metadata constants — centralised here so version/ID changes are one-line fixes.
 // DO NOT change DEFAULT_TRACE_ID to a dynamic value — pyvesync uses "1634265366" verbatim
@@ -219,7 +234,10 @@ metadata {
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"
-            attribute "heartbeat", "string";  
+            attribute "heartbeat", "string"
+            attribute "diagnostics", "string"
+
+            command "captureDiagnostics"
         }
 
     preferences {
@@ -256,6 +274,7 @@ def updated() {
         state.remove('accountID')
     }
     state.lastRegion = newRegion
+    state.driverVersion = "2.3"
 
     // Set flag to stop any running tasks from old driver instance
     state.driverReloading = true
@@ -308,6 +327,7 @@ def initialize() {
         getDevices()
     } else {
         logError "Login failed - check credentials and retry"
+        recordError("Login failed - check credentials and retry", [site:"initialize"])
     }
 }
 
@@ -455,13 +475,16 @@ private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCal
                     continue
                 }
                 logError "${label}: Connection pool shut down after ${maxAttempts} attempts"
+                recordError("${label}: Connection pool shut down after ${maxAttempts} attempts", [site:"retryableHttp"])
             } else {
                 logError "${label}: IllegalStateException - ${e.message}"
+                recordError("${label}: IllegalStateException - ${e.message}", [site:"retryableHttp"])
             }
             return false
         }
         catch (Exception e) {
             logError "${label}: ${e.toString()}"
+            recordError("${label}: ${e.toString()}", [site:"retryableHttp"])
             if (e.metaClass.respondsTo(e, 'getResponse')) {
                 try {
                     checkHttpResponse(label, e.getResponse())
@@ -613,12 +636,19 @@ def Boolean updateDevices()
                 "data": [:]
             ]
 
+            // Track last poll method per DNI for captureDiagnosticsFor() (Phase 5)
+            // Whole-map-reassignment required (same BP17 state-write discipline).
+            def pollMethods = (state.lastPollMethod ?: [:]) as Map
+            pollMethods[dni] = method
+            state.lastPollMethod = pollMethods
+
             sendBypassRequest(dev, command) { resp ->
                 if (checkHttpResponse("update", resp))
                 {
                     def status = resp.data.result
                     if (status == null) {
                         logError "No status returned from ${method}: ${resp?.hasProperty('msg') ? resp.msg : ''}"
+                        recordError("No status returned from ${method}", [site:"updateDevices"], dni)
                         // BP17: track consecutive empty results per DNI so ensurePollHealth()
                         // can trigger a full Resync when configModule drifts post-firmware-update.
                         // Whole-map-reassignment required: Hubitat state is a JSON-backed proxy;
@@ -1648,6 +1678,7 @@ private Boolean getDevices() {
                         return
                     } else {
                         logError "Re-auth failed during getDevices -- check VeSync credentials"
+                        recordError("Re-auth failed during getDevices -- check VeSync credentials", [site:"getDevices"])
                     }
                 } finally {
                     state.remove('reAuthInProgress')
@@ -1807,6 +1838,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
                     return
                 } else {
                     logError "Re-auth failed -- VeSync credentials may need to be updated in driver settings"
+                    recordError("Re-auth failed -- VeSync credentials may need to be updated in driver settings", [site:"sendBypassRequest"])
                 }
             } finally {
                 state.remove('reAuthInProgress')
@@ -2034,6 +2066,57 @@ void logDebugOff() {
   // Cannot be private
   //
   if (settings?.debugOutput) device.updateSetting("debugOutput", [type: "bool", value: false]);
+}
+
+// ---------------------------------------------------------------------------
+// captureDiagnosticsFor — parent-side context for child diagnostic captures
+// (Phase 5, LevoitDiagnosticsLib)
+//
+// Children call parent.captureDiagnosticsFor(device.deviceNetworkId) from the
+// library's captureDiagnostics() to retrieve parent-held per-device state that
+// the child cannot read directly (consecutiveEmpty counter, last poll method,
+// configModule, last error timestamp + message from the ring buffer).
+//
+// Returns a Map of display-ready key→value pairs. Empty map on any error.
+// The child's buildDiagnosticBlock() formats this into the "Parent state for
+// this device" table section of the markdown dump.
+// ---------------------------------------------------------------------------
+
+Map captureDiagnosticsFor(String childDni) {
+    if (!childDni) return [:]
+    try {
+        Map ctx = [:]
+
+        // Consecutive-empty counter (BP17 stale-configModule detector)
+        def counts = state.consecutiveEmpty as Map ?: [:]
+        ctx["consecutiveEmpty"] = counts[childDni] ?: 0
+
+        // Last poll method routed to this child (tracked in updateDevices() since v2.4)
+        def pollMethods = state.lastPollMethod as Map ?: [:]
+        ctx["lastPollMethod"] = pollMethods[childDni] ?: "(not yet polled this session)"
+
+        // configModule from state.deviceList — the bypassV2 routing key
+        def devList = state.deviceList as Map ?: [:]
+        ctx["configModule"] = devList[childDni] ?: "(unknown)"
+
+        // Last error from the ring buffer for this DNI
+        def history = (state.errorHistory as Map ?: [:])
+        def slot = (history[childDni] ?: []) as List
+        if (slot) {
+            def last = slot[-1]
+            String ts = last.ts ? new Date(last.ts as Long).format("yyyy-MM-dd HH:mm:ss") : "?"
+            ctx["lastError.ts"]  = ts
+            ctx["lastError.msg"] = (last.msg ?: "").take(200)
+        } else {
+            ctx["lastError.ts"]  = "(none)"
+            ctx["lastError.msg"] = ""
+        }
+
+        return ctx
+    } catch (Exception e) {
+        logDebug "captureDiagnosticsFor(${childDni}): ${e}"
+        return [:]
+    }
 }
 
 

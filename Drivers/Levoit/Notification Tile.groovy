@@ -35,9 +35,12 @@
 *    2022-04-06  thebearmay    fix max message state coming back as string
 *    2022-09-15  thebearmay    issue with clean install
 *    2022-12-06  thebearmay    additional date/time format
+*    2026-04-29  Dan Cox       v2.4  Phase 5 — captureDiagnostics via LevoitDiagnosticsLib (no logError calls in this driver).
 *    2026-04-25  Dan Cox       v2.0 (community fork, level99/Hubitat-VeSync)
 *                              - Added descriptionTextEnable preference (default true) and gated logInfo helper
 */
+#include level99.LevoitDiagnostics
+
 import java.text.SimpleDateFormat
 import groovy.transform.Field
 static String version()	{  return '2.0.11'  }
@@ -61,7 +64,9 @@ metadata {
 			attribute "last5", "STRING"
 			attribute "last5H", "STRING"
 			attribute "last", "STRING"
-			}   
+			attribute "diagnostics", "string"
+			command "captureDiagnostics"
+			}
 		}
 
 	preferences {
@@ -82,6 +87,7 @@ metadata {
 
 	void updated(){
         logDebug "updated()"
+        state.driverVersion = "2.3"
         // Turn off debug log in 30 minutes (happy path — no hub reboot)
         if (settings?.debugOutput) {
             runIn(1800, "logsOff")

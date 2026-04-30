@@ -14,9 +14,10 @@ flooding logs until the user manually disables it.
 
 Scope:
   - All .groovy files under Drivers/Levoit/ (children + parent).
-  - No exemptions expected: as of v2.2 every driver in the pack received the watchdog.
-    If a future driver is intentionally exempt (e.g. a pure event-listener with no poll
-    cycle), add an exemption entry in tests/lint_config.yaml with a substantive reason.
+  - Library files (those using ``library()`` instead of ``definition()``) are automatically
+    skipped via ``is_library_file()`` — no lint_config.yaml exemption needed.
+  - For other intentional exceptions (e.g. a pure event-listener with no poll cycle),
+    add an exemption entry in tests/lint_config.yaml with a substantive reason.
 
 Comment filter:
   - Lines that (after stripping leading whitespace) begin with `//` are skipped.
@@ -34,6 +35,8 @@ newly-added drivers.
 
 import re
 from pathlib import Path
+
+from lint_rules._helpers import is_library_file
 
 
 # Pattern that matches an invocation (not a definition) of ensureDebugWatchdog().
@@ -69,6 +72,11 @@ def check_rule25_bp16_watchdog_call_site(path, raw_lines, cleaned_lines, raw_tex
     # Normalize path for fragment check (forward slashes, cross-platform)
     path_str = str(path).replace('\\', '/')
     if DRIVER_DIR_FRAGMENT not in path_str:
+        return findings
+
+    # Skip Hubitat library files — they use library() not definition() and have no
+    # poll cycle or debug-output preference. ensureDebugWatchdog() doesn't apply.
+    if is_library_file(raw_text):
         return findings
 
     # Scan cleaned lines for at least one non-comment, non-definition call site

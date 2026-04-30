@@ -152,8 +152,18 @@ This is the most common substantive contribution. The flow is:
 7. **Update `tests/lint_config.yaml`** — add the new driver's filename + `definition(name: ...)` value to `frozen_driver_names` (lint rule 19; protects against future driver-name changes that would orphan user installs — Bug Pattern #9).
 8. **Update `levoitManifest.json`** — add a new `drivers` array entry with a fresh UUID v4 (any UUID generator works), the driver's `name` matching `definition(name: ...)`, namespace `NiklasGustafsson` (preserved from upstream), and the GitHub raw URL for the location.
 9. **Update `Drivers/Levoit/readme.md`** — add a new driver entry to the manual-install table and a per-device events table (lint rule 21 enforces drivers↔README sync).
-10. **Add a Spock spec at `src/test/groovy/drivers/<DriverName>Spec.groovy`** — copy the closest existing spec as a template. Cover at minimum: happy-path setSwitch, setMode, applyStatus parsing of the canonical fixture, and any device-specific commands. The harness uses the Hubitat sandbox mock — see existing specs for the patterns.
-11. **Run lint + Spock locally** — `./gradlew test` and `uv run --python 3.12 tests/lint.py`. Both should pass before opening a PR.
+10. **Wire the diagnostics library** (Phase 5 standard plumbing — REQUIRED for every new child driver, enforced by lint rule 28). At the top of the driver source, add:
+    ```groovy
+    #include level99.LevoitDiagnostics
+    ```
+    In the `metadata { definition(...) { ... } }` block, add the command and attribute:
+    ```groovy
+    command "captureDiagnostics"
+    attribute "diagnostics", "string"
+    ```
+    Where the driver currently calls `log.error(...)` (parser failures, write-failure paths, etc.), add a parallel `recordError(message, contextMap)` call with relevant context (`[site:"setMode", value:requestedMode]` etc.). The library handles ring-buffer storage and pre-fills bug-report URLs from this data. See any v2.4+ driver for examples.
+11. **Add a Spock spec at `src/test/groovy/drivers/<DriverName>Spec.groovy`** — copy the closest existing spec as a template. Cover at minimum: happy-path setSwitch, setMode, applyStatus parsing of the canonical fixture, and any device-specific commands. The harness uses the Hubitat sandbox mock and resolves the `#include` library directive automatically.
+12. **Run lint + Spock locally** — `./gradlew test` and `uv run --python 3.12 tests/lint.py`. Both should pass before opening a PR.
 
 ### Preview drivers (no maintainer hardware)
 

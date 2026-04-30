@@ -14,8 +14,12 @@ or just the bare filename in a markdown link.
 import re
 from pathlib import Path
 
+from lint_rules._helpers import is_library_file
 
-# Files intentionally excluded from the readme table check
+
+# Files intentionally excluded from the readme table check.
+# Library files (those using library() block) are detected automatically via
+# is_library_file() and do not need to be listed here.
 README_EXCLUDED = {
     "Notification Tile.groovy",  # not a VeSync device driver, documented separately if needed
 }
@@ -61,8 +65,20 @@ def check_rule19_doc_sync(repo_root: Path, config: dict):
     readme_text = readme_path.read_text(encoding='utf-8', errors='replace')
     readme_lower = readme_text.lower()
 
-    actual_drivers = {f.name for f in drivers_dir.glob('*.groovy')}
-    expected_in_readme = actual_drivers - README_EXCLUDED
+    # Auto-detect library files (uses library() block) — not user-installable drivers,
+    # so they don't need readme entries regardless of whether they're in README_EXCLUDED.
+    all_driver_paths = list(drivers_dir.glob('*.groovy'))
+    library_filenames = set()
+    for fp in all_driver_paths:
+        try:
+            src = fp.read_text(encoding='utf-8', errors='replace')
+            if is_library_file(src):
+                library_filenames.add(fp.name)
+        except OSError:
+            pass
+
+    actual_drivers = {f.name for f in all_driver_paths}
+    expected_in_readme = actual_drivers - README_EXCLUDED - library_filenames
 
     for fname in sorted(expected_in_readme):
         # Check for the filename (case-insensitive) anywhere in the readme

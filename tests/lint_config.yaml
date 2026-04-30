@@ -106,6 +106,10 @@ manifest_excluded_files:
   # alone doesn't auto-create one. Intentional exception, not a packaging gap.
   # See CONTRIBUTING.md "Codebase orientation" for the full rationale.
   - "Notification Tile.groovy"
+  # NOTE: LevoitDiagnosticsLib.groovy no longer needs an entry here.
+  # manifest_consistency.py now auto-detects library files via is_library_file()
+  # (checks for the library() block) and excludes them from the drivers check
+  # without requiring a hardcoded config entry.
 
 
 # ---------------------------------------------------------------------------

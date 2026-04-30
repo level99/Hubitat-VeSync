@@ -50,6 +50,7 @@
  *    a command in a future release. See CROSS-CHECK block in applyStatus for full rationale.
  *
  *  History:
+ *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-27: v2.1  Community fork [PREVIEW v2.2]. Built from canonical pyvesync payloads
  *                      (Dual200S.yaml fixture commit c98729c + device_map.py LUH-D301S entry).
  *                      Capabilities: Switch, RelativeHumidityMeasurement, Sensor, Actuator,
@@ -62,6 +63,8 @@
  *                      {id:0, level:N, type:'mist'}. Multi-firmware auto-mode try-fallback
  *                      with cache (same pattern as LV600S -- pyvesync PR #505 applies here too).
  */
+
+#include level99.LevoitDiagnostics
 
 metadata {
     definition(
@@ -124,6 +127,9 @@ metadata {
         // the command without explicit pyvesync feature-flag confirmation. If community users
         // confirm setNightLightBrightness works on their Dual 200S, promote to command in next release.
         // NOTE: setWarmMistLevel intentionally absent -- Dual 200S has no warm mist hardware.
+
+        attribute "diagnostics", "string"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -139,6 +145,7 @@ def updated(){
     // state.clear() above removes all state including firmwareVariant -- firmware updates get
     // re-detected on next setMode("auto") call (see sendModeRequest fallback logic below).
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.3"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -158,14 +165,14 @@ def on(){
     logDebug "on()"
     def resp = hubBypass("setSwitch", [enabled: true, id: 0], "setSwitch(enabled=true)")
     if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-    else logError "Power on failed"
+    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
 }
 
 def off(){
     logDebug "off()"
     def resp = hubBypass("setSwitch", [enabled: false, id: 0], "setSwitch(enabled=false)")
     if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-    else logError "Power off failed"
+    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
 // state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write
@@ -203,7 +210,7 @@ def setMode(mode){
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (mode as String).toLowerCase()
     // CROSS-CHECK: only auto and manual are valid for Dual 200S (no sleep per device_map.py)
-    if (!(m in ["auto","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, manual (sleep not supported on Dual 200S)"; return }
+    if (!(m in ["auto","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, manual (sleep not supported on Dual 200S)"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     if (m == "auto") {
         // Multi-firmware try-canonical-then-fallback with cache (same as LV600S -- PR #505 risk)
         String preferred = (state.firmwareVariant == "alt") ? "humidity" : "auto"
@@ -216,7 +223,7 @@ def setMode(mode){
             device.sendEvent(name:"mode", value: m)
             logInfo "Mode: ${m}"
         } else {
-            logError "Mode write failed: ${m}"
+            logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
         }
     }
 }
@@ -246,6 +253,7 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
     } else {
         // Both variants rejected
         logError "Mode '${userMode}' rejected by both payload variants ('auto' and 'humidity', inner code: ${innerCode}). Check device connectivity or report via GitHub issue."
+        recordError("Mode '${userMode}' rejected by both payload variants (inner code: ${innerCode})", [method:"setHumidityMode"])
     }
 }
 
@@ -271,7 +279,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: lvl)
         logInfo "Mist level: ${lvl}"
     } else {
-        logError "Mist level write failed: ${lvl}"
+        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
     }
 }
 
@@ -293,7 +301,7 @@ def setHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"
+        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
     }
 }
 
@@ -308,7 +316,7 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: onOff)
         logInfo "Display: ${onOff}"
     } else {
-        logError "Display write failed"
+        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
 
@@ -323,7 +331,7 @@ def setAutoStop(onOff){
         device.sendEvent(name:"autoStopEnabled", value: onOff)
         logInfo "Auto-stop: ${onOff}"
     } else {
-        logError "Auto-stop write failed"
+        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
     }
 }
 
@@ -341,7 +349,7 @@ def update(){
     def resp = hubBypass("getHumidifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getHumidifierStatus"
+        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"update"]) }
         else applyStatus(status)
     }
 }
@@ -567,7 +575,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

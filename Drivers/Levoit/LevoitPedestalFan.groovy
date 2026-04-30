@@ -97,6 +97,7 @@
  *    - Oscillation method setOscillationStatus (NOT setOscillationSwitch).
  *
  *  History:
+ *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-26: v2.0  Community fork initial release (Dan Cox). Preview driver.
  *                      Built from canonical pyvesync VeSyncPedestalFan payloads
  *                      (LPF-R423S.yaml fixture -- note filename typo; real codes
@@ -111,6 +112,8 @@
  *                      oscillationCoordinate (yaw/pitch), oscillationRange (L/R/T/B),
  *                      errorCode, temperature.
  */
+
+#include level99.LevoitDiagnostics
 
 metadata {
     definition(
@@ -195,6 +198,9 @@ metadata {
         //     https://github.com/home-assistant/core/pull/163353 (HA fan timer PR, open).
         //   Refutation: maintainer's hardware capture reveals timer payload --> add setTimer/
         //     cancelTimer in v2.2 using the confirmed payload format.
+
+        attribute "diagnostics", "string"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -208,6 +214,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.3"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -231,7 +238,7 @@ def on(){
         state.lastSwitchSet = "on"
         device.sendEvent(name:"switch", value:"on")
     } else {
-        logError "Power on failed"
+        logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"])
     }
 }
 
@@ -243,7 +250,7 @@ def off(){
         state.lastSwitchSet = "off"
         device.sendEvent(name:"switch", value:"off")
     } else {
-        logError "Power off failed"
+        logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"])
     }
 }
 
@@ -267,6 +274,7 @@ def setSpeed(spd){
         Integer rawLevel = (spd as Integer)
         if (rawLevel < 1 || rawLevel > 12) {
             logError "setSpeed: invalid raw level ${rawLevel} -- must be 1-12"
+            recordError("setSpeed: invalid raw level ${rawLevel}", [method:"setLevel"])
             return
         }
         sendLevel(rawLevel)
@@ -279,7 +287,7 @@ def setSpeed(spd){
     if (s == "on")   { on(); return }   // Hubitat FanControl spec: "on" resumes at prior/default speed
     if (s == "auto") { setMode("eco"); return }  // Pedestal Fan: auto maps to eco (no auto mode)
     Integer lvl = fanControlEnumToLevel(s)
-    if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; return }
+    if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; recordError("setSpeed: unknown enum '${s}'", [method:"setLevel"]); return }
     sendLevel(lvl)
 }
 
@@ -329,6 +337,7 @@ def setMode(mode){
     String m = (mode as String).toLowerCase()
     if (!(m in ["normal","turbo","eco","sleep"])) {
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|eco|sleep"
+        recordError("setMode: invalid mode '${m}'", [method:"setFanMode"])
         return
     }
     // Map user-facing "sleep" to API "advancedSleep" (pyvesync device_map.py + HA finding #d)
@@ -339,7 +348,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"
+        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setFanMode"])
     }
 }
 
@@ -371,7 +380,7 @@ def setHorizontalOscillation(onOff){
         device.sendEvent(name:"horizontalOscillation", value: onOff)
         logInfo "Horizontal oscillation: ${onOff}"
     } else {
-        logError "Horizontal oscillation write failed"
+        logError "Horizontal oscillation write failed"; recordError("Horizontal oscillation write failed", [method:"setOscillationStatus"])
     }
 }
 
@@ -386,7 +395,7 @@ def setVerticalOscillation(onOff){
         device.sendEvent(name:"verticalOscillation", value: onOff)
         logInfo "Vertical oscillation: ${onOff}"
     } else {
-        logError "Vertical oscillation write failed"
+        logError "Vertical oscillation write failed"; recordError("Vertical oscillation write failed", [method:"setOscillationStatus"])
     }
 }
 
@@ -405,7 +414,7 @@ def setHorizontalRange(left, right){
         device.sendEvent(name:"oscillationRight", value: r)
         logInfo "Horizontal oscillation range: ${l}-${r}"
     } else {
-        logError "Horizontal range write failed"
+        logError "Horizontal range write failed"; recordError("Horizontal range write failed", [method:"setOscillationStatus"])
     }
 }
 
@@ -423,7 +432,7 @@ def setVerticalRange(top, bottom){
         device.sendEvent(name:"oscillationBottom", value: b)
         logInfo "Vertical oscillation range: ${t}-${b}"
     } else {
-        logError "Vertical range write failed"
+        logError "Vertical range write failed"; recordError("Vertical range write failed", [method:"setOscillationStatus"])
     }
 }
 
@@ -436,7 +445,7 @@ def setMute(onOff){
         device.sendEvent(name:"mute", value: onOff)
         logInfo "Mute: ${onOff}"
     } else {
-        logError "Mute write failed"
+        logError "Mute write failed"; recordError("Mute write failed", [method:"setMuteSwitch"])
     }
 }
 
@@ -448,7 +457,7 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: onOff)
         logInfo "Display: ${onOff}"
     } else {
-        logError "Display write failed"
+        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
 
@@ -467,7 +476,7 @@ def update(){
     def resp = hubBypass("getFanStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getFanStatus"
+        if (!status?.result) { logError "No status returned from getFanStatus"; recordError("No status returned from getFanStatus", [method:"update"]) }
         else applyStatus(status)
     }
 }
@@ -658,6 +667,7 @@ private boolean sendLevel(Integer level){
     logDebug "sendLevel(${level})"
     if (level < 1 || level > 12) {
         logError "sendLevel: invalid level ${level} -- must be 1-12"
+        recordError("sendLevel: invalid level ${level}", [method:"setLevel"])
         return false
     }
     def resp = hubBypass("setLevel", [levelIdx: 0, levelType: "wind", manualSpeedLevel: level], "setLevel{levelIdx,levelType,manualSpeedLevel=${level}}")
@@ -669,7 +679,7 @@ private boolean sendLevel(Integer level){
         logInfo "Speed: L${level} (${enumVal})"
         return true
     } else {
-        logError "Speed write failed for level ${level}"
+        logError "Speed write failed for level ${level}"; recordError("Speed write failed for level ${level}", [method:"setLevel"])
         return false
     }
 }
@@ -754,7 +764,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

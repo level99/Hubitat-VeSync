@@ -171,5 +171,14 @@
       "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/VeSyncIntegrationVirtual.groovy",
       "required": false
     }
+  ],
+  "libraries": [
+    {
+      "id": "a4f2c8e1-3b7d-4e9a-b5f0-8c1d6e3a9b2f",
+      "name": "LevoitDiagnostics",
+      "namespace": "level99",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitDiagnosticsLib.groovy",
+      "required": true
+    }
   ]
 }

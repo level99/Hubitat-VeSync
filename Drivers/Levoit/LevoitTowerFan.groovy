@@ -54,6 +54,7 @@
  *    - setMode uses method "setTowerFanMode", NOT "setPurifierMode".
  *
  *  History:
+ *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-26: v2.0  Community fork initial release (Dan Cox). Preview driver.
  *                      Built from canonical pyvesync VeSyncTowerFan payloads
  *                      (LTF-F422S.yaml fixture + vesyncfan.py + fan_models.py).
@@ -65,6 +66,8 @@
  *                      Read-only attributes: displayingType, sleepPreferenceType,
  *                      timerRemain, errorCode, temperature.
  */
+
+#include level99.LevoitDiagnostics
 
 metadata {
     definition(
@@ -114,6 +117,9 @@ metadata {
         // NOTE: setDisplayingType is intentionally absent -- pyvesync's own comment
         // states "Unknown functionality" for displayingType. We read + expose the field
         // as a diagnostic attribute only (HA finding #5). No user-facing setter.
+
+        attribute "diagnostics",     "string"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -127,6 +133,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.3"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -150,7 +157,7 @@ def on(){
         state.lastSwitchSet = "on"
         device.sendEvent(name:"switch", value:"on")
     } else {
-        logError "Power on failed"
+        logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"])
     }
 }
 
@@ -162,7 +169,7 @@ def off(){
         state.lastSwitchSet = "off"
         device.sendEvent(name:"switch", value:"off")
     } else {
-        logError "Power off failed"
+        logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"])
     }
 }
 
@@ -186,6 +193,7 @@ def setSpeed(spd){
         Integer rawLevel = (spd as Integer)
         if (rawLevel < 1 || rawLevel > 12) {
             logError "setSpeed: invalid raw level ${rawLevel} -- must be 1-12"
+            recordError("setSpeed: invalid raw level ${rawLevel}", [method:"setLevel"])
             return
         }
         sendLevel(rawLevel)
@@ -198,7 +206,7 @@ def setSpeed(spd){
     if (s == "on")   { on(); return }   // Hubitat FanControl spec: "on" resumes at prior/default speed
     if (s == "auto") { setMode("auto"); return }
     Integer lvl = fanControlEnumToLevel(s)
-    if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; return }
+    if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; recordError("setSpeed: unknown enum '${s}'", [method:"setLevel"]); return }
     sendLevel(lvl)
 }
 
@@ -250,6 +258,7 @@ def setMode(mode){
     String m = (mode as String).toLowerCase()
     if (!(m in ["normal","turbo","auto","sleep"])) {
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|auto|sleep"
+        recordError("setMode: invalid mode '${m}'", [method:"setTowerFanMode"])
         return
     }
     // Map user-facing "sleep" to API "advancedSleep" (HA finding #d + pyvesync device_map.py)
@@ -260,7 +269,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"
+        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setTowerFanMode"])
     }
 }
 
@@ -273,7 +282,7 @@ def setOscillation(onOff){
         device.sendEvent(name:"oscillation", value: onOff)
         logInfo "Oscillation: ${onOff}"
     } else {
-        logError "Oscillation write failed"
+        logError "Oscillation write failed"; recordError("Oscillation write failed", [method:"setOscillationSwitch"])
     }
 }
 
@@ -285,7 +294,7 @@ def setMute(onOff){
         device.sendEvent(name:"mute", value: onOff)
         logInfo "Mute: ${onOff}"
     } else {
-        logError "Mute write failed"
+        logError "Mute write failed"; recordError("Mute write failed", [method:"setMuteSwitch"])
     }
 }
 
@@ -297,7 +306,7 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: onOff)
         logInfo "Display: ${onOff}"
     } else {
-        logError "Display write failed"
+        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
 
@@ -310,7 +319,7 @@ def setTimer(seconds, action="off"){
     int secs = (seconds as Integer) ?: 0
     if (secs <= 0) { cancelTimer(); return }
     String act = (action ?: "off") as String
-    if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; return }
+    if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"setTimer"]); return }
     logDebug "setTimer(${secs}s, action=${act})"
     def resp = hubBypass("setTimer", [action: act, total: secs], "setTimer(${secs}s,${act})")
     if (httpOk(resp)) {
@@ -323,7 +332,7 @@ def setTimer(seconds, action="off"){
         }
         logInfo "Timer set: ${act} in ${secs}s (id=${state.timerId})"
     } else {
-        logError "Timer set failed"
+        logError "Timer set failed"; recordError("Timer set failed", [method:"setTimer"])
     }
 }
 
@@ -338,7 +347,7 @@ def cancelTimer(){
         state.remove("timerId")
         logInfo "Timer cancelled"
     } else {
-        logError "Timer cancel failed"
+        logError "Timer cancel failed"; recordError("Timer cancel failed", [method:"clearTimer"])
     }
 }
 
@@ -356,7 +365,7 @@ def update(){
     def resp = hubBypass("getTowerFanStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getTowerFanStatus"
+        if (!status?.result) { logError "No status returned from getTowerFanStatus"; recordError("No status returned from getTowerFanStatus", [method:"getTowerFanStatus"]) }
         else applyStatus(status)
     }
 }
@@ -541,6 +550,7 @@ private boolean sendLevel(Integer level){
     logDebug "sendLevel(${level})"
     if (level < 1 || level > 12) {
         logError "sendLevel: invalid level ${level} -- must be 1-12"
+        recordError("sendLevel: invalid level ${level}", [method:"setLevel"])
         return false
     }
     def resp = hubBypass("setLevel", [levelIdx: 0, levelType: "wind", manualSpeedLevel: level], "setLevel{levelIdx,levelType,manualSpeedLevel=${level}}")
@@ -552,7 +562,7 @@ private boolean sendLevel(Integer level){
         logInfo "Speed: L${level} (${enumVal})"
         return true
     } else {
-        logError "Speed write failed for level ${level}"
+        logError "Speed write failed for level ${level}"; recordError("Speed write failed for level ${level}", [method:"setLevel"])
         return false
     }
 }
@@ -638,7 +648,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

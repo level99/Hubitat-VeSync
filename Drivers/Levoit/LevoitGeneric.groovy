@@ -31,6 +31,7 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-04-29: v2.4  Phase 5 — recordError() ring-buffer at all logError sites (library not included; driver has native captureDiagnostics).
  *    2026-04-25: v2.0  Community fork initial release (Dan Cox). Fall-through diagnostic
  *                      driver for unsupported Levoit models. Capabilities: Switch,
  *                      SwitchLevel, RelativeHumidityMeasurement, AirQuality, Actuator,
@@ -81,6 +82,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.3"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -113,10 +115,10 @@ def on(){
             logInfo "Power on (V1 fallback)"
             device.sendEvent(name:"switch", value:"on")
         } else {
-            logError "Power on failed (setSwitch returned -1; setPower also failed)"
+            logError "Power on failed (setSwitch returned -1; setPower also failed)"; recordError("Power on failed (V1 fallback also failed)", [method:"setPower"])
         }
     } else {
-        logError "Power on failed (setSwitch returned non-fallback error; see debug log)"
+        logError "Power on failed (setSwitch returned non-fallback error; see debug log)"; recordError("Power on failed (non-fallback error)", [method:"setSwitch"])
     }
 }
 
@@ -133,10 +135,10 @@ def off(){
             logInfo "Power off (V1 fallback)"
             device.sendEvent(name:"switch", value:"off")
         } else {
-            logError "Power off failed (setSwitch returned -1; setPower also failed)"
+            logError "Power off failed (setSwitch returned -1; setPower also failed)"; recordError("Power off failed (V1 fallback also failed)", [method:"setPower"])
         }
     } else {
-        logError "Power off failed (setSwitch returned non-fallback error; see debug log)"
+        logError "Power off failed (setSwitch returned non-fallback error; see debug log)"; recordError("Power off failed (non-fallback error)", [method:"setSwitch"])
     }
 }
 
@@ -178,7 +180,7 @@ def update(){
     // Both failed or returned no device fields; still call applyStatus so compat is updated
     if (resp?.data) applyStatus(resp?.data)
     else if (resp2?.data) applyStatus(resp2?.data)
-    else logError "No status data returned from either getPurifierStatus or getHumidifierStatus"
+    else { logError "No status data returned from either getPurifierStatus or getHumidifierStatus"; recordError("No status data returned from either status method", [method:"getPurifierStatus"]) }
 }
 
 // 1-arg parent callback
@@ -494,7 +496,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

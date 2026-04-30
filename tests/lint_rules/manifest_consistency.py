@@ -12,6 +12,8 @@ import json
 import re
 from pathlib import Path
 
+from lint_rules._helpers import is_library_file
+
 
 def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
     return {
@@ -101,10 +103,25 @@ def check_rule18_manifest_consistency(repo_root: Path, config: dict):
         ))
         return findings
 
-    actual_drivers = {f.name for f in drivers_dir.glob('*.groovy')}
+    actual_driver_paths = list(drivers_dir.glob('*.groovy'))
 
-    # Drivers that should be in manifest (exclude intentionally-omitted files)
-    expected_in_manifest = actual_drivers - MANIFEST_EXCLUDED
+    # Auto-detect library files (those using library() block) — they are registered
+    # under manifest "libraries" not "drivers", so skip them from the drivers check.
+    library_filenames = set()
+    for fp in actual_driver_paths:
+        try:
+            src = fp.read_text(encoding='utf-8', errors='replace')
+            if is_library_file(src):
+                library_filenames.add(fp.name)
+        except OSError:
+            pass
+
+    actual_drivers = {f.name for f in actual_driver_paths}
+
+    # Drivers that should be in manifest (exclude intentionally-omitted files).
+    # Merge hardcoded exclusions with config-driven extras and auto-detected libraries.
+    config_excluded = set(config.get('manifest_excluded_files', []))
+    expected_in_manifest = actual_drivers - MANIFEST_EXCLUDED - config_excluded - library_filenames
 
     # Check: every driver file has a manifest entry
     for fname in sorted(expected_in_manifest):
