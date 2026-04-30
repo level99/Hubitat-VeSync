@@ -238,9 +238,13 @@ String buildDiagnosticBlock(Map opts) {
     ])
 
     sb.append("---\n")
-    sb.append("**[Click here to open a pre-filled GitHub issue](${issueUrl})**\n\n")
-    sb.append("_Or paste this entire block into the diagnostic-block field of a [new bug report]")
-    sb.append("(https://github.com/level99/Hubitat-VeSync/issues/new?template=bug_report.yml)._\n")
+    sb.append("**Filing this report:**\n\n")
+    sb.append("- **GitHub issue (1-click, requires GitHub account):** [Open pre-filled issue](${issueUrl})\n")
+    sb.append("- **Hubitat community thread (no GitHub account needed):** copy this entire block ")
+    sb.append("and post it as a reply on the [Levoit Air Purifiers, Humidifiers, and Fans thread]")
+    sb.append("(https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499)\n")
+    sb.append("- **Without using the link above:** paste this block into the diagnostic-block field of ")
+    sb.append("a [blank bug report](https://github.com/level99/Hubitat-VeSync/issues/new?template=bug_report.yml)\n")
 
     return sb.toString()
 }
