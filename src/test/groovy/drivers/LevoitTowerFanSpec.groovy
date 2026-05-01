@@ -23,7 +23,7 @@ import support.TestParent
  *   Toggle pattern  (NIT 1) — state.lastSwitchSet seeded by on()/off(); read by toggle(); fallback
  *   Oscillation / mute / display payloads — each setter sends correct payload field
  *   Timer set/cancel — setTimer(60,"off") sends {action:'off',total:60}; cancelTimer sends clearTimer
- *   sleepPreferenceType — nested field exposed as attribute event
+ *   sleepPreferenceType — read-only attribute event (setSleepPreference DEFERRED to v2.5+)
  */
 class LevoitTowerFanSpec extends HubitatSpec {
 
@@ -724,6 +724,68 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setDisplay" }
         req != null
         req.data.screenSwitch == 0
+    }
+
+    // ---- BP18: null-arg + invalid-enum guards on oscillation / mute / display ----
+
+    def "setOscillation(null) emits WARN and makes no API call (BP18)"() {
+        when:
+        driver.setOscillation(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.warns.any { it.contains("setOscillation") && it.contains("null") }
+    }
+
+    def "setOscillation('yes') logs error and makes no API call (invalid enum)"() {
+        when:
+        driver.setOscillation("yes")
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.errors.any { it.contains("yes") || it.contains("invalid") }
+    }
+
+    def "setMute(null) emits WARN and makes no API call (BP18)"() {
+        when:
+        driver.setMute(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.warns.any { it.contains("setMute") && it.contains("null") }
+    }
+
+    def "setMute('yes') logs error and makes no API call (invalid enum)"() {
+        when:
+        driver.setMute("yes")
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.errors.any { it.contains("yes") || it.contains("invalid") }
+    }
+
+    def "setDisplay(null) emits WARN and makes no API call (BP18)"() {
+        when:
+        driver.setDisplay(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.warns.any { it.contains("setDisplay") && it.contains("null") }
+    }
+
+    def "setDisplay('yes') logs error and makes no API call (invalid enum)"() {
+        when:
+        driver.setDisplay("yes")
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.errors.any { it.contains("yes") || it.contains("invalid") }
     }
 
     // -------------------------------------------------------------------------

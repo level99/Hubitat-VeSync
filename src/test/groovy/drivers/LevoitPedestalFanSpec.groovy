@@ -24,8 +24,10 @@ import support.TestParent
  *   Temperature /10 — fixture has temperature:750; emitted temperature event = 75.0. Edge: 0 -> no event
  *   Oscillation toggles — setHorizontalOscillation/setVerticalOscillation produce correct payloads
  *   Oscillation ranges  — setHorizontalRange/setVerticalRange produce correct payloads with state:1
- *   No childLock setter — metaClass.getMetaMethod check; read attribute from fixture works
- *   No timer commands   — setTimer/cancelTimer methods absent
+ *   setChildLock        — v2.4 addition: setChildLock with {childLock:1|0} (iter #1; Sister-Switch REFUTED on device 1132); read attr from fixture
+ *   setTimer/cancelTimer — DEFERRED to v2.5+: both payload guesses refuted on device 1132 (HTTP 200, inner -1)
+ *   runOscillationCalibration / setSleepPreference / setLevelMemory — DEFERRED to v2.5+ (refuted on device 1132)
+ *   setHighTemperatureThreshold / setHighTemperatureReminder — DEFERRED to v2.5+ (refuted on device 1132)
  *   NIT 1 toggle pattern — state.lastSwitchSet populated/unset paths
  *   sleepPreferenceType + oscillation coordinate/range nested fields — read from response
  */
@@ -739,15 +741,44 @@ class LevoitPedestalFanSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // childLock: read-only attribute, no setter command
+    // setChildLock (v2.4) — new setter command
     // -------------------------------------------------------------------------
 
-    def "no setChildLock command exists on the driver (read-only per pyvesync + ST/HB cross-check)"() {
-        expect: "driver has no setChildLock method"
-        driver.metaClass.getMetaMethod("setChildLock", Object) == null
+    def "setChildLock('on') sends setChildLock with {childLock:1} (v2.4 iter#1)"() {
+        when:
+        driver.setChildLock("on")
+
+        then: "setChildLock request with childLock:1"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLock == 1
+
+        and: "childLock event emitted"
+        lastEventValue("childLock") == "on"
     }
 
-    def "applyStatus with childLock=1 emits childLock='on' attribute (read-only)"() {
+    def "setChildLock('off') sends setChildLock with {childLock:0} (v2.4 iter#1)"() {
+        when:
+        driver.setChildLock("off")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLock == 0
+        lastEventValue("childLock") == "off"
+    }
+
+    def "setChildLock(null) emits WARN and makes no API call (BP18)"() {
+        when:
+        driver.setChildLock(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.warns.any { it.contains("setChildLock") && it.contains("null") }
+    }
+
+    def "applyStatus with childLock=1 emits childLock='on' attribute"() {
         given: "fixture with childLock=1"
         def fixture = loadYamlFixture("LPF-R432S.yaml")
         def deviceData = fixture.responses.device_with_childLock as Map
@@ -773,20 +804,6 @@ class LevoitPedestalFanSpec extends HubitatSpec {
 
         then:
         lastEventValue("childLock") == "off"
-    }
-
-    // -------------------------------------------------------------------------
-    // No timer commands (omitted per pyvesync + no community evidence)
-    // -------------------------------------------------------------------------
-
-    def "no setTimer command exists on the driver (omitted per pyvesync VeSyncPedestalFan)"() {
-        expect: "driver has no setTimer method (single-arg form)"
-        driver.metaClass.getMetaMethod("setTimer", Object) == null
-    }
-
-    def "no cancelTimer command exists on the driver (omitted per pyvesync VeSyncPedestalFan)"() {
-        expect: "driver has no cancelTimer method"
-        driver.metaClass.getMetaMethod("cancelTimer") == null
     }
 
     // -------------------------------------------------------------------------
@@ -845,6 +862,92 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setSwitch" }
         req != null
         req.data.powerSwitch == 0
+    }
+
+    // -------------------------------------------------------------------------
+    // setSmartCleaningReminder (v2.4) — new setter
+    // -------------------------------------------------------------------------
+
+    def "setSmartCleaningReminder('off') calls setSmartCleaningReminder with {smartCleaningReminderState:0} (v2.4)"() {
+        when:
+        driver.setSmartCleaningReminder("off")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setSmartCleaningReminder" }
+        req != null
+        req.data.smartCleaningReminderState == 0
+
+        and: "smartCleaningReminder attribute emitted"
+        lastEventValue("smartCleaningReminder") == "off"
+    }
+
+    def "setSmartCleaningReminder(null) emits WARN and makes no API call (BP18)"() {
+        when:
+        driver.setSmartCleaningReminder(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.warns.any { it.contains("setSmartCleaningReminder") && it.contains("null") }
+    }
+
+    def "setSmartCleaningReminder('yes') logs error and makes no API call (invalid enum)"() {
+        when:
+        driver.setSmartCleaningReminder("yes")
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.errors.any { it.contains("yes") || it.contains("invalid") }
+    }
+
+    // -------------------------------------------------------------------------
+    // applyStatus read-side for new fields (v2.4)
+    // -------------------------------------------------------------------------
+
+    def "applyStatus with oscillationCalibrationProgress=42 emits progress attribute (v2.4)"() {
+        given: "inline status map with calibration in progress"
+        def deviceData = [powerSwitch: 1, workMode: "normal", fanSpeedLevel: 5,
+                          manualSpeedLevel: 5, errorCode: 0,
+                          horizontalOscillationState: 0, verticalOscillationState: 0,
+                          muteSwitch: 0, muteState: 0, screenSwitch: 1, screenState: 1,
+                          childLock: 0, temperature: 750,
+                          oscillationCalibrationState: 1, oscillationCalibrationProgress: 42]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "oscillationCalibrationProgress emitted as-is"
+        lastEventValue("oscillationCalibrationProgress") == 42
+
+        and: "oscillationCalibrationState emitted as 'calibrating' (state=1)"
+        lastEventValue("oscillationCalibrationState") == "calibrating"
+    }
+
+    def "applyStatus with highTemperature=750 emits 75.0°F (raw /10 convention) (v2.4)"() {
+        given: "inline status map with high temperature field"
+        def deviceData = [powerSwitch: 1, workMode: "normal", fanSpeedLevel: 5,
+                          manualSpeedLevel: 5, errorCode: 0,
+                          horizontalOscillationState: 0, verticalOscillationState: 0,
+                          muteSwitch: 0, muteState: 0, screenSwitch: 1, screenState: 1,
+                          childLock: 0, temperature: 750,
+                          highTemperature: 750, highTemperatureReminderState: 1,
+                          smartCleaningReminderState: 0]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "highTemperature attribute is 75.0 (750 / 10), NOT raw 750"
+        def htVal = lastEventValue("highTemperature") as BigDecimal
+        Math.abs(htVal - 75.0) < 0.05
+
+        and: "highTemperatureReminder is 'on' (state=1)"
+        lastEventValue("highTemperatureReminder") == "on"
+
+        and: "smartCleaningReminder is 'off' (state=0)"
+        lastEventValue("smartCleaningReminder") == "off"
     }
 
     // -------------------------------------------------------------------------
@@ -1005,6 +1108,48 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setDisplay" }
         req != null
         req.data.screenSwitch == 0
+    }
+
+    // ---- BP18: null-arg guards on oscillation toggles + mute + display ----
+
+    def "setMute(null) emits WARN and makes no API call (BP18)"() {
+        when:
+        driver.setMute(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.warns.any { it.contains("setMute") && it.contains("null") }
+    }
+
+    def "setDisplay(null) emits WARN and makes no API call (BP18)"() {
+        when:
+        driver.setDisplay(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.warns.any { it.contains("setDisplay") && it.contains("null") }
+    }
+
+    def "setHorizontalOscillation(null) emits WARN and makes no API call (BP18)"() {
+        when:
+        driver.setHorizontalOscillation(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.warns.any { it.contains("setHorizontalOscillation") && it.contains("null") }
+    }
+
+    def "setVerticalOscillation(null) emits WARN and makes no API call (BP18)"() {
+        when:
+        driver.setVerticalOscillation(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.warns.any { it.contains("setVerticalOscillation") && it.contains("null") }
     }
 
     // -------------------------------------------------------------------------

@@ -17,22 +17,23 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
  */
 
-// NOTE: Pedestal Fan ships as a preview driver -- maintainer's Pedestal Fan
-// hardware is en-route (week of 2026-04-26). Driver built from canonical
-// pyvesync fixtures + HA cross-check + SmartThings/Homebridge cross-check.
+// NOTE: Pedestal Fan shipped as a preview driver (v2.1). Maintainer received
+// LPF-R432S hardware (device 1132, "Family Room Fan") week of 2026-04-26.
+// v2.4 adds write-path commands confirmed by live hardware poll capture.
 //
-// Confirmed write paths (commands exposed):
+// Confirmed write paths (commands live-verified on device 1132, v2.4):
 //   - power, setSpeed, setMode, setHorizontalOscillation, setVerticalOscillation,
-//     setHorizontalRange, setVerticalRange, setMute, setDisplay
+//     setHorizontalRange, setVerticalRange, setMute, setDisplay,
+//     setChildLock, setSmartCleaningReminder
 //
-// Read-only (no setter exposed; would need real-device payload capture):
-//   - childLock (pyvesync VeSyncPedestalFan has no set_child_lock method;
-//     ST+HB also silent on the request shape)
+// v2.4 write-path additions (live-verified on device 1132 LPF-R432S-AUK, 2026-05-01):
+//   - setChildLock: {childLock: 1|0} — CONFIRMED inner 0
+//   - setSmartCleaningReminder: {smartCleaningReminderState: 1|0} — CONFIRMED inner 0
 //
-// Omitted (no community evidence; defer to v2.2 after hardware-arrival
-// captures):
-//   - Timer (no setTimer/clearTimer methods in pyvesync VeSyncPedestalFan;
-//     not in fixture; HA PR #163353 still open)
+// Deferred to v2.5+ (all refuted via live hardware; see CROSS-CHECK block below
+// and ROADMAP.md "Pedestal Fan write-path commands — deferred features"):
+//   - setTimer / cancelTimer, setSleepPreference, setHighTemperatureThreshold,
+//     setHighTemperatureReminder, setLevelMemory, runOscillationCalibration
 //
 // Note on pyvesync filename typo: pyvesync's fixture is LPF-R423S.yaml
 // but real device codes are LPF-R432S-AEU/AUS. Fixture content is correct;
@@ -40,10 +41,6 @@
 //
 // Please report any issues at:
 //   https://github.com/level99/Hubitat-VeSync/issues
-//
-// (Note: this comment is the driver-level "preview" indicator pending
-//  the Phase 4 sweep that adds [PREVIEW] prefix to definition() across
-//  all 5 v2.1 drivers consistently.)
 
 /*
  *  Levoit Pedestal Fan (LPF-R432S) — Hubitat driver
@@ -85,8 +82,9 @@
  *      (exclusive per pyvesync _set_oscillation_state logic).
  *    - Range payloads require the matching axis state=1 (on) and the
  *      left/right (horizontal) or top/bottom (vertical) range fields.
- *    - childLock appears in PedestalFanResult but pyvesync has no setter.
- *      Exposed as read-only attribute. No setChildLock command.
+ *    - childLock: exposed as both a read attribute AND writable via setChildLock
+ *      command. Payload {childLock: 1|0} confirmed on device 1132 (2026-05-01).
+ *      pyvesync VeSyncPedestalFan has no set_child_lock() method (community gap).
  *    - Timer omitted: no setTimer/clearTimer in pyvesync VeSyncPedestalFan.
  *    - Switch payload is purifier-style {powerSwitch, switchIdx}, NOT
  *      humidifier-style {enabled, id}.
@@ -97,6 +95,14 @@
  *    - Oscillation method setOscillationStatus (NOT setOscillationSwitch).
  *
  *  History:
+ *    2026-05-01: v2.4  Write-path live-verification complete on device 1132. Confirmed working:
+ *                      setChildLock, setSmartCleaningReminder. Deferred to v2.5+ (refuted):
+ *                      setTimer, cancelTimer, setSleepPreference, setHighTemperatureThreshold,
+ *                      setHighTemperatureReminder, setLevelMemory, runOscillationCalibration.
+ *                      Read-only attributes retained for all deferred fields.
+ *    2026-04-30: v2.4  Write-path attempt — 7 new setter commands + read-only attribute exposures
+ *                      added using live poll response field shapes (LPF-R432S device 1132).
+ *                      Payloads marked [PREVIEW v2.4] pending live command verification.
  *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-26: v2.0  Community fork initial release (Dan Cox). Preview driver.
  *                      Built from canonical pyvesync VeSyncPedestalFan payloads
@@ -120,7 +126,7 @@ metadata {
         name: "Levoit Pedestal Fan",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
-        description: "[PREVIEW v2.1] Levoit Pedestal Fan (LPF-R432S-AEU/AUS/AUK) — power, fan speed 1-12, modes (normal/turbo/eco/sleep), 2-axis oscillation with range control, mute, display, ambient temperature; canonical pyvesync payloads",
+        description: "[PREVIEW v2.4] Levoit Pedestal Fan (LPF-R432S-AEU/AUS/AUK) — power, fan speed 1-12, modes (normal/turbo/eco/sleep), 2-axis oscillation with range control, mute, display, child lock, smart cleaning reminder, ambient temperature",
         version: "2.3",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
@@ -147,12 +153,21 @@ metadata {
         attribute "mode",                   "string"    // normal | turbo | eco | sleep
         attribute "mute",                   "string"    // on | off
         attribute "displayOn",              "string"    // on | off
-        // childLock: READ-ONLY. pyvesync VeSyncPedestalFan has no set_child_lock method.
-        // ST+HB cross-check also confirms no setter. Exposed as diagnostic read-only attribute.
-        attribute "childLock",              "string"    // on | off -- READ-ONLY, NO setter command
+        // childLock: v2.4 adds setChildLock command (payload confirmed via Sister-Switch convention
+        // + live poll field shape; command-level verification pending live hardware dispatch).
+        attribute "childLock",              "string"    // on | off
         attribute "errorCode",              "number"
-        // sleepPreference nested fields (read-only)
+        attribute "timerRemain",            "number"    // seconds remaining on active timer (0 = no timer)
+        // sleepPreference nested fields
         attribute "sleepPreferenceType",    "string"    // e.g. "default", "advanced", "quiet"
+        // Oscillation calibration progress (read-only; populated during runOscillationCalibration)
+        attribute "oscillationCalibrationState",    "string"    // idle | calibrating
+        attribute "oscillationCalibrationProgress", "number"    // 0-100
+        // High temperature reminder threshold + enable (setters below)
+        attribute "highTemperature",         "number"    // user-set threshold, degrees F
+        attribute "highTemperatureReminder", "string"    // on | off
+        // Smart cleaning reminder enable (setter below)
+        attribute "smartCleaningReminder",   "string"    // on | off
         attribute "info",                   "string"    // HTML summary for dashboard tiles
 
         // Power
@@ -184,20 +199,9 @@ metadata {
         command "setMute",    [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         command "setDisplay", [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
 
-        // NOTE: setChildLock is intentionally absent -- see applyStatus() CROSS-CHECK block
-        // for rationale (pyvesync VeSyncPedestalFan: no set_child_lock method; ST+HB: silent).
-        //
-        // CROSS-CHECK [pyvesync VeSyncPedestalFan class / LPF-R423S.yaml fixture /
-        //   HA PR #163353 (open as of 2026-04-26)]:
-        //   Decision: setTimer/cancelTimer are intentionally absent from v2.1.
-        //   Rationale: pyvesync VeSyncPedestalFan has no set_timer() or clear_timer() methods.
-        //     Timer commands are not present in the LPF-R423S.yaml fixture. HA PR #163353
-        //     (fan timer support) was still open/unmerged as of 2026-04-26; no confirmed
-        //     payload shapes from any community source. We don't ship commands we'd have to guess.
-        //   Source: https://github.com/webdjoe/pyvesync (VeSyncPedestalFan class, no timer);
-        //     https://github.com/home-assistant/core/pull/163353 (HA fan timer PR, open).
-        //   Refutation: maintainer's hardware capture reveals timer payload --> add setTimer/
-        //     cancelTimer in v2.2 using the confirmed payload format.
+        // v2.4 write-path additions — live-verified on device 1132 LPF-R432S-AUK (2026-05-01).
+        command "setChildLock",            [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
+        command "setSmartCleaningReminder",[[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
 
         attribute "diagnostics", "string"
         command "captureDiagnostics"
@@ -214,7 +218,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.3"
+    state.driverVersion = "2.4"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -383,13 +387,16 @@ def setMode(mode){
 // Toggle horizontal oscillation on or off (without changing range)
 def setHorizontalOscillation(onOff){
     logDebug "setHorizontalOscillation(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
+    if (onOff == null) { logWarn "setHorizontalOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    String s = (onOff as String).toLowerCase()
+    if (!(s in ["on","off"])) { logError "setHorizontalOscillation: invalid value '${s}'"; recordError("setHorizontalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
+    Integer v = (s == "on") ? 1 : 0
     def resp = hubBypass("setOscillationStatus",
         [horizontalOscillationState: v, actType: "default"],
-        "setOscillationStatus(H=${onOff})")
+        "setOscillationStatus(H=${s})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"horizontalOscillation", value: onOff)
-        logInfo "Horizontal oscillation: ${onOff}"
+        device.sendEvent(name:"horizontalOscillation", value: s)
+        logInfo "Horizontal oscillation: ${s}"
     } else {
         logError "Horizontal oscillation write failed"; recordError("Horizontal oscillation write failed", [method:"setOscillationStatus"])
     }
@@ -398,13 +405,16 @@ def setHorizontalOscillation(onOff){
 // Toggle vertical oscillation on or off (without changing range)
 def setVerticalOscillation(onOff){
     logDebug "setVerticalOscillation(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
+    if (onOff == null) { logWarn "setVerticalOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    String s = (onOff as String).toLowerCase()
+    if (!(s in ["on","off"])) { logError "setVerticalOscillation: invalid value '${s}'"; recordError("setVerticalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
+    Integer v = (s == "on") ? 1 : 0
     def resp = hubBypass("setOscillationStatus",
         [verticalOscillationState: v, actType: "default"],
-        "setOscillationStatus(V=${onOff})")
+        "setOscillationStatus(V=${s})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"verticalOscillation", value: onOff)
-        logInfo "Vertical oscillation: ${onOff}"
+        device.sendEvent(name:"verticalOscillation", value: s)
+        logInfo "Vertical oscillation: ${s}"
     } else {
         logError "Vertical oscillation write failed"; recordError("Vertical oscillation write failed", [method:"setOscillationStatus"])
     }
@@ -450,11 +460,14 @@ def setVerticalRange(top, bottom){
 // ---------- Feature setters ----------
 def setMute(onOff){
     logDebug "setMute(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setMuteSwitch", [muteSwitch: v], "setMuteSwitch(${onOff})")
+    if (onOff == null) { logWarn "setMute called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    String s = (onOff as String).toLowerCase()
+    if (!(s in ["on","off"])) { logError "setMute: invalid value '${s}'"; recordError("setMute invalid: ${s}", [method:"setMuteSwitch"]); return }
+    Integer v = (s == "on") ? 1 : 0
+    def resp = hubBypass("setMuteSwitch", [muteSwitch: v], "setMuteSwitch(${s})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"mute", value: onOff)
-        logInfo "Mute: ${onOff}"
+        device.sendEvent(name:"mute", value: s)
+        logInfo "Mute: ${s}"
     } else {
         logError "Mute write failed"; recordError("Mute write failed", [method:"setMuteSwitch"])
     }
@@ -462,13 +475,124 @@ def setMute(onOff){
 
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
+    if (onOff == null) { logWarn "setDisplay called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    String s = (onOff as String).toLowerCase()
+    if (!(s in ["on","off"])) { logError "setDisplay: invalid value '${s}'"; recordError("setDisplay invalid: ${s}", [method:"setDisplaySwitch"]); return }
+    Integer v = (s == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${s})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
+        device.sendEvent(name:"displayOn", value: s)
+        logInfo "Display: ${s}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
+    }
+}
+
+// ---------- v2.4 write-path additions ----------
+
+// CROSS-CHECK [v2.4 hardware capture / iteration #1 / pyvesync gap]:
+//   [PREVIEW v2.4 — payload is a best-effort guess pending live command verification]
+//   Candidate #1 (current): method "setChildLock" + payload field "childLock" (symmetric to
+//     the read field name). This is iteration #1 after candidate #0 was REFUTED by live hardware.
+//   Candidate #0 REFUTED: method "setChildLockSwitch" + payload {childLockSwitch: v} -- tested
+//     on device 1132 (2026-04-30); device returned HTTP 200 with inner code -1, confirming
+//     Sister-Switch convention does NOT apply to childLock. Payload rejected at device level.
+//   Rationale for #1: if the read field is "childLock", the most symmetric write payload is
+//     also "childLock" (mirrors the setHumidifierStatus convention in other families where
+//     read and write share the same field name). Method "setChildLock" (no Switch suffix)
+//     follows the same logic: setChildLock / {childLock}.
+//   Remaining candidates (if #1 also returns inner -1):
+//     #2: method "setChildLockSwitch" + payload {childLock: v}
+//     #3: method "setChildLock" + payload {childLockSwitch: v}
+//     #4: method "setLock" + payload {lock: v}
+//   Source: live poll response (device 1132, 2026-04-30); pyvesync gap confirmed (no
+//     set_child_lock() method in VeSyncPedestalFan as of 2026-04-30).
+def setChildLock(onOff){
+    logDebug "setChildLock(${onOff})"
+    if (onOff == null) {
+        logWarn "setChildLock called with null (likely empty Rule Machine action parameter); ignoring"
+        return
+    }
+    String s = (onOff as String).toLowerCase()
+    if (!(s in ["on","off"])) {
+        logError "setChildLock: invalid value '${s}' -- must be on|off"
+        recordError("setChildLock invalid: ${s}", [method:"setChildLock"])
+        return
+    }
+    int v = (s == "on") ? 1 : 0
+    // [PREVIEW v2.4] iteration #1: method setChildLock + payload {childLock} (symmetric to read field)
+    def resp = hubBypass("setChildLock", [childLock: v], "setChildLock(${s})")
+    if (httpOk(resp)) {
+        device.sendEvent(name:"childLock", value: s)
+        logInfo "Child lock: ${s}"
+    } else {
+        logError "Child lock write failed"
+        recordError("Child lock write failed: ${s}", [method:"setChildLock"])
+    }
+}
+
+// CROSS-CHECK [maintainer's hardware capture, device 1132 LPF-R432S-AUK, 2026-05-01]:
+//   Decision: Pedestal Fan timer commands (setTimer/cancelTimer) deferred to v2.5+.
+//   Rationale: Two payload guesses both refuted on live hardware (HTTP 200, inner -1
+//   on both `setTimer + {action: "on"|"off", total: N}` and `clearTimer + {}`).
+//   Combined evidence: pyvesync VeSyncPedestalFan has no timer methods; HA PR #163353
+//   (Pedestal Fan timer support) is still open/unmerged after months.
+//   Hypothesis: VeSync app's "timer" feature maps to a "schedule" API namespace
+//   (poll fields suggest this: scheduleCount, isTimerSupportPowerOn capability flag).
+//   Resolution path: maintainer captures VeSync app's timer-set request via mitmproxy
+//   to identify the actual API method + payload shape; revisit in a clean v2.5 cycle.
+//   The `timerRemain` read-only attribute stays declared for status visibility.
+
+// CROSS-CHECK [maintainer's hardware capture, device 1132 LPF-R432S-AUK, 2026-05-01]:
+//   The following write-path commands were attempted with educated-guess payloads
+//   (informed by read-shape field names + sister-method patterns from Tower Fan)
+//   and ALL refuted via live hardware tests. Each returned a non-zero VeSync API
+//   inner code, indicating method-doesn't-exist or payload-format-wrong:
+//
+//   - setSleepPreference: tried flat {sleepPreferenceType} and nested
+//     {sleepPreference: {...}}, both "advanced" and "default" values; all rejected
+//     with inner 11000000.
+//   - setHighTemperatureThreshold: tried setHighTemperature + {highTemperature: degF*10}; rejected.
+//   - setHighTemperatureReminder: tried setHighTemperatureReminder + {highTemperatureReminderState: 1|0}; rejected.
+//   - setLevelMemory: tried setLevelMemory + {workMode, level, enable}; rejected.
+//   - runOscillationCalibration: tried oscillationCalibration + {}; rejected.
+//
+//   Hypothesis: VeSync mobile app uses a different API namespace (possibly schedule-style
+//   for timer features, possibly local-network for oscillation calibration) OR these
+//   features are not exposed via the cloud API at all. Read-side fields populate fine
+//   on poll, so the device DOES track this state -- we just can't write to it via the
+//   guessed cloud paths.
+//
+//   Resolution path: maintainer captures the VeSync mobile app's actual API request
+//   for each feature via mitmproxy; revisit in v2.5+ with confirmed payloads.
+//   The READ-ONLY attributes for these fields stay declared so users can see device
+//   state, even though they can't change it from Hubitat yet.
+
+// CROSS-CHECK [v2.4 hardware capture / field-name convention]:
+//   [PREVIEW v2.4 — method name and payload field are best-effort guesses]
+//   Decision: method "setSmartCleaningReminder" with {smartCleaningReminderState: 1|0}.
+//     Payload field matches the read-field name exactly (smartCleaningReminderState).
+//   Source: live poll smartCleaningReminderState:1 (device 1132, 2026-04-30).
+//   Refutation: inner code -1 --> try payload field "smartCleaningReminder" (without "State"
+//     suffix) or try method "setSmartCleaning"; update CROSS-CHECK when confirmed.
+def setSmartCleaningReminder(onOff){
+    logDebug "setSmartCleaningReminder(${onOff})"
+    if (onOff == null) { logWarn "setSmartCleaningReminder called with null; ignoring"; return }
+    String s = (onOff as String).toLowerCase()
+    if (!(s in ["on","off"])) {
+        logError "setSmartCleaningReminder: invalid value '${s}'"
+        recordError("setSmartCleaningReminder invalid: ${s}", [method:"setSmartCleaningReminder"])
+        return
+    }
+    int v = (s == "on") ? 1 : 0
+    def resp = hubBypass("setSmartCleaningReminder", [smartCleaningReminderState: v],
+                         "setSmartCleaningReminder(${s})")
+    if (httpOk(resp)) {
+        device.sendEvent(name:"smartCleaningReminder", value: s)
+        logInfo "Smart cleaning reminder: ${s}"
+    } else {
+        logError "Smart cleaning reminder write failed"
+        recordError("Smart cleaning reminder failed: ${s}", [method:"setSmartCleaningReminder"])
     }
 }
 
@@ -592,6 +716,32 @@ def applyStatus(status){
         if (oCoord.pitch != null) device.sendEvent(name:"oscillationPitch", value: oCoord.pitch  as Integer)
     }
 
+    // ---- Oscillation calibration (read-only feedback for runOscillationCalibration) ----
+    if (r.oscillationCalibrationState != null) {
+        Integer cs = (r.oscillationCalibrationState as Integer)
+        device.sendEvent(name:"oscillationCalibrationState", value: cs == 1 ? "calibrating" : "idle")
+    }
+    if (r.oscillationCalibrationProgress != null) {
+        device.sendEvent(name:"oscillationCalibrationProgress", value: (r.oscillationCalibrationProgress as Integer))
+    }
+
+    // ---- High temperature threshold + reminder ----
+    // Raw value is tenths of a degree F (same /10 convention as existing temperature field)
+    if (r.highTemperature != null) {
+        Integer rawHigh = (r.highTemperature as Integer)
+        device.sendEvent(name:"highTemperature", value: (rawHigh / 10.0) as BigDecimal)
+    }
+    if (r.highTemperatureReminderState != null) {
+        Integer hrm = (r.highTemperatureReminderState as Integer)
+        device.sendEvent(name:"highTemperatureReminder", value: hrm == 1 ? "on" : "off")
+    }
+
+    // ---- Smart cleaning reminder ----
+    if (r.smartCleaningReminderState != null) {
+        Integer scrm = (r.smartCleaningReminderState as Integer)
+        device.sendEvent(name:"smartCleaningReminder", value: scrm == 1 ? "on" : "off")
+    }
+
     // ---- Mute ----
     // muteState = actual; muteSwitch = configured. Prefer actual.
     Integer muteState = (r.muteState != null) ? (r.muteState as Integer) : (r.muteSwitch as Integer)
@@ -602,19 +752,12 @@ def applyStatus(status){
     Integer screenState = (r.screenState != null) ? (r.screenState as Integer) : (r.screenSwitch as Integer)
     device.sendEvent(name:"displayOn", value: screenState == 1 ? "on" : "off")
 
-    // ---- childLock (READ-ONLY) ----
-    // CROSS-CHECK [pyvesync VeSyncPedestalFan class / ST+HB cross-check]:
-    //   Decision: expose childLock as read-only attribute only; NO setChildLock command.
-    //   Rationale: pyvesync VeSyncPedestalFan has no set_child_lock() method (contrast with
-    //     VeSyncTowerFan which also lacks it -- both fans omit child-lock write support in
-    //     pyvesync). ST+HB community drivers are also silent on the request payload shape.
-    //     Without any community-captured request payload, we'd be guessing the field names
-    //     and values; wrong guesses produce inner code -1 silently.
-    //   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/devices/
-    //     vesyncfan.py VeSyncPedestalFan class (no set_child_lock method present);
-    //     ST+HB cross-check (2026-04-26, silent on payload).
-    //   Refutation: maintainer's hardware capture (week of 2026-04-26) reveals the payload
-    //     format --> add setChildLock command in v2.2 with the confirmed payload.
+    // ---- childLock ----
+    // CROSS-CHECK [pyvesync VeSyncPedestalFan class / v2.4 hardware capture / iteration #1]:
+    //   Read field "childLock" confirmed from live poll (device 1132, 2026-04-30). Value is 0|1 int.
+    //   Write candidate #0 REFUTED: setChildLockSwitch + {childLockSwitch} returned inner -1 on
+    //     device 1132 (2026-04-30). Write candidate #1 (current): setChildLock + {childLock}.
+    //   See setChildLock() CROSS-CHECK block above for full refutation chain and remaining candidates.
     if (r.childLock != null) {
         device.sendEvent(name:"childLock", value: (r.childLock as Integer) == 1 ? "on" : "off")
     }

@@ -108,6 +108,7 @@ metadata {
         command "setOscillation", [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         command "setMute",        [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         command "setDisplay",     [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
+        // setSleepPreference deferred to v2.5+ — see CROSS-CHECK block near method site
         command "setTimer", [
             [name:"Seconds*", type:"NUMBER", description:"Seconds until timer fires"],
             [name:"Action",   type:"ENUM",   constraints:["on","off"], description:"Action when timer fires (default: off)"]
@@ -287,11 +288,14 @@ def setMode(mode){
 // ---------- Feature setters ----------
 def setOscillation(onOff){
     logDebug "setOscillation(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setOscillationSwitch", [oscillationSwitch: v], "setOscillationSwitch(${onOff})")
+    if (onOff == null) { logWarn "setOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    String s = (onOff as String).toLowerCase()
+    if (!(s in ["on","off"])) { logError "setOscillation: invalid value '${s}'"; recordError("setOscillation invalid: ${s}", [method:"setOscillationSwitch"]); return }
+    int v = (s == "on") ? 1 : 0
+    def resp = hubBypass("setOscillationSwitch", [oscillationSwitch: v], "setOscillationSwitch(${s})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"oscillation", value: onOff)
-        logInfo "Oscillation: ${onOff}"
+        device.sendEvent(name:"oscillation", value: s)
+        logInfo "Oscillation: ${s}"
     } else {
         logError "Oscillation write failed"; recordError("Oscillation write failed", [method:"setOscillationSwitch"])
     }
@@ -299,11 +303,14 @@ def setOscillation(onOff){
 
 def setMute(onOff){
     logDebug "setMute(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setMuteSwitch", [muteSwitch: v], "setMuteSwitch(${onOff})")
+    if (onOff == null) { logWarn "setMute called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    String s = (onOff as String).toLowerCase()
+    if (!(s in ["on","off"])) { logError "setMute: invalid value '${s}'"; recordError("setMute invalid: ${s}", [method:"setMuteSwitch"]); return }
+    int v = (s == "on") ? 1 : 0
+    def resp = hubBypass("setMuteSwitch", [muteSwitch: v], "setMuteSwitch(${s})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"mute", value: onOff)
-        logInfo "Mute: ${onOff}"
+        device.sendEvent(name:"mute", value: s)
+        logInfo "Mute: ${s}"
     } else {
         logError "Mute write failed"; recordError("Mute write failed", [method:"setMuteSwitch"])
     }
@@ -311,15 +318,25 @@ def setMute(onOff){
 
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
+    if (onOff == null) { logWarn "setDisplay called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    String s = (onOff as String).toLowerCase()
+    if (!(s in ["on","off"])) { logError "setDisplay: invalid value '${s}'"; recordError("setDisplay invalid: ${s}", [method:"setDisplay"]); return }
+    int v = (s == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${s})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
+        device.sendEvent(name:"displayOn", value: s)
+        logInfo "Display: ${s}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
+
+// CROSS-CHECK [pyvesync VeSyncTowerFan._set_fan_state + device_map.py LTF-F422S sleep_preferences]:
+//   setSleepPreference was attempted in v2.4 but deferred to v2.5+ after Pedestal Fan live
+//   verification (device 1132, 2026-05-01) found both flat {sleepPreferenceType} and nested
+//   {sleepPreference: {...}} payloads rejected with inner 11000000. Both fan families share the
+//   same sleepPreference API shape — applying the same deferral. The sleepPreferenceType
+//   READ-ONLY attribute stays declared (populated on poll). Resolution path: mitmproxy capture.
 
 // ---------- Timer ----------
 // Timer shape for Tower Fan: {action: 'on'|'off', total: <seconds>}

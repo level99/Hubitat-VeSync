@@ -60,6 +60,51 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 Items below are not yet locked to a release. They're available for community pickup or maintainer prioritization as time permits.
 
+### Tower Fan write-path parity with Pedestal Fan (v2.5+ candidate)
+
+v2.4 live-verified 4 write-path commands on Pedestal Fan device 1132 (LPF-R432S-AUK, 2026-05-01):
+- `setChildLock(on/off)` → `setChildLock` + `{childLock: 1|0}` — **confirmed**
+- `setSmartCleaningReminder(on/off)` → `setSmartCleaningReminder` + `{smartCleaningReminderState: 1|0}` — **confirmed**
+- `setMute(on/off)` and `setDisplay(on/off)` — **confirmed** (pre-existing commands, hardware-verified)
+
+Plus 5 read-only attribute exposures (calibration state/progress, highTemperature threshold, highTemperatureReminder, smartCleaningReminder) — readable on poll even without write support.
+
+**Sister hardware (Tower Fan LTF-F422S / LTF-F362S) likely supports the confirmed commands**, but maintainer doesn't own a Tower Fan to verify payloads. v2.4 scope deliberately limits Tower Fan changes to BP18 null-guard correctness fixes (setMute, setDisplay, setOscillation) — no speculative feature additions to avoid silent-failure scenarios for community Tower Fan owners.
+
+**Action plan for v2.5+:**
+1. Wait for community Tower Fan owner to volunteer for testing (post on the [Levoit community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499)). OR a maintainer hardware purchase.
+2. Run the same hardware-capture protocol used for Pedestal Fan v2.4: enable parent verboseDebug, send each candidate command, watch response codes.
+3. Cross-reference with pyvesync's `VeSyncTowerFan` class — features pyvesync already supports indicate the API method is confirmed; features pyvesync doesn't have are higher-risk speculative.
+4. Port confirmed features to `LevoitTowerFan.groovy` with the verified payloads (most likely identical to Pedestal Fan; may need minor field-name adjustments).
+5. Update `LevoitTowerFanSpec.groovy` with parallel test coverage.
+
+**Tower Fan-only caveats (not on Pedestal Fan):**
+- Tower Fan has 1-axis oscillation only (no vertical) — `runOscillationCalibration` may not apply, or may apply differently
+- Tower Fan workMode list differs slightly: `normal | turbo | auto | sleep` (no `eco`); `setLevelMemory` mode constraints need updating for Tower Fan
+- Tower Fan has `displayingType` raw field whose meaning is documented as unknown — investigate alongside this work
+
+**Pyvesync upstream PR** for Pedestal Fan write-path methods (already in TODO.md) would expand to cover Tower Fan as well once verified.
+
+### Pedestal Fan write-path commands — deferred features (v2.5+)
+
+v2.4 live-verified 4 write-path commands on device 1132 (LPF-R432S-AUK, 2026-05-01). The following 7 commands were attempted and ALL refuted (non-zero inner code, indicating method-doesn't-exist or payload-format-wrong):
+
+| Command | Payloads tried | Inner code | Notes |
+|---|---|---|---|
+| `setTimer` | `{action:"on"\|"off", total:N}` | -1 | pyvesync has no timer methods; HA PR #163353 still open |
+| `cancelTimer` | `clearTimer + {}` | -1 | Paired with setTimer failure |
+| `setSleepPreference` | flat `{sleepPreferenceType}` AND nested `{sleepPreference:{...}}` | 11000000 | Both "advanced" and "default" values tried |
+| `setHighTemperatureThreshold` | `setHighTemperature + {highTemperature: degF×10}` | -1 | |
+| `setHighTemperatureReminder` | `{highTemperatureReminderState: 1\|0}` | -1 | |
+| `setLevelMemory` | `{workMode, level, enable}` | -1 | |
+| `runOscillationCalibration` | `oscillationCalibration + {}` | -1 | May be local-network only |
+
+**Hypothesis:** VeSync mobile app uses a different API namespace for several of these — possibly "schedule"-style for timer-related operations, possibly local-network (not cloud) for oscillation calibration. Read-side fields all populate correctly on poll, so the device tracks this state; the write paths via guessed cloud method names are simply wrong.
+
+**Resolution path:** capture the VeSync mobile app's actual API request for each feature via mitmproxy; revisit in v2.5 with confirmed method names + payloads. All read-only attributes for these fields remain declared in the driver so users can see device state.
+
+Same deferral applies to Tower Fan `setSleepPreference` — the two fan families share the same API shape for this feature.
+
 ### Coverage gaps identified (v2.2 audit, 2026-04-27)
 
 A comprehensive audit of Levoit's current Wi-Fi lineup against pyvesync `device_map.py` surfaced four additional devices we don't cover and aren't in our queue. All four are blocked on external work — either pyvesync upstream needs to enumerate the model code, or a community member needs to share a `state.deviceType` capture from a real device so we can confirm class assignment, or the product hasn't shipped publicly yet.
@@ -90,6 +135,7 @@ Community hardware reports (a debug log showing the model code + `captureDiagnos
 
 ### Tooling & dev experience
 
+- **NUMBER-input "NaN" UI quirk on `setSpeed`/`setMistLevel`/`setHumidity`/etc.** Hubitat's device-page command card renders `<input type="number">` for `NUMBER`-typed parameters. With no value bound, browsers display "NaN" until the user types. Affects every `NUMBER` command across this fork (Pedestal/Tower Fan `setSpeed`, all humidifiers' `setMistLevel` + `setHumidity`, EverestAir/Sprout `setFanSpeed`, etc.) and is a Hubitat platform behavior, not a per-driver bug. Speculative `range:` / `defaultValue:` keys on the parameter map were tried in v2.4 and don't take effect (not in Hubitat's documented command-parameter spec). Possible v2.5+ fix: convert `setSpeed` (and similar) to `ENUM` with explicit string constraints — gives a dropdown, eliminates NaN. Tradeoff: programmatic callers must handle string-typed input (a 1-line `setSpeed(val) { setSpeed(val as Integer) }` shim covers it). FanControl capability's own `setSpeed(named)` is unaffected. Worth doing as a cross-driver UX polish pass when a v2.5+ window opens.
 - **PyvesyncCoverageSpec — class-source introspection (post-MVP).** Current MVP is fixture-vs-fixture parity (method name + data key set). Misses: payload data values, response field coverage, structural depth, and class-source-vs-port mismatches like the OasisMist 1000S WEUR nightlight ambiguity (pyvesync class CODE has the split but the FIXTURE doesn't exercise it). Extension after the v2.4 auto-tracking bot lands: parse pyvesync's `vesyncfan.py` symbolically, compare method signatures + payload-builder logic against our drivers, surface gaps the fixture-only gate can't see. Higher build cost than the v2.4 bot; queue for v2.5+ depending on whether Output A/B output reveals a need.
 - **Pyvesync local Python harness** — small Python script that diff's our driver payloads against pyvesync's canonical request/response shapes. Useful as a CI gate; partly subsumed by the v2.3 PyvesyncCoverageSpec — revisit after the v2.4 auto-tracking bot lands to decide whether a Python-side complement adds value.
 
