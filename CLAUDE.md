@@ -209,6 +209,25 @@ If neither holds — STOP. Dispatch QA first.
 
 Drift pattern observed in v2.2.1: dev returned with fix → orchestrator went directly to tester to save round-trip → user caught the missing QA step → had to backfill QA. The QA step is cheap (Sonnet, small diff); skipping creates rework when QA finds something tester wouldn't catch (logging discipline, design quality, cross-pattern interactions, PII routing).
 
+### Per-commit CHANGELOG discipline (prevention layer)
+
+Every `feat:` or `fix:` commit on a release branch MUST include a one-line bullet update to `CHANGELOG.md`'s `[Unreleased]` section in the same diff. This is the prevention layer; the `/cut-release` pre-flight CHANGELOG drift check is the safety net.
+
+**Format:** match existing entries — short prose under the appropriate Keep-a-Changelog header (`Added` / `Changed` / `Fixed` / `Removed`), optional commit-hash hint at end.
+
+**Skip CHANGELOG update for:**
+- Pure refactors with no behavior change
+- Doc-only changes (CONTRIBUTING / CLAUDE / agent specs / ROADMAP / TODO)
+- Test-only changes (Spock specs / fixtures / lint tweaks)
+- Tooling / CI / build-config changes
+- Pipeline-process/workflow updates that don't touch user-visible driver code
+
+**When in doubt, add the entry** — over-disclosure beats drift. Drift accumulates silently (every "trivial" feat: that didn't update CHANGELOG compounds), and post-hoc reconstruction at cut time is slower than per-commit habit.
+
+**Why both layers?** The detective layer (cut-release scanner, shipped in v2.4 commit `ec5af15`) catches misses but only at cut time, after the diff has already been merged into the release branch. By then, untangling which commits should have included `[Unreleased]` updates requires re-reading every feat/fix in the cycle and reverse-engineering the rationale. The preventive layer (this rule + the dev agent's rule 4a) keeps each commit honest at write time, which is where the context lives.
+
+Drift signal: `0427455` "docs(v2.4): catch up [Unreleased] CHANGELOG with v2.4 cycle work" — single backfill commit needed precisely because per-commit discipline wasn't in place. After this rule lands, future cycles shouldn't need a catch-up commit.
+
 ### HPM stale-state recovery (maintainer-only)
 
 When ops verification deploys a release-candidate driver to the maintainer's hub via MCP `update_driver_code` BEFORE the cut commit / squash-merge / HPM publish, HPM's internal tracking falls behind reality. The hub's source is post-target-version, but HPM still records the prior released version.
