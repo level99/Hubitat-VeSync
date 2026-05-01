@@ -316,17 +316,17 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
 
         when:
         String url = driver.buildIssueUrl([
-            "driver-name":      "VeSync Integration",
-            "driver-version":   "2.4",
-            "model-code":       "UNKNOWN",
-            "hub-firmware":     "2.5.0.126",
-            "last-error":       "",
-            "diagnostic-block": "test block"
+            "driver":      "VeSync Integration",
+            "driver_version":   "2.4",
+            "model_code":       "UNKNOWN",
+            "hub_firmware":     "2.5.0.126",
+            "last_error":       "",
+            "diagnostic_block": "test block"
         ])
 
         then: "the title param decodes to '[VeSync Integration] diagnostic capture' (no UNKNOWN)"
         // Extract and decode the title param to assert on its value specifically.
-        // model-code=UNKNOWN legitimately stays in the URL as a query param (triage signal) —
+        // model_code=UNKNOWN legitimately stays in the URL as a query param (triage signal) —
         // the assertion targets the title only, not the full URL string.
         def titleMatch = url =~ /[?&]title=([^&]*)/
         def title = titleMatch ? java.net.URLDecoder.decode(titleMatch[0][1] as String, "UTF-8") : ""
@@ -340,12 +340,12 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
 
         when:
         String url = driver.buildIssueUrl([
-            "driver-name":      "Levoit Vital 200S",
-            "driver-version":   "2.4",
-            "model-code":       "LAP-V201S-AUSA",
-            "hub-firmware":     "2.5.0.126",
-            "last-error":       "cloud timeout on getPurifierStatus",
-            "diagnostic-block": "block"
+            "driver":      "Levoit Vital 200S",
+            "driver_version":   "2.4",
+            "model_code":       "LAP-V201S-AUSA",
+            "hub_firmware":     "2.5.0.126",
+            "last_error":       "cloud timeout on getPurifierStatus",
+            "diagnostic_block": "block"
         ])
 
         then: "URL title suffix contains encoded lastError text"
@@ -358,12 +358,12 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
 
         when:
         String url = driver.buildIssueUrl([
-            "driver-name":      "Levoit Vital 200S",
-            "driver-version":   "2.4",
-            "model-code":       "LAP-V201S-AUSA",
-            "hub-firmware":     "2.5.0.126",
-            "last-error":       "",
-            "diagnostic-block": "block"
+            "driver":      "Levoit Vital 200S",
+            "driver_version":   "2.4",
+            "model_code":       "LAP-V201S-AUSA",
+            "hub_firmware":     "2.5.0.126",
+            "last_error":       "",
+            "diagnostic_block": "block"
         ])
 
         then: "URL title suffix contains model code"
@@ -374,18 +374,18 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
     // buildIssueUrl: truncation divisor / 3 path must converge without hanging
     // -------------------------------------------------------------------------
 
-    def "buildIssueUrl handles a very large diagnostic-block without infinite loop"() {
+    def "buildIssueUrl handles a very large diagnostic_block without infinite loop"() {
         given: "a diagnostic block much larger than the URL budget"
         String hugeBlock = "X" * 20000   // 20KB, well above 7500 char budget
 
         when: "buildIssueUrl is called with the oversized block"
         String url = driver.buildIssueUrl([
-            "driver-name":      "Test Driver",
-            "driver-version":   "2.4",
-            "model-code":       "TEST-001",
-            "hub-firmware":     "2.3.9.1",
-            "last-error":       "test error",
-            "diagnostic-block": hugeBlock
+            "driver":      "Test Driver",
+            "driver_version":   "2.4",
+            "model_code":       "TEST-001",
+            "hub_firmware":     "2.3.9.1",
+            "last_error":       "test error",
+            "diagnostic_block": hugeBlock
         ])
 
         then: "a URL is returned (not null/empty) without an exception"

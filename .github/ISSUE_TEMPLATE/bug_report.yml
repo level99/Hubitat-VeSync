@@ -1,20 +1,24 @@
 # IMPORTANT: field `id` values in this form MUST match the parameter names used
-# by LevoitDiagnosticsLib.groovy's buildIssueUrl() helper. The library assembles
-# a pre-fill URL of the form:
+# by LevoitDiagnosticsLib.groovy's buildIssueUrl() helper, AND match the convention
+# already established on `main` (underscore-form: `driver`, `model_code`, etc.).
+# Hyphenated IDs (`driver-name`, `model-code`) silently fail because GitHub renders
+# the issue form from `main`'s template, not from the branch the link came from.
+#
+# The library assembles a pre-fill URL of the form:
 #
 #   https://github.com/level99/Hubitat-VeSync/issues/new?
 #     template=bug_report.yml&
 #     title=...&labels=...&
-#     driver-name=...&driver-version=...&model-code=...&
-#     hub-firmware=...&last-error=...&diagnostic-block=...
+#     driver=...&driver_version=...&model_code=...&
+#     hub_firmware=...&last_error=...&diagnostic_block=...
 #
 # Contract:
-#   id: driver-name       ← library field "driver-name"
-#   id: driver-version    ← library field "driver-version"
-#   id: model-code        ← library field "model-code"
-#   id: hub-firmware      ← library field "hub-firmware"
-#   id: last-error        ← library field "last-error"
-#   id: diagnostic-block  ← library field "diagnostic-block"
+#   id: driver           ← library field "driver"
+#   id: driver_version   ← library field "driver_version"
+#   id: model_code       ← library field "model_code"
+#   id: hub_firmware     ← library field "hub_firmware"
+#   id: last_error       ← library field "last_error"
+#   id: diagnostic_block ← library field "diagnostic_block"
 #
 # Do NOT rename these IDs without updating LevoitDiagnosticsLib.groovy's
 # buildIssueUrl() simultaneously, or pre-filled issue links will break.
@@ -37,7 +41,7 @@ body:
         - For general questions or "is this a bug?" uncertainty, the [Hubitat community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) is faster.
 
   - type: input
-    id: driver-name
+    id: driver
     attributes:
       label: Affected driver
       description: Which driver shows the problem? (pre-filled by captureDiagnostics)
@@ -46,16 +50,16 @@ body:
       required: true
 
   - type: input
-    id: driver-version
+    id: driver_version
     attributes:
       label: Driver version
       description: From the driver's History block or levoitManifest.json. (pre-filled by captureDiagnostics)
-      placeholder: "2.3"
+      placeholder: "2.4"
     validations:
       required: true
 
   - type: input
-    id: model-code
+    id: model_code
     attributes:
       label: Device model code
       description: The exact model code of the affected hardware (visible in VeSync app device info, or on the device label). (pre-filled by captureDiagnostics)
@@ -64,7 +68,7 @@ body:
       required: false
 
   - type: input
-    id: hub-firmware
+    id: hub_firmware
     attributes:
       label: Hubitat hub firmware version
       description: Hubitat → Settings → Hub Details → Platform Version. (pre-filled by captureDiagnostics)
@@ -73,7 +77,7 @@ body:
       required: false
 
   - type: input
-    id: last-error
+    id: last_error
     attributes:
       label: Last error message
       description: The most recent error from the driver logs. (pre-filled by captureDiagnostics)
@@ -82,7 +86,7 @@ body:
       required: false
 
   - type: textarea
-    id: diagnostic-block
+    id: diagnostic_block
     attributes:
       label: Diagnostic capture
       description: |

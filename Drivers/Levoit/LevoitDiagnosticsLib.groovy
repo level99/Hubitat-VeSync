@@ -141,12 +141,12 @@ void captureDiagnostics() {
     // Build the pre-filled GitHub URL (uses the full markdown block as body)
     String lastErrorMsg = errors ? (errors[-1]?.msg ?: "") as String : ""
     String issueUrl = buildIssueUrl([
-        "driver-name":      driverName,
-        "driver-version":   driverVersion,
-        "model-code":       modelCode,
-        "hub-firmware":     hubFw,
-        "last-error":       lastErrorMsg,
-        "diagnostic-block": block
+        "driver":           driverName,
+        "driver_version":   driverVersion,
+        "model_code":       modelCode,
+        "hub_firmware":     hubFw,
+        "last_error":       lastErrorMsg,
+        "diagnostic_block": block
     ])
 
     // Assemble compact HTML summary for the "diagnostics" attribute.
@@ -300,7 +300,11 @@ String buildIssueUrl(Map fields) {
     String base = "https://github.com/level99/Hubitat-VeSync/issues/new"
 
     // Derive labels from driver name (best-effort family detection)
-    String driverName = (fields["driver-name"] ?: "") as String
+    // Field IDs use underscore form to match GitHub issue-form template field IDs
+    // (.github/ISSUE_TEMPLATE/bug_report.yml). These IDs MUST match exactly or pre-fill
+    // silently fails — GitHub renders the template from the default branch (main), so
+    // any mismatch leaves the form fields empty regardless of which branch the URL came from.
+    String driverName = (fields["driver"] ?: "") as String
     String family = "driver"
     if (driverName.toLowerCase().contains("humidifier")) family = "humidifier"
     else if (driverName.toLowerCase().contains("fan"))   family = "fan"
@@ -310,8 +314,8 @@ String buildIssueUrl(Map fields) {
     // - Use last error if present
     // - Else use model code (only when it's a real code, not UNKNOWN/empty)
     // - Else fall back to "diagnostic capture" (avoids "[VeSync Integration] UNKNOWN")
-    String modelCode  = (fields["model-code"] ?: "") as String
-    String lastError  = (fields["last-error"]  ?: "") as String
+    String modelCode  = (fields["model_code"] ?: "") as String
+    String lastError  = (fields["last_error"]  ?: "") as String
     String titleSuffix
     if (lastError) {
         titleSuffix = lastError.take(60)
@@ -322,29 +326,29 @@ String buildIssueUrl(Map fields) {
     }
     String title = "[${driverName.take(30)}] ${titleSuffix}"
 
-    // Build param map (without diagnostic-block first — we measure that separately)
+    // Build param map (without diagnostic_block first — we measure that separately)
     Map params = [
         "template":       "bug_report.yml",
         "labels":         "diag-prefilled,bug,${family}",
         "title":          title,
-        "driver-name":    fields["driver-name"]    ?: "",
-        "driver-version": fields["driver-version"] ?: "",
-        "model-code":     fields["model-code"]     ?: "",
-        "hub-firmware":   fields["hub-firmware"]   ?: "",
-        "last-error":     fields["last-error"]     ?: ""
+        "driver":         fields["driver"]         ?: "",
+        "driver_version": fields["driver_version"] ?: "",
+        "model_code":     fields["model_code"]     ?: "",
+        "hub_firmware":   fields["hub_firmware"]   ?: "",
+        "last_error":     fields["last_error"]     ?: ""
     ]
 
-    // URL-encode everything except diagnostic-block for length measurement
+    // URL-encode everything except diagnostic_block for length measurement
     String baseParams = params.collect { k, v ->
         "${urlEncode(k)}=${urlEncode(v as String)}"
     }.join("&")
 
-    String diagRaw = (fields["diagnostic-block"] ?: "") as String
-    int budgetForDiag = 7500 - base.length() - 1 - baseParams.length() - "&diagnostic-block=".length()
+    String diagRaw = (fields["diagnostic_block"] ?: "") as String
+    int budgetForDiag = 7500 - base.length() - 1 - baseParams.length() - "&diagnostic_block=".length()
 
     String diagEncoded
     if (budgetForDiag <= 0) {
-        // No room at all — skip diagnostic-block
+        // No room at all — skip diagnostic_block
         diagEncoded = urlEncode("[diagnostic too long for URL — paste full block from state.lastDiagnostics (State Variables panel)]")
     } else {
         String encoded = urlEncode(diagRaw)
@@ -363,7 +367,7 @@ String buildIssueUrl(Map fields) {
         }
     }
 
-    return "${base}?${baseParams}&${urlEncode('diagnostic-block')}=${diagEncoded}"
+    return "${base}?${baseParams}&${urlEncode('diagnostic_block')}=${diagEncoded}"
 }
 
 // ---------------------------------------------------------------------------
