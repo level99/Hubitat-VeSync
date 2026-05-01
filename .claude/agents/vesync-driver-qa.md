@@ -668,6 +668,56 @@ Per-child `online` attribute: declared in metadata for all child drivers except 
 
 ---
 
+### BP22: HTTP-error log spam during network outages
+
+**Root cause:** `sendBypassRequest()` caught all exceptions in a generic `catch (Exception e)` block and called `logError "sendBypassRequest: ${e.toString()}"` unconditionally. During a network outage (hub lost internet, DNS failure, VeSync API down), every poll cycle for every child device threw a network-layer exception — typically `java.net.UnknownHostException` or `java.net.SocketTimeoutException`. With 6 child devices at 30s interval, that's 6 ERROR lines per minute for the duration of the outage. Live-confirmed during maintainer's internet outage: 6 errors per minute for the outage duration, plus `SocketTimeoutException` at the leading edge during the connection drop.
+
+Distinct from BP21 (which addresses the API empty-result path — the request completed but VeSync returned no data). BP22 is at the HTTP network layer — the request never reached VeSync.
+
+**Fix design:**
+
+State additions (parent-level — network outages affect all children identically; no per-DNI maps needed):
+
+- `state.networkUnreachableSince` — Long timestamp (millis) when the first network error of the current outage was logged. Null when network is healthy.
+- `state.lastNetworkWarnAt` — Long timestamp (millis) of last hourly WARN re-surface. Null when no outage in progress.
+
+`sendBypassRequest()` catch changes:
+
+- `catch (IllegalStateException e)` — unchanged (connection-pool-shutdown path already existed; not a transient network error).
+- `catch (Exception e)` — new branch: calls `isNetworkException(e)` to classify.
+  - Network-class exceptions (`java.net.UnknownHostException`, `java.net.SocketTimeoutException`, `java.net.ConnectException`, `java.net.NoRouteToHostException`): first error of outage → `log.warn` + seed both state fields to `now()`; subsequent errors → `logDebug "BP22: still unreachable"`.
+  - Non-network exceptions → original `logError` + `recordError` path unchanged.
+- Success path (after `httpPost(params, effectiveClosure)` returns without throwing): if `state.networkUnreachableSince != null` → emit `logInfo "BP22: VeSync API reachable again after ${durStr}"` + clear both state fields. Uses `formatOfflineDuration(sinceMillis)` (BP21 helper, reused).
+
+`isNetworkException(Exception e)` helper: matches exception class name as a string to avoid classpath import issues in the Hubitat Groovy sandbox. Covers the four network-class exception types above.
+
+`emitNetworkWarnIfDue()` helper (parallel to BP21's `emitOfflineWarnsIfDue()`):
+- Returns immediately if `state.networkUnreachableSince == null`.
+- Defense-in-depth null-guard: if `state.lastNetworkWarnAt` is null (state migrated from pre-BP22 install), seeds it to `now()` and returns without emitting — same lesson from BP21 transition-cycle bug.
+- Otherwise: emits `logWarn` with elapsed duration if `now() - lastNetworkWarnAt >= 3600000L`; updates `state.lastNetworkWarnAt = now()`.
+- Called at top of `updateDevices()` after `emitOfflineWarnsIfDue()`.
+- Uses `logWarn` (routes through `sanitize()`) — network unreachability is always user-actionable; `logWarn` is unconditional and `sanitize()` keeps the parent's credential-redaction policy intact.
+
+Log tiering summary:
+
+| Condition | Level | Message |
+|---|---|---|
+| First network error of outage | WARN (once) | `BP22: VeSync API unreachable — ${exClass}: ${msg}. Suppressing…` |
+| Subsequent errors during outage | DEBUG | `BP22: still unreachable (${exClass})` |
+| Hourly re-surface while down | WARN (hourly) | `BP22: VeSync API still unreachable for ${durStr}. Check hub network…` |
+| First successful response after outage | INFO (once) | `BP22: VeSync API reachable again after ${durStr} unreachable.` |
+
+**Check for this pattern** when reviewing:
+- Any modification to `sendBypassRequest()` catch blocks — verify the `isNetworkException` guard is not removed or bypassed; verify non-network exceptions still call `logError` (not silently swallowed).
+- Any new exception class that should be covered by BP22 — should be added to `isNetworkException()` (not hardcoded inline).
+- `emitNetworkWarnIfDue()` call site in `updateDevices()` — must come AFTER `emitOfflineWarnsIfDue()`, before the `driverReloading` guard.
+- Recovery detection — must be on the success path (after `httpPost` returns normally), NOT inside the closure (the closure doesn't know about network-layer exceptions; it only sees successful HTTP responses).
+- State null-coercion: `state.networkUnreachableSince as long` (not `as Long`) when used in arithmetic — Groovy coerces null `as long` to 0L; `as Long` returns null and NPEs in arithmetic. The actual implementation uses the null check before arithmetic, so this is a secondary concern, but flag it if seen without the null check.
+
+**Refutation evidence:** live-verified stop of ERROR spam during internet outage on maintainer's hub. Before: 6 ERRORs/min. After: one WARN at outage start, DEBUG-only during, INFO on recovery.
+
+---
+
 ## Report format
 
 Return ONE of:

@@ -26,6 +26,18 @@ SOFTWARE.
 
 // History:
 //
+// 2026-05-01: v2.4  Bug Pattern #22 — HTTP-error log spam during network outages eliminated.
+//                  - sendBypassRequest() now distinguishes network-layer exceptions
+//                    (UnknownHostException, SocketTimeoutException, ConnectException,
+//                    NoRouteToHostException) from other failures.
+//                  - First network error of an outage: one-time WARN + state.networkUnreachableSince
+//                    set. Subsequent errors during the same outage: DEBUG only (silent in normal logs).
+//                  - New emitNetworkWarnIfDue() helper: hourly WARN re-surface while unreachable;
+//                    defense-in-depth null-guard mirrors BP21's emitOfflineWarnsIfDue().
+//                  - Recovery: INFO "reachable again after Xh Ym" + both state fields cleared,
+//                    triggered on the first successful httpPost() completion.
+//                  - Non-network exceptions (e.g. IllegalStateException) keep existing logError path.
+//                  - New state: state.networkUnreachableSince (Long), state.lastNetworkWarnAt (Long).
 // 2026-05-01: v2.4  Bug Pattern #21 — bounded self-heal backoff for chronically-offline devices.
 //                  - ensurePollHealth() now caps self-heal Resync attempts per device at 3.
 //                    After 3 failed attempts the device is marked offline in state
@@ -666,6 +678,56 @@ private void emitOfflineWarnsIfDue() {
 }
 
 /**
+ * Returns true if the exception is a network-layer error that BP22 should suppress (BP22).
+ *
+ * Covered classes:
+ *   UnknownHostException   — DNS failure (hub lost internet or VeSync DNS down)
+ *   SocketTimeoutException — connect or read timeout
+ *   ConnectException       — connection refused / unreachable
+ *   NoRouteToHostException — ICMP network-unreachable
+ *
+ * All four extend java.io.IOException → checking the class name avoids classpath
+ * import issues in the Hubitat Groovy sandbox.
+ */
+private boolean isNetworkException(Exception e) {
+    String cn = e?.class?.name ?: ""
+    return cn == "java.net.UnknownHostException"   ||
+           cn == "java.net.SocketTimeoutException" ||
+           cn == "java.net.ConnectException"        ||
+           cn == "java.net.NoRouteToHostException"
+}
+
+/**
+ * Emit hourly WARN while the VeSync API is unreachable (BP22).
+ *
+ * Parallels emitOfflineWarnsIfDue() (BP21) but operates at the parent level:
+ * network outages affect all children identically, so a single parent-level
+ * state pair suffices (vs. the per-DNI maps of BP21).
+ *
+ * Defense-in-depth: if state.lastNetworkWarnAt is somehow absent while
+ * networkUnreachableSince is set (e.g. state from a pre-BP22 hub install),
+ * seeds lastNetworkWarnAt = now() and skips this cycle — same null-guard
+ * lesson learned from the BP21 transition-cycle bug.
+ *
+ * Called at the top of updateDevices() after emitOfflineWarnsIfDue().
+ */
+private void emitNetworkWarnIfDue() {
+    if (state.networkUnreachableSince == null) return
+    long nowMs = now()
+    Long lastWarnAt = state.lastNetworkWarnAt as Long
+    if (lastWarnAt == null) {
+        // Defense-in-depth: seed and skip this cycle.
+        state.lastNetworkWarnAt = nowMs
+        return
+    }
+    if (nowMs - lastWarnAt >= 3600000L) {
+        String durStr = formatOfflineDuration(state.networkUnreachableSince as long)
+        logWarn "BP22: VeSync API still unreachable for ${durStr}. Check hub network / DNS / VeSync service status."
+        state.lastNetworkWarnAt = nowMs
+    }
+}
+
+/**
  * Returns the configured API region ("US" or "EU").
  * Reads from settings?.deviceRegion; defaults to "US" when preference is unset
  * (preserves backwards compatibility for existing installs).
@@ -799,6 +861,11 @@ def Boolean updateDevices()
     // WARN once per hour so the user knows it's still unreachable (vs. per-poll ERROR
     // spam that the old code emitted).
     emitOfflineWarnsIfDue()
+
+    // BP22 hourly network WARN -- if the VeSync API has been unreachable (DNS / timeout /
+    // connection error), re-surface a WARN once per hour. Complements BP21 (which is
+    // per-device offline); BP22 is parent-level and fires regardless of device count.
+    emitNetworkWarnIfDue()
 
     // Stop if driver is reloading
     if (state.driverReloading) {
@@ -2179,6 +2246,13 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
 
     try {
         httpPost(params, effectiveClosure)
+        // Network success — check if we're recovering from an outage (BP22).
+        if (state.networkUnreachableSince != null) {
+            String durStr = formatOfflineDuration(state.networkUnreachableSince as long)
+            logInfo "BP22: VeSync API reachable again after ${durStr} unreachable."
+            state.networkUnreachableSince = null
+            state.lastNetworkWarnAt = null
+        }
         return true
     }
     catch (IllegalStateException e) {
@@ -2190,7 +2264,22 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
         return false
     }
     catch (Exception e) {
-        logError "sendBypassRequest: ${e.toString()}"
+        // BP22: distinguish network-layer errors from other failures.
+        // Network errors during an outage flood logs with one ERROR per child per poll cycle.
+        // Apply tiered suppression: one-time WARN on first error; DEBUG-only while outage continues.
+        if (isNetworkException(e)) {
+            if (state.networkUnreachableSince == null) {
+                long ts = now()
+                state.networkUnreachableSince = ts
+                state.lastNetworkWarnAt = ts
+                logWarn "BP22: VeSync API unreachable — ${e.class.simpleName}: ${e.message}. Suppressing further per-poll errors until recovery; will re-surface hourly while down."
+            } else {
+                logDebug "BP22: still unreachable (${e.class.simpleName})"
+            }
+        } else {
+            logError "sendBypassRequest: ${e.toString()}"
+            recordError("sendBypassRequest: ${e.toString()}", [site:"sendBypassRequest"])
+        }
         return false
     }
 }

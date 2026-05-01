@@ -3541,4 +3541,204 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         then: "no additional WARN fired"
         testLog.warns.size() == warnsBefore
     }
+
+    // =========================================================================
+    // Section R — Bug Pattern #22: HTTP-error log spam during network outages
+    //
+    // Validates:
+    //   R1  first network-class exception fires single WARN; state seeded
+    //   R2  second network-class exception during same outage is DEBUG-only
+    //   R3  emitNetworkWarnIfDue defense-in-depth: null lastNetworkWarnAt → seed+skip
+    //   R4  emitNetworkWarnIfDue cadence: 1h elapsed → WARN + update; immediate retry → no-op
+    //   R5  successful httpPost while outage state is set → INFO recovery + state cleared
+    //   R6  non-network exception does NOT touch state.networkUnreachableSince
+    // =========================================================================
+
+    def "sendBypassRequest() first network-class exception emits one WARN and seeds state (R1)"() {
+        // R1: UnknownHostException is a network-class exception. First occurrence of an
+        // outage must emit exactly one WARN and set both networkUnreachableSince and
+        // lastNetworkWarnAt to now(). Subsequent polls should be DEBUG-only (R2).
+        given: "no prior outage state; httpPost throws UnknownHostException"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.networkUnreachableSince = null
+        state.lastNetworkWarnAt = null
+
+        // sendBypassRequest needs a minimal equipment stub and payload
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r1-cid")
+        equip.updateDataValue("configModule", "r1-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            throw new java.net.UnknownHostException("smartapi.vesync.com")
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "exactly one WARN was emitted (not logError)"
+        testLog.errors.isEmpty()
+        testLog.warns.size() == 1
+        testLog.warns[0].contains("BP22")
+        testLog.warns[0].contains("UnknownHostException")
+
+        and: "networkUnreachableSince is set to driver.now()"
+        (state.networkUnreachableSince as Long) == driver.now()
+
+        and: "lastNetworkWarnAt is also set to driver.now()"
+        (state.lastNetworkWarnAt as Long) == driver.now()
+    }
+
+    def "sendBypassRequest() subsequent network exceptions during outage are DEBUG-only (R2)"() {
+        // R2: if state.networkUnreachableSince is already set, further network exceptions
+        // must log at DEBUG only — no additional WARN, no ERROR.
+        given: "outage already in progress (networkUnreachableSince set)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true   // enable debug so we can assert the debug line
+        long outageStart = driver.now() - 60000L   // outage started 1 min ago
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt = outageStart
+        testLog.warns.clear()
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r2-cid")
+        equip.updateDataValue("configModule", "r2-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            throw new java.net.SocketTimeoutException("Read timed out")
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "no new WARN or ERROR was emitted"
+        testLog.errors.isEmpty()
+        testLog.warns.isEmpty()
+
+        and: "a DEBUG log was emitted confirming the suppressed error"
+        testLog.debugs.any { it.contains("BP22") && it.contains("still unreachable") }
+
+        and: "networkUnreachableSince unchanged (still the original outage start time)"
+        (state.networkUnreachableSince as Long) == outageStart
+    }
+
+    def "emitNetworkWarnIfDue() seeds lastNetworkWarnAt and skips WARN when it is null (R3)"() {
+        // R3: defense-in-depth — if networkUnreachableSince is set but lastNetworkWarnAt
+        // is absent (e.g. state migrated from pre-BP22 install), the helper must seed
+        // lastNetworkWarnAt = now() and NOT emit a WARN this cycle.
+        given: "networkUnreachableSince set but lastNetworkWarnAt absent"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.networkUnreachableSince = driver.now() - 7200000L   // 2h ago
+        state.lastNetworkWarnAt = null
+        testLog.warns.clear()
+
+        when:
+        driver.emitNetworkWarnIfDue()
+
+        then: "no WARN emitted this cycle"
+        testLog.warns.isEmpty()
+
+        and: "lastNetworkWarnAt seeded to driver.now()"
+        (state.lastNetworkWarnAt as Long) == driver.now()
+    }
+
+    def "emitNetworkWarnIfDue() fires WARN after 1h cadence and suppresses immediate retry (R4)"() {
+        // R4: normal hourly cadence — 1h elapsed → WARN fires; immediate second call → suppressed.
+        given: "outage state with lastNetworkWarnAt set 1h ago"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        long oneHourAgo = driver.now() - 3600000L
+        state.networkUnreachableSince = driver.now() - 7200000L   // 2h outage
+        state.lastNetworkWarnAt = oneHourAgo
+        testLog.warns.clear()
+
+        when: "first emitNetworkWarnIfDue call (1h elapsed)"
+        driver.emitNetworkWarnIfDue()
+
+        then: "one WARN was emitted"
+        testLog.warns.size() == 1
+        testLog.warns[0].contains("BP22")
+        testLog.warns[0].contains("still unreachable")
+
+        and: "lastNetworkWarnAt updated to driver.now()"
+        (state.lastNetworkWarnAt as Long) == driver.now()
+
+        when: "second call immediately after (within 1h window)"
+        int warnsBefore = testLog.warns.size()
+        driver.emitNetworkWarnIfDue()
+
+        then: "no additional WARN"
+        testLog.warns.size() == warnsBefore
+    }
+
+    def "sendBypassRequest() clears outage state and logs INFO on successful HTTP response (R5)"() {
+        // R5: recovery detection. When httpPost succeeds after an outage, the driver must
+        // emit INFO with the elapsed outage duration and clear both state fields.
+        given: "outage state is set; httpPost succeeds this time"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        long outageStart = driver.now() - 3600000L   // 1h outage
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt = outageStart
+        testLog.infos.clear()
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r5-cid")
+        equip.updateDataValue("configModule", "r5-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        // httpPost succeeds — closure invoked with a fake 200 response
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [code: 0, result: [code: 0, result: [:], traceId: "r5"]]
+            cb(fakeResp)
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "INFO recovery message was emitted"
+        testLog.infos.any { it.contains("BP22") && it.contains("reachable again") }
+
+        and: "networkUnreachableSince cleared"
+        state.networkUnreachableSince == null
+
+        and: "lastNetworkWarnAt cleared"
+        state.lastNetworkWarnAt == null
+    }
+
+    def "sendBypassRequest() non-network exception does NOT touch BP22 outage state (R6)"() {
+        // R6: a non-network exception (e.g. NullPointerException from a driver bug)
+        // must follow the existing logError path; BP22 state must remain untouched.
+        given: "no prior outage; httpPost throws a non-network exception"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.networkUnreachableSince = null
+        state.lastNetworkWarnAt = null
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r6-cid")
+        equip.updateDataValue("configModule", "r6-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            throw new NullPointerException("unexpected null in response handler")
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "a logError was emitted (existing non-BP22 path)"
+        testLog.errors.any { it.contains("sendBypassRequest") }
+
+        and: "networkUnreachableSince remains null (BP22 not triggered)"
+        state.networkUnreachableSince == null
+
+        and: "lastNetworkWarnAt remains null"
+        state.lastNetworkWarnAt == null
+    }
 }
