@@ -108,6 +108,12 @@ Existing rules / dashboards continue to work — same commands, same attributes 
 
 The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing`, `synced`, `not synced`). Use `not synced` in a rule to detect prolonged loss of contact with VeSync servers.
 
+### Common attributes (all child devices)
+
+| Attribute | Values | Description |
+| --- | --- | --- |
+| online | true, false | Offline detection state managed by the parent. Set to `false` after 3 consecutive failed self-heal attempts; returns to `true` on the next successful poll. Use in Rule Machine to detect chronically-offline devices and trigger an alert. |
+
 ### Core 200S
 
 | event | Values | Description |

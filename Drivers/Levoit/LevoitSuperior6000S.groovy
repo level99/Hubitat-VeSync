@@ -77,6 +77,8 @@ metadata {
         attribute "pumpCleanRemain", "number"    // seconds remaining in pump clean cycle
         attribute "info", "string"               // HTML summary
         attribute "diagnostics", "string"        // captureDiagnostics() output
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online", "string"
 
         command "setMode",            [[name:"Mode*",            type:"ENUM",   constraints:["auto","manual","sleep"]]]
         command "setMistLevel",       [[name:"Level*",           type:"NUMBER", description:"1-9"]]

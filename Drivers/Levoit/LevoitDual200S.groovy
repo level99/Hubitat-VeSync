@@ -129,6 +129,8 @@ metadata {
         // NOTE: setWarmMistLevel intentionally absent -- Dual 200S has no warm mist hardware.
 
         attribute "diagnostics", "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online", "string"
         command "captureDiagnostics"
     }
 

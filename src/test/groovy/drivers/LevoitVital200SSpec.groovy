@@ -495,4 +495,29 @@ class LevoitVital200SSpec extends HubitatSpec {
         req != null
         req.data.powerSwitch == 1
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #21: online attribute declared in metadata
+    // -------------------------------------------------------------------------
+
+    def "metadata declares 'online' attribute (BP21 — parent writes it; no child setter needed)"() {
+        // BP21: the parent marks the child offline/online via sendEvent(name:"online", ...).
+        // For this to work without Hubitat rejecting the event, the attribute must be
+        // declared in the driver's metadata. This test asserts it is present by verifying
+        // that sendEvent with name:"online" is accepted (no exception) and is retrievable.
+        when: "parent marks device offline via sendEvent"
+        testDevice.sendEvent(name: "online", value: "false",
+            descriptionText: "Test offline mark")
+
+        then: "event was captured and value is retrievable"
+        testDevice.currentValue("online") == "false"
+
+        when: "parent marks device back online"
+        testDevice.sendEvent(name: "online", value: "true",
+            descriptionText: "Test recovery")
+
+        then:
+        testDevice.currentValue("online") == "true"
+        noExceptionThrown()
+    }
 }

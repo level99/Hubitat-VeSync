@@ -618,6 +618,56 @@ It is BLOCKING — broken library save = HPM install failure for all users = uns
 
 ---
 
+### BP21: BP17 self-heal loops on chronically-offline devices
+
+**Root cause:** `ensurePollHealth()` triggers `getDevices()` configModule refresh when 5 consecutive empty polls occur (BP17 fix). The Resync succeeds (VeSync cloud knows the device even if it's offline), but if the device is genuinely offline (unplugged / off WiFi / off VeSync cloud), the next 5 polls also return empty → BP17 fires again → infinite ~5min self-heal cycle. Live-confirmed observation on device 1070 (DNI `vsaq63affce48109fb60322ea72bb2b1`), last activity ~8h before the bug was filed.
+
+Additionally: the prior code emitted `logError "No status returned from ${method}"` on every empty poll, generating one ERROR per device per poll cycle indefinitely — log noise that makes logs unreadable for offline devices.
+
+**Fix design:**
+
+State additions (all use whole-map-reassignment discipline; bracket-notation writes do NOT persist in Hubitat's JSON-backed state proxy):
+
+- `state.selfHealAttempts[dni]` — Integer counter, incremented each time `ensurePollHealth()` fires for this DNI. Cleared on recovery.
+- `state.deviceOfflineSince[dni]` — Long (millis) timestamp when device was marked offline. Absent when online.
+- `state.lastOfflineWarnAt[dni]` — Long (millis) of last hourly WARN. Absent until first WARN.
+
+`ensurePollHealth()` changes:
+- Iterates per-DNI (not a single `anyExceeded` aggregate). Per-DNI iteration is required because each device needs its own attempt counter.
+- If `state.deviceOfflineSince` already contains the DNI → skip all self-heal logic (device already marked offline; the configModule refresh won't help a genuinely-offline device).
+- Otherwise: increment `state.selfHealAttempts[dni]`, reset `consecutiveEmpty[dni]`, then:
+  - If attempts ≤ 3 → fire `runIn(2, "getDevices")` (same as original BP17; count 1 at INFO, counts 2-3 at DEBUG)
+  - If attempts > 3 → call `markChildOffline(dni)` (no further Resync)
+
+`markChildOffline(dni)` / `markChildOnline(dni)` helpers:
+- `markChildOffline`: sets `state.deviceOfflineSince[dni]`, calls `child.sendEvent(name:"online", value:"false")`. Null-guards on child lookup.
+- `markChildOnline`: clears all three state maps for this DNI, calls `child.sendEvent(name:"online", value:"true")`, logs INFO recovery with duration. Called from the success branch of `updateDevices()` when a previously-offline DNI returns a non-null result.
+
+Log refactor (tiered, replacing per-poll ERROR):
+- Counts 1-4, not offline: DEBUG `"N consecutive empty"` — silent in normal operation
+- Count == 5 (first self-heal, attempt 1): INFO `"may be offline, attempting self-heal"`
+- Attempts 2-3: DEBUG `"self-heal attempt N"`
+- After 3rd failure: INFO `"marked offline, suppressing further noise"`
+- Hourly while offline: WARN via `emitOfflineWarnsIfDue()` (called at top of `updateDevices()`)
+- Sub-hourly while offline: DEBUG `"still empty (offline since H:MM)"`
+- First recovery: INFO `"back online after Nh Mm"`
+
+`emitOfflineWarnsIfDue()`: iterates `state.deviceOfflineSince`; emits WARN + updates `state.lastOfflineWarnAt[dni]` when `now() - lastWarnAt >= 3600000`. Called at the top of `updateDevices()` alongside the existing watchdog calls.
+
+`formatOfflineDuration(sinceMillis)`: returns human-readable strings (`"8 minutes"`, `"2 hours"`, `"1d 4h"`).
+
+Per-child `online` attribute: declared in metadata for all child drivers except `LevoitCore200S Light`, `LevoitGeneric`, `Notification Tile`, `VeSyncIntegrationVirtual`. No setter command needed (parent-only writable). Parent writes it via `sendEvent` directly on the child device handle.
+
+**Check for this pattern** when reviewing:
+- Any modification to `ensurePollHealth()` — verify it cannot loop again on offline devices (must check `state.deviceOfflineSince.containsKey(dni)` before scheduling Resync)
+- Any change to the empty-result branch in `updateDevices()` — verify `logError` is NOT called unconditionally (it was the source of per-poll ERROR spam)
+- Any new child driver — verify it declares `attribute "online", "string"` (RULE28 will flag missing `#include`/`command "captureDiagnostics"`; analogous check for `online` attribute is manual)
+- Recovery path — verify `markChildOnline(dni)` is called in the `status != null` branch when `state.deviceOfflineSince.containsKey(dni)`
+
+**Refutation evidence:** the fix was live-confirmed to stop the loop on device 1070 (DNI `vsaq63affce48109fb60322ea72bb2b1`). The `online:"false"` attribute was visible on the child device's page within one poll cycle after the parent's `updated()` ran.
+
+---
+
 ## Report format
 
 Return ONE of:

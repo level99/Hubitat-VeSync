@@ -83,6 +83,8 @@ metadata {
 
             attribute "info", "string";                               // HTML
             attribute "diagnostics", "string"
+            // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+            attribute "online", "string"
 
             command "setDisplay", [[name:"Display*", type: "ENUM", description: "Display", constraints: ["on", "off"] ] ]
             command "setSpeed", [[name:"Speed*", type: "ENUM", description: "Speed", constraints: ["off", "sleep", "auto", "low", "medium", "high", "max"] ] ]

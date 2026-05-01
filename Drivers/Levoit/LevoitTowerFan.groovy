@@ -120,6 +120,8 @@ metadata {
         // as a diagnostic attribute only (HA finding #5). No user-facing setter.
 
         attribute "diagnostics",     "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online",          "string"
         command "captureDiagnostics"
     }
 

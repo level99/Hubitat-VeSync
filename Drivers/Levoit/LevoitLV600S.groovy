@@ -110,6 +110,8 @@ metadata {
         // pyvesync device_map.py LUH-A602S features list: [WARM_MIST, AUTO_STOP] -- no NIGHTLIGHT.
 
         attribute "diagnostics", "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online", "string"
         command "captureDiagnostics"
     }
 

@@ -2533,11 +2533,15 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     def "updateDevices() error path does not throw when resp has no 'msg' property (M4)"() {
-        // M4: Bug 2 regression test. updateDevices() error path contained:
+        // M4: Bug 2 regression test. updateDevices() error path originally contained:
         //   logError "No status returned from ${method}: ${resp?.msg}"
         // resp?.msg only guards against null resp; a non-null HttpResponseDecorator
         // without a msg property still throws MissingPropertyException. After the fix,
         // resp?.hasProperty('msg') ? resp.msg : '' is used instead.
+        //
+        // BP21 subsequently refactored the null-status branch further: logError was removed
+        // (BP21 noise reduction) and replaced with logDebug + recordError(). The branch
+        // still runs and logs at DEBUG level; this test verifies no exception escapes.
         //
         // We simulate the scenario: httpPost returns HTTP 200 with outer code 0 but
         // resp.data.result == null (so the null-status branch is taken). The resp
@@ -2575,9 +2579,9 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         then: "no MissingPropertyException is thrown"
         noExceptionThrown()
-
-        and: "an error log was emitted (the branch ran) without throwing"
-        testLog.errors.any { it.contains("No status returned from") }
+        // NOTE: BP21 removed the logError from this branch (noise reduction for offline devices).
+        // The null-status path now emits logDebug + recordError() instead. The critical invariant
+        // for M4 is the absence of an exception — that remains verified above.
     }
 
     def "getDevices() logs missing-driver INFO exactly once when N devices need the same driver (M5)"() {
@@ -2773,10 +2777,13 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         // N4: tracking increments. When the poll callback receives status==null (simulating
         // stale configModule returning empty result), state.consecutiveEmpty[dni] must be
         // incremented so the watchdog can detect the pattern.
+        // BP21 note: the logError that was previously emitted here was intentionally removed
+        // (BP21 noise reduction). The branch now emits logDebug + recordError() instead.
+        // This test enables debugOutput to capture the debug log as branch-ran evidence.
         given: "one device in deviceList; httpPost returns HTTP 200 with result==null"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
-        settings.debugOutput = false
+        settings.debugOutput = true   // enable debug so BP21 logDebug emission is captured
         state.prefsSeeded = true
         state.scheduleVersion = "2.2"
         state.deviceList = ["empty-cid": "stale-config-module"]
@@ -2802,8 +2809,8 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         state.consecutiveEmpty != null
         (state.consecutiveEmpty["empty-cid"] as Integer) == 1
 
-        and: "an error log was emitted (the null-status branch ran)"
-        testLog.errors.any { it.contains("No status returned from") }
+        and: "a debug log was emitted confirming the null-status branch ran (BP21: logError replaced by logDebug)"
+        testLog.debugs.any { it.contains("empty") || it.contains("consecutive") }
     }
 
     def "updateDevices() clears state.consecutiveEmpty[dni] on successful poll (N5 -- BP17 Fix B)"() {
@@ -3258,5 +3265,280 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         and: "uuid is also updated (BP19)"
         existingChild.getDataValue("uuid") == "new-uuid-400s"
+    }
+
+    // =========================================================================
+    // Section Q — Bug Pattern #21: bounded self-heal backoff for offline devices
+    //
+    // Validates:
+    //   Q1  selfHealAttempts increments correctly across consecutive empty results
+    //   Q2  3rd self-heal attempt triggers offline marker (state set + child event)
+    //   Q3  already-offline device's empty poll does NOT fire further self-heal
+    //   Q4  recovery: first non-empty result clears state + emits online:"true" event
+    //   Q5  hourly WARN re-surface fires once per hour, not every poll
+    //   Q6  formatOfflineDuration helper outputs correct strings
+    // =========================================================================
+
+    def "ensurePollHealth() increments selfHealAttempts on consecutive empty results (Q1)"() {
+        // Q1: when a DNI reaches the threshold (5 consecutive empties), ensurePollHealth()
+        // must increment state.selfHealAttempts[dni] and schedule a Resync (up to 3 times).
+        given: "a device DNI with exactly 5 consecutive empty results (at threshold)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.consecutiveEmpty = ["PURIFIER-CID": 5]
+
+        int resyncCount = 0
+        driver.metaClass.runIn = { int delay, String handler ->
+            if (handler == "getDevices") resyncCount++
+        }
+        driver.metaClass.getChildDevice = { String dni ->
+            def d = new TestDevice()
+            d.name = "Test Purifier"
+            d
+        }
+
+        when:
+        driver.ensurePollHealth()
+
+        then: "selfHealAttempts for the DNI is now 1"
+        (state.selfHealAttempts as Map)?.get("PURIFIER-CID") == 1
+
+        and: "a Resync was scheduled"
+        resyncCount == 1
+
+        and: "consecutiveEmpty was reset to allow re-triggering after next 5 empties"
+        !(state.consecutiveEmpty as Map)?.containsKey("PURIFIER-CID")
+    }
+
+    def "ensurePollHealth() marks device offline after 3 self-heal attempts (Q2)"() {
+        // Q2: when selfHealAttempts reaches 3, ensurePollHealth() must:
+        //   - set state.deviceOfflineSince[dni] to a timestamp
+        //   - NOT schedule another Resync
+        //   - call markChildOffline() which emits sendEvent(online:"false") on the child
+        given: "a DNI with 5 consecutive empties AND 3 prior self-heal attempts"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.consecutiveEmpty  = ["PURIFIER-CID": 5]
+        state.selfHealAttempts  = ["PURIFIER-CID": 3]   // attempt 4 will be this run — exceeds MAX_HEAL_ATTEMPTS(3), triggers offline branch
+
+        int resyncCount = 0
+        driver.metaClass.runIn = { int delay, String handler ->
+            if (handler == "getDevices") resyncCount++
+        }
+
+        def childDev = new TestDevice()
+        childDev.name = "Test Purifier"
+        driver.metaClass.getChildDevice = { String dni ->
+            dni == "PURIFIER-CID" ? childDev : null
+        }
+
+        when:
+        driver.ensurePollHealth()
+
+        then: "no further Resync was scheduled"
+        resyncCount == 0
+
+        and: "device is marked offline in state"
+        (state.deviceOfflineSince as Map)?.containsKey("PURIFIER-CID")
+
+        and: "the child received an online:false event"
+        childDev.events.any { it.name == "online" && it.value == "false" }
+    }
+
+    def "ensurePollHealth() does NOT fire self-heal for already-offline device (Q3)"() {
+        // Q3: if state.deviceOfflineSince already contains the DNI, ensurePollHealth()
+        // must skip all self-heal logic (no runIn, no counter increment).
+        given: "a DNI that is already marked offline AND has new consecutive empties"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.consecutiveEmpty   = ["OFFLINE-CID": 5]
+        state.deviceOfflineSince = ["OFFLINE-CID": driver.now() - 10000]
+        state.selfHealAttempts   = ["OFFLINE-CID": 3]
+
+        int resyncCount = 0
+        driver.metaClass.runIn = { int delay, String handler ->
+            if (handler == "getDevices") resyncCount++
+        }
+        driver.metaClass.getChildDevice = { String dni -> null }
+
+        when:
+        driver.ensurePollHealth()
+
+        then: "no Resync was scheduled"
+        resyncCount == 0
+
+        and: "selfHealAttempts did NOT increase beyond 3"
+        ((state.selfHealAttempts as Map)?.get("OFFLINE-CID") ?: 0) <= 3
+    }
+
+    def "first non-empty poll after offline period clears state and emits online:true (Q4)"() {
+        // Q4: the success branch of updateDevices() must detect state.deviceOfflineSince[dni]
+        // and call markChildOnline(dni), which clears offline state and fires sendEvent(online:"true").
+        given: "a purifier DNI that was marked offline, now returning a valid response"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.prefsSeeded       = true
+        state.deviceList        = ["PURIFIER-CID": "test-config"]
+        state.deviceOfflineSince = ["PURIFIER-CID": driver.now() - 3600000]   // 1h ago
+        state.selfHealAttempts  = ["PURIFIER-CID": 3]
+
+        def childDev = new TestDevice()
+        childDev.typeName = "Levoit Vital 200S Air Purifier"
+        childDev.updateDataValue("deviceType", "LAP-V201S-WUS")
+        childDev.name  = "Test Purifier"
+        childDev.label = "Test Purifier"
+        // Override update() to be a no-op (we only care about the sendEvent side-effect)
+        childDev.metaClass.update = { Map st, nl -> true }
+        childDevices["PURIFIER-CID"] = childDev
+
+        // httpPost returns a non-null result
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            capturedHttpPosts << params.clone()
+            if (params.body?.payload) capturedBypassBodies << params.body.clone()
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    result: [powerSwitch: 1, fanSpeedLevel: 2],
+                    traceId: "test-trace"
+                ]
+            ]
+            callback(fakeResp)
+        }
+
+        when:
+        driver.updateDevices()
+
+        then: "state.deviceOfflineSince no longer contains the DNI"
+        !(state.deviceOfflineSince as Map)?.containsKey("PURIFIER-CID")
+
+        and: "state.selfHealAttempts no longer contains the DNI"
+        !(state.selfHealAttempts as Map)?.containsKey("PURIFIER-CID")
+
+        and: "state.lastOfflineWarnAt no longer contains the DNI"
+        !(state.lastOfflineWarnAt as Map)?.containsKey("PURIFIER-CID")
+
+        and: "the child received an online:true event"
+        childDev.events.any { it.name == "online" && it.value == "true" }
+    }
+
+    def "emitOfflineWarnsIfDue() emits WARN once per hour while device is offline (Q5)"() {
+        // Q5: the hourly-WARN helper must emit exactly once per hour interval.
+        // First call: 2h elapsed since lastOfflineWarnAt (seeded by markChildOffline) → emits.
+        // Second call immediately after: suppressed (within-hour window).
+        given: "device offline 2h ago; markChildOffline seeded both timestamps at offline time"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        long twoHoursAgo = driver.now() - 7200000L
+        state.deviceOfflineSince = ["OFFLINE-CID": twoHoursAgo]
+        state.lastOfflineWarnAt  = ["OFFLINE-CID": twoHoursAgo]   // seeded by markChildOffline at t=0
+
+        driver.metaClass.getChildDevice = { String dni ->
+            def d = new TestDevice(); d.name = "Offline Purifier"; d
+        }
+
+        when: "first call to emitOfflineWarnsIfDue()"
+        driver.emitOfflineWarnsIfDue()
+
+        then: "a WARN was emitted"
+        testLog.warns.any { it.contains("offline") }
+
+        and: "lastOfflineWarnAt was recorded"
+        (state.lastOfflineWarnAt as Map)?.containsKey("OFFLINE-CID")
+
+        when: "second call immediately after (within the 1h window)"
+        int warnCountBefore = testLog.warns.size()
+        driver.emitOfflineWarnsIfDue()
+
+        then: "no additional WARN was emitted (still within 1h suppress window)"
+        testLog.warns.size() == warnCountBefore
+    }
+
+    def "formatOfflineDuration() returns expected human-readable strings (Q6)"(long sinceMillis, String expectedPrefix) {
+        // Q6: helper must round correctly across minute/hour/day boundaries.
+        // driver.now() returns the HubitatSpec-mocked fixed timestamp (1745000000000L),
+        // so elapsed = mockedNow - (mockedNow - sinceMillis) = sinceMillis exactly.
+        given: "a timestamp representing the offline start"
+        long since = driver.now() - sinceMillis
+
+        when:
+        String result = driver.formatOfflineDuration(since)
+
+        then: "result contains the expected prefix text"
+        result.contains(expectedPrefix)
+
+        where:
+        sinceMillis          | expectedPrefix
+        30 * 1000L           | "less than a minute"  // 30 seconds — sub-minute floor
+        5  * 60 * 1000L      | "5 minute"    // 5 minutes
+        1  * 60 * 1000L      | "1 minute"    // 1 minute (singular)
+        60 * 60 * 1000L      | "1 hour"      // exactly 1 hour
+        2L * 60 * 60 * 1000L | "2 hour"      // 2 hours
+        25L * 60 * 60 * 1000L| "1d"          // 25 hours → 1d 1h
+    }
+
+    def "emitOfflineWarnsIfDue() does NOT fire WARN in same cycle as markChildOffline (Q7)"() {
+        // Q7: regression guard for the BP21 transition-cycle bug.
+        // markChildOffline() must seed lastOfflineWarnAt[dni] = now() so that
+        // emitOfflineWarnsIfDue() running in the same updateDevices() cycle sees
+        // elapsed = 0 < 3600000 and does NOT emit a WARN.
+        given: "fresh state — no offline devices"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.deviceOfflineSince = [:]
+        state.lastOfflineWarnAt  = [:]
+        state.selfHealAttempts   = [:]
+        testLog.warns.clear()
+
+        // markChildOffline calls getChildDevice internally; return null (no child on hub yet)
+        driver.metaClass.getChildDevice = { String d -> null }
+
+        when: "markChildOffline is called for a fresh DNI"
+        driver.markChildOffline("FRESH-OFFLINE-CID")
+
+        and: "emitOfflineWarnsIfDue runs in the same poll cycle"
+        driver.emitOfflineWarnsIfDue()
+
+        then: "deviceOfflineSince and lastOfflineWarnAt are both seeded for the DNI"
+        (state.deviceOfflineSince as Map)?.containsKey("FRESH-OFFLINE-CID")
+        (state.lastOfflineWarnAt  as Map)?.containsKey("FRESH-OFFLINE-CID")
+
+        and: "no WARN was emitted (would-be-immediate-fire bug suppressed)"
+        !testLog.warns.any { it.contains("FRESH-OFFLINE-CID") || it.contains("offline for") }
+    }
+
+    def "emitOfflineWarnsIfDue() fires WARN once per hour after offline transition (Q8)"() {
+        // Q8: verify normal hourly cadence — WARN fires when 1h has elapsed since
+        // lastOfflineWarnAt (as would be the case 1h after markChildOffline seeded it),
+        // and lastOfflineWarnAt is updated to prevent a second fire within the same hour.
+        given: "device marked offline 1h ago; lastOfflineWarnAt seeded at the same time"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        long oneHourAgo = driver.now() - 3600000L
+        state.deviceOfflineSince = ["LONG-OFFLINE-CID": oneHourAgo]
+        state.lastOfflineWarnAt  = ["LONG-OFFLINE-CID": oneHourAgo]   // as seeded by markChildOffline 1h ago
+        testLog.warns.clear()
+
+        driver.metaClass.getChildDevice = { String d -> null }   // label falls back to DNI
+
+        when: "emitOfflineWarnsIfDue runs"
+        driver.emitOfflineWarnsIfDue()
+
+        then: "exactly one WARN was emitted"
+        testLog.warns.size() == 1
+        testLog.warns[0].contains("LONG-OFFLINE-CID")
+
+        and: "lastOfflineWarnAt updated to now() to start the next 1h window"
+        (state.lastOfflineWarnAt as Map)["LONG-OFFLINE-CID"] == driver.now()
+
+        when: "emitOfflineWarnsIfDue runs again immediately (within same hour)"
+        int warnsBefore = testLog.warns.size()
+        driver.emitOfflineWarnsIfDue()
+
+        then: "no additional WARN fired"
+        testLog.warns.size() == warnsBefore
     }
 }

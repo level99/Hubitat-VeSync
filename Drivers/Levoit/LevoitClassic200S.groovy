@@ -109,6 +109,8 @@ metadata {
         attribute "nightLightBrightness", "number"  // 0 | 50 | 100 (read-only; no setter)
         attribute "info",             "string"   // HTML summary for dashboard tiles
         attribute "diagnostics",      "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online",           "string"
 
         // CROSS-CHECK [pyvesync device_map.py Classic200S mist_modes]:
         //   Only auto and manual are valid. No sleep mode on Classic 200S.

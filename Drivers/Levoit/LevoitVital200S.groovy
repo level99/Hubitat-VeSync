@@ -71,6 +71,8 @@ metadata {
         attribute "errorCode", "number"
         attribute "timerRemain", "number"
         attribute "diagnostics", "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online", "string"
 
         command "setDisplay", [[name:"Display*", type: "ENUM", constraints: ["on","off"]]]
         command "setSpeed", [[name:"Speed*", type: "ENUM", constraints: ["off","sleep","low","medium","high","max"]]]

@@ -26,6 +26,27 @@ SOFTWARE.
 
 // History:
 //
+// 2026-05-01: v2.4  Bug Pattern #21 — bounded self-heal backoff for chronically-offline devices.
+//                  - ensurePollHealth() now caps self-heal Resync attempts per device at 3.
+//                    After 3 failed attempts the device is marked offline in state
+//                    (state.deviceOfflineSince[dni]), further self-heal triggers are suppressed,
+//                    and the child receives a sendEvent(online:"false") for dashboards/RM.
+//                  - On first successful poll after an offline period the state is cleared and
+//                    the child receives sendEvent(online:"true") with recovery duration in INFO log.
+//                  - Log refactored from per-poll ERROR spam to tiered DEBUG/INFO/WARN:
+//                      counts 1-4 AND not offline  -> DEBUG "N consecutive empty"
+//                      count == 5 (first BP17 fire) -> INFO  "may be offline, self-healing"
+//                      attempts 2-3                 -> DEBUG "self-heal attempt N"
+//                      3rd-attempt offline mark     -> INFO  "marked offline, suppressing noise"
+//                      while offline, hourly        -> WARN  "has been offline for Nh Mm"
+//                      while offline, sub-hourly    -> DEBUG "still empty (offline since X)"
+//                      first recovery               -> INFO  "back online after Nh Mm"
+//                  - Hourly offline WARN emitted at top of updateDevices() by
+//                    emitOfflineWarnsIfDue() — iterates state.deviceOfflineSince.
+//                  - New helpers: markChildOffline(dni), markChildOnline(dni),
+//                    formatOfflineDuration(sinceMillis), emitOfflineWarnsIfDue().
+//                  - Per-child "online" attribute added to all child drivers (excludes
+//                    LevoitCore200S Light, LevoitGeneric, Notification Tile, VeSyncIntegrationVirtual).
 // 2026-04-27: v2.2.1 Bug fixes.
 //                  - Bug 1: safeAddChildDevice() helper wraps every addChildDevice()
 //                    call in getDevices() with UnknownDeviceTypeException catch.
@@ -227,6 +248,7 @@ import groovy.transform.Field
 @Field static final String APP_VERSION       = "2.5.1"
 @Field static final String DEFAULT_TRACE_ID  = "1634265366"
 @Field static final String DEFAULT_TIME_ZONE = "America/Los_Angeles"
+@Field static final int    MAX_HEAL_ATTEMPTS = 3   // BP21: cap self-heal Resyncs before marking offline
 // Regional routing is binary: US → smartapi.vesync.com, EU → smartapi.vesync.eu
 // (per pyvesync const.py). Implemented in v2.2 via deviceRegion preference + getApiHost() helper.
 
@@ -425,17 +447,29 @@ private void ensureDebugWatchdog() {
 }
 
 /**
- * BP17 poll-health watchdog.
+ * BP17 / BP21 poll-health watchdog.
  *
  * A stale configModule in state.deviceList (caused by a VeSync-side firmware update)
- * makes every bypassV2 status call return an empty result, generating one
- * ERROR log per device per poll cycle indefinitely. The symptom is:
- *   ERROR: No status returned from getPurifierStatus
+ * makes every bypassV2 status call return an empty result. BP17's fix triggers a full
+ * getDevices() Resync at 5 consecutive empties to refresh configModule from the cloud.
  *
- * This watchdog counts consecutive empty results per DNI via state.consecutiveEmpty.
- * If any DNI reaches the threshold (5 consecutive empties), a full getDevices() is
- * triggered to refresh configModule values from the VeSync cloud. On success, the
- * fresh configModule values restore normal polling without user action.
+ * BP21 bounds that self-heal loop for chronically-offline devices (unplugged / off WiFi /
+ * off VeSync cloud). If the underlying device is genuinely offline, the Resync succeeds
+ * (VeSync cloud still knows the device) but the next 5 polls also fail, triggering another
+ * Resync → infinite ~5min cycle + per-poll ERROR spam.
+ *
+ * Fix: cap self-heal attempts at 3 per device per session. After 3 failures:
+ *   - Mark device offline in state (state.deviceOfflineSince[dni] = now())
+ *   - Suppress further self-heal triggers until the next non-empty result
+ *   - Emit sendEvent(online:"false") to the child for dashboards / Rule Machine
+ *
+ * Recovery: the first non-empty result (in the updateDevices() success branch) clears
+ * state and emits sendEvent(online:"true"). See the updateDevices() empty/success
+ * branches and markChildOffline()/markChildOnline() helpers.
+ *
+ * state.selfHealAttempts[dni] — counter, incremented at each BP17 fire (whole-map discipline)
+ * state.deviceOfflineSince[dni] — Long (millis) when marked offline; absent when online
+ * state.lastOfflineWarnAt[dni]  — Long (millis) of last hourly WARN; absent until first WARN
  *
  * Threshold of 5: ~2.5 min at 30s interval — fast enough to self-heal before the
  * user notices, slow enough to avoid spurious Resyncs on transient API blips.
@@ -443,13 +477,192 @@ private void ensureDebugWatchdog() {
 private void ensurePollHealth() {
     if (!state.consecutiveEmpty) return
     int threshold = 5
-    boolean anyExceeded = state.consecutiveEmpty.any { dni, count -> (count as Integer) >= threshold }
-    if (anyExceeded) {
-        def offendingDnis = state.consecutiveEmpty.findAll { k, v -> (v as Integer) >= threshold }.keySet()
-        logInfo "BP17 poll-health: ${offendingDnis.size()} device(s) returned ≥${threshold} consecutive empty results (${offendingDnis}). Scheduling getDevices() to refresh configModule."
-        state.consecutiveEmpty = [:]  // reset counters before Resync to avoid re-triggering immediately
-        runIn(2, "getDevices")  // async — keeps current poll thread from blocking on retryableHttp delays
+
+    state.consecutiveEmpty.each { String dni, countRaw ->
+        int count = countRaw as Integer
+        if (count < threshold) return  // not yet a concern
+
+        // Device is already marked offline — skip all self-heal logic entirely.
+        // A genuinely-offline device won't recover via getDevices(); suppressing
+        // the trigger avoids the infinite ~5min self-heal loop (BP21).
+        if (state.deviceOfflineSince?.containsKey(dni)) {
+            logDebug "BP21: ${dni} already marked offline — skipping self-heal"
+            return
+        }
+
+        // Count how many self-heal attempts have been made for this DNI
+        def healMap = (state.selfHealAttempts ?: [:]) as Map
+        int attempts = ((healMap[dni] ?: 0) as Integer) + 1
+        healMap[dni] = attempts
+        state.selfHealAttempts = healMap
+
+        // Reset the consecutive-empty counter for this DNI before the Resync
+        // to avoid re-triggering immediately when the Resync completes.
+        def counts = (state.consecutiveEmpty ?: [:]) as Map
+        counts.remove(dni)
+        state.consecutiveEmpty = counts
+
+        if (attempts <= MAX_HEAL_ATTEMPTS) {
+            // Still within the self-heal budget — attempt Resync.
+            // (Attempt 1 is logged at INFO to alert the user; attempts 2+ at DEBUG.)
+            if (attempts == 1) {
+                def child = getChildDevice(dni)
+                String label = child?.label ?: child?.name ?: dni
+                logInfo "BP17 poll-health: device '${label}' (${dni}) returned ≥${threshold} consecutive empty results. Attempting self-heal (attempt ${attempts}/${MAX_HEAL_ATTEMPTS})."
+            } else {
+                logDebug "BP17 poll-health: self-heal attempt ${attempts}/${MAX_HEAL_ATTEMPTS} for ${dni}"
+            }
+            runIn(2, "getDevices")  // async — keeps current poll thread from blocking
+        } else {
+            // Exhausted self-heal budget — mark device offline.
+            def child = getChildDevice(dni)
+            String label = child?.label ?: child?.name ?: dni
+            logInfo "BP21: device '${label}' (${dni}) still empty after ${MAX_HEAL_ATTEMPTS} self-heal attempts. " +
+                    "Marking offline. Suppressing further self-heal triggers. " +
+                    "Check device power / WiFi / VeSync app to verify."
+            markChildOffline(dni)
+        }
     }
+}
+
+/**
+ * Mark a child device as offline (BP21).
+ *
+ * Sets state.deviceOfflineSince[dni] to the current timestamp and emits
+ * sendEvent(name:"online", value:"false") on the child. The child's "online"
+ * attribute is readable in dashboards and Rule Machine without any special
+ * driver code — parent writes it directly via sendEvent.
+ *
+ * Idempotent if the device is already marked offline (the parent's
+ * ensurePollHealth() guards prevent re-entry, but the double-guard is cheap).
+ */
+private void markChildOffline(String dni) {
+    def offlineMap = (state.deviceOfflineSince ?: [:]) as Map
+    if (offlineMap.containsKey(dni)) return   // already marked offline; no-op
+    long ts = now()
+    offlineMap[dni] = ts
+    state.deviceOfflineSince = offlineMap
+
+    // Seed lastOfflineWarnAt to now() so emitOfflineWarnsIfDue() in the same
+    // updateDevices() cycle does not immediately fire a WARN (BP21 transition-cycle bug).
+    // The first hourly WARN will fire ≥1h after this mark.
+    def warnMap = (state.lastOfflineWarnAt ?: [:]) as Map
+    warnMap[dni] = ts
+    state.lastOfflineWarnAt = warnMap
+
+    def child = getChildDevice(dni)
+    if (child == null) {
+        logDebug "markChildOffline(${dni}): no child device found — state updated but no event emitted"
+        return
+    }
+    child.sendEvent(name: "online", value: "false",
+        descriptionText: "Marked offline after ${MAX_HEAL_ATTEMPTS} self-heal attempts failed. Check device power / WiFi / VeSync app.")
+}
+
+/**
+ * Mark a child device as back online (BP21 recovery).
+ *
+ * Clears state.deviceOfflineSince[dni], state.selfHealAttempts[dni], and
+ * state.lastOfflineWarnAt[dni], then emits sendEvent(name:"online", value:"true")
+ * on the child. Logs recovery duration at INFO.
+ *
+ * Called from the updateDevices() success branch when a poll returns non-empty
+ * for a DNI that was previously marked offline.
+ */
+private void markChildOnline(String dni) {
+    def offlineMap = (state.deviceOfflineSince ?: [:]) as Map
+    Long sinceMillis = offlineMap[dni] as Long
+    offlineMap.remove(dni)
+    state.deviceOfflineSince = offlineMap
+
+    def healMap = (state.selfHealAttempts ?: [:]) as Map
+    healMap.remove(dni)
+    state.selfHealAttempts = healMap
+
+    def warnMap = (state.lastOfflineWarnAt ?: [:]) as Map
+    warnMap.remove(dni)
+    state.lastOfflineWarnAt = warnMap
+
+    def child = getChildDevice(dni)
+    if (child == null) {
+        logDebug "markChildOnline(${dni}): no child device found — state cleared but no event emitted"
+        return
+    }
+    String durStr = sinceMillis ? formatOfflineDuration(sinceMillis) : "unknown duration"
+    child.sendEvent(name: "online", value: "true",
+        descriptionText: "Device back online after ${durStr} offline.")
+    logInfo "BP21: device '${child.label ?: child.name ?: dni}' (${dni}) back online after ${durStr} offline."
+}
+
+/**
+ * Format an offline duration in human-readable form (BP21).
+ *
+ * sinceMillis — the timestamp (millis) when the device was marked offline.
+ * Returns strings like "8 minutes", "2 hours", "1d 4h".
+ */
+private String formatOfflineDuration(long sinceMillis) {
+    long elapsed = now() - sinceMillis
+    long seconds = elapsed / 1000
+    long minutes = seconds / 60
+    long hours   = minutes / 60
+    long days    = hours   / 24
+    if (days > 0) {
+        long remHours = hours - days * 24
+        return remHours > 0 ? "${days}d ${remHours}h" : "${days}d"
+    }
+    if (hours > 0) {
+        long remMin = minutes - hours * 60
+        return remMin > 0 ? "${hours}h ${remMin}m" : "${hours} hour${hours == 1 ? '' : 's'}"
+    }
+    if (minutes == 0) return "less than a minute"
+    return "${minutes} minute${minutes == 1 ? '' : 's'}"
+}
+
+/**
+ * Emit hourly WARN for each device currently marked offline (BP21).
+ *
+ * Called at the top of updateDevices() after ensurePollHealth(). Iterates
+ * state.deviceOfflineSince; for any entry where 1 hour has passed since the
+ * last WARN (or no WARN has been emitted yet for that device), emits a WARN
+ * log and updates state.lastOfflineWarnAt[dni].
+ */
+private void emitOfflineWarnsIfDue() {
+    def offlineMap = state.deviceOfflineSince as Map
+    if (!offlineMap) return
+    long oneHour = 3600000L
+    long nowMs = now()
+
+    def warnMap = (state.lastOfflineWarnAt ?: [:]) as Map
+    boolean warnMapDirty = false
+
+    offlineMap.each { String dni, sinceRaw ->
+        Long sinceMillis = sinceRaw as Long
+        Long lastWarnAt = warnMap[dni] as Long
+
+        // Defense-in-depth: lastOfflineWarnAt[dni] may be absent for state
+        // migrated from pre-BP21 driver versions, or for any future code path that
+        // sets deviceOfflineSince without going through markChildOffline().
+        // Treat missing as "just now" — seed it and skip this cycle so the 1h
+        // cadence starts cleanly rather than firing immediately.
+        if (lastWarnAt == null) {
+            warnMap[dni] = nowMs
+            warnMapDirty = true
+            return
+        }
+
+        boolean dueForWarn = (nowMs - lastWarnAt >= oneHour)
+        if (!dueForWarn) return
+
+        def child = getChildDevice(dni)
+        String label = child?.label ?: child?.name ?: dni
+        String durStr = formatOfflineDuration(sinceMillis)
+        logWarn "BP21: device '${label}' has been offline for ${durStr}. Check device power / WiFi / VeSync app."
+
+        warnMap[dni] = nowMs
+        warnMapDirty = true
+    }
+
+    if (warnMapDirty) state.lastOfflineWarnAt = warnMap
 }
 
 /**
@@ -578,7 +791,14 @@ def Boolean updateDevices()
     // results (symptom of stale configModule after VeSync-side firmware update) and
     // triggers a full getDevices() Resync to refresh configModule values. Idempotent
     // once all DNI counters are cleared.
+    // BP21 bounds this to 3 Resync attempts per device; after 3 fails the device is
+    // marked offline and further self-heal is suppressed until the device recovers.
     ensurePollHealth()
+
+    // BP21 hourly offline WARN -- for each device currently marked offline, emit a
+    // WARN once per hour so the user knows it's still unreachable (vs. per-poll ERROR
+    // spam that the old code emitted).
+    emitOfflineWarnsIfDue()
 
     // Stop if driver is reloading
     if (state.driverReloading) {
@@ -658,16 +878,26 @@ def Boolean updateDevices()
                 {
                     def status = resp.data.result
                     if (status == null) {
-                        logError "No status returned from ${method}: ${resp?.hasProperty('msg') ? resp.msg : ''}"
-                        recordError("No status returned from ${method}", [site:"updateDevices"], dni)
-                        // BP17: track consecutive empty results per DNI so ensurePollHealth()
-                        // can trigger a full Resync when configModule drifts post-firmware-update.
-                        // Whole-map-reassignment required: Hubitat state is a JSON-backed proxy;
-                        // bracket-notation writes (state.foo[k]=v) operate on a snapshot and do
-                        // NOT persist. Only top-level assignment (state.foo = newMap) writes back.
+                        // BP17: track consecutive empty results per DNI.
+                        // BP21: tiered logging — no per-poll ERROR; DEBUG while count<5 or offline;
+                        // INFO at threshold (first self-heal fire); WARN hourly via emitOfflineWarnsIfDue().
+                        // Whole-map-reassignment required: Hubitat state is a JSON-backed proxy.
                         def counts = (state.consecutiveEmpty ?: [:]) as Map
-                        counts[dni] = ((counts[dni] ?: 0) as Integer) + 1
+                        int newCount = ((counts[dni] ?: 0) as Integer) + 1
+                        counts[dni] = newCount
                         state.consecutiveEmpty = counts
+
+                        boolean alreadyOffline = state.deviceOfflineSince?.containsKey(dni)
+                        if (alreadyOffline) {
+                            // Device is marked offline — suppress ERROR spam; DEBUG only.
+                            Long since = state.deviceOfflineSince[dni] as Long
+                            logDebug "BP21: ${method} still empty for ${dni} (offline since ${new Date(since).format('HH:mm')})"
+                        } else {
+                            // Device is not yet marked offline — suppress per-poll ERROR;
+                            // DEBUG for counts 1-4; ensurePollHealth() fires the INFO at count==5.
+                            logDebug "BP21: ${method} returned empty for ${dni} (${newCount} consecutive)"
+                        }
+                        recordError("No status returned from ${method}", [site:"updateDevices"], dni)
                     } else {
                         // Successful poll — clear the stale-configModule counter for this DNI.
                         // Same whole-map-reassignment discipline: remove on snapshot, then reassign.
@@ -675,6 +905,10 @@ def Boolean updateDevices()
                             def counts = state.consecutiveEmpty as Map
                             counts.remove(dni)
                             state.consecutiveEmpty = counts
+                        }
+                        // BP21: if device was previously marked offline, mark it back online now.
+                        if (state.deviceOfflineSince?.containsKey(dni)) {
+                            markChildOnline(dni)
                         }
                         dev.update(status, getChildDevice(dni+"-nl"))
                     }
