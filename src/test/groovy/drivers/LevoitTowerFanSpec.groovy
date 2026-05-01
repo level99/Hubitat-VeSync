@@ -212,6 +212,25 @@ class LevoitTowerFanSpec extends HubitatSpec {
         testLog.errors.isEmpty()
     }
 
+    def "setLevel(50, 30) 2-arg form delegates to 1-arg (SwitchLevel standard signature)"() {
+        // Hubitat SwitchLevel capability advertises setLevel(level, duration). Without the 2-arg
+        // overload, callers (Rule Machine with duration, dashboards, MCP) throw MissingMethodException.
+        given: "default state"
+        settings.descriptionTextEnable = false
+
+        when: "setLevel is called with two args (level=50, duration=30)"
+        driver.setLevel(50, 30)
+
+        then: "same API call as setLevel(50) — setLevel API request sent with manualSpeedLevel"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.containsKey("manualSpeedLevel")
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #6: speed="off" when powerSwitch=0
     // -------------------------------------------------------------------------

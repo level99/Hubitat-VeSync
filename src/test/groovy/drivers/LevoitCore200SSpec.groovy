@@ -314,4 +314,41 @@ class LevoitCore200SSpec extends HubitatSpec {
         req != null
         (req.data == null || req.data == [:])
     }
+
+    // -------------------------------------------------------------------------
+    // SwitchLevel 2-arg overload
+    // -------------------------------------------------------------------------
+
+    def "setLevel(50) 1-arg sends Core-line setLevel API call"() {
+        // Baseline: confirm 1-arg setLevel routes to the speed API.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel(50) is called -- maps to speed 2 (33 <= 50 < 66)"
+        driver.setLevel(50)
+
+        then: "Core-line setLevel request was sent with {level, id, type}"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.containsKey("level")
+    }
+
+    def "setLevel(50, 30) 2-arg form delegates to 1-arg (SwitchLevel standard signature)"() {
+        // Hubitat SwitchLevel capability advertises setLevel(level, duration). Without the 2-arg
+        // overload, callers (Rule Machine with duration, dashboards, MCP) throw MissingMethodException.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel is called with two args (level=50, duration=30)"
+        driver.setLevel(50, 30)
+
+        then: "same API call as setLevel(50) — Core-line setLevel request sent"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.containsKey("level")
+    }
 }

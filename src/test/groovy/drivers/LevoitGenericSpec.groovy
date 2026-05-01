@@ -446,4 +446,39 @@ class LevoitGenericSpec extends HubitatSpec {
         setPowerReq != null
         setPowerReq.data.powerSwitch == 1
     }
+
+    // -------------------------------------------------------------------------
+    // SwitchLevel 2-arg overload
+    // -------------------------------------------------------------------------
+
+    def "setLevel(50) 1-arg emits level event (Generic best-effort pass-through)"() {
+        // Baseline: confirm 1-arg setLevel emits the level attribute.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setLevel(50)
+
+        then: "level event emitted with value 50"
+        noExceptionThrown()
+        def evt = testDevice.allEvents("level")
+        evt.size() > 0
+        evt.last().value == 50
+    }
+
+    def "setLevel(50, 30) 2-arg form delegates to 1-arg (SwitchLevel standard signature)"() {
+        // Hubitat SwitchLevel capability advertises setLevel(level, duration). Without the 2-arg
+        // overload, callers (Rule Machine with duration, dashboards, MCP) throw MissingMethodException.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setLevel is called with two args (level=50, duration=30)"
+        driver.setLevel(50, 30)
+
+        then: "same outcome as setLevel(50) — level event emitted"
+        noExceptionThrown()
+        def evt = testDevice.allEvents("level")
+        evt.size() > 0
+        evt.last().value == 50
+    }
 }

@@ -185,6 +185,23 @@ class LevoitVital200SSpec extends HubitatSpec {
         badCall == null
     }
 
+    def "setLevel(50, 30) 2-arg form delegates to 1-arg (SwitchLevel standard signature)"() {
+        // Hubitat SwitchLevel capability advertises setLevel(level, duration). Without the 2-arg
+        // overload, callers (Rule Machine with duration, dashboards, MCP) throw MissingMethodException.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel is called with two args (level=50, duration=30)"
+        driver.setLevel(50, 30)
+
+        then: "same API call as setLevel(50) — setLevel request sent with manualSpeedLevel"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.containsKey("manualSpeedLevel")
+    }
+
     def "setMode('auto') sends setPurifierMode with workMode='auto' (Bug Pattern #5 complement)"() {
         given: "device is on"
         settings.descriptionTextEnable = false

@@ -218,6 +218,17 @@ def cycleSpeed(){
     sendLevel(next)
 }
 
+// 2-arg setLevel overload — Hubitat SwitchLevel capability standard signature.
+// VeSync devices do NOT support hardware-level fade/duration, so the duration
+// parameter is intentionally ignored. Delegates to the 1-arg version.
+// Without this overload, any caller using the standard 2-arg form (Rule Machine
+// with duration, dashboard tiles, MCP setLevel(N, D), third-party apps) throws
+// MissingMethodException — Hubitat sandbox catches it silently and the command
+// fails without user feedback.
+def setLevel(val, duration) {
+    setLevel(val)
+}
+
 // SwitchLevel capability: setLevel(percent 0-100) -> map to 1-12
 // SwitchLevel convention: setLevel(0) turns the device off (matches Z-Wave dimmer platform expectation).
 def setLevel(val){

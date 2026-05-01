@@ -197,4 +197,20 @@ class LevoitCore200SLightSpec extends HubitatSpec {
         req != null
         req.data.night_light == "off"
     }
+
+    def "setLevel(90, 30) 2-arg form delegates to 1-arg (SwitchLevel standard signature)"() {
+        // Hubitat SwitchLevel capability advertises setLevel(level, duration). Without the 2-arg
+        // overload, callers (Rule Machine with duration, dashboards, MCP) throw MissingMethodException.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setLevel is called with two args (level=90, duration=30)"
+        driver.setLevel(90, 30)
+
+        then: "same routing as setLevel(90) -- routes to setNightLight('on') since level > 75"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setNightLight" }
+        req != null
+        req.data.night_light == "on"
+    }
 }

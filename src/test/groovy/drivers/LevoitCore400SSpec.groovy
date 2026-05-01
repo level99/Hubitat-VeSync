@@ -160,6 +160,24 @@ class LevoitCore400SSpec extends HubitatSpec {
         req.data.id == 0
     }
 
+    def "setLevel(50, 30) 2-arg form delegates to 1-arg (SwitchLevel standard signature)"() {
+        // Hubitat SwitchLevel capability advertises setLevel(level, duration). Without the 2-arg
+        // overload, callers (Rule Machine with duration, dashboards, MCP) throw MissingMethodException.
+        given: "device is on in manual mode"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        driver.state.mode = "manual"
+
+        when: "setLevel is called with two args (level=50, duration=30)"
+        driver.setLevel(50, 30)
+
+        then: "same API call as setLevel(50) — Core-line setLevel request sent"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.containsKey("level")
+    }
+
     def "AQI calculation produces a value between 0 and 500"() {
         given:
         settings.descriptionTextEnable = false
