@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **BP23 — `setLevel(N)` now auto-turns-on the device when switch is off.** SwitchLevel capability convention is that calling `setLevel` on an off device should turn it on AND set the level. This was a pre-existing latent bug — the buggy pattern dates back to upstream v1.1 (July 2022) and was inherited by all subsequent SwitchLevel-implementing drivers in this fork. Affected Core 200S/300S/400S/600S, Vital 100S/200S, Tower Fan, Pedestal Fan — Room Lighting "Activate" actions and similar `setLevel(100)`-from-off scenarios silently failed (cloud accepted speed commands but device stayed off). Fixed via auto-on guard at top of `setLevel`. Superior 6000S was unaffected — already had the guard via `setMistLevel`.
+
 ### Changed
 
 - **CI reproducibility** — Pin `astral-sh/setup-uv@v3` to uv `0.11.8` across `lint.yml` and `pyvesync-tracker.yml`. A breaking uv release would otherwise silently affect both workflows.

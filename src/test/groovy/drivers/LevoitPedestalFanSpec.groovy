@@ -1221,4 +1221,42 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setMode") && it.contains("null") }
         testParent.allRequests.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #23: setLevel(N>0) auto-turns-on when switch is off
+    // -------------------------------------------------------------------------
+
+    def "BP23: setLevel(N>0) when switch is off calls on() before sending level command"() {
+        // Room Lighting 'Activate' calls setLevel(100) on an off device. Without the BP23
+        // guard, the cloud accepted speed/mode commands but the device stayed physically off.
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setLevel(50) is called on an off device"
+        driver.setLevel(50)
+
+        then: "on() was called — setSwitch with powerSwitch=1 was sent"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
+        onReq != null
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP23: on() sets and clears state.turningOn to prevent re-entrance from setLevel"() {
+        // on() must set state.turningOn before the API call so that any internal path that
+        // calls setLevel() during turn-on doesn't loop back into on().
+        given: "device is off"
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "on() completes"
+        driver.on()
+
+        then: "state.turningOn was cleared after on() returned (try/finally guarantee)"
+        !state.containsKey("turningOn") || state.turningOn == null
+
+        and: "switch event was emitted as on"
+        lastEventValue("switch") == "on"
+    }
 }

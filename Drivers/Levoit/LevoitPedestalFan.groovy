@@ -238,13 +238,20 @@ def initialize(){ logDebug "Initializing" }
 // NOT humidifier-style {enabled: bool, id: 0}
 def on(){
     logDebug "on()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(power=1)")
-    if (httpOk(resp)) {
-        logInfo "Power on"
-        state.lastSwitchSet = "on"
-        device.sendEvent(name:"switch", value:"on")
-    } else {
-        logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"])
+    // state.turningOn prevents BP23 re-entrance: setLevel(N) -> on() -> (internal speed call) -> setLevel()
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(power=1)")
+        if (httpOk(resp)) {
+            logInfo "Power on"
+            state.lastSwitchSet = "on"
+            device.sendEvent(name:"switch", value:"on")
+        } else {
+            logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"])
+        }
+    } finally {
+        state.remove('turningOn')
     }
 }
 
@@ -318,10 +325,14 @@ def setLevel(val, duration) {
 
 // SwitchLevel capability: setLevel(percent 0-100) -> map to 1-12
 // SwitchLevel convention: setLevel(0) turns the device off (matches Z-Wave dimmer platform expectation).
+// BP23: setLevel(N>0) auto-turns-on when switch is off (SwitchLevel capability convention).
 def setLevel(val){
     logDebug "setLevel(${val})"
     Integer pct = Math.max(0, Math.min(100, (val as Integer) ?: 0))
     if (pct == 0) { off(); return }
+    // BP23: auto-on when switch is off.
+    // state.turningOn guard set in on() prevents re-entrance.
+    if (!state.turningOn && device.currentValue("switch") != "on") on()
     Integer lvl = levelFromPercent(pct)
     // SwitchLevel spec requires emitting the level event immediately
     sendEvent(name:"level", value: pct)

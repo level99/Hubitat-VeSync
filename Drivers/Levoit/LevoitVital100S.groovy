@@ -234,9 +234,14 @@ def setLevel(val, duration) {
 }
 
 // SwitchLevel convention: setLevel(0) turns the device off (matches Z-Wave dimmer platform expectation).
+// BP23: setLevel(N>0) auto-turns-on when switch is off (SwitchLevel capability convention).
 def setLevel(val){
     logDebug "setLevel $val"
     if (val == 0) { off(); return }
+    // BP23: auto-on when switch is off.
+    // state.turningOn is set by on() while configureOnState() runs async;
+    // skip the redundant on() call if a turn-on cycle is already in flight.
+    if (!state.turningOn && device.currentValue("switch") != "on") on()
     Integer lvl
     if (val < 20) lvl=1
     else if (val < 40) lvl=2

@@ -232,6 +232,11 @@ def setLevel(value, duration)
 def setLevel(value)
 {
     logDebug "setLevel $value"
+    // SwitchLevel convention: setLevel(0) means off (Z-Wave dimmer platform expectation).
+    if (value == 0) { off(); return }
+    // BP23: auto-on when switch is off (SwitchLevel capability convention).
+    // state.turningOn guard prevents recursive on()->setSpeed()->setLevel() loop.
+    if (!state.turningOn && device.currentValue("switch") != "on") on()
     def speed = 0
     setMode("manual") // always manual if setLevel() cmd was called
 
