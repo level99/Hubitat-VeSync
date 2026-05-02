@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Pin `astral-sh/setup-uv@v3` to uv `0.11.8` across `lint.yml` and `pyvesync-tracker.yml` for CI reproducibility. A breaking uv release would otherwise silently affect both workflows.
+
 ## [2.4] - 2026-05-01
 
 ### Fixed
