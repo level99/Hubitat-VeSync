@@ -51,7 +51,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Fall-through diagnostic driver for unsupported Levoit models. Provides best-effort power control and diagnostic capture for new-device-support issue filing.",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -82,7 +82,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.3"
+    state.driverVersion = "2.4"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -473,6 +473,13 @@ def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
 def logError(msg){ log.error msg }
 def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
 void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
+
+// Local no-op stub for recordError() — Generic does not #include level99.LevoitDiagnostics
+// (it has its own native captureDiagnostics() to avoid the method-name conflict). The
+// recordError() ring-buffer instrumentation pass added recordError() calls alongside
+// logError() sites; without this stub, every Generic error path would throw
+// MissingMethodException on top of the original error.
+private void recordError(String msg, Map ctx = [:], String overrideDni = null) { /* no-op */ }
 
 // BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
 private void ensureDebugWatchdog() {

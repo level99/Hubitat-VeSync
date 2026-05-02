@@ -60,7 +60,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson and elfege (contributor)",
         description: "Supports controlling the Levoit 600S air purifier",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -115,7 +115,7 @@ def installed() {
 def updated() {
 	logDebug "Updated with settings: ${settings}"
     state.clear()
-    state.driverVersion = "2.3"
+    state.driverVersion = "2.4"
     unschedule()
 	initialize()
 

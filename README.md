@@ -31,7 +31,7 @@ A Hubitat Elevation driver pack for **Levoit smart home devices** (air purifiers
 | **Levoit Sprout Air Purifier** *(v2.3 preview)* | `LAP-B851S-WEU/-WNA/-AEUR/-AUS/-WUS`, `LAP-BAY-MAX01S` | Switch, FanControl (**1-3**), Mode (auto/sleep/turbo/pet; manual via `setFanSpeed`), full AQ sensor suite (AQLevel, PM2.5, PM1, PM10, VOC, CO2), ChildLock, Display, NightLight (on/off/dim/auto string enum). pyvesync class `VeSyncAirSprout` (`VeSyncAirBaseV2`); manual mode established via `setLevel` NOT `setPurifierMode`. |
 | **Levoit EverestAir Air Purifier** *(v2.3 preview)* | `LAP-EL551S-WUS/-WEU/-AEUR/-AUS` | Switch, FanControl (**1-3**), Mode (auto/sleep/manual/**turbo**), AQ + PM2.5, LightDetection (feature on/off + `lightDetected` ambient-sensed read), VentAngle (**passive read** from `fanRotateAngle` — no write path in pyvesync), FilterLife, Display, ChildLock. pyvesync class `VeSyncAirBaseV2` (same base class as Vital 200S; no separate EverestAir class exists). Turbo is the first TURBO mode in this codebase — handled via `setPurifierMode {workMode:"turbo"}`. "EverestAir-P" is a marketing SKU, not a separate API class. No nightlight, no pet mode. |
 | **Levoit Tower Fan** *(v2.1 preview)* | `LTF-F422S-WUS/-WUSR/-KEU/-WJP` | Switch, FanControl (1-12), SwitchLevel, Mode (normal/turbo/auto/sleep), Oscillation (single-axis), Mute, Timer, Display, Temperature, ErrorCode |
-| **Levoit Pedestal Fan** *(v2.1 preview)* | `LPF-R432S-AEU/-AUS/-AUK` | Switch, FanControl (1-12), SwitchLevel, Mode (normal/turbo/eco/sleep), 2-axis Oscillation with range control, Mute, Display, Temperature, ChildLock (read-only) |
+| **Levoit Pedestal Fan** *(v2.1)* | `LPF-R432S-AEU/-AUS/-AUK` | Switch, FanControl (1-12), SwitchLevel, Mode (normal/turbo/eco/sleep), 2-axis Oscillation with range control, Mute, Display, Temperature, ChildLock, SmartCleaningReminder *(setters added v2.4)* |
 | **Levoit Generic Device** | Fall-through for unsupported `LAP-` / `LEH-` / `LV-` Levoit models | Best-effort Switch + SwitchLevel + AirQuality + Humidity, plus `captureDiagnostics()` for filing new-device-support issues |
 
 ¹ `LAP-V201-AUSR` (no `S` after `V201`) is an intentional typo SKU — this is the literal model code the VeSync cloud API emits for AU-market V201S hardware, as documented in pyvesync `device_map.py`. If your Hubitat log shows `LAP-V201-AUSR` as unrecognized, update to v2.2 or later.
@@ -40,7 +40,7 @@ A Hubitat Elevation driver pack for **Levoit smart home devices** (air purifiers
 
 For per-device attribute and command details: [`Drivers/Levoit/readme.md`](Drivers/Levoit/readme.md).
 
-For upcoming devices beyond v2.3: [`ROADMAP.md`](ROADMAP.md).
+For upcoming devices beyond v2.4: [`ROADMAP.md`](ROADMAP.md).
 
 ## For contributors
 

@@ -63,7 +63,7 @@ Copy the relevant `.groovy` files from the `Drivers/Levoit/` directory into Hubi
 | `LevoitSproutAir.groovy` | Levoit Sprout Air Purifier (LAP-B851S-*, LAP-BAY-MAX01S) *(v2.3 preview)* |
 | `LevoitEverestAir.groovy` | Levoit EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) *(v2.3 preview)* |
 | `LevoitTowerFan.groovy` | Levoit Tower Fan *(v2.1 preview)* |
-| `LevoitPedestalFan.groovy` | Levoit Pedestal Fan *(v2.1 preview)* |
+| `LevoitPedestalFan.groovy` | Levoit Pedestal Fan *(v2.1)* |
 | `LevoitGeneric.groovy` | **Fall-through diagnostic driver** — any unrecognized Levoit model code. Best-effort power control + `captureDiagnostics()` for filing new-device-support requests. |
 
 ### Setup
@@ -560,7 +560,7 @@ First fan device supported by this fork. Mode `sleep` maps to API literal `advan
 
 Commands: `setMode`, `setSpeed` (1-12), `setOscillation`, `setMute`, `setDisplay`, `setTimer` (seconds + on/off action), `cancelTimer`, `toggle`.
 
-### Pedestal Fan (LPF-R432S) *— v2.1 preview*
+### Pedestal Fan (LPF-R432S)
 
 2-axis oscillation (horizontal + vertical, controlled separately). Mode `sleep` maps to `advancedSleep` like Tower Fan; mode `eco` is the Pedestal Fan's auto-equivalent (Tower Fan has `auto`; do not confuse). `childLock` is read-only — pyvesync has no setter and ST/HB community drivers also expose no write path. Timer is omitted in v2.1 (no community-confirmed payload).
 
@@ -660,6 +660,6 @@ Thank you to **elfege** for adding `setLevel()` and figuring out the 'max' speed
 
 The Vital 200S, Superior 6000S, parent driver fixes, and v2.0 fork release are by **Dan Cox**, with payload research from pyvesync's test fixtures (`LAP-V201S.yaml`, `LEH-S601S.yaml`).
 
-The v2.1 drivers (Vital 100S, Classic 300S, OasisMist 450S, Tower Fan, Pedestal Fan) are also by **Dan Cox**, and ship as **preview drivers**: the maintainer does not own this hardware. Each driver was built from canonical pyvesync fixtures plus cross-checks against Home Assistant's `vesync` integration and the SmartThings/Homebridge community drivers. Inline `CROSS-CHECK` comment blocks document every contentious decision (decision/rationale/source/refutation criteria) so users reporting hardware behavior contradicting our blind decisions have a clear reference. If your device behaves differently than this driver expects, please [open an issue](https://github.com/level99/Hubitat-VeSync/issues) with a `captureDiagnostics` paste and a debug log — we'll iterate.
+The v2.1 preview drivers (Vital 100S, Classic 300S, OasisMist 450S, Tower Fan) are also by **Dan Cox**, and shipped as **preview drivers**: the maintainer did not own this hardware at v2.1 ship time. (Pedestal Fan also shipped as v2.1 preview but moved out of preview in v2.4 after live hardware verification — see CHANGELOG.) Each driver was built from canonical pyvesync fixtures plus cross-checks against Home Assistant's `vesync` integration and the SmartThings/Homebridge community drivers. Inline `CROSS-CHECK` comment blocks document every contentious decision (decision/rationale/source/refutation criteria) so users reporting hardware behavior contradicting our blind decisions have a clear reference. If your device behaves differently than this driver expects, please [open an issue](https://github.com/level99/Hubitat-VeSync/issues) with a `captureDiagnostics` paste and a debug log — we'll iterate.
 
 If you're a Vital 200S or Superior 6000S user who tried this integration before and hit "device discovered but data retrieval fails" — that's the bug fixed in v2.0.

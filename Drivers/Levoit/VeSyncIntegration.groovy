@@ -282,7 +282,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson (original); Dan Cox (fork: Vital 200S, Superior 6000S, parent fixes); elfege (contributor)",
         description: "Integrates Levoit air purifiers and humidifiers with Hubitat Elevation via VeSync cloud API",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"
@@ -326,7 +326,7 @@ def updated() {
         state.remove('accountID')
     }
     state.lastRegion = newRegion
-    state.driverVersion = "2.3"
+    state.driverVersion = "2.4"
 
     // Set flag to stop any running tasks from old driver instance
     state.driverReloading = true
