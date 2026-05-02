@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Pin `astral-sh/setup-uv@v3` to uv `0.11.8` across `lint.yml` and `pyvesync-tracker.yml` for CI reproducibility. A breaking uv release would otherwise silently affect both workflows.
+- **CI reproducibility** — Pin `astral-sh/setup-uv@v3` to uv `0.11.8` across `lint.yml` and `pyvesync-tracker.yml`. A breaking uv release would otherwise silently affect both workflows.
 
 ## [2.4] - 2026-05-01
 
