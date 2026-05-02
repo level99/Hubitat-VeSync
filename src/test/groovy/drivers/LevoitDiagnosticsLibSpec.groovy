@@ -374,6 +374,64 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
     // buildIssueUrl: truncation divisor / 3 path must converge without hanging
     // -------------------------------------------------------------------------
 
+    def "buildIssueUrl param keys match the bug_report.yml form field IDs (contract test)"() {
+        // Contract guard: the 6 pre-filled URL parameter keys produced by buildIssueUrl()
+        // must each appear as a form field `id` in .github/ISSUE_TEMPLATE/bug_report.yml.
+        //
+        // This spec was added in response to a mid-cycle break where the YAML used hyphenated
+        // IDs (e.g. `driver-version`) while buildIssueUrl() used underscored keys
+        // (`driver_version`). GitHub silently renders the form from the published `main`
+        // template, so mismatched IDs cause pre-filled links to drop fields with no error.
+        //
+        // Direction of check: urlPrefillKeys ⊆ formFieldIds.
+        //   - URL params `template`, `title`, `labels` are GitHub prefill mechanism fields,
+        //     not form body elements — excluded from the check.
+        //   - Form fields without URL params (e.g. `context`, `reproduction`, `debug_log`,
+        //     `prereqs`) are not pre-filled and are also excluded — the URL is intentionally
+        //     a subset of the form.
+        //   - Only the 6 pre-filled fields need to be in lockstep in both files.
+        given: "the issue template YAML is parsed for form field IDs"
+        // .github/ISSUE_TEMPLATE/bug_report.yml lives outside src/test/resources/.
+        // CWD when ./gradlew test runs is the project root, so the relative path resolves.
+        File yamlFile = new File(".github/ISSUE_TEMPLATE/bug_report.yml")
+        assert yamlFile.exists() : "bug_report.yml not found at ${yamlFile.absolutePath}"
+
+        Map yamlData = new org.yaml.snakeyaml.Yaml().load(yamlFile.text) as Map
+        List bodyFields = (yamlData.body as List) ?: []
+        Set<String> formFieldIds = bodyFields
+            .findAll { (it as Map).id != null }   // markdown blocks have no id — skip
+            .collect { (it as Map).id as String }
+            .toSet()
+
+        and: "a representative buildIssueUrl call is made"
+        String url = driver.buildIssueUrl([
+            "driver":           "Levoit Vital 200S Air Purifier",
+            "driver_version":   "2.4",
+            "model_code":       "LAP-V201S-WUS",
+            "hub_firmware":     "2.5.0.126",
+            "last_error":       "test error",
+            "diagnostic_block": "## diag block"
+        ])
+
+        when: "the URL query string is parsed for its parameter keys"
+        String query = url.contains('?') ? url.substring(url.indexOf('?') + 1) : ""
+        Set<String> allUrlParamKeys = query
+            .tokenize('&')
+            .collect { it.contains('=') ? it.substring(0, it.indexOf('=')) : it }
+            .collect { java.net.URLDecoder.decode(it, "UTF-8") }
+            .toSet()
+        // Exclude the GitHub-mechanism params that are not form body field IDs
+        Set<String> urlPrefillKeys = allUrlParamKeys - ["template", "title", "labels"]
+
+        then: "every pre-filled URL param key matches a form field id in bug_report.yml"
+        // If this fails: the two files have drifted. Rename the id in bug_report.yml to match
+        // the key used in buildIssueUrl(), OR rename the key in buildIssueUrl() and update
+        // bug_report.yml to match — but both MUST stay in lockstep. See the warning comment
+        // block at the top of bug_report.yml for the full contract.
+        Set<String> missing = urlPrefillKeys - formFieldIds
+        missing.isEmpty()
+    }
+
     def "buildIssueUrl handles a very large diagnostic_block without infinite loop"() {
         given: "a diagnostic block much larger than the URL budget"
         String hugeBlock = "X" * 20000   // 20KB, well above 7500 char budget
