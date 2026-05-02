@@ -54,6 +54,7 @@
  *    - setMode uses method "setTowerFanMode", NOT "setPurifierMode".
  *
  *  History:
+ *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-26: v2.0  Community fork initial release (Dan Cox). Preview driver.
  *                      Built from canonical pyvesync VeSyncTowerFan payloads
  *                      (LTF-F422S.yaml fixture + vesyncfan.py + fan_models.py).
@@ -66,13 +67,15 @@
  *                      timerRemain, errorCode, temperature.
  */
 
+#include level99.LevoitDiagnostics
+
 metadata {
     definition(
         name: "Levoit Tower Fan",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Tower Fan (LTF-F422S-WUS/WUSR/KEU/WJP) — power, fan speed 1-12, modes (normal/turbo/auto/sleep), oscillation, mute, display, timer, ambient temperature; canonical pyvesync payloads",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -105,6 +108,7 @@ metadata {
         command "setOscillation", [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         command "setMute",        [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         command "setDisplay",     [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
+        // setSleepPreference deferred to v2.5+ — see CROSS-CHECK block near method site
         command "setTimer", [
             [name:"Seconds*", type:"NUMBER", description:"Seconds until timer fires"],
             [name:"Action",   type:"ENUM",   constraints:["on","off"], description:"Action when timer fires (default: off)"]
@@ -114,6 +118,11 @@ metadata {
         // NOTE: setDisplayingType is intentionally absent -- pyvesync's own comment
         // states "Unknown functionality" for displayingType. We read + expose the field
         // as a diagnostic attribute only (HA finding #5). No user-facing setter.
+
+        attribute "diagnostics",     "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online",          "string"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -127,6 +136,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.4"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -150,7 +160,7 @@ def on(){
         state.lastSwitchSet = "on"
         device.sendEvent(name:"switch", value:"on")
     } else {
-        logError "Power on failed"
+        logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"])
     }
 }
 
@@ -162,7 +172,7 @@ def off(){
         state.lastSwitchSet = "off"
         device.sendEvent(name:"switch", value:"off")
     } else {
-        logError "Power off failed"
+        logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"])
     }
 }
 
@@ -186,6 +196,7 @@ def setSpeed(spd){
         Integer rawLevel = (spd as Integer)
         if (rawLevel < 1 || rawLevel > 12) {
             logError "setSpeed: invalid raw level ${rawLevel} -- must be 1-12"
+            recordError("setSpeed: invalid raw level ${rawLevel}", [method:"setLevel"])
             return
         }
         sendLevel(rawLevel)
@@ -198,7 +209,7 @@ def setSpeed(spd){
     if (s == "on")   { on(); return }   // Hubitat FanControl spec: "on" resumes at prior/default speed
     if (s == "auto") { setMode("auto"); return }
     Integer lvl = fanControlEnumToLevel(s)
-    if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; return }
+    if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; recordError("setSpeed: unknown enum '${s}'", [method:"setLevel"]); return }
     sendLevel(lvl)
 }
 
@@ -208,6 +219,17 @@ def cycleSpeed(){
     Integer cur = state.fanLevel as Integer ?: 1
     Integer next = (cur >= 12) ? 1 : (cur + 1)
     sendLevel(next)
+}
+
+// 2-arg setLevel overload — Hubitat SwitchLevel capability standard signature.
+// VeSync devices do NOT support hardware-level fade/duration, so the duration
+// parameter is intentionally ignored. Delegates to the 1-arg version.
+// Without this overload, any caller using the standard 2-arg form (Rule Machine
+// with duration, dashboard tiles, MCP setLevel(N, D), third-party apps) throws
+// MissingMethodException — Hubitat sandbox catches it silently and the command
+// fails without user feedback.
+def setLevel(val, duration) {
+    setLevel(val)
 }
 
 // SwitchLevel capability: setLevel(percent 0-100) -> map to 1-12
@@ -250,6 +272,7 @@ def setMode(mode){
     String m = (mode as String).toLowerCase()
     if (!(m in ["normal","turbo","auto","sleep"])) {
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|auto|sleep"
+        recordError("setMode: invalid mode '${m}'", [method:"setTowerFanMode"])
         return
     }
     // Map user-facing "sleep" to API "advancedSleep" (HA finding #d + pyvesync device_map.py)
@@ -260,46 +283,62 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"
+        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setTowerFanMode"])
     }
 }
 
 // ---------- Feature setters ----------
 def setOscillation(onOff){
     logDebug "setOscillation(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setOscillationSwitch", [oscillationSwitch: v], "setOscillationSwitch(${onOff})")
+    if (onOff == null) { logWarn "setOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    String s = (onOff as String).toLowerCase()
+    if (!(s in ["on","off"])) { logError "setOscillation: invalid value '${s}'"; recordError("setOscillation invalid: ${s}", [method:"setOscillationSwitch"]); return }
+    int v = (s == "on") ? 1 : 0
+    def resp = hubBypass("setOscillationSwitch", [oscillationSwitch: v], "setOscillationSwitch(${s})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"oscillation", value: onOff)
-        logInfo "Oscillation: ${onOff}"
+        device.sendEvent(name:"oscillation", value: s)
+        logInfo "Oscillation: ${s}"
     } else {
-        logError "Oscillation write failed"
+        logError "Oscillation write failed"; recordError("Oscillation write failed", [method:"setOscillationSwitch"])
     }
 }
 
 def setMute(onOff){
     logDebug "setMute(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setMuteSwitch", [muteSwitch: v], "setMuteSwitch(${onOff})")
+    if (onOff == null) { logWarn "setMute called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    String s = (onOff as String).toLowerCase()
+    if (!(s in ["on","off"])) { logError "setMute: invalid value '${s}'"; recordError("setMute invalid: ${s}", [method:"setMuteSwitch"]); return }
+    int v = (s == "on") ? 1 : 0
+    def resp = hubBypass("setMuteSwitch", [muteSwitch: v], "setMuteSwitch(${s})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"mute", value: onOff)
-        logInfo "Mute: ${onOff}"
+        device.sendEvent(name:"mute", value: s)
+        logInfo "Mute: ${s}"
     } else {
-        logError "Mute write failed"
+        logError "Mute write failed"; recordError("Mute write failed", [method:"setMuteSwitch"])
     }
 }
 
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
+    if (onOff == null) { logWarn "setDisplay called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    String s = (onOff as String).toLowerCase()
+    if (!(s in ["on","off"])) { logError "setDisplay: invalid value '${s}'"; recordError("setDisplay invalid: ${s}", [method:"setDisplay"]); return }
+    int v = (s == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${s})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
+        device.sendEvent(name:"displayOn", value: s)
+        logInfo "Display: ${s}"
     } else {
-        logError "Display write failed"
+        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
+
+// CROSS-CHECK [pyvesync VeSyncTowerFan._set_fan_state + device_map.py LTF-F422S sleep_preferences]:
+//   setSleepPreference was attempted in v2.4 but deferred to v2.5+ after Pedestal Fan live
+//   verification (device 1132, 2026-05-01) found both flat {sleepPreferenceType} and nested
+//   {sleepPreference: {...}} payloads rejected with inner 11000000. Both fan families share the
+//   same sleepPreference API shape — applying the same deferral. The sleepPreferenceType
+//   READ-ONLY attribute stays declared (populated on poll). Resolution path: mitmproxy capture.
 
 // ---------- Timer ----------
 // Timer shape for Tower Fan: {action: 'on'|'off', total: <seconds>}
@@ -310,7 +349,7 @@ def setTimer(seconds, action="off"){
     int secs = (seconds as Integer) ?: 0
     if (secs <= 0) { cancelTimer(); return }
     String act = (action ?: "off") as String
-    if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; return }
+    if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"setTimer"]); return }
     logDebug "setTimer(${secs}s, action=${act})"
     def resp = hubBypass("setTimer", [action: act, total: secs], "setTimer(${secs}s,${act})")
     if (httpOk(resp)) {
@@ -323,7 +362,7 @@ def setTimer(seconds, action="off"){
         }
         logInfo "Timer set: ${act} in ${secs}s (id=${state.timerId})"
     } else {
-        logError "Timer set failed"
+        logError "Timer set failed"; recordError("Timer set failed", [method:"setTimer"])
     }
 }
 
@@ -338,7 +377,7 @@ def cancelTimer(){
         state.remove("timerId")
         logInfo "Timer cancelled"
     } else {
-        logError "Timer cancel failed"
+        logError "Timer cancel failed"; recordError("Timer cancel failed", [method:"clearTimer"])
     }
 }
 
@@ -356,7 +395,7 @@ def update(){
     def resp = hubBypass("getTowerFanStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getTowerFanStatus"
+        if (!status?.result) { logError "No status returned from getTowerFanStatus"; recordError("No status returned from getTowerFanStatus", [method:"getTowerFanStatus"]) }
         else applyStatus(status)
     }
 }
@@ -541,6 +580,7 @@ private boolean sendLevel(Integer level){
     logDebug "sendLevel(${level})"
     if (level < 1 || level > 12) {
         logError "sendLevel: invalid level ${level} -- must be 1-12"
+        recordError("sendLevel: invalid level ${level}", [method:"setLevel"])
         return false
     }
     def resp = hubBypass("setLevel", [levelIdx: 0, levelType: "wind", manualSpeedLevel: level], "setLevel{levelIdx,levelType,manualSpeedLevel=${level}}")
@@ -552,7 +592,7 @@ private boolean sendLevel(Integer level){
         logInfo "Speed: L${level} (${enumVal})"
         return true
     } else {
-        logError "Speed write failed for level ${level}"
+        logError "Speed write failed for level ${level}"; recordError("Speed write failed for level ${level}", [method:"setLevel"])
         return false
     }
 }
@@ -638,7 +678,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

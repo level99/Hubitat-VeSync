@@ -25,6 +25,7 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
 // 2026-04-25: v2.0 (community fork, level99/Hubitat-VeSync, by Dan Cox)
 //                  - Added descriptionTextEnable preference (default true) and gated logInfo helper
 //                  - Added INFO logging at state-change transitions (night light on/off/dim)
@@ -40,13 +41,15 @@ SOFTWARE.
 // 2021-10-22: v1.0 Support for Levoit Air Purifier Core 200S / 400S
 
 
+#include level99.LevoitDiagnostics
+
 metadata {
     definition(
         name: "Levoit Core200S Air Purifier Light",
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S / 300S air purifiers' night light capability",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -54,6 +57,8 @@ metadata {
 
             command "setNightLight", [[name:"Night Light*", type: "ENUM", description: "Display", constraints: ["on", "off", "dim"] ] ]
 
+            attribute "diagnostics",     "string"
+            command "captureDiagnostics"
         }
 
     preferences {
@@ -71,6 +76,7 @@ def updated() {
 	logDebug "Updated with settings: ${settings}"
 
     state.clear()
+    state.driverVersion = "2.4"
     unschedule()
 	initialize()
 
@@ -133,6 +139,17 @@ def sendLevelEvent(mode)
 
     device.sendEvent(name: "level", value: dimLevel)
     device.sendEvent(name: "switch", value: swtch)
+}
+
+// 2-arg setLevel overload — Hubitat SwitchLevel capability standard signature.
+// VeSync devices do NOT support hardware-level fade/duration, so the duration
+// parameter is intentionally ignored. Delegates to the 1-arg version.
+// Without this overload, any caller using the standard 2-arg form (Rule Machine
+// with duration, dashboard tiles, MCP setLevel(N, D), third-party apps) throws
+// MissingMethodException — Hubitat sandbox catches it silently and the command
+// fails without user feedback.
+def setLevel(level, duration) {
+    setLevel(level)
 }
 
 def setLevel(level) {
@@ -212,12 +229,12 @@ def checkHttpResponse(action, resp) {
 		return true
 	else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500)
 	{
-		log.error "${action}: ${resp.status} - ${resp.getData()}"
+		log.error "${action}: ${resp.status} - ${resp.getData()}"; recordError("${action}: HTTP ${resp.status}", [site:"checkHttpResponse"])
 		return false
 	}
 	else
 	{
-		log.error "${action}: unexpected HTTP response: ${resp.status}"
+		log.error "${action}: unexpected HTTP response: ${resp.status}"; recordError("${action}: unexpected HTTP ${resp.status}", [site:"checkHttpResponse"])
 		return false
 	}
 }

@@ -184,6 +184,33 @@ This applies to ALL committed files: driver source, specs, fixtures, agent defin
 
 When reviewing changes, scan for these specific anti-patterns. Each is a real bug that was found and fixed during v2.0 development:
 
+### Test-layer coverage matrix
+
+Use this when reviewing a diff in the absence of one or more verification layers (e.g. preview driver without hardware → no Real-hardware row). A bug pattern only caught by Real-hardware needs explicit caveat in your APPROVE: *"Approve subject to A1 verification when hardware is acquired."*
+
+| BP | Static lint | Spock harness | Virtual parent (A2) | Real hardware (A1) |
+|---|:-:|:-:|:-:|:-:|
+| 1 — Missing 2-arg update | ✓ | ✓ | ✓ | ✓ |
+| 2 — Hardcoded getPurifierStatus | — | ✓ | ✓ | ✓ |
+| 3 — Envelope peel | — | ✓ | ✓ | ✓ |
+| 4 — V201S setLevel field-name | — | ✓ (PyvesyncCoverageSpec) | ✓ (FIXTURE_OPS) | ✓ |
+| 5 — V201S manual-mode wrong method | — | ✓ (PyvesyncCoverageSpec) | ✓ (FIXTURE_OPS) | ✓ |
+| 6 — Speed reports while off | — | ✓ | ✓ | ✓ |
+| 7 — Info HTML async race | — | — (mock is sync) | ✓ | ✓ |
+| 8 — Drying state mapped as boolean | — | ✓ | ✓ | ✓ |
+| 9 — Driver name change | ✓ (RULE19) | — | ✓ | ✓ |
+| 10 — SmartThings icon URL | ✓ | — | — | — |
+| 11 — Wrong documentationLink | ✓ | — | — | — |
+| 12 — Pref-seed missing | ✓ | ✓ | ✓ | ✓ |
+| 13 — Token-expiry silent failure | — | — | — | ✓ |
+| 14 — Hub-reboot drops runIn cron | ✓ | ✓ | ✓ (schedule fires on hub) | ✓ |
+| 15 — Driver uses app-only API | ✓ (RULE23) | ✓ (fail-fast mock) | ✓ | ✓ |
+| 16 — debugOutput stuck after reboot | ✓ (RULE25) | ✓ | ✓ | ✓ |
+| 17 — Stale state.deviceList configModule | — | ✓ | — (no real polling) | ✓ |
+| 18 — NPE on (null as String).toLowerCase() | ✓ (RULE27) | ✓ | ✓ | ✓ |
+
+Read: a `✓` means the layer would catch the regression. `—` means the layer cannot detect it (either by design — e.g. lint can't catch runtime async races — or by missing test coverage). The two BPs caught only by Real-hardware (BP13, and partially BP17) are the cases where a preview driver's A2 verification is insufficient and the maintainer's hardware sweep before cut is load-bearing.
+
 ### 1. Missing 2-arg `update(status, nightLight)` signature on a child
 
 **Symptom:** Every parent poll throws `MissingMethodException: No signature of method: <child_class>.update() applicable for argument types: (LazyMap, null)`. Status attributes never populate; the only data shown is whatever was set before the breakage. Community users report "device discovered but data retrieval fails."
@@ -538,6 +565,185 @@ If the driver lacks a `logWarn` helper, add `private logWarn(msg) { log.warn msg
 **Live-evidence:** surfaced 2026-04-28 during v2.3 cut-release pre-flight production-log audit. A Superior 6000S deployment logged the NPE pattern at `LevoitSuperior6000S.groovy:134`. Fork-wide audit found 17 vulnerable sites across 13 drivers (`setMode` in 13 drivers; `setSpeed` in PedestalFan + TowerFan; `setNightLight` in Classic300S; `setNightlightMode` in SproutAir); all fixed in the same fold-in commit.
 
 **Flag this pattern** whenever a new driver adds a `set*` command method without a null-guard at entry, OR uses `(arg as String).toLowerCase()` / `(arg as Integer)` style normalization without first guarding. It is BLOCKING — null is a routine real-world value via Rule Machine misconfiguration, not an edge case.
+
+---
+
+### 19. Self-heal logic refreshes intermediate state but not the load-bearing data value
+
+A common pattern: a watchdog detects symptom (e.g. empty polls), schedules a recovery action (e.g. Resync), but the recovery action operates on intermediate state (e.g. `state.deviceList`) without propagating the refreshed value to the load-bearing call site (e.g. `equipment.getDataValue("configModule")` used in `sendBypassRequest`). The watchdog appears to fire correctly; logs show "scheduling Resync"; but the actual API call still uses the stale value. Self-heal looks fixed but isn't.
+
+**Symptom:** ERROR fires every poll cycle, watchdog message appears periodically (e.g. `[BP17 poll-health] N device(s) returned ≥5 consecutive empty results`), but errors don't stop. ERROR pattern persists indefinitely.
+
+**Canonical fix:** ensure recovery code path updates BOTH the intermediate state AND the load-bearing call-site source (typically a child device data value). For VeSyncIntegration's getDevices() existing-child branches: refresh `configModule`, `cid`, and `uuid` data values, not just `deviceType`.
+
+**Live-evidence:** surfaced 2026-04-30 via static review triggered by community bug report — Core 200S user on v2.3 reported "No status returned from getPurifierStatus" every hour after upgrading. Self-heal logged but didn't fix; root cause was getDevices() existing-child else-branch never refreshing configModule data value. The v2.3 BP17 fix correctly added the consecutiveEmpty counter + ensurePollHealth watchdog + Resync trigger; the gap was the Resync's existing-child update path. Fix folded into v2.4 (21 else-branches updated, 63 lines added).
+
+**Flag this pattern** whenever a watchdog/self-heal mechanism is added: review every line of the recovery action and confirm each load-bearing call-site source (every `getDataValue` / state read used in subsequent API calls) is updated by the recovery, not just the intermediate state. Resync-style recovery is most prone — there are typically 20+ device-type branches and any missed one creates partial-recovery bugs. It is BLOCKING — silent self-heal failure is worse than no self-heal because users don't know to take manual action.
+
+### 20. Library file file-scope commentary triggers Hubitat parser "Internal error" (platform bug)
+
+Hubitat's library parser silently rejects library source containing certain content shapes between the optional MIT header and the `library(...)` declaration. `POST /library/saveOrUpdateJson` returns `{"success":false,"message":"Internal error"}` with no further detail in the JSON response or hub Logs. HPM hits the same endpoint, so end users see install failure with the same generic toast. **Confirmed reproduces on hub firmware 2.4.4.156 AND 2.5.0.126** (FW upgrade did not fix); platform-side bug, not FW-specific.
+
+The trigger is **fuzzier than originally cataloged**. Two manifestations confirmed:
+
+1. **Original (2026-04-30 morning):** `/* */` multi-line block comments at file scope, after the optional MIT header, before `library(`. Strip the block, replace with one-line comment, or convert to `//` line comments → saves.
+2. **Update (2026-04-30 afternoon, during v2.4 UX refactor):** even `//` line-comment content can trigger when:
+   - The comments contain literal text `/* */` or `library(` as documentation (paraphrasing the workaround in a NOTE block triggered the parser when added to a previously-saving file)
+   - File-scope commentary is dense (e.g. 20+ line `//` doc-headers preceding `library(`)
+   - Multi-line section-divider commentary between functions accumulates beyond a fuzzy threshold
+
+No clean single-token trigger isolated for case 2. The trigger is a parser/tokenizer interaction with content shape — not a clean syntactic rule.
+
+**Symptom:** library not present on hub after import; "Internal error" toast on Save. No log line. No compile trace. HPM-installed packages partially deploy (drivers fine, library missing) and downstream `#include` resolution fails at driver compile time with `MissingMethodException` for any library-provided helper (e.g. `recordError`).
+
+**Canonical fix (and shipping convention):** keep file-scope content in library files between the MIT header and the `library(` declaration to **ZERO commentary** if possible. Don't add doc headers, NOTE blocks, or expanded section dividers to library files. If documentation is needed, put it in:
+- `CONTRIBUTING.md` (for contributor-facing rationale)
+- `CLAUDE.md` BP catalog entry (for AI-agent-facing rationale)
+- The dev agent spec (for behavioral guidance during driver/library work)
+
+NEVER inside the library source itself. Section dividers between functions inside library files: single `// ----` line, not multi-line `// header / // detail / // ---` blocks. Do NOT paraphrase the BP20 trigger pattern in `//` comments either — the literal text triggers the parser when matched. javadoc `/* */` blocks INSIDE method bodies (above each function) are NOT affected — bug is file-scope-only.
+
+**Lint enforcement:** RULE29 (`tests/lint_rules/library_no_top_block_comment.py`) FAILs on any library file containing a `/* */` block comment after the first one (the optional MIT header) and before `library(`. Catches the original (case 1) trigger pattern. Does NOT catch case 2 manifestations (fuzzy `//` content) — those are caught by the runtime smoke test.
+
+**Runtime smoke test (deterministic catch):** `vesync-driver-operations` agent, on any library-file deploy, must POST the source to `/library/saveOrUpdateJson` and verify `success:true` in the response BEFORE reporting deployment success. If save fails, ops returns FAIL with the JSON body. This catches ANY trigger pattern at deploy time regardless of what slipped past lint or convention.
+
+**Live-evidence:** surfaced 2026-04-30 during v2.4 Phase 5 release prep — `LevoitDiagnosticsLib.groovy` (~425 lines / ~17.5 KB) consistently failed Save with "Internal error". ~30 in-browser variant tests (CodeMirror.setValue + Save + response capture) isolated the original `/* */` trigger. Workaround applied: convert doc block to `//` line comments. Then during the UX refactor a NOTE block of `// line comments` explaining the workaround was added — that ALSO triggered the bug despite being all-`//`. Removing the NOTE block restored save. Subsequent bisection of the dev-refactored 22 KB version showed the 4 modified function bodies save in any combination, but adding back the dev's expanded section comments tipped it back into failure. The shipped v2.4 library has ZERO file-scope commentary between the MIT header and `library(`; all explanation lives in CONTRIBUTING.md, this BP entry, and the dev/QA agent specs.
+
+**Flag this pattern** when reviewing any library file diff. Specifically flag:
+- Any addition of file-scope content between MIT header and `library(` (any `/* */` block, multi-line `//` block, NOTE block, or section divider that's more than one line of `// ----`)
+- Any text that paraphrases the BP20 workaround inside a comment (e.g. "uses // because /* */ is broken") — the literal text patterns themselves can trigger
+- Any expansion of section-divider commentary inside the library file
+
+It is BLOCKING — broken library save = HPM install failure for all users = unshippable. The runtime ops smoke-test is the final defense; lint + this BP review is the front-line catch.
+
+---
+
+### BP21: BP17 self-heal loops on chronically-offline devices
+
+**Root cause:** `ensurePollHealth()` triggers `getDevices()` configModule refresh when 5 consecutive empty polls occur (BP17 fix). The Resync succeeds (VeSync cloud knows the device even if it's offline), but if the device is genuinely offline (unplugged / off WiFi / off VeSync cloud), the next 5 polls also return empty → BP17 fires again → infinite ~5min self-heal cycle. Live-confirmed observation on device 1070 (DNI `vsaq63affce48109fb60322ea72bb2b1`), last activity ~8h before the bug was filed.
+
+Additionally: the prior code emitted `logError "No status returned from ${method}"` on every empty poll, generating one ERROR per device per poll cycle indefinitely — log noise that makes logs unreadable for offline devices.
+
+**Fix design:**
+
+State additions (all use whole-map-reassignment discipline; bracket-notation writes do NOT persist in Hubitat's JSON-backed state proxy):
+
+- `state.selfHealAttempts[dni]` — Integer counter, incremented each time `ensurePollHealth()` fires for this DNI. Cleared on recovery.
+- `state.deviceOfflineSince[dni]` — Long (millis) timestamp when device was marked offline. Absent when online.
+- `state.lastOfflineWarnAt[dni]` — Long (millis) of last hourly WARN. Absent until first WARN.
+
+`ensurePollHealth()` changes:
+- Iterates per-DNI (not a single `anyExceeded` aggregate). Per-DNI iteration is required because each device needs its own attempt counter.
+- If `state.deviceOfflineSince` already contains the DNI → skip all self-heal logic (device already marked offline; the configModule refresh won't help a genuinely-offline device).
+- Otherwise: increment `state.selfHealAttempts[dni]`, reset `consecutiveEmpty[dni]`, then:
+  - If attempts ≤ 3 → fire `runIn(2, "getDevices")` (same as original BP17; count 1 at INFO, counts 2-3 at DEBUG)
+  - If attempts > 3 → call `markChildOffline(dni)` (no further Resync)
+
+`markChildOffline(dni)` / `markChildOnline(dni)` helpers:
+- `markChildOffline`: sets `state.deviceOfflineSince[dni]`, calls `child.sendEvent(name:"online", value:"false")`. Null-guards on child lookup.
+- `markChildOnline`: clears all three state maps for this DNI, calls `child.sendEvent(name:"online", value:"true")`, logs INFO recovery with duration. Called from the success branch of `updateDevices()` when a previously-offline DNI returns a non-null result.
+
+Log refactor (tiered, replacing per-poll ERROR):
+- Counts 1-4, not offline: DEBUG `"N consecutive empty"` — silent in normal operation
+- Count == 5 (first self-heal, attempt 1): INFO `"may be offline, attempting self-heal"`
+- Attempts 2-3: DEBUG `"self-heal attempt N"`
+- After 3rd failure: INFO `"marked offline, suppressing further noise"`
+- Hourly while offline: WARN via `emitOfflineWarnsIfDue()` (called at top of `updateDevices()`)
+- Sub-hourly while offline: DEBUG `"still empty (offline since H:MM)"`
+- First recovery: INFO `"back online after Nh Mm"`
+
+`emitOfflineWarnsIfDue()`: iterates `state.deviceOfflineSince`; emits WARN + updates `state.lastOfflineWarnAt[dni]` when `now() - lastWarnAt >= 3600000`. Called at the top of `updateDevices()` alongside the existing watchdog calls.
+
+`formatOfflineDuration(sinceMillis)`: returns human-readable strings (`"8 minutes"`, `"2 hours"`, `"1d 4h"`).
+
+Per-child `online` attribute: declared in metadata for all child drivers except `LevoitCore200S Light`, `LevoitGeneric`, `Notification Tile`, `VeSyncIntegrationVirtual`. No setter command needed (parent-only writable). Parent writes it via `sendEvent` directly on the child device handle.
+
+**Check for this pattern** when reviewing:
+- Any modification to `ensurePollHealth()` — verify it cannot loop again on offline devices (must check `state.deviceOfflineSince.containsKey(dni)` before scheduling Resync)
+- Any change to the empty-result branch in `updateDevices()` — verify `logError` is NOT called unconditionally (it was the source of per-poll ERROR spam)
+- Any new child driver — verify it declares `attribute "online", "string"` (RULE28 will flag missing `#include`/`command "captureDiagnostics"`; analogous check for `online` attribute is manual)
+- Recovery path — verify `markChildOnline(dni)` is called in the `status != null` branch when `state.deviceOfflineSince.containsKey(dni)`
+
+**Refutation evidence:** the fix was live-confirmed to stop the loop on device 1070 (DNI `vsaq63affce48109fb60322ea72bb2b1`). The `online:"false"` attribute was visible on the child device's page within one poll cycle after the parent's `updated()` ran.
+
+---
+
+### BP22: HTTP-error log spam during network outages
+
+**Root cause:** `sendBypassRequest()` caught all exceptions in a generic `catch (Exception e)` block and called `logError "sendBypassRequest: ${e.toString()}"` unconditionally. During a network outage (hub lost internet, DNS failure, VeSync API down), every poll cycle for every child device threw a network-layer exception — typically `java.net.UnknownHostException` or `java.net.SocketTimeoutException`. With 6 child devices at 30s interval, that's 6 ERROR lines per minute for the duration of the outage. Live-confirmed during maintainer's internet outage: 6 errors per minute for the outage duration, plus `SocketTimeoutException` at the leading edge during the connection drop.
+
+Distinct from BP21 (which addresses the API empty-result path — the request completed but VeSync returned no data). BP22 is at the HTTP network layer — the request never reached VeSync.
+
+**Fix design:**
+
+State additions (parent-level — network outages affect all children identically; no per-DNI maps needed):
+
+- `state.networkUnreachableSince` — Long timestamp (millis) when the first network error of the current outage was logged. Null when network is healthy.
+- `state.lastNetworkWarnAt` — Long timestamp (millis) of last hourly WARN re-surface. Null when no outage in progress.
+
+`sendBypassRequest()` catch changes:
+
+- `catch (IllegalStateException e)` — unchanged (connection-pool-shutdown path already existed; not a transient network error).
+- `catch (Exception e)` — new branch: calls `isNetworkException(e)` to classify.
+  - Network-class exceptions (see `isNetworkException` below): first error of outage → `logWarn` + seed both state fields to `now()`; subsequent errors → `logDebug "BP22: still unreachable"`.
+  - Non-network exceptions → original `logError` + `recordError` path unchanged.
+- Success path (after `httpPost(params, effectiveClosure)` returns without throwing): if `state.networkUnreachableSince != null` → emit `logInfo "BP22: VeSync API reachable again after ${durStr}"` + clear all three state fields (networkUnreachableSince, lastNetworkWarnAt, lastNetworkProbeAt). Uses `formatOfflineDuration(sinceMillis)` (BP21 helper, reused).
+
+`isNetworkException(Exception e)` helper: walks the full cause chain (bounded to depth 10 to avoid infinite loops on cyclic causes) and checks each `Throwable.class.name` against the 8-class list. Cause-chain walk is required because live testing showed Apache HttpClient wraps the real network exception inside a generic wrapper — a flat top-level check misses these. String-based class name comparison avoids classpath import issues in the Hubitat Groovy sandbox. Covers 8 exception classes in two tiers:
+
+JDK layer (4 classes):
+- `java.net.UnknownHostException` — DNS failure
+- `java.net.SocketTimeoutException` — connect or read timeout
+- `java.net.ConnectException` — connection refused / unreachable
+- `java.net.NoRouteToHostException` — ICMP network-unreachable
+
+Apache HttpClient layer (4 classes — Hubitat's actual HTTP stack wraps JDK exceptions in these; live-observed during firewall block):
+- `org.apache.http.conn.ConnectTimeoutException` — connect timeout (firewall silent drop / SYN timeout)
+- `org.apache.http.conn.ConnectionPoolTimeoutException` — connection-pool exhaustion (cascading effect)
+- `org.apache.http.NoHttpResponseException` — server stopped responding after accepting connection
+- `org.apache.http.conn.HttpHostConnectException` — connection refused or ICMP unreachable at HttpClient layer
+
+When reviewing: if a new network-class exception surfaces in a live-log report that is not in this list, it should be added to `isNetworkException()` — not handled inline at the call site.
+
+Dual circuit-breaker (BP22 stall prevention): the per-call breaker in `sendBypassRequest()` is not sufficient on its own. Children are polled in a for-loop; all 6 dispatch `httpPost()` near-simultaneously. The first child to fail (~20s later) sets `networkUnreachableSince`, but the other 5 are already mid-`httpPost` and won't re-check. Result: first outage cycle still stalls ~120s. AND state may not propagate to in-flight closures in Hubitat's JSON-backed proxy.
+
+Two-layer fix:
+
+1. **Top-level circuit-breaker in `updateDevices()`** — added BEFORE the `driverReloading` guard, AFTER `emitNetworkWarnIfDue()`. When `state.networkUnreachableSince != null` and the probe interval hasn't elapsed, returns `false` immediately without iterating any children. When the interval HAS elapsed, sets `state.lastNetworkProbeAt = now()`, sets `state.networkProbeInFlight = true`, logs DEBUG "probing updateDevices cycle", and falls through to run the full cycle as a recovery probe. The remaining body (stale-CID cleanup, children for-loop, heartbeat) is wrapped in a `try {}` block; a `finally {}` clears `state.networkProbeInFlight` unconditionally at cycle end.
+
+2. **Per-call circuit-breaker in `sendBypassRequest()`** — still present; guards command-triggered `httpPost()` calls that arrive outside the polling path (e.g. user presses button while network is down). Condition is now `state.networkUnreachableSince != null && !state.networkProbeInFlight` — the `!networkProbeInFlight` guard bypasses the check when the top-level breaker has signalled "this IS the recovery probe", preventing a deadlock where the top-level updates `lastNetworkProbeAt = now()` and then each child's per-call check sees `sinceLastProbe=0` and skips.
+
+State additions: `state.networkProbeInFlight` (Boolean) — set to `true` only during a top-level recovery probe cycle; `null`/`false` at all other times. Must be cleared in `finally` so it cannot persist across cycles.
+
+`emitNetworkWarnIfDue()` helper (parallel to BP21's `emitOfflineWarnsIfDue()`):
+- Returns immediately if `state.networkUnreachableSince == null`.
+- Defense-in-depth null-guard: if `state.lastNetworkWarnAt` is null (state migrated from pre-BP22 install), seeds it to `now()` and returns without emitting — same lesson from BP21 transition-cycle bug.
+- Otherwise: emits `logWarn` with elapsed duration if `now() - lastNetworkWarnAt >= 3600000L`; updates `state.lastNetworkWarnAt = now()`.
+- Called at top of `updateDevices()` after `emitOfflineWarnsIfDue()`.
+- Uses `logWarn` (routes through `sanitize()`) — network unreachability is always user-actionable; `logWarn` is unconditional and `sanitize()` keeps the parent's credential-redaction policy intact.
+
+Log tiering summary:
+
+| Condition | Level | Message |
+|---|---|---|
+| First network error of outage | WARN (once) | `BP22: VeSync API unreachable — ${exClass}: ${msg}. Suppressing…` |
+| Subsequent errors during outage | DEBUG | `BP22: still unreachable (${exClass})` |
+| Hourly re-surface while down | WARN (hourly) | `BP22: VeSync API still unreachable for ${durStr}. Check hub network…` |
+| First successful response after outage | INFO (once) | `BP22: VeSync API reachable again after ${durStr} unreachable.` |
+
+**Check for this pattern** when reviewing:
+- Any modification to `sendBypassRequest()` catch blocks — verify the `isNetworkException` guard is not removed or bypassed; verify non-network exceptions still call `logError` (not silently swallowed).
+- Any new exception class that should be covered by BP22 — should be added to `isNetworkException()` (not hardcoded inline).
+- `isNetworkException()` — must walk the cause chain (while loop on `t.cause`), not just check `e.class.name` at top level. A flat check misses wrapped exceptions (live-confirmed regression).
+- Top-level circuit-breaker in `updateDevices()` — must appear AFTER `emitNetworkWarnIfDue()`, BEFORE the `driverReloading` guard. If missing, all children stall in the first outage cycle despite the per-call breaker.
+- Per-call circuit-breaker in `sendBypassRequest()` — must appear BEFORE the `try { httpPost(...) }` block AND must check `!state.networkProbeInFlight`. If the flag check is missing, recovery probes from top-level are deadlocked.
+- `networkProbeInFlight` set before iterating children in the top-level probe path, cleared in `finally` (not just on success). If not in `finally`, a failing probe cycle leaves the flag set permanently, bypassing the per-call breaker forever.
+- `state.lastNetworkProbeAt` cleared in the recovery path — if omitted, the first successful probe will clear `networkUnreachableSince` but leave a stale probe timestamp that delays the next outage's first probe.
+- `emitNetworkWarnIfDue()` call site in `updateDevices()` — must come AFTER `emitOfflineWarnsIfDue()`, before the top-level circuit-breaker block.
+- Recovery detection — must be on the success path (after `httpPost` returns normally), NOT inside the closure (the closure doesn't know about network-layer exceptions; it only sees successful HTTP responses).
+- State null-coercion: `state.networkUnreachableSince as long` (not `as Long`) when used in arithmetic — Groovy coerces null `as long` to 0L; `as Long` returns null and NPEs in arithmetic. The actual implementation uses the null check before arithmetic, so this is a secondary concern, but flag it if seen without the null check.
+
+**Refutation evidence:** live-verified stop of ERROR spam during internet outage on maintainer's hub. Before: 6 ERRORs/min. After: one WARN at outage start, DEBUG-only during, INFO on recovery. Per-call circuit-breaker added after live observation of 122,187ms poll cycles during firewall block. Top-level circuit-breaker added after live observation that per-call breaker was insufficient for the parallel-poll case — 35+ minutes of 120s+ poll cycles post first-WARN.
 
 ---
 

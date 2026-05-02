@@ -31,6 +31,7 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-04-29: v2.4  Phase 5 — recordError() ring-buffer at all logError sites (library not included; driver has native captureDiagnostics).
  *    2026-04-25: v2.0  Community fork initial release (Dan Cox). Fall-through diagnostic
  *                      driver for unsupported Levoit models. Capabilities: Switch,
  *                      SwitchLevel, RelativeHumidityMeasurement, AirQuality, Actuator,
@@ -50,7 +51,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Fall-through diagnostic driver for unsupported Levoit models. Provides best-effort power control and diagnostic capture for new-device-support issue filing.",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -81,6 +82,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.4"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -113,10 +115,10 @@ def on(){
             logInfo "Power on (V1 fallback)"
             device.sendEvent(name:"switch", value:"on")
         } else {
-            logError "Power on failed (setSwitch returned -1; setPower also failed)"
+            logError "Power on failed (setSwitch returned -1; setPower also failed)"; recordError("Power on failed (V1 fallback also failed)", [method:"setPower"])
         }
     } else {
-        logError "Power on failed (setSwitch returned non-fallback error; see debug log)"
+        logError "Power on failed (setSwitch returned non-fallback error; see debug log)"; recordError("Power on failed (non-fallback error)", [method:"setSwitch"])
     }
 }
 
@@ -133,10 +135,10 @@ def off(){
             logInfo "Power off (V1 fallback)"
             device.sendEvent(name:"switch", value:"off")
         } else {
-            logError "Power off failed (setSwitch returned -1; setPower also failed)"
+            logError "Power off failed (setSwitch returned -1; setPower also failed)"; recordError("Power off failed (V1 fallback also failed)", [method:"setPower"])
         }
     } else {
-        logError "Power off failed (setSwitch returned non-fallback error; see debug log)"
+        logError "Power off failed (setSwitch returned non-fallback error; see debug log)"; recordError("Power off failed (non-fallback error)", [method:"setSwitch"])
     }
 }
 
@@ -146,6 +148,17 @@ def toggle(){
 }
 
 // ---------- SwitchLevel (best-effort pass-through) ----------
+
+// 2-arg setLevel overload — Hubitat SwitchLevel capability standard signature.
+// VeSync devices do NOT support hardware-level fade/duration, so the duration
+// parameter is intentionally ignored. Delegates to the 1-arg version.
+// Without this overload, any caller using the standard 2-arg form (Rule Machine
+// with duration, dashboard tiles, MCP setLevel(N, D), third-party apps) throws
+// MissingMethodException — Hubitat sandbox catches it silently and the command
+// fails without user feedback.
+def setLevel(val, duration) {
+    setLevel(val)
+}
 
 def setLevel(val){
     logDebug "setLevel(${val})"
@@ -178,7 +191,7 @@ def update(){
     // Both failed or returned no device fields; still call applyStatus so compat is updated
     if (resp?.data) applyStatus(resp?.data)
     else if (resp2?.data) applyStatus(resp2?.data)
-    else logError "No status data returned from either getPurifierStatus or getHumidifierStatus"
+    else { logError "No status data returned from either getPurifierStatus or getHumidifierStatus"; recordError("No status data returned from either status method", [method:"getPurifierStatus"]) }
 }
 
 // 1-arg parent callback
@@ -461,6 +474,13 @@ def logError(msg){ log.error msg }
 def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
 void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
 
+// Local no-op stub for recordError() — Generic does not #include level99.LevoitDiagnostics
+// (it has its own native captureDiagnostics() to avoid the method-name conflict). The
+// recordError() ring-buffer instrumentation pass added recordError() calls alongside
+// logError() sites; without this stub, every Generic error path would throw
+// MissingMethodException on top of the original error.
+private void recordError(String msg, Map ctx = [:], String overrideDni = null) { /* no-op */ }
+
 // BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
 private void ensureDebugWatchdog() {
     if (settings?.debugOutput && state.debugEnabledAt) {
@@ -494,7 +514,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

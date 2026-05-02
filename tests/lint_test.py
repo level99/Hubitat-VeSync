@@ -69,6 +69,7 @@ def rule_ids(findings):
 
 from lint_rules.groovy_javadoc_terminator import check_rule26_javadoc_terminator
 from lint_rules.bp18_null_guard import check_rule27_bp18_null_guard
+from lint_rules.captureDiagnostics_presence import check_rule28_capturediagnostics_presence
 from lint_rules.bug_patterns import (
     check_bp1_missing_2arg_update,
     check_bp2_hardcoded_purifier_method,
@@ -1247,7 +1248,239 @@ class TestRule27NullGuardOnSetCommands:
 
 
 # ---------------------------------------------------------------------------
+# RULE20 version_lockstep — _extract_definition_block parser robustness
+# ---------------------------------------------------------------------------
+
+class TestExtractDefinitionBlock:
+    """Regression tests for _extract_definition_block — the parser that locates
+    the metadata definition() block before extracting the version: field.
+
+    Surfaced 2026-04-29: when a driver source contains a `// definition(name:)`
+    line comment followed (much later) by an unrelated `if (cond) {` closure
+    block, the original regex matched the comment's `definition(` token and
+    extended through the unrelated `) {` — capturing a sprawling 'interior'
+    that did NOT include the real metadata block, masking the real version: field.
+    Fix: strip line comments (`re.sub` with `(?m)^\\s*//.*$`) before the match.
+    """
+
+    def test_normal_definition_block_is_extracted(self):
+        """Happy path: standard driver source — version field found correctly."""
+        from lint_rules.version_lockstep import _extract_definition_block, _extract_version_from_block
+        source = '''
+import groovy.transform.Field
+
+metadata {
+    definition(
+        name: "Example",
+        namespace: "level99",
+        version: "2.3"
+    ) {
+        capability "Refresh"
+    }
+}
+'''
+        interior, lineno = _extract_definition_block(source)
+        assert interior is not None
+        assert _extract_version_from_block(interior) == "2.3"
+
+    def test_comment_with_definition_token_does_not_confuse_parser(self):
+        """Regression: line comment containing `definition(name:)` followed
+        later by an unrelated `if (cond) {` must NOT capture the comment as
+        the start of the definition block. The real definition block at the
+        bottom must still be located and its version extracted.
+        """
+        from lint_rules.version_lockstep import _extract_definition_block, _extract_version_from_block
+        source = '''
+import groovy.transform.Field
+
+// The driver name strings MUST match the real child driver's definition(name:)
+// exactly — Hubitat resolves child drivers by name string on addChildDevice().
+
+@Field static final Map FIXTURE_TO_DRIVER = ["x": "y"]
+
+private void example() {
+    if (data?.containsKey("level")) {
+        // unrelated closure body; this `) {` would have terminated the
+        // bogus interior captured by the comment-confused regex.
+    }
+}
+
+metadata {
+    definition(
+        name: "Example",
+        namespace: "level99",
+        version: "2.3"
+    ) {
+        capability "Refresh"
+    }
+}
+'''
+        interior, lineno = _extract_definition_block(source)
+        assert interior is not None, "definition block should be found despite comment confusion"
+        version = _extract_version_from_block(interior)
+        assert version == "2.3", (
+            f"version: '2.3' should be extracted from the real definition block; "
+            f"got {version!r} (interior len={len(interior)})"
+        )
+
+    def test_no_definition_block_returns_none(self):
+        """Source without any definition() block returns (None, 1)."""
+        from lint_rules.version_lockstep import _extract_definition_block
+        source = '''
+// Just a comment with definition(name:)
+def helper() {}
+'''
+        interior, lineno = _extract_definition_block(source)
+        assert interior is None
+        assert lineno == 1
+
+
+# ---------------------------------------------------------------------------
 # Integration: lint.py exit codes
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# RULE28 — captureDiagnostics Phase 5 presence check
+# ---------------------------------------------------------------------------
+
+class TestRule28CaptureDiagnosticsPresence:
+    """RULE28: every in-scope Levoit driver must have the Phase 5 plumbing:
+    #include level99.LevoitDiagnostics, command "captureDiagnostics", and
+    attribute "diagnostics", "string".
+    """
+
+    GOOD = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+
+        metadata {
+            definition(name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson",
+                       version: "2.3") {
+                capability "Switch"
+                attribute "diagnostics",     "string"
+                command "captureDiagnostics"
+            }
+        }
+        def updated() { state.clear() }
+    """)
+
+    # Library file — should be out-of-scope regardless of content
+    LIBRARY_FILE = textwrap.dedent("""\
+        library(
+            name: "LevoitDiagnostics",
+            namespace: "level99"
+        )
+        void recordError(String msg, Map ctx = [:]) { }
+    """)
+
+    MISSING_INCLUDE = textwrap.dedent("""\
+        metadata {
+            definition(name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson",
+                       version: "2.3") {
+                capability "Switch"
+                attribute "diagnostics",     "string"
+                command "captureDiagnostics"
+            }
+        }
+    """)
+
+    MISSING_COMMAND = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+
+        metadata {
+            definition(name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson",
+                       version: "2.3") {
+                capability "Switch"
+                attribute "diagnostics",     "string"
+            }
+        }
+    """)
+
+    MISSING_ATTRIBUTE = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+
+        metadata {
+            definition(name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson",
+                       version: "2.3") {
+                capability "Switch"
+                command "captureDiagnostics"
+            }
+        }
+    """)
+
+    WRONG_ATTR_TYPE = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+
+        metadata {
+            definition(name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson",
+                       version: "2.3") {
+                capability "Switch"
+                attribute "diagnostics",     "String"
+                command "captureDiagnostics"
+            }
+        }
+    """)
+
+    def test_good_driver_passes(self):
+        findings = run_rule(check_rule28_capturediagnostics_presence, self.GOOD, "LevoitVital200S")
+        assert findings == []
+
+    def test_library_file_is_out_of_scope(self):
+        # Library files use library() block — RULE28 must skip them (PASS)
+        findings = run_rule(check_rule28_capturediagnostics_presence, self.LIBRARY_FILE, "LevoitDiagnosticsLib")
+        assert findings == []
+
+    def test_out_of_scope_virtual_passes(self):
+        # VeSyncIntegrationVirtual.groovy — test harness, explicitly out-of-scope
+        findings = run_rule(check_rule28_capturediagnostics_presence, self.MISSING_INCLUDE, "VeSyncIntegrationVirtual")
+        assert findings == []
+
+    def test_out_of_scope_generic_passes(self):
+        # LevoitGeneric.groovy — native captureDiagnostics; intentionally no #include
+        findings = run_rule(check_rule28_capturediagnostics_presence, self.MISSING_INCLUDE, "LevoitGeneric")
+        assert findings == []
+
+    def test_missing_include_fails(self):
+        findings = run_rule(check_rule28_capturediagnostics_presence, self.MISSING_INCLUDE, "LevoitVital200S")
+        rule_ids_found = [f['rule_id'] for f in findings]
+        assert "RULE28_missing_include_LevoitDiagnostics" in rule_ids_found
+        assert all(f['severity'] == 'FAIL' for f in findings)
+
+    def test_missing_command_fails(self):
+        findings = run_rule(check_rule28_capturediagnostics_presence, self.MISSING_COMMAND, "LevoitVital200S")
+        rule_ids_found = [f['rule_id'] for f in findings]
+        assert "RULE28_missing_command_captureDiagnostics" in rule_ids_found
+
+    def test_missing_attribute_fails(self):
+        findings = run_rule(check_rule28_capturediagnostics_presence, self.MISSING_ATTRIBUTE, "LevoitVital200S")
+        rule_ids_found = [f['rule_id'] for f in findings]
+        assert "RULE28_missing_attribute_diagnostics" in rule_ids_found
+
+    def test_wrong_attribute_type_fails(self):
+        # attribute "diagnostics", "String" (capital S) must fail — Hubitat needs lowercase "string"
+        findings = run_rule(check_rule28_capturediagnostics_presence, self.WRONG_ATTR_TYPE, "LevoitVital200S")
+        rule_ids_found = [f['rule_id'] for f in findings]
+        assert "RULE28_missing_attribute_diagnostics" in rule_ids_found
+
+    def test_not_checked_for_non_groovy(self):
+        # Python files, markdown, etc. must not be checked
+        path = REPO_ROOT / "tests" / "lint_test.py"
+        from lint_rules.groovy_lite import clean_source
+        src = "attribute 'diagnostics', 'string'\ncommand 'captureDiagnostics'\n"
+        raw_lines = src.splitlines()
+        _, cleaned_lines = clean_source(src)
+        findings = check_rule28_capturediagnostics_presence(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+        assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# TestLintExitCodes
 # ---------------------------------------------------------------------------
 
 class TestLintExitCodes:

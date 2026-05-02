@@ -147,6 +147,24 @@ abstract class HubitatSpec extends Specification {
         }
         def source = file.text
 
+        // Resolve Hubitat #include directives by inlining the named library files.
+        // Mirrors what Hubitat's preprocessor does at runtime: each `#include
+        // <namespace>.<libraryName>` line is replaced by the body of the
+        // corresponding library .groovy file. The library file's own `library(...)`
+        // metadata call is shimmed below the same way as `metadata(...)` etc.
+        // After inlining, the driver source has the library's methods in scope.
+        StringBuilder libraryBodies = new StringBuilder()
+        java.util.regex.Pattern includePattern =
+            java.util.regex.Pattern.compile(/^#include\s+([\w.]+)\s*$/, java.util.regex.Pattern.MULTILINE)
+        java.util.regex.Matcher matcher = includePattern.matcher(source)
+        while (matcher.find()) {
+            File libFile = resolveLibraryFile(matcher.group(1))
+            if (libFile?.exists()) {
+                libraryBodies.append(libFile.text).append("\n")
+            }
+        }
+        String strippedSource = source.replaceAll(/(?m)^#include\s+[\w.]+\s*$/, '')
+
         // Prepend metadata DSL shims. These define no-op closures for the
         // keywords Hubitat evaluates at definition-time. Without these, the
         // `metadata { definition(...) { capability "..." } }` block throws
@@ -157,10 +175,12 @@ abstract class HubitatSpec extends Specification {
         // `metadata { definition(...) { ... } }` (nested closures).
         // `capability`, `attribute`, `command`, `input` are defined to accept
         // varargs so they work regardless of how many args the driver passes.
+        // `library` is the metadata block at the top of Hubitat library files.
         def shim = '''\
 def metadata(Closure c)   { /* no-op */  }
 def definition(Map m)     { /* no-op */  }
 def definition(Map m, Closure c) { c?.call() }
+def library(Map m)        { /* no-op */  }
 def capability(String s)  { /* no-op */  }
 def attribute(Object... a){ /* no-op */  }
 def command(Object... a)  { /* no-op */  }
@@ -169,14 +189,29 @@ def input(Object... a)    { /* no-op */  }
 // @Field and import declarations from driver source are fine as-is.
 // `static String version()` (Notification Tile) is also fine.
 '''
-        def shimmedSource = shim + "\n" + source
+        def combinedSource = shim + "\n" + libraryBodies.toString() + "\n" + strippedSource
 
         def gcl = new GroovyClassLoader(this.class.classLoader)
         try {
-            return gcl.parseClass(shimmedSource, file.name)
+            return gcl.parseClass(combinedSource, file.name)
         } catch (Exception e) {
             throw new RuntimeException(
                 "Failed to parse driver source ${sourcePath}: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Resolve a Hubitat #include reference (e.g. "level99.LevoitDiagnostics")
+     * to the corresponding library file on disk. Returns null if not known.
+     *
+     * Hardcoded mapping for now — expand as new libraries are added.
+     */
+    private File resolveLibraryFile(String nsAndName) {
+        switch (nsAndName) {
+            case "level99.LevoitDiagnostics":
+                return new File("Drivers/Levoit/LevoitDiagnosticsLib.groovy")
+            default:
+                return null
         }
     }
 

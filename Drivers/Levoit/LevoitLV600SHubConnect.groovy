@@ -70,6 +70,7 @@
  *    If community users confirm setAutoStop works on LUH-A603S-WUS, promote to command.
  *
  *  History:
+ *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.3  Community fork [PREVIEW v2.3]. Built from pyvesync device_map.py
  *                      LUH-A603S-WUS entry + VeSyncLV600S class + LUH-A603S-WUS.yaml fixture
  *                      (commit c98729c). Capabilities: Switch, RelativeHumidityMeasurement,
@@ -85,13 +86,15 @@
  *                      powerSwitch/switchIdx, workMode, levelIdx/virtualLevel/levelType.
  */
 
+#include level99.LevoitDiagnostics
+
 metadata {
     definition(
         name: "Levoit LV600S Hub Connect Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit LV600S Hub Connect (LUH-A603S-WUS) — DIFFERENT from LevoitLV600S.groovy (A602S). Uses VeSyncLV600S class payloads: powerSwitch/switchIdx, workMode:'humidity' for auto mode, levelIdx/virtualLevel/levelType. Mist 1-9, warm mist 0-3, target humidity top-level camelCase. No setAutoStop command (passive read only). No night-light.",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -133,6 +136,11 @@ metadata {
         // NOTE: setAutoStop intentionally absent -- LUH-A603S-WUS features=[WARM_MIST], no AUTO_STOP.
         command "toggle"
         // NOTE: setNightLight intentionally absent -- LUH-A603S-WUS has no night-light hardware.
+
+        attribute "diagnostics", "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online", "string"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -146,6 +154,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.4"
     runIn(3, "refresh")
     if (settings?.debugOutput) {
         runIn(1800, "logDebugOff")
@@ -165,14 +174,14 @@ def on(){
     logDebug "on()"
     def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
     if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-    else logError "Power on failed"
+    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
 }
 
 def off(){
     logDebug "off()"
     def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
     if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-    else logError "Power off failed"
+    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
 def toggle(){
@@ -194,6 +203,7 @@ def setMode(mode){
     String m = (mode as String).toLowerCase()
     if (!(m in ["auto","sleep","manual"])) {
         logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"
+        recordError("Invalid mode: ${m}", [method:"setHumidityMode"])
         return
     }
     // Map user-facing "auto" to wire value "humidity" (VeSyncLV600S class convention)
@@ -206,7 +216,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m} (wire: ${wireMode})"
+        logError "Mode write failed: ${m} (wire: ${wireMode})"; recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
 
@@ -224,7 +234,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: lvl)
         logInfo "Mist level: ${lvl}"
     } else {
-        logError "Mist level write failed: ${lvl}"
+        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
     }
 }
 
@@ -240,6 +250,7 @@ def setWarmMistLevel(level){
     Integer lvl = (level as Integer) ?: 0
     if (lvl < 0 || lvl > 3) {
         logError "Invalid warm mist level ${lvl} -- must be 0-3 (0=off, 1-3=warm intensity)"
+        recordError("Invalid warm mist level ${lvl}", [method:"setLevel"])
         return
     }
     def resp = hubBypass("setLevel", [levelIdx: 0, levelType: "warm", mistLevel: 0, warmLevel: lvl], "setLevel(warm,${lvl})")
@@ -252,7 +263,7 @@ def setWarmMistLevel(level){
         device.sendEvent(name:"warmMistEnabled", value: warmOnStr)
         logInfo "Warm mist: level=${lvl}, enabled=${warmOnStr}"
     } else {
-        logError "Warm mist level write failed: ${lvl}"
+        logError "Warm mist level write failed: ${lvl}"; recordError("Warm mist level write failed: ${lvl}", [method:"setLevel"])
     }
 }
 
@@ -271,7 +282,7 @@ def setHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"
+        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
     }
 }
 
@@ -288,7 +299,7 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: onOff)
         logInfo "Display: ${onOff}"
     } else {
-        logError "Display write failed"
+        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
 
@@ -301,7 +312,7 @@ def update(){
     def resp = hubBypass("getHumidifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getHumidifierStatus"
+        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"update"]) }
         else applyStatus(status)
     }
 }
@@ -499,7 +510,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

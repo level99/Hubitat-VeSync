@@ -152,8 +152,18 @@ This is the most common substantive contribution. The flow is:
 7. **Update `tests/lint_config.yaml`** — add the new driver's filename + `definition(name: ...)` value to `frozen_driver_names` (lint rule 19; protects against future driver-name changes that would orphan user installs — Bug Pattern #9).
 8. **Update `levoitManifest.json`** — add a new `drivers` array entry with a fresh UUID v4 (any UUID generator works), the driver's `name` matching `definition(name: ...)`, namespace `NiklasGustafsson` (preserved from upstream), and the GitHub raw URL for the location.
 9. **Update `Drivers/Levoit/readme.md`** — add a new driver entry to the manual-install table and a per-device events table (lint rule 21 enforces drivers↔README sync).
-10. **Add a Spock spec at `src/test/groovy/drivers/<DriverName>Spec.groovy`** — copy the closest existing spec as a template. Cover at minimum: happy-path setSwitch, setMode, applyStatus parsing of the canonical fixture, and any device-specific commands. The harness uses the Hubitat sandbox mock — see existing specs for the patterns.
-11. **Run lint + Spock locally** — `./gradlew test` and `uv run --python 3.12 tests/lint.py`. Both should pass before opening a PR.
+10. **Wire the diagnostics library** (Phase 5 standard plumbing — REQUIRED for every new child driver, enforced by lint rule 28). At the top of the driver source, add:
+    ```groovy
+    #include level99.LevoitDiagnostics
+    ```
+    In the `metadata { definition(...) { ... } }` block, add the command and attribute:
+    ```groovy
+    command "captureDiagnostics"
+    attribute "diagnostics", "string"
+    ```
+    Where the driver currently calls `log.error(...)` (parser failures, write-failure paths, etc.), add a parallel `recordError(message, contextMap)` call with relevant context (`[site:"setMode", value:requestedMode]` etc.). The library handles ring-buffer storage and pre-fills bug-report URLs from this data. See any v2.4+ driver for examples.
+11. **Add a Spock spec at `src/test/groovy/drivers/<DriverName>Spec.groovy`** — copy the closest existing spec as a template. Cover at minimum: happy-path setSwitch, setMode, applyStatus parsing of the canonical fixture, and any device-specific commands. The harness uses the Hubitat sandbox mock and resolves the `#include` library directive automatically.
+12. **Run lint + Spock locally** — `./gradlew test` and `uv run --python 3.12 tests/lint.py`. Both should pass before opening a PR.
 
 ### Preview drivers (no maintainer hardware)
 
@@ -164,6 +174,26 @@ If you don't have the device yourself but pyvesync covers it cleanly, you can sh
 - Note "preview" status in the `Drivers/Levoit/readme.md` driver entry
 
 Hardware reports refuting blind decisions are then tracked back to the `CROSS-CHECK` source citation, validated, and the prefix gets stripped in the next release cut.
+
+### On-hub validation without owning the hardware (virtual test parent)
+
+If you don't own the hardware, the **virtual test parent** (`Drivers/Levoit/VeSyncIntegrationVirtual.groovy`) lets you exercise child driver parser paths end-to-end on a real Hubitat hub. It replaces the real `VeSync Integration` parent app with a fixture-driven harness — children call `parent.sendBypassRequest(...)` and the virtual parent serves canned pyvesync responses validated against `tests/pyvesync-fixtures/<name>.yaml`.
+
+Setup:
+
+1. **Install via HPM Modify.** Open the Levoit package in HPM, click **Modify**, opt in to "VeSync Virtual Test Parent" (description leads with `[DEV TOOL] Do NOT install for normal use`). HPM downloads the source automatically.
+2. **Add as a virtual device.** Devices → Add Device → Virtual → pick "VeSync Virtual Test Parent" from the User Devices type list → Save. The virtual parent coexists safely with the real `VeSync Integration` parent app — virtual children use the `VirtualVeSync-` DNI prefix and never talk to the VeSync cloud, so there's no cross-wiring risk. If the real parent is also installed, you'll see a WARN at spawn time noting the coexistence (informational; spawn proceeds normally) — just be careful not to confuse virtual children with real ones during testing.
+3. **Spawn a fixture-bound child.** On the virtual parent's device page, run the `spawnFromFixture` command. Pick the fixture matching your driver under test (e.g. `Core200S` for the Levoit Core 200S driver). Provide a child label.
+4. **Exercise the child.** Click commands on the spawned child (`on`, `off`, `setSpeed`, etc.). Watch Hubitat Logs for `[DEV TOOL] Payload validated: <method>` (success) and `[DEV TOOL] Payload data keys mismatch` (your driver's payload diverges from pyvesync canonical — fix it).
+5. **Verify attribute population.** Confirm the spawned child's attributes (switch, level, mode, etc.) populate correctly after the canned response delivers — this validates the parser end-to-end.
+
+What this catches: Hubitat-runtime bugs that Spock can't (sandbox quirks, async callback ordering, real `addChildDevice` lifecycle, schedule()/runIn() cron mechanics — the BP14/BP16/BP17 fingerprint), plus payload field-name regressions (BP4-style).
+
+What this does NOT catch: real cloud round-trip behaviors (live VeSync API responses, BP4 field-name verification vs live API, BP13 token-expiry, response envelope shapes the fixture doesn't capture). For drivers where you own the hardware, the real parent + real cloud is still the gold standard.
+
+Phase 1 of the virtual parent (shipped in v2.4) only supports the Core 200S fixture for end-to-end spawning; payload validation works for all 19 fixtures via the regenerated `FIXTURE_OPS` map. Other fixtures gain spawnable end-to-end coverage as their `canonicalDefaultState` + `STATE_MUTATORS` get extended in subsequent commits.
+
+In your PR description, call out which sub-mode you used: `[ ] real hardware [ ] virtual parent [ ] preview-only (Spock + manual review)`.
 
 ### EU region support (v2.2 preview)
 
@@ -228,6 +258,8 @@ The Spock harness + 22 lint rules catch a long tail of regressions. Most of thes
 | **TURBO mode as a mode value** | Convention | Drivers for devices that expose a TURBO operating mode (e.g. EverestAir) implement it as a `setMode("turbo")` call, NOT as a separate `setTurbo()` toggle command. The wire payload is `setPurifierMode { workMode: "turbo" }` — identical path to `auto`/`sleep`. The `mode` attribute type is `string` and includes `"turbo"` in its ENUM constraint list. Reason: pyvesync's `VeSyncAirBaseV2` treats turbo as a workMode value; no separate bypassV2 method exists. Canonical example: `LevoitEverestAir.groovy`. |
 | **Passive-read-only attributes** | Convention | Some device features expose a sensor value that has no user-writable counterpart (e.g. EverestAir's `fanRotateAngle` vent position). These are declared as `attribute "ventAngle", "number"` and populated in `applyStatus` only — no `setVentAngle` command is defined. Attempting to call the missing setter throws `MissingMethodException`; a Spock spec test using `then: thrown(MissingMethodException)` documents the intentional absence. Reason: pyvesync's `_set_state()` reads the field but no setter method exists anywhere in the class hierarchy. Canonical example: `LevoitEverestAir.groovy` `ventAngle` attribute. |
 | **Logging gates** | Convention | INFO logs gate on `descriptionTextEnable`; DEBUG logs gate on `debugOutput`; both default to user choice (`descriptionTextEnable` on, `debugOutput` off with 30-min auto-disable). PII auto-redacts via parent's `sanitize()`. |
+| **Library files use `//` line comments at top, not `/* */` blocks (BP20)** | RULE29 | Hubitat's library parser silently rejects library files containing `/* ... */` block comments at file scope (after the optional MIT header, before the `library(...)` declaration). `POST /library/saveOrUpdateJson` returns `{success:false, message:"Internal error"}` and HPM install fails for end users — confirmed reproduces on hub firmware 2.4.4.156 AND 2.5.0.126. Workaround: convert to `// line comments` (same content, different syntax). javadoc `/* */` blocks inside method bodies are unaffected. Driver files (using `definition()`) are unaffected — bug is library-parser-specific. Canonical example: `Drivers/Levoit/LevoitDiagnosticsLib.groovy`. |
+| **Library files: keep file-scope commentary minimal (BP20-related)** | Convention + ops smoke-test | Hubitat's library parser bug isn't only `/* */`-shaped — adding `//` line-comment NOTE blocks (especially containing the literal text `/* */` or `library(` as documentation), expanded section dividers, or large javadoc headers can ALSO trip the parser into "Internal error" on save. Discovered 2026-04-30 during v2.4 UX refactor: a 5-line `//` NOTE block we added to the library file flipped a previously-saving file back into failure. **Rule for library files specifically:** keep file-scope content between the MIT header and the `library(...)` declaration to ZERO commentary if possible. If a library needs explanation, put it in CONTRIBUTING.md, the BP catalog (`CLAUDE.md`), or the dev agent spec — NOT in the library source. Section dividers between functions: keep to a single `// ----` line, not multi-line `// header / // detail / // ---` blocks. Don't paraphrase the BP20 trigger pattern in `//` comments either (the literal text triggers the parser when matched). Driver files (using `definition()`) are NOT affected; standard javadoc + comment density is fine on driver files. The ops agent's library-deploy smoke test (POST to `/library/saveOrUpdateJson` and verify `success:true`) is the runtime-layer catch for any pattern lint missed. |
 
 ### Full lint rule list
 

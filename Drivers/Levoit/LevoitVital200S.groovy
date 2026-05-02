@@ -27,6 +27,9 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-04-29: v2.4  Added captureDiagnostics command + diagnostics attribute via
+ *                      LevoitDiagnostics library. Added recordError() ring-buffer calls at
+ *                      all logError sites.
  *    2026-04-25: v2.0  Community fork initial release (Dan Cox). Built from canonical pyvesync
  *                      payloads. Capabilities: Switch, SwitchLevel, FanControl, AirQuality.
  *                      Setters: setSpeed (sleep/low/med/high/max), setMode (manual/auto/sleep/
@@ -36,13 +39,15 @@
  *                      Diagnostic raw-response logging gated by debugOutput preference.
  */
 
+#include level99.LevoitDiagnostics
+
 metadata {
     definition(
         name: "Levoit Vital 200S Air Purifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Levoit Vital 200S / 200S-P (LAP-V201S) — power, fan speed, mode, timer, AQ/PM2.5, filter health; canonical pyvesync payloads",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -65,6 +70,9 @@ metadata {
         attribute "info", "string"
         attribute "errorCode", "number"
         attribute "timerRemain", "number"
+        attribute "diagnostics", "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online", "string"
 
         command "setDisplay", [[name:"Display*", type: "ENUM", constraints: ["on","off"]]]
         command "setSpeed", [[name:"Speed*", type: "ENUM", constraints: ["off","sleep","low","medium","high","max"]]]
@@ -78,6 +86,7 @@ metadata {
         command "resetFilter"
         command "setTimer", [[name:"Minutes*", type:"NUMBER", description:"Auto-off after N minutes; 0 cancels"]]
         command "cancelTimer"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -91,6 +100,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.4"
     runIn(3, "update")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -125,6 +135,7 @@ def on(){
             runInMillis(500, "configureOnState")
         } else {
             logError "Failed to turn on device"
+            recordError("Failed to turn on device", [method:"setSwitch"])
         }
     } finally {
         state.remove('turningOn')
@@ -181,6 +192,7 @@ def off(){
             device.sendEvent(name:"switch", value:"off")
         } else {
             logError "Failed to turn off device"
+            recordError("Failed to turn off device", [method:"setSwitch"])
         }
     } finally {
         state.remove('turningOff')
@@ -202,6 +214,17 @@ def cycleSpeed(){
     def next = ["sleep":"low","low":"medium","medium":"high","high":"max","max":"sleep"][cur] ?: "low"
     if (device.currentValue("switch")!="on") on()
     setSpeed(next)
+}
+
+// 2-arg setLevel overload — Hubitat SwitchLevel capability standard signature.
+// VeSync devices do NOT support hardware-level fade/duration, so the duration
+// parameter is intentionally ignored. Delegates to the 1-arg version.
+// Without this overload, any caller using the standard 2-arg form (Rule Machine
+// with duration, dashboard tiles, MCP setLevel(N, D), third-party apps) throws
+// MissingMethodException — Hubitat sandbox catches it silently and the command
+// fails without user feedback.
+def setLevel(val, duration) {
+    setLevel(val)
 }
 
 def setLevel(val){
@@ -246,7 +269,7 @@ def setSpeed(spd){
 def setSpeedLevel(level){
     logDebug "setSpeedLevel(${level})"
     def ok = writeSpeedPreferred(level)
-    if (!ok) logError "Speed write failed for level ${level}"
+    if (!ok) { logError "Speed write failed for level ${level}"; recordError("Speed write failed for level ${level}", [method:"setLevel"]) }
     return ok
 }
 
@@ -275,6 +298,7 @@ def setMode(mode){
         ok = httpOk(resp)
     } else {
         logError "Unknown mode: ${mode}"
+        recordError("Unknown mode: ${mode}", [method:"setMode"])
         return false
     }
 
@@ -288,6 +312,7 @@ def setMode(mode){
         logInfo "Mode: ${mode}"
     } else {
         logError "Mode write failed for ${mode}"
+        recordError("Mode write failed for ${mode}", [method:"setPurifierMode"])
     }
     return ok
 }
@@ -369,7 +394,7 @@ def update(){
     def resp = hubBypass("getPurifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getPurifierStatus"
+        if (!status?.result) { logError "No status returned from getPurifierStatus"; recordError("No status returned from getPurifierStatus", [method:"getPurifierStatus"]) }
         else applyStatus(status)
     }
 }
@@ -559,6 +584,7 @@ private boolean httpOk(resp){
         return false
     }
     logError "HTTP ${st}"
+    recordError("HTTP ${st}", [method:"httpOk"])
     return false
 }
 

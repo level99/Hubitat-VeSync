@@ -41,6 +41,7 @@
  *    covers ONLY LUH-A602S-* codes. Do NOT add LUH-A603S-* here.
  *
  *  History:
+ *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-27: v2.2  Community fork [PREVIEW]. Built from canonical pyvesync payloads
  *                      (LUH-A602S-WUS.yaml fixture + device_map.py LUH-A602S entry +
  *                      OasisMist 450S warm-mist cross-check + pyvesync PR #505 audit).
@@ -58,13 +59,15 @@
  *                      (NOT the buggy VeSyncHumid200300S base -- pyvesync vesynchumidifier.py ~328).
  */
 
+#include level99.LevoitDiagnostics
+
 metadata {
     definition(
         name: "Levoit LV600S Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.2] Levoit LV600S (LUH-A602S-WUSR/-WUS/-WEUR/-WEU/-WJP/-WUSC) — mist 1-9, warm mist 0-3, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display; no night-light; canonical pyvesync payloads. NOTE: auto-mode may use 'humidity' payload on some firmware -- see pyvesync PR #505 and driver source CROSS-CHECK.",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -105,6 +108,11 @@ metadata {
         command "toggle"
         // NOTE: setNightLight is intentionally absent -- LV600S has no night-light hardware.
         // pyvesync device_map.py LUH-A602S features list: [WARM_MIST, AUTO_STOP] -- no NIGHTLIGHT.
+
+        attribute "diagnostics", "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online", "string"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -120,6 +128,7 @@ def updated(){
     // state.clear() removes all state including firmwareVariant -- firmware updates get
     // re-detected on next setMode("auto") call (see sendModeRequest fallback logic below).
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.4"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -139,14 +148,14 @@ def on(){
     logDebug "on()"
     def resp = hubBypass("setSwitch", [enabled: true, id: 0], "setSwitch(enabled=true)")
     if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-    else logError "Power on failed"
+    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
 }
 
 def off(){
     logDebug "off()"
     def resp = hubBypass("setSwitch", [enabled: false, id: 0], "setSwitch(enabled=false)")
     if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-    else logError "Power off failed"
+    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
 // state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write
@@ -185,7 +194,7 @@ def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (mode as String).toLowerCase()
-    if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"; return }
+    if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     if (m == "auto") {
         // Multi-firmware try-canonical-then-fallback with cache
         String preferred = (state.firmwareVariant == "alt") ? "humidity" : "auto"
@@ -198,7 +207,7 @@ def setMode(mode){
             device.sendEvent(name:"mode", value: m)
             logInfo "Mode: ${m}"
         } else {
-            logError "Mode write failed: ${m}"
+            logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
         }
     }
 }
@@ -228,6 +237,7 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
     } else {
         // Both variants rejected
         logError "Mode '${userMode}' rejected by both payload variants ('auto' and 'humidity', inner code: ${innerCode}). Check device connectivity or report via GitHub issue."
+        recordError("Mode '${userMode}' rejected by both payload variants (inner code: ${innerCode})", [method:"setHumidityMode"])
     }
 }
 
@@ -246,7 +256,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: lvl)
         logInfo "Mist level: ${lvl}"
     } else {
-        logError "Mist level write failed: ${lvl}"
+        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
     }
 }
 
@@ -277,6 +287,7 @@ def setWarmMistLevel(level){
     Integer lvl = (level as Integer) ?: 0
     if (lvl < 0 || lvl > 3) {
         logError "Invalid warm mist level ${lvl} -- must be 0-3 (0=off, 1-3=warm intensity)"
+        recordError("Invalid warm mist level ${lvl}", [method:"setVirtualLevel"])
         return
     }
     def resp = hubBypass("setVirtualLevel", [id: 0, level: lvl, type: "warm"], "setVirtualLevel(warm,${lvl})")
@@ -291,7 +302,7 @@ def setWarmMistLevel(level){
         device.sendEvent(name:"warmMistEnabled", value: warmOnStr)
         logInfo "Warm mist: level=${lvl}, enabled=${warmOnStr}"
     } else {
-        logError "Warm mist level write failed: ${lvl}"
+        logError "Warm mist level write failed: ${lvl}"; recordError("Warm mist level write failed: ${lvl}", [method:"setVirtualLevel"])
     }
 }
 
@@ -316,7 +327,7 @@ def setHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"
+        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
     }
 }
 
@@ -331,7 +342,7 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: onOff)
         logInfo "Display: ${onOff}"
     } else {
-        logError "Display write failed"
+        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
 
@@ -346,7 +357,7 @@ def setAutoStop(onOff){
         device.sendEvent(name:"autoStopEnabled", value: onOff)
         logInfo "Auto-stop: ${onOff}"
     } else {
-        logError "Auto-stop write failed"
+        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
     }
 }
 
@@ -364,7 +375,7 @@ def update(){
     def resp = hubBypass("getHumidifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getHumidifierStatus"
+        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"update"]) }
         else applyStatus(status)
     }
 }
@@ -592,7 +603,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

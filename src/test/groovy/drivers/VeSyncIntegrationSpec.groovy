@@ -34,6 +34,10 @@ import support.TestDevice
  *   Section L       — Bug Pattern #16 (debug auto-disable watchdog, parent):
  *                     updated() timestamp set/clear, ensureDebugWatchdog() no-op below
  *                     threshold, fires above threshold, called from updateDevices()
+ *   Section P       — Bug Pattern #19 (existing-child configModule refresh on Resync):
+ *                     Core 200S else-branch refreshes configModule/cid/uuid (P1),
+ *                     Superior 6000S same coverage (P2), Core 200S Light equip2 (P3),
+ *                     name+label preserved (P4), deviceType backfill preserved (P5)
  *
  * ARCHITECTURE NOTE: The parent driver is NOT a child — it runs differently.
  * It calls httpPost (for login/getDevices), not parent.sendBypassRequest.
@@ -2529,11 +2533,15 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     def "updateDevices() error path does not throw when resp has no 'msg' property (M4)"() {
-        // M4: Bug 2 regression test. updateDevices() error path contained:
+        // M4: Bug 2 regression test. updateDevices() error path originally contained:
         //   logError "No status returned from ${method}: ${resp?.msg}"
         // resp?.msg only guards against null resp; a non-null HttpResponseDecorator
         // without a msg property still throws MissingPropertyException. After the fix,
         // resp?.hasProperty('msg') ? resp.msg : '' is used instead.
+        //
+        // BP21 subsequently refactored the null-status branch further: logError was removed
+        // (BP21 noise reduction) and replaced with logDebug + recordError(). The branch
+        // still runs and logs at DEBUG level; this test verifies no exception escapes.
         //
         // We simulate the scenario: httpPost returns HTTP 200 with outer code 0 but
         // resp.data.result == null (so the null-status branch is taken). The resp
@@ -2571,9 +2579,9 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         then: "no MissingPropertyException is thrown"
         noExceptionThrown()
-
-        and: "an error log was emitted (the branch ran) without throwing"
-        testLog.errors.any { it.contains("No status returned from") }
+        // NOTE: BP21 removed the logError from this branch (noise reduction for offline devices).
+        // The null-status path now emits logDebug + recordError() instead. The critical invariant
+        // for M4 is the absence of an exception — that remains verified above.
     }
 
     def "getDevices() logs missing-driver INFO exactly once when N devices need the same driver (M5)"() {
@@ -2769,10 +2777,13 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         // N4: tracking increments. When the poll callback receives status==null (simulating
         // stale configModule returning empty result), state.consecutiveEmpty[dni] must be
         // incremented so the watchdog can detect the pattern.
+        // BP21 note: the logError that was previously emitted here was intentionally removed
+        // (BP21 noise reduction). The branch now emits logDebug + recordError() instead.
+        // This test enables debugOutput to capture the debug log as branch-ran evidence.
         given: "one device in deviceList; httpPost returns HTTP 200 with result==null"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
-        settings.debugOutput = false
+        settings.debugOutput = true   // enable debug so BP21 logDebug emission is captured
         state.prefsSeeded = true
         state.scheduleVersion = "2.2"
         state.deviceList = ["empty-cid": "stale-config-module"]
@@ -2798,8 +2809,8 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         state.consecutiveEmpty != null
         (state.consecutiveEmpty["empty-cid"] as Integer) == 1
 
-        and: "an error log was emitted (the null-status branch ran)"
-        testLog.errors.any { it.contains("No status returned from") }
+        and: "a debug log was emitted confirming the null-status branch ran (BP21: logError replaced by logDebug)"
+        testLog.debugs.any { it.contains("empty") || it.contains("consecutive") }
     }
 
     def "updateDevices() clears state.consecutiveEmpty[dni] on successful poll (N5 -- BP17 Fix B)"() {
@@ -2955,5 +2966,1151 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         then: "exactly one migration INFO log was emitted (not two)"
         testLog.infos.count { it.contains("My Sprout Humidifier") && it.contains("Levoit Sprout Humidifier") } == 1
+    }
+
+    // =========================================================================
+    // Section P — Bug Pattern #19: existing-child configModule refresh on Resync
+    //
+    // When getDevices() discovers a device whose child already exists, it hits
+    // the else-branch of the if(equip1 == null) guard. Prior to BP19 fix, this
+    // else-branch only updated name, label, and deviceType — it never refreshed
+    // configModule, cid, or uuid. When VeSync changed configModule server-side
+    // (firmware update), the stale child-side value caused every subsequent poll
+    // to return empty. The BP17 watchdog fired and called getDevices() (Resync),
+    // but Resync hit the same else-branch and failed to heal the root cause.
+    //
+    // Tests:
+    //   P1 — Core 200S existing child: configModule, cid, uuid refreshed on Resync
+    //   P2 — Superior 6000S existing child: same refresh; proves coverage across
+    //         device families (purifier vs humidifier branch)
+    //   P3 — Core 200S Light (equip2): Light child configModule/cid/uuid also refreshed
+    //   P4 — name and label are still updated (existing behavior preserved)
+    //   P5 — deviceType is still updated (BP12 backfill preserved)
+    // =========================================================================
+
+    /** Helper: returns a getDevices()-shaped httpPost response with one device entry. */
+    private Expando getDevicesWithDevice(Map device) {
+        def r = new Expando()
+        r.status = 200
+        r.data = [
+            code: 0,
+            result: [
+                code : 0,
+                list : [device],
+                total: 1
+            ],
+            traceId: "test-trace"
+        ]
+        return r
+    }
+
+    /** Helper: returns a getDevices() response with two devices in the list. */
+    private Expando getDevicesWithDevices(List<Map> devices) {
+        def r = new Expando()
+        r.status = 200
+        r.data = [
+            code: 0,
+            result: [
+                code : 0,
+                list : devices,
+                total: devices.size()
+            ],
+            traceId: "test-trace"
+        ]
+        return r
+    }
+
+    def "getDevices() existing-child else-branch refreshes configModule/cid/uuid for Core 200S (BP19 P1)"() {
+        // P1: Core 200S purifier — existing child has STALE configModule from a prior
+        // Resync. Server returns FRESH values. After getDevices(), the child's data
+        // values must reflect the fresh values so sendBypassRequest uses the new
+        // configModule on subsequent polls.
+        given: "a Core 200S child already exists with stale configModule"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-p1"
+        state.accountID = "acc-p1"
+        state.prefsSeeded = true
+
+        // Existing child device with stale data values
+        def existingChild = new TestDevice()
+        existingChild.typeName = "Levoit Core200S Air Purifier"
+        existingChild.updateDataValue("configModule", "STALE-configModule-200S")
+        existingChild.updateDataValue("cid", "STALE-cid-200S")
+        existingChild.updateDataValue("uuid", "STALE-uuid-200S")
+        existingChild.updateDataValue("deviceType", "Core200S")
+        childDevices["fresh-cid-200S"] = existingChild
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> [] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevice([
+                deviceType  : "Core200S",
+                deviceName  : "Living Room Purifier",
+                cid         : "fresh-cid-200S",
+                configModule: "FRESH-configModule-200S",
+                uuid        : "FRESH-uuid-200S",
+                macID       : "AA:BB:CC:DD:EE:01"
+            ]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "configModule data value reflects fresh value from server (not stale)"
+        existingChild.getDataValue("configModule") == "FRESH-configModule-200S"
+
+        and: "cid data value is refreshed"
+        existingChild.getDataValue("cid") == "fresh-cid-200S"
+
+        and: "uuid data value is refreshed"
+        existingChild.getDataValue("uuid") == "FRESH-uuid-200S"
+    }
+
+    def "getDevices() existing-child else-branch refreshes configModule/cid/uuid for Superior 6000S (BP19 P2)"() {
+        // P2: Superior 6000S humidifier — same BP19 regression but the humidifier branch
+        // (dtype V601S). Proves the fix is uniform across device families, not just
+        // purifier branches.
+        given: "a Superior 6000S child already exists with stale configModule"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-p2"
+        state.accountID = "acc-p2"
+        state.prefsSeeded = true
+
+        def existingChild = new TestDevice()
+        existingChild.typeName = "Levoit Superior 6000S Humidifier"
+        existingChild.updateDataValue("configModule", "STALE-configModule-6000S")
+        existingChild.updateDataValue("cid", "STALE-cid-6000S")
+        existingChild.updateDataValue("uuid", "STALE-uuid-6000S")
+        existingChild.updateDataValue("deviceType", "LEH-S601S-WUS")
+        childDevices["fresh-cid-6000S"] = existingChild
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> [] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevice([
+                deviceType  : "LEH-S601S-WUS",
+                deviceName  : "Bedroom Humidifier",
+                cid         : "fresh-cid-6000S",
+                configModule: "FRESH-configModule-6000S",
+                uuid        : "FRESH-uuid-6000S",
+                macID       : "AA:BB:CC:DD:EE:02"
+            ]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "configModule data value reflects fresh value from server (not stale)"
+        existingChild.getDataValue("configModule") == "FRESH-configModule-6000S"
+
+        and: "cid data value is refreshed"
+        existingChild.getDataValue("cid") == "fresh-cid-6000S"
+
+        and: "uuid data value is refreshed"
+        existingChild.getDataValue("uuid") == "FRESH-uuid-6000S"
+    }
+
+    def "getDevices() existing Core 200S Light child (equip2) refreshes configModule/cid/uuid (BP19 P3)"() {
+        // P3: Core 200S Light child (equip2 in the 200S dtype branch). The Light child
+        // is a separate getChildDevice lookup keyed by cid+"-nl". Its else-branch had
+        // the same BP19 regression. Verify the fix covers equip2 as well.
+        given: "a Core 200S Light child already exists with stale configModule"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-p3"
+        state.accountID = "acc-p3"
+        state.prefsSeeded = true
+
+        // Light child (DNI = cid + "-nl")
+        def existingLight = new TestDevice()
+        existingLight.typeName = "Levoit Core200S Air Purifier Light"
+        existingLight.updateDataValue("configModule", "STALE-configModule-light")
+        existingLight.updateDataValue("cid", "STALE-cid-light")
+        existingLight.updateDataValue("uuid", "STALE-uuid-light")
+        existingLight.updateDataValue("deviceType", "Core200S")
+        childDevices["cid-200S-p3-nl"] = existingLight
+
+        // Main purifier child (DNI = cid) — also exists so both take the else-branch
+        def existingPurifier = new TestDevice()
+        existingPurifier.typeName = "Levoit Core200S Air Purifier"
+        existingPurifier.updateDataValue("configModule", "STALE-configModule-200S-p3")
+        existingPurifier.updateDataValue("cid", "STALE-cid-200S-p3")
+        existingPurifier.updateDataValue("uuid", "STALE-uuid-200S-p3")
+        existingPurifier.updateDataValue("deviceType", "Core200S")
+        childDevices["cid-200S-p3"] = existingPurifier
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> [] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevice([
+                deviceType  : "Core200S",
+                deviceName  : "Den Purifier",
+                cid         : "cid-200S-p3",
+                configModule: "FRESH-configModule-200S-p3",
+                uuid        : "FRESH-uuid-200S-p3",
+                macID       : "AA:BB:CC:DD:EE:03"
+            ]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "Light child (equip2) configModule is refreshed to fresh value"
+        existingLight.getDataValue("configModule") == "FRESH-configModule-200S-p3"
+
+        and: "Light child uuid is refreshed"
+        existingLight.getDataValue("uuid") == "FRESH-uuid-200S-p3"
+
+        and: "Main purifier child (equip1) configModule is also refreshed"
+        existingPurifier.getDataValue("configModule") == "FRESH-configModule-200S-p3"
+    }
+
+    def "getDevices() existing-child else-branch still updates name and label (BP19 P4)"() {
+        // P4: regression guard — the else-branch's existing behavior (name + label update)
+        // must be preserved after adding the BP19 configModule refresh lines.
+        given: "a Superior 6000S child exists with an old device name"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-p4"
+        state.accountID = "acc-p4"
+        state.prefsSeeded = true
+
+        def existingChild = new TestDevice()
+        existingChild.typeName = "Levoit Superior 6000S Humidifier"
+        existingChild.name  = "Old Name"
+        existingChild.label = "Old Label"
+        existingChild.updateDataValue("configModule", "old-cm")
+        existingChild.updateDataValue("cid", "cid-p4")
+        existingChild.updateDataValue("uuid", "old-uuid")
+        existingChild.updateDataValue("deviceType", "LEH-S601S-WUS")
+        childDevices["cid-p4"] = existingChild
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> [] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevice([
+                deviceType  : "LEH-S601S-WUS",
+                deviceName  : "New Device Name",
+                cid         : "cid-p4",
+                configModule: "new-cm",
+                uuid        : "new-uuid",
+                macID       : "AA:BB:CC:DD:EE:04"
+            ]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "device name is updated to the value from VeSync server"
+        existingChild.name == "New Device Name"
+
+        and: "device label is updated"
+        existingChild.label == "New Device Name"
+
+        and: "configModule is also updated (BP19)"
+        existingChild.getDataValue("configModule") == "new-cm"
+    }
+
+    def "getDevices() existing-child else-branch still updates deviceType (BP19 P5)"() {
+        // P5: regression guard — deviceType backfill (for v2.1->v2.2 upgrades) must
+        // still be present in the else-branch after adding the BP19 lines before it.
+        given: "a Core 400S child exists with no deviceType set (pre-v2.2 state)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-p5"
+        state.accountID = "acc-p5"
+        state.prefsSeeded = true
+
+        def existingChild = new TestDevice()
+        existingChild.typeName = "Levoit Core400S Air Purifier"
+        existingChild.updateDataValue("configModule", "old-cm-400s")
+        existingChild.updateDataValue("cid", "cid-p5")
+        existingChild.updateDataValue("uuid", "old-uuid-400s")
+        // intentionally no deviceType set — simulates pre-v2.2 child
+        childDevices["cid-p5"] = existingChild
+
+        driver.metaClass.getChildDevice = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> [] }
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevice([
+                deviceType  : "LAP-C401S-WUS",
+                deviceName  : "Office Purifier",
+                cid         : "cid-p5",
+                configModule: "new-cm-400s",
+                uuid        : "new-uuid-400s",
+                macID       : "AA:BB:CC:DD:EE:05"
+            ]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "deviceType data value is set (v2.2 backfill preserved)"
+        existingChild.getDataValue("deviceType") == "LAP-C401S-WUS"
+
+        and: "configModule is also updated (BP19)"
+        existingChild.getDataValue("configModule") == "new-cm-400s"
+
+        and: "uuid is also updated (BP19)"
+        existingChild.getDataValue("uuid") == "new-uuid-400s"
+    }
+
+    // =========================================================================
+    // Section Q — Bug Pattern #21: bounded self-heal backoff for offline devices
+    //
+    // Validates:
+    //   Q1  selfHealAttempts increments correctly across consecutive empty results
+    //   Q2  3rd self-heal attempt triggers offline marker (state set + child event)
+    //   Q3  already-offline device's empty poll does NOT fire further self-heal
+    //   Q4  recovery: first non-empty result clears state + emits online:"true" event
+    //   Q5  hourly WARN re-surface fires once per hour, not every poll
+    //   Q6  formatOfflineDuration helper outputs correct strings
+    // =========================================================================
+
+    def "ensurePollHealth() increments selfHealAttempts on consecutive empty results (Q1)"() {
+        // Q1: when a DNI reaches the threshold (5 consecutive empties), ensurePollHealth()
+        // must increment state.selfHealAttempts[dni] and schedule a Resync (up to 3 times).
+        given: "a device DNI with exactly 5 consecutive empty results (at threshold)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.consecutiveEmpty = ["PURIFIER-CID": 5]
+
+        int resyncCount = 0
+        driver.metaClass.runIn = { int delay, String handler ->
+            if (handler == "getDevices") resyncCount++
+        }
+        driver.metaClass.getChildDevice = { String dni ->
+            def d = new TestDevice()
+            d.name = "Test Purifier"
+            d
+        }
+
+        when:
+        driver.ensurePollHealth()
+
+        then: "selfHealAttempts for the DNI is now 1"
+        (state.selfHealAttempts as Map)?.get("PURIFIER-CID") == 1
+
+        and: "a Resync was scheduled"
+        resyncCount == 1
+
+        and: "consecutiveEmpty was reset to allow re-triggering after next 5 empties"
+        !(state.consecutiveEmpty as Map)?.containsKey("PURIFIER-CID")
+    }
+
+    def "ensurePollHealth() marks device offline after 3 self-heal attempts (Q2)"() {
+        // Q2: when selfHealAttempts reaches 3, ensurePollHealth() must:
+        //   - set state.deviceOfflineSince[dni] to a timestamp
+        //   - NOT schedule another Resync
+        //   - call markChildOffline() which emits sendEvent(online:"false") on the child
+        given: "a DNI with 5 consecutive empties AND 3 prior self-heal attempts"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.consecutiveEmpty  = ["PURIFIER-CID": 5]
+        state.selfHealAttempts  = ["PURIFIER-CID": 3]   // attempt 4 will be this run — exceeds MAX_HEAL_ATTEMPTS(3), triggers offline branch
+
+        int resyncCount = 0
+        driver.metaClass.runIn = { int delay, String handler ->
+            if (handler == "getDevices") resyncCount++
+        }
+
+        def childDev = new TestDevice()
+        childDev.name = "Test Purifier"
+        driver.metaClass.getChildDevice = { String dni ->
+            dni == "PURIFIER-CID" ? childDev : null
+        }
+
+        when:
+        driver.ensurePollHealth()
+
+        then: "no further Resync was scheduled"
+        resyncCount == 0
+
+        and: "device is marked offline in state"
+        (state.deviceOfflineSince as Map)?.containsKey("PURIFIER-CID")
+
+        and: "the child received an online:false event"
+        childDev.events.any { it.name == "online" && it.value == "false" }
+    }
+
+    def "ensurePollHealth() does NOT fire self-heal for already-offline device (Q3)"() {
+        // Q3: if state.deviceOfflineSince already contains the DNI, ensurePollHealth()
+        // must skip all self-heal logic (no runIn, no counter increment).
+        given: "a DNI that is already marked offline AND has new consecutive empties"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.consecutiveEmpty   = ["OFFLINE-CID": 5]
+        state.deviceOfflineSince = ["OFFLINE-CID": driver.now() - 10000]
+        state.selfHealAttempts   = ["OFFLINE-CID": 3]
+
+        int resyncCount = 0
+        driver.metaClass.runIn = { int delay, String handler ->
+            if (handler == "getDevices") resyncCount++
+        }
+        driver.metaClass.getChildDevice = { String dni -> null }
+
+        when:
+        driver.ensurePollHealth()
+
+        then: "no Resync was scheduled"
+        resyncCount == 0
+
+        and: "selfHealAttempts did NOT increase beyond 3"
+        ((state.selfHealAttempts as Map)?.get("OFFLINE-CID") ?: 0) <= 3
+    }
+
+    def "first non-empty poll after offline period clears state and emits online:true (Q4)"() {
+        // Q4: the success branch of updateDevices() must detect state.deviceOfflineSince[dni]
+        // and call markChildOnline(dni), which clears offline state and fires sendEvent(online:"true").
+        given: "a purifier DNI that was marked offline, now returning a valid response"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.prefsSeeded       = true
+        state.deviceList        = ["PURIFIER-CID": "test-config"]
+        state.deviceOfflineSince = ["PURIFIER-CID": driver.now() - 3600000]   // 1h ago
+        state.selfHealAttempts  = ["PURIFIER-CID": 3]
+
+        def childDev = new TestDevice()
+        childDev.typeName = "Levoit Vital 200S Air Purifier"
+        childDev.updateDataValue("deviceType", "LAP-V201S-WUS")
+        childDev.name  = "Test Purifier"
+        childDev.label = "Test Purifier"
+        // Override update() to be a no-op (we only care about the sendEvent side-effect)
+        childDev.metaClass.update = { Map st, nl -> true }
+        childDevices["PURIFIER-CID"] = childDev
+
+        // httpPost returns a non-null result
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            capturedHttpPosts << params.clone()
+            if (params.body?.payload) capturedBypassBodies << params.body.clone()
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    result: [powerSwitch: 1, fanSpeedLevel: 2],
+                    traceId: "test-trace"
+                ]
+            ]
+            callback(fakeResp)
+        }
+
+        when:
+        driver.updateDevices()
+
+        then: "state.deviceOfflineSince no longer contains the DNI"
+        !(state.deviceOfflineSince as Map)?.containsKey("PURIFIER-CID")
+
+        and: "state.selfHealAttempts no longer contains the DNI"
+        !(state.selfHealAttempts as Map)?.containsKey("PURIFIER-CID")
+
+        and: "state.lastOfflineWarnAt no longer contains the DNI"
+        !(state.lastOfflineWarnAt as Map)?.containsKey("PURIFIER-CID")
+
+        and: "the child received an online:true event"
+        childDev.events.any { it.name == "online" && it.value == "true" }
+    }
+
+    def "emitOfflineWarnsIfDue() emits WARN once per hour while device is offline (Q5)"() {
+        // Q5: the hourly-WARN helper must emit exactly once per hour interval.
+        // First call: 2h elapsed since lastOfflineWarnAt (seeded by markChildOffline) → emits.
+        // Second call immediately after: suppressed (within-hour window).
+        given: "device offline 2h ago; markChildOffline seeded both timestamps at offline time"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        long twoHoursAgo = driver.now() - 7200000L
+        state.deviceOfflineSince = ["OFFLINE-CID": twoHoursAgo]
+        state.lastOfflineWarnAt  = ["OFFLINE-CID": twoHoursAgo]   // seeded by markChildOffline at t=0
+
+        driver.metaClass.getChildDevice = { String dni ->
+            def d = new TestDevice(); d.name = "Offline Purifier"; d
+        }
+
+        when: "first call to emitOfflineWarnsIfDue()"
+        driver.emitOfflineWarnsIfDue()
+
+        then: "a WARN was emitted"
+        testLog.warns.any { it.contains("offline") }
+
+        and: "lastOfflineWarnAt was recorded"
+        (state.lastOfflineWarnAt as Map)?.containsKey("OFFLINE-CID")
+
+        when: "second call immediately after (within the 1h window)"
+        int warnCountBefore = testLog.warns.size()
+        driver.emitOfflineWarnsIfDue()
+
+        then: "no additional WARN was emitted (still within 1h suppress window)"
+        testLog.warns.size() == warnCountBefore
+    }
+
+    def "formatOfflineDuration() returns expected human-readable strings (Q6)"(long sinceMillis, String expectedPrefix) {
+        // Q6: helper must round correctly across minute/hour/day boundaries.
+        // driver.now() returns the HubitatSpec-mocked fixed timestamp (1745000000000L),
+        // so elapsed = mockedNow - (mockedNow - sinceMillis) = sinceMillis exactly.
+        given: "a timestamp representing the offline start"
+        long since = driver.now() - sinceMillis
+
+        when:
+        String result = driver.formatOfflineDuration(since)
+
+        then: "result contains the expected prefix text"
+        result.contains(expectedPrefix)
+
+        where:
+        sinceMillis          | expectedPrefix
+        30 * 1000L           | "less than a minute"  // 30 seconds — sub-minute floor
+        5  * 60 * 1000L      | "5 minute"    // 5 minutes
+        1  * 60 * 1000L      | "1 minute"    // 1 minute (singular)
+        60 * 60 * 1000L      | "1 hour"      // exactly 1 hour
+        2L * 60 * 60 * 1000L | "2 hour"      // 2 hours
+        25L * 60 * 60 * 1000L| "1d"          // 25 hours → 1d 1h
+    }
+
+    def "emitOfflineWarnsIfDue() does NOT fire WARN in same cycle as markChildOffline (Q7)"() {
+        // Q7: regression guard for the BP21 transition-cycle bug.
+        // markChildOffline() must seed lastOfflineWarnAt[dni] = now() so that
+        // emitOfflineWarnsIfDue() running in the same updateDevices() cycle sees
+        // elapsed = 0 < 3600000 and does NOT emit a WARN.
+        given: "fresh state — no offline devices"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.deviceOfflineSince = [:]
+        state.lastOfflineWarnAt  = [:]
+        state.selfHealAttempts   = [:]
+        testLog.warns.clear()
+
+        // markChildOffline calls getChildDevice internally; return null (no child on hub yet)
+        driver.metaClass.getChildDevice = { String d -> null }
+
+        when: "markChildOffline is called for a fresh DNI"
+        driver.markChildOffline("FRESH-OFFLINE-CID")
+
+        and: "emitOfflineWarnsIfDue runs in the same poll cycle"
+        driver.emitOfflineWarnsIfDue()
+
+        then: "deviceOfflineSince and lastOfflineWarnAt are both seeded for the DNI"
+        (state.deviceOfflineSince as Map)?.containsKey("FRESH-OFFLINE-CID")
+        (state.lastOfflineWarnAt  as Map)?.containsKey("FRESH-OFFLINE-CID")
+
+        and: "no WARN was emitted (would-be-immediate-fire bug suppressed)"
+        !testLog.warns.any { it.contains("FRESH-OFFLINE-CID") || it.contains("offline for") }
+    }
+
+    def "emitOfflineWarnsIfDue() fires WARN once per hour after offline transition (Q8)"() {
+        // Q8: verify normal hourly cadence — WARN fires when 1h has elapsed since
+        // lastOfflineWarnAt (as would be the case 1h after markChildOffline seeded it),
+        // and lastOfflineWarnAt is updated to prevent a second fire within the same hour.
+        given: "device marked offline 1h ago; lastOfflineWarnAt seeded at the same time"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        long oneHourAgo = driver.now() - 3600000L
+        state.deviceOfflineSince = ["LONG-OFFLINE-CID": oneHourAgo]
+        state.lastOfflineWarnAt  = ["LONG-OFFLINE-CID": oneHourAgo]   // as seeded by markChildOffline 1h ago
+        testLog.warns.clear()
+
+        driver.metaClass.getChildDevice = { String d -> null }   // label falls back to DNI
+
+        when: "emitOfflineWarnsIfDue runs"
+        driver.emitOfflineWarnsIfDue()
+
+        then: "exactly one WARN was emitted"
+        testLog.warns.size() == 1
+        testLog.warns[0].contains("LONG-OFFLINE-CID")
+
+        and: "lastOfflineWarnAt updated to now() to start the next 1h window"
+        (state.lastOfflineWarnAt as Map)["LONG-OFFLINE-CID"] == driver.now()
+
+        when: "emitOfflineWarnsIfDue runs again immediately (within same hour)"
+        int warnsBefore = testLog.warns.size()
+        driver.emitOfflineWarnsIfDue()
+
+        then: "no additional WARN fired"
+        testLog.warns.size() == warnsBefore
+    }
+
+    // =========================================================================
+    // Section R — Bug Pattern #22: HTTP-error log spam during network outages
+    //
+    // Validates:
+    //   R1  first network-class exception fires single WARN; state seeded
+    //   R2  second network-class exception during same outage is DEBUG-only
+    //   R3  emitNetworkWarnIfDue defense-in-depth: null lastNetworkWarnAt → seed+skip
+    //   R4  emitNetworkWarnIfDue cadence: 1h elapsed → WARN + update; immediate retry → no-op
+    //   R5  successful httpPost while outage state is set → INFO recovery + state cleared
+    //   R6  non-network exception does NOT touch state.networkUnreachableSince
+    // =========================================================================
+
+    def "sendBypassRequest() first network-class exception emits one WARN and seeds state (R1)"() {
+        // R1: UnknownHostException is a network-class exception. First occurrence of an
+        // outage must emit exactly one WARN and set both networkUnreachableSince and
+        // lastNetworkWarnAt to now(). Subsequent polls should be DEBUG-only (R2).
+        given: "no prior outage state; httpPost throws UnknownHostException"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.networkUnreachableSince = null
+        state.lastNetworkWarnAt = null
+
+        // sendBypassRequest needs a minimal equipment stub and payload
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r1-cid")
+        equip.updateDataValue("configModule", "r1-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            throw new java.net.UnknownHostException("smartapi.vesync.com")
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "exactly one WARN was emitted (not logError)"
+        testLog.errors.isEmpty()
+        testLog.warns.size() == 1
+        testLog.warns[0].contains("BP22")
+        testLog.warns[0].contains("UnknownHostException")
+
+        and: "networkUnreachableSince is set to driver.now()"
+        (state.networkUnreachableSince as Long) == driver.now()
+
+        and: "lastNetworkWarnAt is also set to driver.now()"
+        (state.lastNetworkWarnAt as Long) == driver.now()
+    }
+
+    def "sendBypassRequest() subsequent network exceptions during outage are DEBUG-only (R2)"() {
+        // R2: if state.networkUnreachableSince is already set, further network exceptions
+        // must log at DEBUG only — no additional WARN, no ERROR.
+        given: "outage already in progress (networkUnreachableSince set)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true   // enable debug so we can assert the debug line
+        long outageStart = driver.now() - 60000L   // outage started 1 min ago
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = driver.now() - 360000L   // last probe 6 min ago — interval expired, call passes through to httpPost
+        testLog.warns.clear()
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r2-cid")
+        equip.updateDataValue("configModule", "r2-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            throw new java.net.SocketTimeoutException("Read timed out")
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "no new WARN or ERROR was emitted"
+        testLog.errors.isEmpty()
+        testLog.warns.isEmpty()
+
+        and: "a DEBUG log was emitted confirming the suppressed error"
+        testLog.debugs.any { it.contains("BP22") && it.contains("still unreachable") }
+
+        and: "networkUnreachableSince unchanged (still the original outage start time)"
+        (state.networkUnreachableSince as Long) == outageStart
+    }
+
+    def "emitNetworkWarnIfDue() seeds lastNetworkWarnAt and skips WARN when it is null (R3)"() {
+        // R3: defense-in-depth — if networkUnreachableSince is set but lastNetworkWarnAt
+        // is absent (e.g. state migrated from pre-BP22 install), the helper must seed
+        // lastNetworkWarnAt = now() and NOT emit a WARN this cycle.
+        given: "networkUnreachableSince set but lastNetworkWarnAt absent"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.networkUnreachableSince = driver.now() - 7200000L   // 2h ago
+        state.lastNetworkWarnAt = null
+        testLog.warns.clear()
+
+        when:
+        driver.emitNetworkWarnIfDue()
+
+        then: "no WARN emitted this cycle"
+        testLog.warns.isEmpty()
+
+        and: "lastNetworkWarnAt seeded to driver.now()"
+        (state.lastNetworkWarnAt as Long) == driver.now()
+    }
+
+    def "emitNetworkWarnIfDue() fires WARN after 1h cadence and suppresses immediate retry (R4)"() {
+        // R4: normal hourly cadence — 1h elapsed → WARN fires; immediate second call → suppressed.
+        given: "outage state with lastNetworkWarnAt set 1h ago"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        long oneHourAgo = driver.now() - 3600000L
+        state.networkUnreachableSince = driver.now() - 7200000L   // 2h outage
+        state.lastNetworkWarnAt = oneHourAgo
+        testLog.warns.clear()
+
+        when: "first emitNetworkWarnIfDue call (1h elapsed)"
+        driver.emitNetworkWarnIfDue()
+
+        then: "one WARN was emitted"
+        testLog.warns.size() == 1
+        testLog.warns[0].contains("BP22")
+        testLog.warns[0].contains("still unreachable")
+
+        and: "lastNetworkWarnAt updated to driver.now()"
+        (state.lastNetworkWarnAt as Long) == driver.now()
+
+        when: "second call immediately after (within 1h window)"
+        int warnsBefore = testLog.warns.size()
+        driver.emitNetworkWarnIfDue()
+
+        then: "no additional WARN"
+        testLog.warns.size() == warnsBefore
+    }
+
+    def "sendBypassRequest() clears outage state and logs INFO on successful HTTP response (R5)"() {
+        // R5: recovery detection. When httpPost succeeds after an outage, the driver must
+        // emit INFO with the elapsed outage duration and clear both state fields.
+        given: "outage state is set; httpPost succeeds this time"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        long outageStart = driver.now() - 3600000L   // 1h outage
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt = outageStart
+        testLog.infos.clear()
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r5-cid")
+        equip.updateDataValue("configModule", "r5-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        // httpPost succeeds — closure invoked with a fake 200 response
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [code: 0, result: [code: 0, result: [:], traceId: "r5"]]
+            cb(fakeResp)
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "INFO recovery message was emitted"
+        testLog.infos.any { it.contains("BP22") && it.contains("reachable again") }
+
+        and: "networkUnreachableSince cleared"
+        state.networkUnreachableSince == null
+
+        and: "lastNetworkWarnAt cleared"
+        state.lastNetworkWarnAt == null
+    }
+
+    def "sendBypassRequest() non-network exception does NOT touch BP22 outage state (R6)"() {
+        // R6: a non-network exception (e.g. NullPointerException from a driver bug)
+        // must follow the existing logError path; BP22 state must remain untouched.
+        given: "no prior outage; httpPost throws a non-network exception"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.networkUnreachableSince = null
+        state.lastNetworkWarnAt = null
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r6-cid")
+        equip.updateDataValue("configModule", "r6-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            throw new NullPointerException("unexpected null in response handler")
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "a logError was emitted (existing non-BP22 path)"
+        testLog.errors.any { it.contains("sendBypassRequest") }
+
+        and: "networkUnreachableSince remains null (BP22 not triggered)"
+        state.networkUnreachableSince == null
+
+        and: "lastNetworkWarnAt remains null"
+        state.lastNetworkWarnAt == null
+    }
+
+    @groovy.transform.CompileDynamic
+    def "isNetworkException() recognises all 8 network-class exception FQCNs (R7)"(String fqcn) {
+        // R7: the BP22 classifier must return true for all 8 exception class names it
+        // documents — 4 JDK + 4 Apache HttpClient.
+        //
+        // Strategy — hybrid, because JVM security forbids defining classes in java.* packages:
+        //   java.net.*    → real JDK instances (already on classpath; new Foo('test'))
+        //   org.apache.*  → GroovyClassLoader synthesis (not a restricted package; class.name
+        //                   of the synthesised class matches the FQN that isNetworkException checks)
+        given: "a real exception instance whose class FQN is '${fqcn}'"
+        Exception e = buildExceptionForTest(fqcn)
+
+        when:
+        boolean result = driver.isNetworkException(e)
+
+        then:
+        result == true
+
+        where:
+        fqcn << [
+            'java.net.UnknownHostException',
+            'java.net.SocketTimeoutException',
+            'java.net.ConnectException',
+            'java.net.NoRouteToHostException',
+            'org.apache.http.conn.ConnectTimeoutException',
+            'org.apache.http.conn.ConnectionPoolTimeoutException',
+            'org.apache.http.NoHttpResponseException',
+            'org.apache.http.conn.HttpHostConnectException',
+        ]
+    }
+
+    /**
+     * Build a test exception whose getClass().getName() == fqcn.
+     *
+     * JDK java.net.* classes: instantiated directly (on classpath; JVM prohibits
+     * redefining java.* packages via any ClassLoader).
+     * Apache org.apache.http.* classes: synthesised via GroovyClassLoader (org.apache.*
+     * is not a restricted namespace; the generated class has the correct FQN).
+     */
+    private Exception buildExceptionForTest(String fqcn) {
+        if (fqcn.startsWith('java.net.')) {
+            switch (fqcn) {
+                case 'java.net.UnknownHostException':   return new java.net.UnknownHostException('test')
+                case 'java.net.SocketTimeoutException': return new java.net.SocketTimeoutException('test')
+                case 'java.net.ConnectException':       return new java.net.ConnectException('test')
+                case 'java.net.NoRouteToHostException': return new java.net.NoRouteToHostException('test')
+            }
+        }
+        // Apache HttpClient classes — synthesise via GroovyClassLoader
+        String simpleName = fqcn.substring(fqcn.lastIndexOf('.') + 1)
+        String packageName = fqcn.substring(0, fqcn.lastIndexOf('.'))
+        String src = """
+            package ${packageName}
+            class ${simpleName} extends RuntimeException {
+                ${simpleName}() { super('test') }
+            }
+        """
+        GroovyClassLoader gcl = new GroovyClassLoader()
+        Class<?> cls = gcl.parseClass(src)
+        return cls.getDeclaredConstructor().newInstance() as Exception
+    }
+
+    def "isNetworkException() returns false for non-network exceptions (R8)"(Exception e) {
+        // R8: non-network exceptions must NOT trigger BP22 suppression — they should
+        // follow the logError path so the user sees the real error.
+        expect:
+        !driver.isNetworkException(e)
+
+        where:
+        e << [
+            new NullPointerException("null in handler"),
+            new IllegalArgumentException("bad arg"),
+            new IllegalStateException("state error"),
+            new RuntimeException("generic"),
+            new groovy.lang.MissingPropertyException("prop", String),
+        ]
+    }
+
+    def "sendBypassRequest() skips httpPost within 5-minute probe interval during outage (R9)"() {
+        // R9: circuit-breaker. When networkUnreachableSince is set and lastNetworkProbeAt
+        // is recent (< 5 min), sendBypassRequest must return false without calling httpPost.
+        given: "outage in progress; last probe was 1 minute ago"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        long outageStart = driver.now() - 120000L   // 2 min outage
+        long recentProbe = driver.now() - 60000L    // probed 1 min ago (within 5-min window)
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = recentProbe
+
+        boolean httpPostCalled = false
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            httpPostCalled = true
+            throw new java.net.UnknownHostException("should not be reached")
+        }
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r9-cid")
+        equip.updateDataValue("configModule", "r9-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        when:
+        boolean result = driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "httpPost was NOT called (circuit open)"
+        !httpPostCalled
+
+        and: "returned false silently"
+        result == false
+
+        and: "lastNetworkProbeAt unchanged"
+        (state.lastNetworkProbeAt as Long) == recentProbe
+    }
+
+    def "sendBypassRequest() fires probe when 5-minute interval expires during outage (R10)"() {
+        // R10: after 5+ minutes since lastNetworkProbeAt, sendBypassRequest must let the
+        // call through as a probe attempt and update lastNetworkProbeAt to now().
+        given: "outage in progress; last probe was 6 minutes ago (interval expired)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        long outageStart = driver.now() - 600000L   // 10 min outage
+        long staleProbe  = driver.now() - 360000L   // probed 6 min ago (> 5 min threshold)
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = staleProbe
+
+        boolean httpPostCalled = false
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            httpPostCalled = true
+            // Probe still fails — connection still down
+            throw new java.net.ConnectException("still unreachable")
+        }
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r10-cid")
+        equip.updateDataValue("configModule", "r10-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "httpPost WAS called (probe attempt fired)"
+        httpPostCalled
+
+        and: "lastNetworkProbeAt updated to driver.now()"
+        (state.lastNetworkProbeAt as Long) == driver.now()
+    }
+
+    def "sendBypassRequest() probe success clears all 3 BP22 state fields (R11)"() {
+        // R11: when the probe fires (interval expired) and httpPost succeeds, the
+        // recovery path must clear networkUnreachableSince, lastNetworkWarnAt, AND
+        // lastNetworkProbeAt — all three state fields.
+        given: "outage state set; probe interval expired; httpPost succeeds this time"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        long outageStart = driver.now() - 600000L   // 10 min outage
+        long staleProbe  = driver.now() - 360000L   // 6 min ago — probe fires
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = staleProbe
+        testLog.infos.clear()
+
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [code: 0, result: [code: 0, result: [:], traceId: "r11"]]
+            cb(fakeResp)
+        }
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r11-cid")
+        equip.updateDataValue("configModule", "r11-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "INFO recovery message emitted"
+        testLog.infos.any { it.contains("BP22") && it.contains("reachable again") }
+
+        and: "networkUnreachableSince cleared"
+        state.networkUnreachableSince == null
+
+        and: "lastNetworkWarnAt cleared"
+        state.lastNetworkWarnAt == null
+
+        and: "lastNetworkProbeAt cleared"
+        state.lastNetworkProbeAt == null
+    }
+
+    def "isNetworkException() walks cause chain to find wrapped network exceptions (R12)"() {
+        // R12: live observation — ConnectTimeoutException surfaced as the CAUSE of a
+        // generic wrapper, not as the top-level exception. The cause-chain walk must
+        // find it even when buried 1 or 2 levels deep. Also validates depth limit:
+        // a 12-exception chain doesn't infinite-loop.
+        given: "a wrapper containing a network exception as cause"
+        def inner = new java.net.UnknownHostException("dns failed")
+        def wrapper1 = new RuntimeException("wrapper", inner)
+        def wrapper2 = new RuntimeException("outer wrapper", wrapper1)
+
+        expect: "one level of wrapping — detected"
+        driver.isNetworkException(wrapper1)
+
+        and: "two levels of wrapping — detected"
+        driver.isNetworkException(wrapper2)
+
+        and: "a chain of 12 exceptions (beyond depth limit) — returns false without looping"
+        Exception chain = new RuntimeException("tail")
+        (1..12).each { chain = new RuntimeException("level-${it}", chain) }
+        !driver.isNetworkException(chain)
+
+        and: "null exception — returns false safely"
+        !driver.isNetworkException(null)
+    }
+
+    def "updateDevices() top-level circuit-breaker skips entire cycle when probe interval not elapsed (R13)"() {
+        // R13: during a known outage with a recent probe (< 5 min ago), updateDevices()
+        // must return false immediately — before iterating children or calling httpPost.
+        // This is the parallel-poll fix: none of the children dispatch their httpPost calls
+        // at all, so no stalls can occur.
+        given: "outage in progress; last probe 1 minute ago (interval not elapsed)"
+        settings.refreshInterval = 30
+        settings.debugOutput = true
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        long outageStart = driver.now() - 120000L    // outage for 2 min
+        long recentProbe = driver.now() - 60000L     // probed 1 min ago
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = recentProbe
+
+        // Register a child device — if the circuit-breaker works, it must never be iterated
+        boolean childUpdateCalled = false
+        def child = new TestDevice()
+        child.updateDataValue("deviceType", "LAP-V201S-WUS")
+        child.metaClass.update = { Map st, nl -> childUpdateCalled = true; true }
+        state.deviceList = ["R13-CID": "r13-cm"]
+        childDevices["R13-CID"] = child
+
+        boolean httpPostCalled = false
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            httpPostCalled = true
+            throw new java.net.SocketTimeoutException("should not be reached")
+        }
+
+        when:
+        boolean result = driver.updateDevices()
+
+        then: "cycle was skipped — returned false"
+        result == false
+
+        and: "httpPost was NOT called"
+        !httpPostCalled
+
+        and: "child update was NOT called"
+        !childUpdateCalled
+
+        and: "lastNetworkProbeAt unchanged"
+        (state.lastNetworkProbeAt as Long) == recentProbe
+
+        and: "one DEBUG log emitted for the skip"
+        testLog.debugs.any { it.contains("skipping updateDevices cycle") }
+    }
+
+    def "updateDevices() top-level circuit-breaker allows probe cycle when interval elapsed (R14)"() {
+        // R14: when the probe interval has elapsed (> 5 min since lastNetworkProbeAt),
+        // updateDevices() must let the full cycle run as a recovery probe, update
+        // lastNetworkProbeAt to now(), and set networkProbeInFlight before iterating.
+        // Here the probe still fails (outage continues) — verifies state update, not recovery.
+        given: "outage in progress; last probe 6 minutes ago (interval expired)"
+        settings.refreshInterval = 30
+        settings.debugOutput = true
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        long outageStart = driver.now() - 600000L   // outage for 10 min
+        long staleProbe  = driver.now() - 360000L   // probed 6 min ago
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = staleProbe
+
+        boolean httpPostCalled = false
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            httpPostCalled = true
+            throw new java.net.SocketTimeoutException("still unreachable")
+        }
+
+        def child = new TestDevice()
+        child.updateDataValue("deviceType", "LAP-V201S-WUS")
+        child.metaClass.update = { Map st, nl -> true }
+        state.deviceList = ["R14-CID": "r14-cm"]
+        childDevices["R14-CID"] = child
+
+        when:
+        driver.updateDevices()
+
+        then: "cycle ran — httpPost was called (probe attempt)"
+        httpPostCalled
+
+        and: "lastNetworkProbeAt updated to driver.now()"
+        (state.lastNetworkProbeAt as Long) == driver.now()
+
+        and: "DEBUG probe log emitted"
+        testLog.debugs.any { it.contains("probing updateDevices cycle") }
+    }
+
+    def "networkProbeInFlight bypasses per-call circuit-breaker in sendBypassRequest (R15)"() {
+        // R15: when state.networkProbeInFlight is true (set by the top-level breaker),
+        // the per-call circuit-breaker in sendBypassRequest() must bypass its short-circuit
+        // and allow the httpPost through. Without this, the top-level probe would set
+        // lastNetworkProbeAt = now() and then each child's per-call check would see
+        // sinceLastProbe=0 and skip — deadlock where no probe actually fires.
+        given: "outage state set but networkProbeInFlight signals this IS the probe"
+        settings.debugOutput = true
+        long outageStart = driver.now() - 600000L
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = driver.now()   // just updated by top-level breaker
+        state.networkProbeInFlight    = true            // top-level breaker set this
+
+        boolean httpPostCalled = false
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            httpPostCalled = true
+            // Probe still fails
+            throw new java.net.ConnectException("still unreachable")
+        }
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r15-cid")
+        equip.updateDataValue("configModule", "r15-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "httpPost WAS called (per-call breaker bypassed by networkProbeInFlight)"
+        httpPostCalled
+    }
+
+    def "updateDevices() clears networkProbeInFlight in finally block after probe cycle (R16)"() {
+        // R16: networkProbeInFlight must be cleared at the end of updateDevices() regardless
+        // of whether the probe cycle succeeded or failed. The try/finally guarantee ensures
+        // the flag doesn't persist across cycles and re-disable the per-call breaker permanently.
+        given: "outage state with expired probe interval — cycle will run as probe"
+        settings.refreshInterval = 30
+        settings.debugOutput = true
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        long outageStart = driver.now() - 600000L
+        long staleProbe  = driver.now() - 360000L   // expired
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = staleProbe
+
+        // httpPost throws (outage continues) — verify finally clears flag even on failure
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            throw new java.net.SocketTimeoutException("still unreachable")
+        }
+
+        def child = new TestDevice()
+        child.updateDataValue("deviceType", "LAP-V201S-WUS")
+        child.metaClass.update = { Map st, nl -> true }
+        state.deviceList = ["R16-CID": "r16-cm"]
+        childDevices["R16-CID"] = child
+
+        when:
+        driver.updateDevices()
+
+        then: "networkProbeInFlight is null/false after cycle completes"
+        !state.networkProbeInFlight
     }
 }

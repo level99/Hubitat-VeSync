@@ -1,0 +1,42 @@
+{
+  "_comment": [
+    "Hand-curated FIXTURE_OPS method extensions for VeSyncIntegrationVirtual.groovy.",
+    "Each entry lists driver-side methods that are NOT documented in pyvesync's vendored",
+    "tests/api/.../<fixture>.yaml — typically v2.3+ command additions to this fork's drivers",
+    "that pyvesync's upstream test fixtures haven't been updated to cover.",
+    "",
+    "The regenerator at tools/regenerate_virtual_parent.py merges these into the",
+    "auto-generated FIXTURE_OPS @Field block, deduping by method name (extensions take",
+    "precedence on conflict).",
+    "",
+    "When a pyvesync upstream PR adds these methods to the canonical fixture YAML,",
+    "remove the corresponding extension entry here; the next regenerator run will",
+    "replace it with the canonical pyvesync source."
+  ],
+
+  "Core200S": {
+    "method_extensions": [
+      {"method": "setDisplay",   "dataKeys": ["state"]},
+      {"method": "setChildLock", "dataKeys": ["child_lock"]},
+      {"method": "addTimer",     "dataKeys": ["action", "total"]},
+      {"method": "delTimer",     "dataKeys": ["id"]},
+      {"method": "resetFilter",  "dataKeys": []}
+    ]
+  },
+
+  "LTF-F422S": {
+    "_comment": "pyvesync vendored LTF-F422S.yaml omits setTowerFanMode and setDisplay — only setLevel, setSwitch, setMuteSwitch, setOscillationSwitch, getTowerFanStatus are present. Mode-set and display commands are driver-side additions.",
+    "method_extensions": [
+      {"method": "setTowerFanMode", "dataKeys": ["workMode"]},
+      {"method": "setDisplay",      "dataKeys": ["screenSwitch"]}
+    ]
+  },
+
+  "LPF-R423S": {
+    "_comment": "pyvesync vendored LPF-R423S.yaml omits setFanMode and setDisplay — only setLevel, setSwitch, setOscillationStatus, getFanStatus are present. Mode-set and display commands are driver-side additions.",
+    "method_extensions": [
+      {"method": "setFanMode", "dataKeys": ["workMode"]},
+      {"method": "setDisplay", "dataKeys": ["screenSwitch"]}
+    ]
+  }
+}

@@ -438,4 +438,39 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setMode") && it.contains("null") }
         testParent.allRequests.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // SwitchLevel 2-arg overload
+    // -------------------------------------------------------------------------
+
+    def "setLevel(50) 1-arg sends setVirtualLevel API call"() {
+        // Baseline: confirm 1-arg setLevel routes to the mist-level API.
+        given: "default state"
+        settings.descriptionTextEnable = false
+
+        when: "setLevel(50) is called -- maps to mist level ~5 out of 9"
+        driver.setLevel(50)
+
+        then: "setVirtualLevel API request was sent"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
+        req != null
+        req.data.containsKey("virtualLevel")
+    }
+
+    def "setLevel(50, 30) 2-arg form delegates to 1-arg (SwitchLevel standard signature)"() {
+        // Hubitat SwitchLevel capability advertises setLevel(level, duration). Without the 2-arg
+        // overload, callers (Rule Machine with duration, dashboards, MCP) throw MissingMethodException.
+        given: "default state"
+        settings.descriptionTextEnable = false
+
+        when: "setLevel is called with two args (level=50, duration=30)"
+        driver.setLevel(50, 30)
+
+        then: "same API call as setLevel(50) — setVirtualLevel request sent"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
+        req != null
+        req.data.containsKey("virtualLevel")
+    }
 }

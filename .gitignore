@@ -53,3 +53,7 @@ TODO.md
 
 # Scratch caches from research agents (HA cross-check, etc.)
 .tmp/
+
+# Local dry-run artifact from tools/pyvesync-tracker/detect_devices.py
+# (CI writes this in cwd as a body-file for `gh issue create`; ephemeral.)
+new-devices.md

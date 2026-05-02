@@ -1,0 +1,146 @@
+name: Pyvesync tracker
+
+# Tracks the upstream webdjoe/pyvesync release tag against the version pinned
+# in tests/pyvesync-fixtures/README.md. When a newer tag exists, this workflow:
+#
+#   Output A — Opens (or refreshes) a "chore: bump pyvesync to <tag>" PR that
+#              re-pulls the 19 vendored YAMLs and updates the pinned reference.
+#              Existing CI (Lint + Spock + PyvesyncCoverageSpec) gates the merge.
+#
+#   Output B — If new Levoit device codes appeared in pyvesync's device_map.py,
+#              opens a `new-device-support` issue listing them with class
+#              assignments. Filtered to LAP-/LUH-/LEH-/LTF-/LPF-/LV- prefixes
+#              plus literal codes (Core200S, Classic200S, Dual200S, Vital200S,
+#              Core300S/400S/600S, Classic300S) so non-Levoit upstream churn is
+#              suppressed.
+
+on:
+  schedule:
+    # Mondays 06:00 UTC — caught early enough in the week to triage.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pyvesync-tracker
+  cancel-in-progress: false
+
+jobs:
+  track:
+    name: Detect + refresh + file
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Bootstrap labels (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          create_label() {
+            local name="$1" color="$2" desc="$3"
+            gh label create "$name" --color "$color" --description "$desc" 2>/dev/null \
+              || gh label edit "$name" --color "$color" --description "$desc" 2>/dev/null \
+              || true
+          }
+          create_label auto-filed         ededed "Auto-filed by a GitHub Action"
+          create_label new-device-support 0075ca "Pyvesync added a new Levoit device code"
+          create_label upstream-tracking  fbca04 "Tracks upstream pyvesync changes"
+
+      - name: Detect latest pyvesync tag
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run --python 3.12 tools/pyvesync-tracker/detect.py
+
+      - name: Refresh fixtures (Output A)
+        if: steps.detect.outputs.has-update == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run --python 3.12 tools/pyvesync-tracker/refresh.py "${{ steps.detect.outputs.new-tag }}"
+
+      - name: Detect new Levoit devices (Output B)
+        if: steps.detect.outputs.has-update == 'true'
+        id: devices
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          uv run --python 3.12 tools/pyvesync-tracker/detect_devices.py \
+            "${{ steps.detect.outputs.old-tag }}" \
+            "${{ steps.detect.outputs.new-tag }}"
+
+      - name: Open / refresh auto-bump PR (Output A)
+        if: steps.detect.outputs.has-update == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_TAG: ${{ steps.detect.outputs.new-tag }}
+          OLD_TAG: ${{ steps.detect.outputs.old-tag }}
+        run: |
+          set -euo pipefail
+          BRANCH="chore/pyvesync-${NEW_TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${BRANCH}"
+          if git diff --quiet; then
+            echo "No fixture changes between ${OLD_TAG} and ${NEW_TAG} — skipping PR."
+            exit 0
+          fi
+          git add tests/pyvesync-fixtures/
+          git commit -m "chore: bump pyvesync to ${NEW_TAG}"
+          git push --force-with-lease origin "${BRANCH}"
+          if gh pr view "${BRANCH}" --json state --jq '.state' 2>/dev/null | grep -q OPEN; then
+            echo "PR for ${BRANCH} already open — push refreshed it."
+            exit 0
+          fi
+          BODY_FILE="$(mktemp)"
+          cat > "${BODY_FILE}" <<EOF
+          Auto-filed by \`.github/workflows/pyvesync-tracker.yml\`.
+
+          Bumps vendored pyvesync fixtures from \`${OLD_TAG}\` to \`${NEW_TAG}\`.
+
+          - Vendored YAML fixtures in \`tests/pyvesync-fixtures/\` refreshed from upstream.
+          - Pinned-tag reference updated in \`tests/pyvesync-fixtures/README.md\`.
+          - \`FIXTURE_OPS\` @Field block in \`Drivers/Levoit/VeSyncIntegrationVirtual.groovy\` regenerated to match (via \`tools/regenerate_virtual_parent.py\`).
+
+          CI (Lint + Spock + PyvesyncCoverageSpec) runs on this PR. Green = safe to merge; red = real divergence between this fork's drivers and upstream — investigate per failure.
+
+          Pyvesync diff: https://github.com/webdjoe/pyvesync/compare/${OLD_TAG}...${NEW_TAG}
+          EOF
+          gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "chore: bump pyvesync to ${NEW_TAG}" \
+            --body-file "${BODY_FILE}" \
+            --label "auto-filed,upstream-tracking"
+
+      - name: Open new-device-support issue (Output B)
+        if: steps.detect.outputs.has-update == 'true' && steps.devices.outputs.new-devices == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_TAG: ${{ steps.detect.outputs.new-tag }}
+          NEW_COUNT: ${{ steps.devices.outputs.new-count }}
+        run: |
+          set -euo pipefail
+          PLURAL=""
+          [ "${NEW_COUNT}" != "1" ] && PLURAL="s"
+          TITLE="Pyvesync added support for ${NEW_COUNT} new Levoit code${PLURAL} (tag ${NEW_TAG})"
+          COUNT=$(gh issue list --state open --search "${TITLE} in:title" --json number --jq 'length')
+          if [ "${COUNT}" != "0" ]; then
+            echo "Issue with title \"${TITLE}\" already open — skipping."
+            exit 0
+          fi
+          gh issue create \
+            --title "${TITLE}" \
+            --body-file new-devices.md \
+            --label "auto-filed,new-device-support,upstream-tracking"

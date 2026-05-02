@@ -27,6 +27,9 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-04-29: v2.4  Added captureDiagnostics command + diagnostics attribute via
+ *                      LevoitDiagnostics library. Added recordError() ring-buffer calls at
+ *                      all logError sites.
  *    2026-04-26: v2.0  Community fork initial release (Dan Cox). Built from canonical pyvesync
  *                      payloads (Classic300S.yaml fixture + call_json_humidifiers.py + HA PR
  *                      #137544 production-reality findings). Capabilities: Switch,
@@ -41,13 +44,15 @@
  *                      on legacy firmware variants. Foundation driver for OasisMist 450S US extension.
  */
 
+#include level99.LevoitDiagnostics
+
 metadata {
     definition(
         name: "Levoit Classic 300S Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Classic 300S (LUH-A601S) humidifier — mist 1-9, target humidity, auto/sleep/manual modes, night-light (off/dim/bright), auto-stop, display; canonical pyvesync payloads",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -67,6 +72,9 @@ metadata {
         attribute "autoStopReached",     "string"   // yes | no
         attribute "humidityHigh",        "string"   // yes | no
         attribute "info",                "string"   // HTML summary for dashboard tiles
+        attribute "diagnostics",         "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online",              "string"
 
         command "setMode",         [[name:"Mode*",        type:"ENUM",   constraints:["auto","sleep","manual"]]]
         command "setMistLevel",    [[name:"Level*",        type:"NUMBER", description:"1-9"]]
@@ -75,6 +83,7 @@ metadata {
         command "setDisplay",      [[name:"On/Off*",       type:"ENUM",   constraints:["on","off"]]]
         command "setAutoStop",     [[name:"On/Off*",       type:"ENUM",   constraints:["on","off"]]]
         command "toggle"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -88,6 +97,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.4"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -107,14 +117,14 @@ def on(){
     logDebug "on()"
     def resp = hubBypass("setSwitch", [enabled: true, id: 0], "setSwitch(enabled=true)")
     if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-    else logError "Power on failed"
+    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
 }
 
 def off(){
     logDebug "off()"
     def resp = hubBypass("setSwitch", [enabled: false, id: 0], "setSwitch(enabled=false)")
     if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-    else logError "Power off failed"
+    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
 // state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write
@@ -131,7 +141,7 @@ def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (mode as String).toLowerCase()
-    if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m}"; return }
+    if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     // Classic 300S uses {mode: <value>}, NOT {workMode: <value>} (Superior 6000S difference)
     def resp = hubBypass("setHumidityMode", [mode: m], "setHumidityMode(${m})")
     if (httpOk(resp)) {
@@ -139,7 +149,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"
+        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
 
@@ -165,7 +175,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: lvl)
         logInfo "Mist level: ${lvl}"
     } else {
-        logError "Mist level write failed: ${lvl}"
+        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
     }
 }
 
@@ -180,7 +190,7 @@ def setHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"
+        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
     }
 }
 
@@ -194,7 +204,7 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: onOff)
         logInfo "Display: ${onOff}"
     } else {
-        logError "Display write failed"
+        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
 
@@ -208,7 +218,7 @@ def setAutoStop(onOff){
         device.sendEvent(name:"autoStopEnabled", value: onOff)
         logInfo "Auto-stop: ${onOff}"
     } else {
-        logError "Auto-stop write failed"
+        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
     }
 }
 
@@ -234,6 +244,7 @@ def setNightLight(level){
     Map nlNameToInt = [off: 0, dim: 50, bright: 100]
     if (!nlNameToInt.containsKey(lvlStr)) {
         logError "Invalid nightLight value '${lvlStr}' -- must be one of: off, dim, bright"
+        recordError("Invalid nightLight value '${lvlStr}'", [method:"setNightLightBrightness"])
         return
     }
     Integer brightness = nlNameToInt[lvlStr]
@@ -244,7 +255,7 @@ def setNightLight(level){
         device.sendEvent(name:"nightLightBrightness", value: brightness)
         logInfo "Night light: ${lvlStr}"
     } else {
-        logError "Night light write failed: ${lvlStr}"
+        logError "Night light write failed: ${lvlStr}"; recordError("Night light write failed: ${lvlStr}", [method:"setNightLightBrightness"])
     }
 }
 
@@ -262,7 +273,7 @@ def update(){
     def resp = hubBypass("getHumidifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getHumidifierStatus"
+        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"update"]) }
         else applyStatus(status)
     }
 }
@@ -472,7 +483,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

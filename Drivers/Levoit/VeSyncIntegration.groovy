@@ -26,6 +26,46 @@ SOFTWARE.
 
 // History:
 //
+// 2026-05-01: v2.4  Bug Pattern #22 — HTTP-error log spam and poll-cycle stalls during
+//                  network outages eliminated.
+//                  - isNetworkException() classifies 8 exception classes (4 JDK + 4 Apache
+//                    HttpClient) via cause-chain walk (depth 10) — covers sandbox wrappers.
+//                  - First network error of an outage: one-time WARN + state.networkUnreachableSince
+//                    set. Subsequent errors: DEBUG only (silent in normal logs).
+//                  - Dual circuit-breaker: (1) top-level in updateDevices() skips the entire
+//                    poll cycle during a known outage (prevents parallel-child stalls); (2)
+//                    per-call in sendBypassRequest() skips individual httpPost() for command-
+//                    triggered calls outside polling. Both use the same 5-minute probe interval.
+//                    Coordination via state.networkProbeInFlight flag: top-level sets it when
+//                    firing a recovery probe so per-call breaker doesn't re-block the probe.
+//                    Cleared in a try/finally in updateDevices().
+//                  - New emitNetworkWarnIfDue() helper: hourly WARN re-surface while unreachable.
+//                  - Recovery: INFO "reachable again after Xh Ym" + all state fields cleared
+//                    on first successful httpPost() completion.
+//                  - Non-network exceptions keep existing logError path.
+//                  - New state: state.networkUnreachableSince (Long), state.lastNetworkWarnAt (Long),
+//                    state.lastNetworkProbeAt (Long), state.networkProbeInFlight (Boolean).
+// 2026-05-01: v2.4  Bug Pattern #21 — bounded self-heal backoff for chronically-offline devices.
+//                  - ensurePollHealth() now caps self-heal Resync attempts per device at 3.
+//                    After 3 failed attempts the device is marked offline in state
+//                    (state.deviceOfflineSince[dni]), further self-heal triggers are suppressed,
+//                    and the child receives a sendEvent(online:"false") for dashboards/RM.
+//                  - On first successful poll after an offline period the state is cleared and
+//                    the child receives sendEvent(online:"true") with recovery duration in INFO log.
+//                  - Log refactored from per-poll ERROR spam to tiered DEBUG/INFO/WARN:
+//                      counts 1-4 AND not offline  -> DEBUG "N consecutive empty"
+//                      count == 5 (first BP17 fire) -> INFO  "may be offline, self-healing"
+//                      attempts 2-3                 -> DEBUG "self-heal attempt N"
+//                      3rd-attempt offline mark     -> INFO  "marked offline, suppressing noise"
+//                      while offline, hourly        -> WARN  "has been offline for Nh Mm"
+//                      while offline, sub-hourly    -> DEBUG "still empty (offline since X)"
+//                      first recovery               -> INFO  "back online after Nh Mm"
+//                  - Hourly offline WARN emitted at top of updateDevices() by
+//                    emitOfflineWarnsIfDue() — iterates state.deviceOfflineSince.
+//                  - New helpers: markChildOffline(dni), markChildOnline(dni),
+//                    formatOfflineDuration(sinceMillis), emitOfflineWarnsIfDue().
+//                  - Per-child "online" attribute added to all child drivers (excludes
+//                    LevoitCore200S Light, LevoitGeneric, Notification Tile, VeSyncIntegrationVirtual).
 // 2026-04-27: v2.2.1 Bug fixes.
 //                  - Bug 1: safeAddChildDevice() helper wraps every addChildDevice()
 //                    call in getDevices() with UnknownDeviceTypeException catch.
@@ -190,10 +230,36 @@ SOFTWARE.
 // 2022-07-18: v1.1 Support for Levoit Air Purifier Core 600S.
 //                  Split into separate files for each device.
 //                  Support for 'SwitchLevel' capability.
+// 2026-04-30: v2.4  Bug Pattern #19 — existing-child configModule refresh on Resync.
+//                  getDevices() else-branches (existing-child update path) previously
+//                  refreshed only name, label, and deviceType; configModule, cid, and
+//                  uuid were never updated. When VeSync changed a device's configModule
+//                  server-side (e.g. firmware update), sendBypassRequest still read the
+//                  stale value from the child data store, and every poll returned empty.
+//                  The BP17 watchdog correctly fired and scheduled a Resync, but Resync
+//                  hit the else-branch and did not propagate the fresh configModule, so
+//                  polling continued to fail indefinitely. All 21 else-branches (20 equip1
+//                  + 1 equip2 for Core200S Light) now update configModule, cid, and uuid
+//                  before deviceType, matching the new-child if-branch pattern.
+// 2026-04-29: v2.4  Phase 5 — per-device captureDiagnostics + error ring-buffer.
+//                  - #include level99.LevoitDiagnostics: library provides
+//                    recordError() ring-buffer (last 10 per device, FIFO), and
+//                    captureDiagnostics() for the parent itself.
+//                  - Added captureDiagnosticsFor(String childDni) — returns
+//                    per-device parent-side context map for child diagnostic captures
+//                    (consecutiveEmpty, lastPollMethod, configModule, last error).
+//                  - updateDevices() now sets state.lastPollMethod[<dni>] before
+//                    calling dev.update() so captureDiagnosticsFor can report it.
+//                  - recordError() called alongside logError() at the 6 highest-value
+//                    call sites (login failure, poll-null, connection-pool, re-auth).
+//                  - Added attribute "diagnostics" + command "captureDiagnostics"
+//                    to metadata.
 // 2021-10-22: v1.0 Support for Levoit Air Purifier Core 200S / 400S
 
 import java.security.MessageDigest
 import groovy.transform.Field
+
+#include level99.LevoitDiagnostics
 
 // VeSync API metadata constants — centralised here so version/ID changes are one-line fixes.
 // DO NOT change DEFAULT_TRACE_ID to a dynamic value — pyvesync uses "1634265366" verbatim
@@ -201,6 +267,7 @@ import groovy.transform.Field
 @Field static final String APP_VERSION       = "2.5.1"
 @Field static final String DEFAULT_TRACE_ID  = "1634265366"
 @Field static final String DEFAULT_TIME_ZONE = "America/Los_Angeles"
+@Field static final int    MAX_HEAL_ATTEMPTS = 3   // BP21: cap self-heal Resyncs before marking offline
 // Regional routing is binary: US → smartapi.vesync.com, EU → smartapi.vesync.eu
 // (per pyvesync const.py). Implemented in v2.2 via deviceRegion preference + getApiHost() helper.
 
@@ -215,11 +282,14 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson (original); Dan Cox (fork: Vital 200S, Superior 6000S, parent fixes); elfege (contributor)",
         description: "Integrates Levoit air purifiers and humidifiers with Hubitat Elevation via VeSync cloud API",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"
-            attribute "heartbeat", "string";  
+            attribute "heartbeat", "string"
+            attribute "diagnostics", "string"
+
+            command "captureDiagnostics"
         }
 
     preferences {
@@ -256,6 +326,7 @@ def updated() {
         state.remove('accountID')
     }
     state.lastRegion = newRegion
+    state.driverVersion = "2.4"
 
     // Set flag to stop any running tasks from old driver instance
     state.driverReloading = true
@@ -308,6 +379,7 @@ def initialize() {
         getDevices()
     } else {
         logError "Login failed - check credentials and retry"
+        recordError("Login failed - check credentials and retry", [site:"initialize"])
     }
 }
 
@@ -394,17 +466,29 @@ private void ensureDebugWatchdog() {
 }
 
 /**
- * BP17 poll-health watchdog.
+ * BP17 / BP21 poll-health watchdog.
  *
  * A stale configModule in state.deviceList (caused by a VeSync-side firmware update)
- * makes every bypassV2 status call return an empty result, generating one
- * ERROR log per device per poll cycle indefinitely. The symptom is:
- *   ERROR: No status returned from getPurifierStatus
+ * makes every bypassV2 status call return an empty result. BP17's fix triggers a full
+ * getDevices() Resync at 5 consecutive empties to refresh configModule from the cloud.
  *
- * This watchdog counts consecutive empty results per DNI via state.consecutiveEmpty.
- * If any DNI reaches the threshold (5 consecutive empties), a full getDevices() is
- * triggered to refresh configModule values from the VeSync cloud. On success, the
- * fresh configModule values restore normal polling without user action.
+ * BP21 bounds that self-heal loop for chronically-offline devices (unplugged / off WiFi /
+ * off VeSync cloud). If the underlying device is genuinely offline, the Resync succeeds
+ * (VeSync cloud still knows the device) but the next 5 polls also fail, triggering another
+ * Resync → infinite ~5min cycle + per-poll ERROR spam.
+ *
+ * Fix: cap self-heal attempts at 3 per device per session. After 3 failures:
+ *   - Mark device offline in state (state.deviceOfflineSince[dni] = now())
+ *   - Suppress further self-heal triggers until the next non-empty result
+ *   - Emit sendEvent(online:"false") to the child for dashboards / Rule Machine
+ *
+ * Recovery: the first non-empty result (in the updateDevices() success branch) clears
+ * state and emits sendEvent(online:"true"). See the updateDevices() empty/success
+ * branches and markChildOffline()/markChildOnline() helpers.
+ *
+ * state.selfHealAttempts[dni] — counter, incremented at each BP17 fire (whole-map discipline)
+ * state.deviceOfflineSince[dni] — Long (millis) when marked offline; absent when online
+ * state.lastOfflineWarnAt[dni]  — Long (millis) of last hourly WARN; absent until first WARN
  *
  * Threshold of 5: ~2.5 min at 30s interval — fast enough to self-heal before the
  * user notices, slow enough to avoid spurious Resyncs on transient API blips.
@@ -412,12 +496,264 @@ private void ensureDebugWatchdog() {
 private void ensurePollHealth() {
     if (!state.consecutiveEmpty) return
     int threshold = 5
-    boolean anyExceeded = state.consecutiveEmpty.any { dni, count -> (count as Integer) >= threshold }
-    if (anyExceeded) {
-        def offendingDnis = state.consecutiveEmpty.findAll { k, v -> (v as Integer) >= threshold }.keySet()
-        logInfo "BP17 poll-health: ${offendingDnis.size()} device(s) returned ≥${threshold} consecutive empty results (${offendingDnis}). Scheduling getDevices() to refresh configModule."
-        state.consecutiveEmpty = [:]  // reset counters before Resync to avoid re-triggering immediately
-        runIn(2, "getDevices")  // async — keeps current poll thread from blocking on retryableHttp delays
+
+    state.consecutiveEmpty.each { String dni, countRaw ->
+        int count = countRaw as Integer
+        if (count < threshold) return  // not yet a concern
+
+        // Device is already marked offline — skip all self-heal logic entirely.
+        // A genuinely-offline device won't recover via getDevices(); suppressing
+        // the trigger avoids the infinite ~5min self-heal loop (BP21).
+        if (state.deviceOfflineSince?.containsKey(dni)) {
+            logDebug "BP21: ${dni} already marked offline — skipping self-heal"
+            return
+        }
+
+        // Count how many self-heal attempts have been made for this DNI
+        def healMap = (state.selfHealAttempts ?: [:]) as Map
+        int attempts = ((healMap[dni] ?: 0) as Integer) + 1
+        healMap[dni] = attempts
+        state.selfHealAttempts = healMap
+
+        // Reset the consecutive-empty counter for this DNI before the Resync
+        // to avoid re-triggering immediately when the Resync completes.
+        def counts = (state.consecutiveEmpty ?: [:]) as Map
+        counts.remove(dni)
+        state.consecutiveEmpty = counts
+
+        if (attempts <= MAX_HEAL_ATTEMPTS) {
+            // Still within the self-heal budget — attempt Resync.
+            // (Attempt 1 is logged at INFO to alert the user; attempts 2+ at DEBUG.)
+            if (attempts == 1) {
+                def child = getChildDevice(dni)
+                String label = child?.label ?: child?.name ?: dni
+                logInfo "BP17 poll-health: device '${label}' (${dni}) returned ≥${threshold} consecutive empty results. Attempting self-heal (attempt ${attempts}/${MAX_HEAL_ATTEMPTS})."
+            } else {
+                logDebug "BP17 poll-health: self-heal attempt ${attempts}/${MAX_HEAL_ATTEMPTS} for ${dni}"
+            }
+            runIn(2, "getDevices")  // async — keeps current poll thread from blocking
+        } else {
+            // Exhausted self-heal budget — mark device offline.
+            def child = getChildDevice(dni)
+            String label = child?.label ?: child?.name ?: dni
+            logInfo "BP21: device '${label}' (${dni}) still empty after ${MAX_HEAL_ATTEMPTS} self-heal attempts. " +
+                    "Marking offline. Suppressing further self-heal triggers. " +
+                    "Check device power / WiFi / VeSync app to verify."
+            markChildOffline(dni)
+        }
+    }
+}
+
+/**
+ * Mark a child device as offline (BP21).
+ *
+ * Sets state.deviceOfflineSince[dni] to the current timestamp and emits
+ * sendEvent(name:"online", value:"false") on the child. The child's "online"
+ * attribute is readable in dashboards and Rule Machine without any special
+ * driver code — parent writes it directly via sendEvent.
+ *
+ * Idempotent if the device is already marked offline (the parent's
+ * ensurePollHealth() guards prevent re-entry, but the double-guard is cheap).
+ */
+private void markChildOffline(String dni) {
+    def offlineMap = (state.deviceOfflineSince ?: [:]) as Map
+    if (offlineMap.containsKey(dni)) return   // already marked offline; no-op
+    long ts = now()
+    offlineMap[dni] = ts
+    state.deviceOfflineSince = offlineMap
+
+    // Seed lastOfflineWarnAt to now() so emitOfflineWarnsIfDue() in the same
+    // updateDevices() cycle does not immediately fire a WARN (BP21 transition-cycle bug).
+    // The first hourly WARN will fire ≥1h after this mark.
+    def warnMap = (state.lastOfflineWarnAt ?: [:]) as Map
+    warnMap[dni] = ts
+    state.lastOfflineWarnAt = warnMap
+
+    def child = getChildDevice(dni)
+    if (child == null) {
+        logDebug "markChildOffline(${dni}): no child device found — state updated but no event emitted"
+        return
+    }
+    child.sendEvent(name: "online", value: "false",
+        descriptionText: "Marked offline after ${MAX_HEAL_ATTEMPTS} self-heal attempts failed. Check device power / WiFi / VeSync app.")
+}
+
+/**
+ * Mark a child device as back online (BP21 recovery).
+ *
+ * Clears state.deviceOfflineSince[dni], state.selfHealAttempts[dni], and
+ * state.lastOfflineWarnAt[dni], then emits sendEvent(name:"online", value:"true")
+ * on the child. Logs recovery duration at INFO.
+ *
+ * Called from the updateDevices() success branch when a poll returns non-empty
+ * for a DNI that was previously marked offline.
+ */
+private void markChildOnline(String dni) {
+    def offlineMap = (state.deviceOfflineSince ?: [:]) as Map
+    Long sinceMillis = offlineMap[dni] as Long
+    offlineMap.remove(dni)
+    state.deviceOfflineSince = offlineMap
+
+    def healMap = (state.selfHealAttempts ?: [:]) as Map
+    healMap.remove(dni)
+    state.selfHealAttempts = healMap
+
+    def warnMap = (state.lastOfflineWarnAt ?: [:]) as Map
+    warnMap.remove(dni)
+    state.lastOfflineWarnAt = warnMap
+
+    def child = getChildDevice(dni)
+    if (child == null) {
+        logDebug "markChildOnline(${dni}): no child device found — state cleared but no event emitted"
+        return
+    }
+    String durStr = sinceMillis ? formatOfflineDuration(sinceMillis) : "unknown duration"
+    child.sendEvent(name: "online", value: "true",
+        descriptionText: "Device back online after ${durStr} offline.")
+    logInfo "BP21: device '${child.label ?: child.name ?: dni}' (${dni}) back online after ${durStr} offline."
+}
+
+/**
+ * Format an offline duration in human-readable form (BP21).
+ *
+ * sinceMillis — the timestamp (millis) when the device was marked offline.
+ * Returns strings like "8 minutes", "2 hours", "1d 4h".
+ */
+private String formatOfflineDuration(long sinceMillis) {
+    long elapsed = now() - sinceMillis
+    long seconds = elapsed / 1000
+    long minutes = seconds / 60
+    long hours   = minutes / 60
+    long days    = hours   / 24
+    if (days > 0) {
+        long remHours = hours - days * 24
+        return remHours > 0 ? "${days}d ${remHours}h" : "${days}d"
+    }
+    if (hours > 0) {
+        long remMin = minutes - hours * 60
+        return remMin > 0 ? "${hours}h ${remMin}m" : "${hours} hour${hours == 1 ? '' : 's'}"
+    }
+    if (minutes == 0) return "less than a minute"
+    return "${minutes} minute${minutes == 1 ? '' : 's'}"
+}
+
+/**
+ * Emit hourly WARN for each device currently marked offline (BP21).
+ *
+ * Called at the top of updateDevices() after ensurePollHealth(). Iterates
+ * state.deviceOfflineSince; for any entry where 1 hour has passed since the
+ * last WARN (or no WARN has been emitted yet for that device), emits a WARN
+ * log and updates state.lastOfflineWarnAt[dni].
+ */
+private void emitOfflineWarnsIfDue() {
+    def offlineMap = state.deviceOfflineSince as Map
+    if (!offlineMap) return
+    long oneHour = 3600000L
+    long nowMs = now()
+
+    def warnMap = (state.lastOfflineWarnAt ?: [:]) as Map
+    boolean warnMapDirty = false
+
+    offlineMap.each { String dni, sinceRaw ->
+        Long sinceMillis = sinceRaw as Long
+        Long lastWarnAt = warnMap[dni] as Long
+
+        // Defense-in-depth: lastOfflineWarnAt[dni] may be absent for state
+        // migrated from pre-BP21 driver versions, or for any future code path that
+        // sets deviceOfflineSince without going through markChildOffline().
+        // Treat missing as "just now" — seed it and skip this cycle so the 1h
+        // cadence starts cleanly rather than firing immediately.
+        if (lastWarnAt == null) {
+            warnMap[dni] = nowMs
+            warnMapDirty = true
+            return
+        }
+
+        boolean dueForWarn = (nowMs - lastWarnAt >= oneHour)
+        if (!dueForWarn) return
+
+        def child = getChildDevice(dni)
+        String label = child?.label ?: child?.name ?: dni
+        String durStr = formatOfflineDuration(sinceMillis)
+        logWarn "BP21: device '${label}' has been offline for ${durStr}. Check device power / WiFi / VeSync app."
+
+        warnMap[dni] = nowMs
+        warnMapDirty = true
+    }
+
+    if (warnMapDirty) state.lastOfflineWarnAt = warnMap
+}
+
+/**
+ * Returns true if the exception (or any cause in its chain) is a network-layer error
+ * that BP22 should suppress.
+ *
+ * JDK network exceptions:
+ *   UnknownHostException   — DNS failure (hub lost internet or VeSync DNS down)
+ *   SocketTimeoutException — connect or read timeout
+ *   ConnectException       — connection refused / unreachable
+ *   NoRouteToHostException — ICMP network-unreachable
+ *
+ * Apache HttpClient exceptions (Hubitat's actual HTTP stack wraps JDK in these;
+ * live-observed: ConnectTimeoutException appears as the cause of a wrapper, not the
+ * top-level exception, so cause-chain walk is required):
+ *   ConnectTimeoutException       — connect timeout (firewall silent drop / SYN timeout)
+ *   ConnectionPoolTimeoutException — connection-pool exhaustion (cascading effect during outage)
+ *   NoHttpResponseException        — server stopped responding after accepting connection
+ *   HttpHostConnectException       — connection refused or ICMP unreachable at HttpClient layer
+ *
+ * String-based class.name comparison avoids classpath import issues in the Hubitat
+ * Groovy sandbox. Cause-chain walk (bounded to depth 10) handles sandbox/proxy wrappers
+ * that wrap the real network exception one or more levels deep.
+ */
+private boolean isNetworkException(Exception e) {
+    Throwable t = e
+    int depth = 0
+    while (t != null && depth < 10) {
+        String cn = t?.class?.name ?: ""
+        if (cn == "java.net.UnknownHostException"                        ||
+            cn == "java.net.SocketTimeoutException"                      ||
+            cn == "java.net.ConnectException"                            ||
+            cn == "java.net.NoRouteToHostException"                      ||
+            cn == "org.apache.http.conn.ConnectTimeoutException"         ||
+            cn == "org.apache.http.conn.ConnectionPoolTimeoutException"  ||
+            cn == "org.apache.http.NoHttpResponseException"              ||
+            cn == "org.apache.http.conn.HttpHostConnectException") {
+            return true
+        }
+        t = t.cause
+        depth++
+    }
+    return false
+}
+
+/**
+ * Emit hourly WARN while the VeSync API is unreachable (BP22).
+ *
+ * Parallels emitOfflineWarnsIfDue() (BP21) but operates at the parent level:
+ * network outages affect all children identically, so a single parent-level
+ * state pair suffices (vs. the per-DNI maps of BP21).
+ *
+ * Defense-in-depth: if state.lastNetworkWarnAt is somehow absent while
+ * networkUnreachableSince is set (e.g. state from a pre-BP22 hub install),
+ * seeds lastNetworkWarnAt = now() and skips this cycle — same null-guard
+ * lesson learned from the BP21 transition-cycle bug.
+ *
+ * Called at the top of updateDevices() after emitOfflineWarnsIfDue().
+ */
+private void emitNetworkWarnIfDue() {
+    if (state.networkUnreachableSince == null) return
+    long nowMs = now()
+    Long lastWarnAt = state.lastNetworkWarnAt as Long
+    if (lastWarnAt == null) {
+        // Defense-in-depth: seed and skip this cycle.
+        state.lastNetworkWarnAt = nowMs
+        return
+    }
+    if (nowMs - lastWarnAt >= 3600000L) {
+        String durStr = formatOfflineDuration(state.networkUnreachableSince as long)
+        logWarn "BP22: VeSync API still unreachable for ${durStr}. Check hub network / DNS / VeSync service status."
+        state.lastNetworkWarnAt = nowMs
     }
 }
 
@@ -455,13 +791,16 @@ private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCal
                     continue
                 }
                 logError "${label}: Connection pool shut down after ${maxAttempts} attempts"
+                recordError("${label}: Connection pool shut down after ${maxAttempts} attempts", [site:"retryableHttp"])
             } else {
                 logError "${label}: IllegalStateException - ${e.message}"
+                recordError("${label}: IllegalStateException - ${e.message}", [site:"retryableHttp"])
             }
             return false
         }
         catch (Exception e) {
             logError "${label}: ${e.toString()}"
+            recordError("${label}: ${e.toString()}", [site:"retryableHttp"])
             if (e.metaClass.respondsTo(e, 'getResponse')) {
                 try {
                     checkHttpResponse(label, e.getResponse())
@@ -544,13 +883,62 @@ def Boolean updateDevices()
     // results (symptom of stale configModule after VeSync-side firmware update) and
     // triggers a full getDevices() Resync to refresh configModule values. Idempotent
     // once all DNI counters are cleared.
+    // BP21 bounds this to 3 Resync attempts per device; after 3 fails the device is
+    // marked offline and further self-heal is suppressed until the device recovers.
     ensurePollHealth()
+
+    // BP21 hourly offline WARN -- for each device currently marked offline, emit a
+    // WARN once per hour so the user knows it's still unreachable (vs. per-poll ERROR
+    // spam that the old code emitted).
+    emitOfflineWarnsIfDue()
+
+    // BP22 hourly network WARN -- if the VeSync API has been unreachable (DNS / timeout /
+    // connection error), re-surface a WARN once per hour. Complements BP21 (which is
+    // per-device offline); BP22 is parent-level and fires regardless of device count.
+    emitNetworkWarnIfDue()
+
+    // BP22 top-level circuit-breaker: skip the entire poll cycle if the VeSync API is
+    // known-unreachable and the probe interval hasn't elapsed yet.
+    //
+    // WHY this is needed in addition to the per-call breaker in sendBypassRequest():
+    // Children are polled in a for-loop that dispatches all httpPost() calls near-
+    // simultaneously. The first child to fail (~20s later) sets networkUnreachableSince,
+    // but the other children are already mid-httpPost and won't re-check the breaker.
+    // Result: first outage cycle still stalls ~120s. AND because state propagation in
+    // Hubitat's JSON-backed proxy may not be visible to in-flight closures, subsequent
+    // cycles can stall too. Top-level breaker stops the whole cycle before any child
+    // dispatches, eliminating the stall entirely.
+    //
+    // The per-call breaker in sendBypassRequest() is still useful for command-triggered
+    // calls (e.g. user presses button while network is down) that arrive outside the
+    // normal polling path.
+    //
+    // Coordination: when firing a recovery probe here, set state.networkProbeInFlight so
+    // the per-call breaker doesn't re-block the probe call in each child's sendBypassRequest.
+    // Cleared in a try/finally below regardless of cycle success or failure.
+    if (state.networkUnreachableSince != null) {
+        long nowMs = now()
+        long lastProbeAt = (state.lastNetworkProbeAt as Long) ?: (state.networkUnreachableSince as Long)
+        long sinceLastProbe = nowMs - lastProbeAt
+        if (sinceLastProbe < 300000L) {
+            logDebug "BP22: skipping updateDevices cycle (network unreachable; next probe in ${(int)((300000L - sinceLastProbe) / 1000)}s)"
+            return false
+        }
+        // Probe interval elapsed — let the full cycle run as a recovery probe.
+        state.lastNetworkProbeAt = nowMs
+        state.networkProbeInFlight = true
+        logDebug "BP22: probing updateDevices cycle for network recovery (last probe ${(int)(sinceLastProbe / 1000)}s ago)"
+    }
 
     // Stop if driver is reloading
     if (state.driverReloading) {
         logDebug "Skipping updateDevices - driver reloading"
         return false
     }
+
+    // BP22: wrap remaining cycle body in try/finally so networkProbeInFlight is always
+    // cleared at cycle end, regardless of whether the probe succeeded, failed, or threw.
+    try {
 
     // Self-heal: remove cids from state.deviceList that have no corresponding child device.
     // This handles the case where addChildDevice silently returned a phantom handle during
@@ -613,20 +1001,37 @@ def Boolean updateDevices()
                 "data": [:]
             ]
 
+            // Track last poll method per DNI for captureDiagnosticsFor() (Phase 5)
+            // Whole-map-reassignment required (same BP17 state-write discipline).
+            def pollMethods = (state.lastPollMethod ?: [:]) as Map
+            pollMethods[dni] = method
+            state.lastPollMethod = pollMethods
+
             sendBypassRequest(dev, command) { resp ->
                 if (checkHttpResponse("update", resp))
                 {
                     def status = resp.data.result
                     if (status == null) {
-                        logError "No status returned from ${method}: ${resp?.hasProperty('msg') ? resp.msg : ''}"
-                        // BP17: track consecutive empty results per DNI so ensurePollHealth()
-                        // can trigger a full Resync when configModule drifts post-firmware-update.
-                        // Whole-map-reassignment required: Hubitat state is a JSON-backed proxy;
-                        // bracket-notation writes (state.foo[k]=v) operate on a snapshot and do
-                        // NOT persist. Only top-level assignment (state.foo = newMap) writes back.
+                        // BP17: track consecutive empty results per DNI.
+                        // BP21: tiered logging — no per-poll ERROR; DEBUG while count<5 or offline;
+                        // INFO at threshold (first self-heal fire); WARN hourly via emitOfflineWarnsIfDue().
+                        // Whole-map-reassignment required: Hubitat state is a JSON-backed proxy.
                         def counts = (state.consecutiveEmpty ?: [:]) as Map
-                        counts[dni] = ((counts[dni] ?: 0) as Integer) + 1
+                        int newCount = ((counts[dni] ?: 0) as Integer) + 1
+                        counts[dni] = newCount
                         state.consecutiveEmpty = counts
+
+                        boolean alreadyOffline = state.deviceOfflineSince?.containsKey(dni)
+                        if (alreadyOffline) {
+                            // Device is marked offline — suppress ERROR spam; DEBUG only.
+                            Long since = state.deviceOfflineSince[dni] as Long
+                            logDebug "BP21: ${method} still empty for ${dni} (offline since ${new Date(since).format('HH:mm')})"
+                        } else {
+                            // Device is not yet marked offline — suppress per-poll ERROR;
+                            // DEBUG for counts 1-4; ensurePollHealth() fires the INFO at count==5.
+                            logDebug "BP21: ${method} returned empty for ${dni} (${newCount} consecutive)"
+                        }
+                        recordError("No status returned from ${method}", [site:"updateDevices"], dni)
                     } else {
                         // Successful poll — clear the stale-configModule counter for this DNI.
                         // Same whole-map-reassignment discipline: remove on snapshot, then reassign.
@@ -634,6 +1039,10 @@ def Boolean updateDevices()
                             def counts = state.consecutiveEmpty as Map
                             counts.remove(dni)
                             state.consecutiveEmpty = counts
+                        }
+                        // BP21: if device was previously marked offline, mark it back online now.
+                        if (state.deviceOfflineSince?.containsKey(dni)) {
+                            markChildOnline(dni)
                         }
                         dev.update(status, getChildDevice(dni+"-nl"))
                     }
@@ -671,6 +1080,15 @@ def Boolean updateDevices()
     // Schedule a call to the timeout method. This will cancel any outstanding
     // schedules.
     runIn(5 * (int)settings.refreshInterval, "timeOutLevoit")
+
+    } finally {
+        // BP22: clear probe-in-flight flag regardless of cycle outcome.
+        // The flag is only set when the top-level circuit-breaker fires a recovery probe;
+        // clearing it here is a no-op in normal (non-outage) cycles.
+        if (state.networkProbeInFlight) {
+            state.remove('networkProbeInFlight')
+        }
+    }
 }
 
 /**
@@ -1051,6 +1469,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} Light / " + dtype;
                             equip2.name = device.deviceName + " Light";
                             equip2.label = device.deviceName + " Light";
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip2.updateDataValue("configModule", device.configModule);
+                            equip2.updateDataValue("cid", device.cid);
+                            equip2.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip2.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1079,6 +1501,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1107,6 +1533,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1135,6 +1565,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1163,6 +1597,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1191,6 +1629,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1219,6 +1661,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1247,6 +1693,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1275,6 +1725,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1303,6 +1757,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1331,6 +1789,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1359,6 +1821,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1387,6 +1853,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
@@ -1414,6 +1884,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
@@ -1441,6 +1915,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
@@ -1468,6 +1946,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
@@ -1495,6 +1977,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
@@ -1522,6 +2008,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
                     }
@@ -1549,6 +2039,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1577,6 +2071,10 @@ private Boolean getDevices() {
                             logDebug "Updating ${device.deviceName} / " + dtype;
                             equip1.name = device.deviceName;
                             equip1.label = device.deviceName;
+                            // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                            equip1.updateDataValue("configModule", device.configModule);
+                            equip1.updateDataValue("cid", device.cid);
+                            equip1.updateDataValue("uuid", device.uuid);
                             // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                             equip1.updateDataValue("deviceType", device.deviceType);
                         }
@@ -1605,6 +2103,10 @@ private Boolean getDevices() {
                                 logDebug "Updating ${device.deviceName} / " + dtype;
                                 equip1.name = device.deviceName;
                                 equip1.label = device.deviceName;
+                                // BP19: refresh load-bearing data values so BP17 Resync actually heals stale configModule
+                                equip1.updateDataValue("configModule", device.configModule);
+                                equip1.updateDataValue("cid", device.cid);
+                                equip1.updateDataValue("uuid", device.uuid);
                                 // backfill for v2.1 -> v2.2 upgrades — child gates on state.deviceType
                                 equip1.updateDataValue("deviceType", device.deviceType);
                             }
@@ -1648,6 +2150,7 @@ private Boolean getDevices() {
                         return
                     } else {
                         logError "Re-auth failed during getDevices -- check VeSync credentials"
+                        recordError("Re-auth failed during getDevices -- check VeSync credentials", [site:"getDevices"])
                     }
                 } finally {
                     state.remove('reAuthInProgress')
@@ -1807,6 +2310,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
                     return
                 } else {
                     logError "Re-auth failed -- VeSync credentials may need to be updated in driver settings"
+                    recordError("Re-auth failed -- VeSync credentials may need to be updated in driver settings", [site:"sendBypassRequest"])
                 }
             } finally {
                 state.remove('reAuthInProgress')
@@ -1816,8 +2320,38 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
         tracingClosure(resp)
     }
 
+    // BP22 per-call circuit-breaker: skip httpPost entirely when in a known network outage.
+    // Guards command-triggered calls (e.g. user pressing a button while network is down)
+    // that arrive outside the normal polling path. The top-level breaker in updateDevices()
+    // already handles the parallel-poll case; this is the fallback for non-poll callers.
+    //
+    // Skip if state.networkProbeInFlight is true: the top-level breaker in updateDevices()
+    // already determined that this cycle IS the recovery probe and set lastNetworkProbeAt.
+    // Without this bypass, the per-call check would see sinceLastProbe=0 and skip too,
+    // creating a deadlock where neither breaker allows the probe through.
+    if (state.networkUnreachableSince != null && !state.networkProbeInFlight) {
+        long nowMs = now()
+        long lastProbeAt = (state.lastNetworkProbeAt as Long) ?: (state.networkUnreachableSince as Long)
+        long sinceLastProbe = nowMs - lastProbeAt
+        if (sinceLastProbe < 300000L) {
+            logDebug "BP22: skipping httpPost (network unreachable; next probe in ${(int)((300000L - sinceLastProbe) / 1000)}s)"
+            return false
+        }
+        // 5+ minutes elapsed — let this call through as a probe for recovery.
+        state.lastNetworkProbeAt = nowMs
+        logDebug "BP22: probing httpPost for network recovery (last probe ${(int)(sinceLastProbe / 1000)}s ago)"
+    }
+
     try {
         httpPost(params, effectiveClosure)
+        // Network success — check if we're recovering from an outage (BP22).
+        if (state.networkUnreachableSince != null) {
+            String durStr = formatOfflineDuration(state.networkUnreachableSince as long)
+            logInfo "BP22: VeSync API reachable again after ${durStr} unreachable."
+            state.networkUnreachableSince = null
+            state.lastNetworkWarnAt = null
+            state.lastNetworkProbeAt = null
+        }
         return true
     }
     catch (IllegalStateException e) {
@@ -1829,7 +2363,22 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
         return false
     }
     catch (Exception e) {
-        logError "sendBypassRequest: ${e.toString()}"
+        // BP22: distinguish network-layer errors from other failures.
+        // Network errors during an outage flood logs with one ERROR per child per poll cycle.
+        // Apply tiered suppression: one-time WARN on first error; DEBUG-only while outage continues.
+        if (isNetworkException(e)) {
+            if (state.networkUnreachableSince == null) {
+                long ts = now()
+                state.networkUnreachableSince = ts
+                state.lastNetworkWarnAt = ts
+                logWarn "BP22: VeSync API unreachable — ${e.class.simpleName}: ${e.message}. Suppressing further per-poll errors until recovery; will re-surface hourly while down."
+            } else {
+                logDebug "BP22: still unreachable (${e.class.simpleName})"
+            }
+        } else {
+            logError "sendBypassRequest: ${e.toString()}"
+            recordError("sendBypassRequest: ${e.toString()}", [site:"sendBypassRequest"])
+        }
         return false
     }
 }
@@ -2034,6 +2583,57 @@ void logDebugOff() {
   // Cannot be private
   //
   if (settings?.debugOutput) device.updateSetting("debugOutput", [type: "bool", value: false]);
+}
+
+// ---------------------------------------------------------------------------
+// captureDiagnosticsFor — parent-side context for child diagnostic captures
+// (Phase 5, LevoitDiagnosticsLib)
+//
+// Children call parent.captureDiagnosticsFor(device.deviceNetworkId) from the
+// library's captureDiagnostics() to retrieve parent-held per-device state that
+// the child cannot read directly (consecutiveEmpty counter, last poll method,
+// configModule, last error timestamp + message from the ring buffer).
+//
+// Returns a Map of display-ready key→value pairs. Empty map on any error.
+// The child's buildDiagnosticBlock() formats this into the "Parent state for
+// this device" table section of the markdown dump.
+// ---------------------------------------------------------------------------
+
+Map captureDiagnosticsFor(String childDni) {
+    if (!childDni) return [:]
+    try {
+        Map ctx = [:]
+
+        // Consecutive-empty counter (BP17 stale-configModule detector)
+        def counts = state.consecutiveEmpty as Map ?: [:]
+        ctx["consecutiveEmpty"] = counts[childDni] ?: 0
+
+        // Last poll method routed to this child (tracked in updateDevices() since v2.4)
+        def pollMethods = state.lastPollMethod as Map ?: [:]
+        ctx["lastPollMethod"] = pollMethods[childDni] ?: "(not yet polled this session)"
+
+        // configModule from state.deviceList — the bypassV2 routing key
+        def devList = state.deviceList as Map ?: [:]
+        ctx["configModule"] = devList[childDni] ?: "(unknown)"
+
+        // Last error from the ring buffer for this DNI
+        def history = (state.errorHistory as Map ?: [:])
+        def slot = (history[childDni] ?: []) as List
+        if (slot) {
+            def last = slot[-1]
+            String ts = last.ts ? new Date(last.ts as Long).format("yyyy-MM-dd HH:mm:ss") : "?"
+            ctx["lastError.ts"]  = ts
+            ctx["lastError.msg"] = (last.msg ?: "").take(200)
+        } else {
+            ctx["lastError.ts"]  = "(none)"
+            ctx["lastError.msg"] = ""
+        }
+
+        return ctx
+    } catch (Exception e) {
+        logDebug "captureDiagnosticsFor(${childDni}): ${e}"
+        return [:]
+    }
 }
 
 

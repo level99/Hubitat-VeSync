@@ -6,36 +6,70 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 ---
 
-## v2.4 — next release (TBD)
+## v2.5 — next release candidates
 
-### Hardware-pending items (carryforward from v2.3)
-
-- **Pedestal Fan write-path completion** — `setDisplay`, `setMute`, `setChildLock`, timer payload. Awaiting maintainer's Pedestal Fan arrival to capture canonical request shapes.
-- **Tower Fan `displayingType` semantics resolution** — currently a 0/1 toggle of unknown function. Toggle in mobile app, observe device behavior + status field, document, decide whether to expose as user-facing command.
-
-### Upstream-pending items (carryforward from v2.3)
+### Upstream-pending items
 
 - **Pyvesync PR #502 fold-in** once upstream merges — reconcile RGB nightlight `colorSliderLocation` anchor table + re-verify HSV-brightness adjustment against pyvesync's `_apply_brightness_to_rgb`.
 - **Upstream pyvesync PR — regional code roll-up.** Single PR contributing model codes back upstream that we cover but pyvesync's `device_map.py` doesn't enumerate: `LAP-V201S-WUSR`, `LAP-V201S-WEUR` (Vital 200S), `LAP-C201S-WUSR` (Core 200S), `LAP-C401S-KUSR` (PlasmaPro 400S-P black), `LPF-R432S-AUK` (UK Pedestal Fan), `LTF-F362S-WUSR` (36-inch Tower Fan, with note that hardware is sibling of F422S). Low-controversy patch; eliminates 6 of our enumeration gaps in one upstream merge.
 - **BP16 live-verified footer** — analogous to BP14's footer in `qa-agent.md`; add after first community report confirms post-reboot self-heal.
 - **Plain (non-RGB) brightness nightlight for `LUH-O451S-WUSR`** — per pyvesync issue #500 refutation of the v2.1 "no nightlight (hardware lacks it)" CROSS-CHECK decision. WUSR variant DOES have a nightlight per the user report; investigate, capture/validate, re-add nightlight conditionally for that specific variant.
+- **Hubitat platform bug BP20 — library `/* */` doc-header parser fails save.** Filed at [community thread 163611](https://community.hubitat.com/t/bug-report-library-save-returns-internal-error-on-doc-header-block-fw-2-4-4-156-2-5-0-126/163611). Workaround in place: lint RULE29 + `// line comments` in library source. **When Hubitat fixes the parser:** revert the in-source NOTE block + `// → /* */` conversion in `LevoitDiagnosticsLib.groovy`, drop RULE29 from lint, scrub BP20 mentions from CONTRIBUTING.md / CLAUDE.md / dev+QA agents.
 
-### v2.3 post-cut WATCH items (queued during the v2.3 cut-release pre-flight + cross-source validation)
+### Conditional items (act on community signal)
 
-- **`getPurifierStatus` empty-response ERROR log dedup/downgrade** — pre-existing v2.0+ behavior; one offline child drives ~1 ERROR/min when the device is unplugged or off the VeSync cloud. Surfaced by the v2.3 production-log audit. Downgrade to WARN or dedup per-device per session so the log doesn't spam an error per minute for a known-offline scenario.
 - **OasisMist 1000S WEUR nightlight payload fallback** — only if community reports failure with the current pyvesync-class pattern. Pyvesync's WEUR fixture doesn't actually exercise nightlight, leaving the payload underspecified upstream. Fallback: switch to spkesDE's single-method `setNightLightBrightness {nightLightBrightness: N}` pattern (1-line change in `LevoitOasisMist1000S.groovy:setNightlight`).
 - **Sprout Air VOC/CO2 attribute population verification** — driver declares `voc` + `co2` attributes (Sprout Air is Levoit's air-quality flagship per marketing) but pyvesync's device_map.py doesn't list explicit VOC/CO2 features. Driver is null-safe — attributes stay null if API doesn't return them. Action if community reports null values: confirm pyvesync feature gap + drop attributes (or document as marketing-aspirational).
 - **EverestAir `setTimer`/`clearTimer` commands** — pyvesync `VeSyncAirBaseV2` exposes `set_timer`/`clear_timer`; v2.3 driver doesn't surface them. Cookie-cutter port from Tower Fan timer pattern.
 
 ---
 
-## Beyond v2.4 — unscheduled
+## Beyond v2.5 — unscheduled
 
 Items below are not yet locked to a release. They're available for community pickup or maintainer prioritization as time permits.
 
-### Coverage gaps identified (v2.2 audit, 2026-04-27)
+### Tower Fan write-path parity with Pedestal Fan
 
-A comprehensive audit of Levoit's current Wi-Fi lineup against pyvesync `device_map.py` surfaced four additional devices we don't cover and aren't in our queue. All four are blocked on external work — either pyvesync upstream needs to enumerate the model code, or a community member needs to share a `state.deviceType` capture from a real device so we can confirm class assignment, or the product hasn't shipped publicly yet.
+Port the confirmed Pedestal Fan write paths (`setChildLock`, `setSmartCleaningReminder`, plus already-shipped `setMute` / `setDisplay`) to Tower Fan once a Tower Fan tester is available. Maintainer doesn't own LTF-F422S / LTF-F362S; speculative additions deliberately avoided to prevent silent-failure scenarios for community Tower Fan owners.
+
+**Unblocks on:** community Tower Fan owner volunteering for live-verification ([Levoit community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499)) OR maintainer hardware purchase.
+
+**Plan once a tester is available:**
+1. Run hardware-capture protocol: enable parent verboseDebug, send each candidate command, watch response codes.
+2. Cross-reference pyvesync `VeSyncTowerFan` — features pyvesync already supports indicate the API method is confirmed; features pyvesync doesn't have are higher-risk speculative.
+3. Port confirmed features to `LevoitTowerFan.groovy` with the verified payloads (likely identical to Pedestal Fan; may need minor field-name adjustments).
+4. Update `LevoitTowerFanSpec.groovy` with parallel test coverage.
+5. Resolve `displayingType` semantics in the same pass — currently a 0/1 toggle of unknown function. Toggle in mobile app, observe device behavior + status field, document, decide whether to expose.
+
+**Tower Fan-only caveats (not on Pedestal Fan):**
+- 1-axis oscillation only (no vertical) — `runOscillationCalibration` may not apply, or may apply differently
+- workMode list differs slightly: `normal | turbo | auto | sleep` (no `eco`); `setLevelMemory` mode constraints need updating
+
+**Upstream:** the pyvesync PR for Pedestal Fan write-path methods (in TODO.md) expands to cover Tower Fan once verified.
+
+### Pedestal Fan write-path commands — refuted, awaiting API capture
+
+Seven Pedestal Fan setter commands and the Tower Fan `setSleepPreference` are blocked on API-shape discovery. Each was attempted with educated-guess payloads against real hardware; all refuted by VeSync API inner code (method-doesn't-exist or payload-format-wrong). Read-side fields populate correctly on poll, so the device hardware tracks this state — the cloud write paths via guessed method names are simply wrong.
+
+**Refuted attempts (don't repeat):**
+
+| Command | Payloads tried | Inner code | Notes |
+|---|---|---|---|
+| `setTimer` | `{action:"on"\|"off", total:N}` | -1 | pyvesync has no timer methods; HA PR #163353 still open |
+| `cancelTimer` | `clearTimer + {}` | -1 | Paired with setTimer failure |
+| `setSleepPreference` | flat `{sleepPreferenceType}` AND nested `{sleepPreference:{...}}` | 11000000 | Both "advanced" and "default" values tried; same shape on Tower Fan |
+| `setHighTemperatureThreshold` | `setHighTemperature + {highTemperature: degF×10}` | -1 | |
+| `setHighTemperatureReminder` | `{highTemperatureReminderState: 1\|0}` | -1 | |
+| `setLevelMemory` | `{workMode, level, enable}` | -1 | |
+| `runOscillationCalibration` | `oscillationCalibration + {}` | -1 | May be local-network only |
+
+**Hypothesis:** VeSync mobile app likely uses a different API namespace for several of these — possibly "schedule"-style for timer-related operations, possibly local-network (not cloud) for oscillation calibration.
+
+**Resolution path:** mitmproxy capture of the VeSync mobile app's actual request for each feature. iOS/Android with the app installed; trigger each feature once; capture the corresponding `/cloud/v2/deviceManaged/bypassV2` request body. Read-only attributes for these fields remain declared in the driver so users can see device state.
+
+### Coverage gaps awaiting external resolution
+
+Four Levoit devices we don't cover, all blocked on external work — pyvesync upstream needs to enumerate the model code, OR a community member needs to share a `state.deviceType` capture from a real device, OR the product hasn't shipped publicly yet.
 
 | Device | Model code(s) | Likely pyvesync class | Blocker |
 |---|---|---|---|
@@ -63,11 +97,8 @@ Community hardware reports (a debug log showing the model code + `captureDiagnos
 
 ### Tooling & dev experience
 
-- **PyvesyncCoverageSpec — auto-refresh PR bot.** The MVP gate ships in v2.3 (pinned pyvesync 3.4.2; manual refresh on upstream version bumps). v2.4 follow-on: scheduled GitHub Action that detects new pyvesync tags via API, fetches the 19 vendored YAMLs from the new tag, opens a "chore: bump pyvesync to <tag>" PR. CI runs the existing `PyvesyncCoverageSpec` against the bumped fixtures; failures = real divergence surfaced for human review. Trade-off: the spec stays hermetic (no live network at test time) while refresh becomes effectively automatic. Same pattern Dependabot/Renovate use for arbitrary-source tracking.
-- **PyvesyncCoverageSpec — class-source introspection (post-MVP).** Current MVP is fixture-vs-fixture parity (method name + data key set). Misses: payload data values, response field coverage, structural depth, and class-source-vs-port mismatches like the OasisMist 1000S WEUR nightlight ambiguity (pyvesync class CODE has the split but the FIXTURE doesn't exercise it). v2.4+ extension: parse pyvesync's `vesyncfan.py` symbolically, compare method signatures + payload-builder logic against our drivers, surface gaps the fixture-only gate can't see.
-- **Virtual test parent driver** — sibling driver to `VeSyncIntegration.groovy` that returns canned pyvesync-fixture data instead of talking to the cloud. Lets contributors exercise child-driver parser paths end-to-end without owning the hardware. Worth building if hardware coverage expands or if multiple new device types need to land in succession.
-- **Pyvesync local Python harness** — small Python script that diff's our driver payloads against pyvesync's canonical request/response shapes. Useful as a CI gate; partly subsumed by the v2.3 PyvesyncCoverageSpec — revisit after the auto-refresh PR bot lands to decide whether a Python-side complement adds value.
-- **Release automation Tier 1** — `scripts/release.sh` plus seeded `CHANGELOG.md`. The `/cut-release` slash command (in `.claude/commands/cut-release.md`) implements the Claude-driven flow; a complementary shell script for non-Claude releases would close the loop.
+- **NUMBER-input "NaN" UI quirk on `setSpeed`/`setMistLevel`/`setHumidity`/etc.** Hubitat's device-page command card renders `<input type="number">` for `NUMBER`-typed parameters. With no value bound, browsers display "NaN" until the user types. Affects every `NUMBER` command across this fork (Pedestal/Tower Fan `setSpeed`, all humidifiers' `setMistLevel` + `setHumidity`, EverestAir/Sprout `setFanSpeed`, etc.) and is a Hubitat platform behavior, not a per-driver bug. Speculative `range:` / `defaultValue:` keys on the parameter map were tried in v2.4 and don't take effect (not in Hubitat's documented command-parameter spec). Possible v2.5+ fix: convert `setSpeed` (and similar) to `ENUM` with explicit string constraints — gives a dropdown, eliminates NaN. Tradeoff: programmatic callers must handle string-typed input (a 1-line `setSpeed(val) { setSpeed(val as Integer) }` shim covers it). FanControl capability's own `setSpeed(named)` is unaffected. Worth doing as a cross-driver UX polish pass when a v2.5+ window opens.
+- **PyvesyncCoverageSpec — class-source introspection (post-MVP).** Current MVP is fixture-vs-fixture parity (method name + data key set). Misses: payload data values, response field coverage, structural depth, and class-source-vs-port mismatches like the OasisMist 1000S WEUR nightlight ambiguity (pyvesync class CODE has the split but the FIXTURE doesn't exercise it). Extension: parse pyvesync's `vesyncfan.py` symbolically, compare method signatures + payload-builder logic against our drivers, surface gaps the fixture-only gate can't see. Higher build cost; do only if the auto-tracking bot's Output A/B reveals a real need.
 
 ### Speculative / unresolved API questions
 
@@ -77,12 +108,18 @@ Open questions about VeSync API behavior that we haven't fully resolved. If you 
 2. **Whether VeSync rate-limits per-account or per-IP.** Empty-result polls are common (~10-30% on healthy installs). We assume rate-limiting; could also be transient cloud failures. Real cap is unknown.
 3. **Whether older firmware on Vital 200S returns the same fields.** Our diagnostic-confirmed field set is from one user's device. Older units might have different fields; the V102S fixture in pyvesync suggests the field set has evolved over firmware versions.
 4. **The `traceId` field's significance.** The parent driver currently sends a hardcoded value (inherited from upstream and ultimately from pyvesync). If VeSync ever validates this, the integration breaks.
-5. ~~**Whether the `deviceRegion` field in the parent's request body matters.** Currently hardcoded to `"US"` for all installs.~~ **Shipped in v2.2 preview.** EU host routing (`smartapi.vesync.eu`) is now implemented via the `VeSync API region` preference on the parent device. The `deviceRegion` body field is now preference-backed via `getDeviceRegion()`. Open question: whether EU VeSync accounts require the EU host for initial login, or only for device commands. Community EU-hardware reports welcome on the [Hubitat thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499).
+5. **Whether EU VeSync accounts require the EU host (`smartapi.vesync.eu`) for initial login, or only for device commands.** Region routing via the `VeSync API region` preference is in place; the login-vs-command distinction is unconfirmed. Community EU-hardware reports welcome on the [Hubitat thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499).
 
 ### Adjacent product directions
 
 - **Alexa-aware capability surfaces.** Drivers currently expose standard capabilities (Switch, SwitchLevel, AudioVolume, etc.) — Alexa interprets these via Hubitat's Echo Skill but with limited semantic richness. Adding richer capabilities like `MediaInputSource` might give voice-control polish. Worth a research pass + pilot on one driver.
 - **Migration guide for users coming from a Home Assistant + Homebridge bridge.** Some community users used HA-as-bridge to get Vital 200S working before our v2.0 native support; a migration-from-bridge guide could ease their transition.
+
+### Far backlog — maybe (not committed)
+
+Items that have been considered but aren't priorities. Recorded so they don't get re-proposed without context. Build only if a specific need emerges.
+
+- **Release automation Tier 1 — `scripts/release.sh`.** A bash/Python implementation of the mechanical parts of the `/cut-release` slash command (version bumps + lockstep + manifest reconciliation + drift detection). Doesn't replace the prose-generation parts (releaseNotes content, CHANGELOG bullets, PR body) which still need a human or Claude session. Maintainer always uses the Claude-driven flow today, so this only matters if the maintainer wants to cut releases outside Claude OR a non-Claude fork wants its own release flow. ~2-3 hr build cost; net ROI low at current scale.
 
 ---
 
@@ -111,6 +148,6 @@ Each item here is fair game for a community PR. The general path:
 
 1. **Read [`CLAUDE.md`](CLAUDE.md)** for the dev/QA/tester pipeline and conventions.
 2. **Pyvesync first.** For any new device support, start at [pyvesync](https://github.com/webdjoe/pyvesync) — `src/pyvesync/device_map.py` for device class assignment, `src/tests/api/...` for canonical request/response fixtures. Don't trust other reverse-engineered clients as the source of truth.
-3. **Open an issue** before doing a large diff so we can confirm scope + sequencing (e.g. "I want to add Classic 300S — does that fit the v2.1 plan or should it land later?").
+3. **Open an issue** before doing a large diff so we can confirm scope + sequencing (e.g. "I want to add &lt;new device&gt; — does that fit the next release or should it land later?").
 4. **Run the Spock harness + lint locally** before opening a PR. CI gates both, but local fast-feedback saves round-trips.
 5. **Live-test if you have the hardware.** If you don't, note that in the PR — the maintainer or another community user with matching hardware can test before merge.

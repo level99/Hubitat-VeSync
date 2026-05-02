@@ -77,10 +77,30 @@ class TestDevice {
     String deviceNetworkId = "test-device-001"
     String getDeviceNetworkId() { deviceNetworkId }
 
+    // Captures calls to child.update(status) and child.update(status, nightLight) —
+    // exercised when a spec drives a parent-spawns-child flow (e.g. VeSyncIntegrationVirtualSpec).
+    // The real Hubitat platform dispatches these to the child driver's update() method;
+    // here we capture each call as [status: <Map>, nightLight: <Object|null>] for spec assertion.
+    final List<Map> updateCalls = []
+
+    void update(Map status) {
+        updateCalls << [status: status, nightLight: null]
+    }
+
+    void update(Map status, Object nightLight) {
+        updateCalls << [status: status, nightLight: nightLight]
+    }
+
+    /** Convenience: return the most recent update() call, or null if none. */
+    Map lastUpdate() {
+        updateCalls.isEmpty() ? null : updateCalls[-1]
+    }
+
     /** Clear all captured events and settings updates. Called by HubitatSpec.setup(). */
     void reset() {
         events.clear()
         settingsUpdates.clear()
+        updateCalls.clear()
     }
 
     /** Convenience: find the latest event for an attribute. Returns null if none. */

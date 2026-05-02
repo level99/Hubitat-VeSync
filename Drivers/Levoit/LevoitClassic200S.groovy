@@ -59,6 +59,9 @@
  *      Auto-stop: {enabled: bool}; targetHumidity: nested at configuration.auto_target_humidity.
  *
  *  History:
+ *    2026-04-29: v2.4  Added captureDiagnostics command + diagnostics attribute via
+ *                      LevoitDiagnostics library. Added recordError() ring-buffer calls at
+ *                      all logError sites.
  *    2026-04-28: v2.3  Community fork [PREVIEW v2.3]. Built from pyvesync device_map.py
  *                      Classic200S entry + VeSyncHumid200S class (commit c98729c) + Classic200S.yaml
  *                      fixture (setIndicatorLightSwitch confirmed). Capabilities: Switch,
@@ -71,13 +74,15 @@
  *                      not setDisplay. No warm mist. Mode auto/manual only (no sleep).
  */
 
+#include level99.LevoitDiagnostics
+
 metadata {
     definition(
         name: "Levoit Classic 200S Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Classic 200S (literal deviceType 'Classic200S') — mist 1-9, target humidity 30-80%, auto/manual modes only (no sleep), auto-stop, display (via setIndicatorLightSwitch -- different from Classic 300S). No warm mist. Night-light brightness passive read-only. pyvesync VeSyncHumid200S class. CROSS-CHECK: different from Classic 300S (VeSyncHumid200300S).",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -103,6 +108,9 @@ metadata {
         // Field present in ClassicLVHumidResult base class (same as Dual 200S pattern).
         attribute "nightLightBrightness", "number"  // 0 | 50 | 100 (read-only; no setter)
         attribute "info",             "string"   // HTML summary for dashboard tiles
+        attribute "diagnostics",      "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online",           "string"
 
         // CROSS-CHECK [pyvesync device_map.py Classic200S mist_modes]:
         //   Only auto and manual are valid. No sleep mode on Classic 200S.
@@ -116,6 +124,7 @@ metadata {
         command "setDisplay",       [[name:"On/Off*",  type:"ENUM",   constraints:["on","off"]]]
         command "setAutoStop",      [[name:"On/Off*",  type:"ENUM",   constraints:["on","off"]]]
         command "toggle"
+        command "captureDiagnostics"
         // NOTE: setNightLight intentionally absent -- Classic200S features=[AUTO_STOP], no NIGHTLIGHT.
         // NOTE: setWarmMistLevel intentionally absent -- Classic 200S has no warm mist hardware.
     }
@@ -131,6 +140,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.4"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -150,14 +160,14 @@ def on(){
     logDebug "on()"
     def resp = hubBypass("setSwitch", [enabled: true, id: 0], "setSwitch(enabled=true)")
     if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-    else logError "Power on failed"
+    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
 }
 
 def off(){
     logDebug "off()"
     def resp = hubBypass("setSwitch", [enabled: false, id: 0], "setSwitch(enabled=false)")
     if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-    else logError "Power off failed"
+    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
 // state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write race.
@@ -185,6 +195,7 @@ def setMode(mode){
     // CROSS-CHECK: only auto and manual are valid for Classic 200S (no sleep per device_map.py)
     if (!(m in ["auto","manual"])) {
         logError "Invalid mode: ${m} -- must be one of: auto, manual (sleep not supported on Classic 200S)"
+        recordError("Invalid mode: ${m}", [method:"setMode"])
         return
     }
     def resp = hubBypass("setHumidityMode", [mode: m], "setHumidityMode(${m})")
@@ -194,6 +205,7 @@ def setMode(mode){
         logInfo "Mode: ${m}"
     } else {
         logError "Mode write failed: ${m}"
+        recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
 
@@ -213,6 +225,7 @@ def setMistLevel(level){
         logInfo "Mist level: ${lvl}"
     } else {
         logError "Mist level write failed: ${lvl}"
+        recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
     }
 }
 
@@ -231,6 +244,7 @@ def setHumidity(percent){
         logInfo "Target humidity: ${p}%"
     } else {
         logError "Target humidity write failed: ${p}"
+        recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
     }
 }
 
@@ -253,6 +267,7 @@ def setDisplay(onOff){
         logInfo "Display: ${onOff}"
     } else {
         logError "Display write failed"
+        recordError("Display write failed", [method:"setIndicatorLightSwitch"])
     }
 }
 
@@ -267,6 +282,7 @@ def setAutoStop(onOff){
         logInfo "Auto-stop: ${onOff}"
     } else {
         logError "Auto-stop write failed"
+        recordError("Auto-stop write failed", [method:"setAutomaticStop"])
     }
 }
 
@@ -279,7 +295,7 @@ def update(){
     def resp = hubBypass("getHumidifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getHumidifierStatus"
+        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [site:"update"]) }
         else applyStatus(status)
     }
 }
@@ -473,6 +489,7 @@ private boolean httpOk(resp){
         return false
     }
     logError "HTTP ${st}"
+    recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

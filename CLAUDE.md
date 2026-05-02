@@ -209,6 +209,25 @@ If neither holds — STOP. Dispatch QA first.
 
 Drift pattern observed in v2.2.1: dev returned with fix → orchestrator went directly to tester to save round-trip → user caught the missing QA step → had to backfill QA. The QA step is cheap (Sonnet, small diff); skipping creates rework when QA finds something tester wouldn't catch (logging discipline, design quality, cross-pattern interactions, PII routing).
 
+### Per-commit CHANGELOG discipline (prevention layer)
+
+Every `feat:` or `fix:` commit on a release branch MUST include a one-line bullet update to `CHANGELOG.md`'s `[Unreleased]` section in the same diff. This is the prevention layer; the `/cut-release` pre-flight CHANGELOG drift check is the safety net.
+
+**Format:** match existing entries — short prose under the appropriate Keep-a-Changelog header (`Added` / `Changed` / `Fixed` / `Removed`), optional commit-hash hint at end.
+
+**Skip CHANGELOG update for:**
+- Pure refactors with no behavior change
+- Doc-only changes (CONTRIBUTING / CLAUDE / agent specs / ROADMAP / TODO)
+- Test-only changes (Spock specs / fixtures / lint tweaks)
+- Tooling / CI / build-config changes
+- Pipeline-process/workflow updates that don't touch user-visible driver code
+
+**When in doubt, add the entry** — over-disclosure beats drift. Drift accumulates silently (every "trivial" feat: that didn't update CHANGELOG compounds), and post-hoc reconstruction at cut time is slower than per-commit habit.
+
+**Why both layers?** The detective layer (cut-release scanner, shipped in v2.4 commit `ec5af15`) catches misses but only at cut time, after the diff has already been merged into the release branch. By then, untangling which commits should have included `[Unreleased]` updates requires re-reading every feat/fix in the cycle and reverse-engineering the rationale. The preventive layer (this rule + the dev agent's rule 4a) keeps each commit honest at write time, which is where the context lives.
+
+Drift signal: `0427455` "docs(v2.4): catch up [Unreleased] CHANGELOG with v2.4 cycle work" — single backfill commit needed precisely because per-commit discipline wasn't in place. After this rule lands, future cycles shouldn't need a catch-up commit.
+
 ### HPM stale-state recovery (maintainer-only)
 
 When ops verification deploys a release-candidate driver to the maintainer's hub via MCP `update_driver_code` BEFORE the cut commit / squash-merge / HPM publish, HPM's internal tracking falls behind reality. The hub's source is post-target-version, but HPM still records the prior released version.
@@ -266,9 +285,11 @@ Output is only ~3% of total. **Do not reduce verdict verbosity** — output fide
 
 ## Two deployment contexts
 
-### A. With Hubitat MCP server (maintainer setup)
+After QA approval, the operations layer verifies on a real Hubitat hub. Three sub-modes — pick based on whether MCP is available AND whether real device hardware is owned for the driver under test.
 
-After QA approval, dispatch the **vesync-driver-operations** agent. It handles the deploy + verify cycle and returns a structured PASS/FAIL/UNCERTAIN report. Pass it the source file path, driver ID (look up via `mcp__hubitat__manage_apps_drivers list_hub_drivers`), affected device IDs, and a test plan.
+### A1. With MCP + real hardware (canonical path for shipped-hardware drivers)
+
+Dispatch the **vesync-driver-operations** agent. It handles the deploy + verify cycle on real hardware (real `VeSync Integration` parent → real VeSync cloud → real device) and returns a structured PASS/FAIL/UNCERTAIN report. Pass it the source file path, driver ID (look up via `mcp__hubitat__manage_apps_drivers list_hub_drivers`), affected device IDs, and a test plan.
 
 You can also do the deploy yourself if the change is trivial:
 1. Upload source: `curl -F "uploadFile=@<file>" -F "folder=/" "http://<hub-IP>/hub/fileManager/upload"`
@@ -276,6 +297,26 @@ You can also do the deploy yourself if the change is trivial:
 3. Verify: trigger `refresh` on the affected device, inspect `applyStatus raw r ...` log lines, confirm attributes populated.
 
 Use the operations agent when: you want structured PASS/FAIL evidence in the work item, the test plan is non-trivial, or you want to keep the main session's context lean (operations is Haiku, much cheaper than Opus on log-heavy verification).
+
+This is the only mode that exercises the real cloud round-trip — required for catching API-shape regressions (BP4 V201S field-name verification, BP13 token-expiry, response envelope shapes the fixture doesn't capture).
+
+### A2. With MCP + virtual test parent (preview drivers without hardware)
+
+For drivers shipped as preview without maintainer hardware (the default since v2.1 — Tower/Pedestal Fans, LV600S, Dual 200S, Classic 200S, OasisMist 1000S, Sprout family, EverestAir, etc.), real-hardware verification isn't available. The **virtual test parent** (`Drivers/Levoit/VeSyncIntegrationVirtual.groovy`, ships `required: false` in HPM) replaces the real parent with a fixture-driven harness that serves canned pyvesync responses to children.
+
+Dispatch flow:
+
+1. Deploy the virtual parent + new child driver via MCP `update_driver_code`.
+2. Configure the virtual parent's preferences to spawn the relevant fixture's child (UI step, or direct settings update via MCP).
+3. Send commands to the spawned child via `mcp__hubitat__send_command` — virtual parent intercepts, validates payload data keys against `FIXTURE_OPS`, returns a canned response asynchronously.
+4. Read attributes (`mcp__hubitat__get_attribute`) and logs (`mcp__hubitat__manage_logs`) to verify the child's parser populated state correctly.
+5. Operations agent returns PASS/FAIL/UNCERTAIN with `[DEV TOOL]` log markers as evidence.
+
+What this catches that A1 doesn't (because no hardware to test on): Hubitat sandbox runtime quirks, async callback ordering, real `addChildDevice` lifecycle, `schedule()`/`runIn()` cron mechanics — the BP14/BP16/BP17 pattern fingerprint. What it does NOT catch (no real cloud): BP4 field-name regressions vs live API, BP13 token expiry, response envelope shapes pyvesync didn't capture.
+
+The virtual parent coexists safely with the real `VeSync Integration` parent on the same hub. Virtual children use the `VirtualVeSync-` DNI prefix and never touch the VeSync cloud, so there is no cross-wiring risk. If both parents are installed, a WARN is logged at spawn time (`[DEV TOOL] Real 'VeSync Integration' parent app detected`) — this is informational only and does not block spawn.
+
+For preview drivers, A2 is the standard pre-ship gate. If a driver is later acquired and tested via A1, that supersedes A2 for that specific driver.
 
 ### B. Without Hubitat MCP (typical contributor)
 
@@ -286,7 +327,8 @@ The pipeline still works — you just stop at the local-file-edit step. Push you
    - In Hubitat UI: **Drivers Code** → find the driver → **Edit** → paste new content → **Save**.
    - Open the affected child device's page → click **Refresh**.
    - Check **Logs** for `applyStatus raw r ...` lines.
-4. Open a PR with the diff + test plan + manual verification notes.
+   - For drivers without hardware, install the virtual test parent (HPM Modify → opt in to "VeSync Virtual Test Parent") and run a fixture-driven verification on your hub before opening the PR.
+4. Open a PR with the diff + test plan + manual verification notes (call out which sub-mode you used: real hardware / virtual parent / Spock-only).
 
 You don't have to deploy to merge — code review + spec-conformance via the dev/QA pipeline is sufficient gate. The maintainer will deploy on the live hub before/during merge.
 
@@ -360,6 +402,12 @@ The QA agent's definition contains a numbered catalog of bug patterns from the v
 14. Hub-reboot drops `runIn`-based poll cycle — `runIn()` is in-memory only; use `schedule()` cron for periodic work (persists across reboots). See `vesync-driver-qa.md` BP14 entry for canonical `setupPollSchedule()` + `ensurePollWatchdog()` design and live-verification footer.
 15. Driver code uses app-only API (`subscribe`/`unsubscribe` to location events) — drivers cannot subscribe to location events; use `schedule()` for periodic work, parent→child calls for cross-device. HubitatSpec mock must fail-fast (not no-op). See `vesync-driver-qa.md` BP15 entry for full root-cause + fix.
 16. `debugOutput` stuck `true` indefinitely after hub reboot — `runIn(1800, "logDebugOff")` in `updated()` is in-memory only and evaporates across reboots; `settings.debugOutput` persists. Fix: `updated()` records `state.debugEnabledAt = now()` when debug enabled (clears it when disabled); `ensureDebugWatchdog()` at top of every poll/command entry auto-disables when elapsed > 30 min. Same architectural shape as BP14. See `vesync-driver-qa.md` BP16 entry for full design.
+17. Stale `state.deviceList` configModule causes silent empty-result polls — see `vesync-driver-qa.md` BP17 entry for full root-cause + fix (consecutiveEmpty counter + `ensurePollHealth()` watchdog + auto-Resync trigger).
+18. NullPointerException on `(arg as String).toLowerCase()` for null command parameter — Rule Machine passes null when a parameter slot is left blank; null-coerced-to-String throws NPE that Hubitat sandbox swallows. Fix: null-guard at method entry. See `vesync-driver-qa.md` BP18.
+19. Self-heal logic refreshes intermediate state but not the load-bearing data value — BP17's Resync correctly refreshed `state.deviceList` but not the children's `configModule` data values that `sendBypassRequest` reads at API call time, so the self-heal logged success but didn't actually fix the polling. Fix: refresh ALL load-bearing call-site sources, not just intermediate state. See `vesync-driver-qa.md` BP19 (the v2.4 fix folded the missing 21 else-branches).
+20. Library file file-scope commentary triggers Hubitat parser "Internal error" — the trigger is fuzzier than originally cataloged. Original finding (2026-04-30 morning): `/* */` block comments at file scope before `library(` fail save. Update (2026-04-30 afternoon, during UX refactor): also fails on `//` line-comment blocks containing literal text `/* */` or `library(` as documentation, on expanded section dividers, and at certain comment-density thresholds. RULE29 still catches the obvious `/* */` form; the broader trigger pattern is enforced via convention + the ops agent's library-deploy smoke test (POST to `/library/saveOrUpdateJson` and verify `success:true`). Rule for library files specifically: keep file-scope content between MIT header and `library(` declaration to ZERO commentary; put explanations in CONTRIBUTING.md / BP catalog / agent specs. javadoc `/* */` blocks INSIDE method bodies are unaffected. Driver files (using `definition()`) are not affected. See `vesync-driver-qa.md` BP20 entry for canonical fix + the broader convention; canonical example `Drivers/Levoit/LevoitDiagnosticsLib.groovy`.
+21. BP17 self-heal loops on chronically-offline devices — `ensurePollHealth()` triggers `getDevices()` configModule refresh on 5 consecutive empty polls; the refresh succeeds, polling resumes, but if the underlying device is genuinely offline (unplugged / off WiFi / off VeSync cloud), polls remain empty → BP17 fires again 5 polls later → infinite ~5min self-heal cycle plus per-poll ERROR spam. Fix: bound the self-heal counter (max 3 attempts per device); after 3 fails, mark device as offline in state, suppress further self-heal triggers, refactor logging to tiered DEBUG/INFO/WARN with hourly re-surface, expose state via per-child `online` attribute. See `vesync-driver-qa.md` BP21 entry for full design.
+22. HTTP-error path log spam during network outages — `sendBypassRequest()` previously logged `logError` every poll cycle for every child when the hub lost internet (DNS failure, connection timeout, etc.) — e.g., 6 children × 1 cycle/min = 6 ERROR lines/min for the duration of the outage. Distinct from BP21 (which addresses empty-API-result path); this is the network-layer error path (`UnknownHostException`, `SocketTimeoutException`, `ConnectException`, `NoRouteToHostException`). Fix: classify exception by class name (cause-chain walk, depth 10, handles sandbox/proxy wrappers); on first network-class exception log one-time WARN and set `state.networkUnreachableSince` + `state.lastNetworkWarnAt` (both parent-level — network outages affect all children identically); subsequent errors are DEBUG-only; `emitNetworkWarnIfDue()` re-surfaces a WARN hourly while still down; recovery detected on first successful `httpPost()` completion → INFO with elapsed duration + all state fields cleared. Dual circuit-breaker: (1) top-level at `updateDevices()` entry skips the entire poll cycle during a known outage — prevents the parallel-child stall where all children dispatch `httpPost` near-simultaneously before the first failure can set state, causing all to stall for full connect-timeout; (2) per-call in `sendBypassRequest()` guards command-triggered (non-polling) calls. Both probe every 5 minutes for recovery. Coordination: top-level breaker sets `state.networkProbeInFlight = true` when firing a recovery probe, cleared in a `try/finally` at end of `updateDevices()`; per-call breaker checks `!state.networkProbeInFlight` so the probe cycle's children are not re-blocked. Covers both JDK and Apache HttpClient (8 exception classes total). Non-network exceptions keep the existing `logError` path. See `vesync-driver-qa.md` BP22 entry for full design.
 
 When the developer or QA recognizes one of these patterns in a diff, name it explicitly: *"Bug Pattern #1 — missing 2-arg signature."* The other agent recognizes the name and applies the canonical fix.
 

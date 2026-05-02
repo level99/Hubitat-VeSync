@@ -6,6 +6,12 @@
 
 <!-- How did you verify this works? Tested on your own hub? Spock tests cover it? Both? -->
 
+**Verified on (check all that apply):**
+
+- [ ] Real hardware (own a device matching this driver; commands round-trip via real VeSync cloud)
+- [ ] Virtual test parent (`VeSyncIntegrationVirtual.groovy` — fixture-driven on-hub verification; see CONTRIBUTING.md "On-hub validation without owning the hardware")
+- [ ] Spock + manual review only (no on-hub verification — preview driver, contributor without hardware, or doc/test-only change)
+
 ## Checklist
 
 - [ ] Lint passes (`uv run --python 3.12 tests/lint.py --strict` exits 0). CI runs this too.

@@ -52,6 +52,76 @@ These are install-specific and not baked into this agent's knowledge.
 
 ---
 
+## Two dispatch modes
+
+The orchestrator dispatches you in one of two modes. The mode is named explicitly in the dispatch prompt — read it first to set expectations.
+
+### Mode A1: Real-hardware verification (canonical path)
+
+Used when the maintainer owns hardware for the driver under test. Dispatch prompt names the real `VeSync Integration` parent app-id, the child driverId, and real device-ids (e.g. live Vital 200S 1847, Superior 6000S 1848).
+
+Verify path:
+- Real parent → real VeSync cloud → real device → real status responses
+- All Step 3 test patterns below apply directly
+- Catches API-shape regressions (BP4 V201S field-name verification, BP13 token-expiry, response envelope shapes the fixture doesn't capture)
+
+PASS criteria includes: real cloud round-trip succeeded (`HTTP 200 inner=0`), `Heartbeat: synced`, attribute round-trip on real hardware.
+
+### Mode A2: Virtual-parent verification (preview drivers without hardware)
+
+Used for drivers shipped as preview without maintainer hardware (Tower/Pedestal Fans, LV600S, Dual 200S, Classic 200S, OasisMist 1000S, Sprout family, EverestAir, etc.). Dispatch prompt names the **virtual** parent's app-id (`VeSync Virtual Test Parent`), a fixture name (e.g. `Core200S`, `LAP-V102S`), and a virtual child label.
+
+Verify path:
+- Virtual parent (`VeSyncIntegrationVirtual.groovy`) intercepts `sendBypassRequest` calls from the spawned child
+- Validates payload data keys against `FIXTURE_OPS` (the regenerated map sourced from `tests/pyvesync-fixtures/<name>.yaml` + `tools/virtual_parent_extensions.json`)
+- Returns canned responses synthesized from the fixture's canonical default state, mutated by accumulated `set*` requests
+- All log lines from the virtual parent carry the `[DEV TOOL]` prefix
+
+The virtual parent coexists safely with the real `VeSync Integration` parent on the same hub — no pre-flight removal required. Virtual children use the `VirtualVeSync-` DNI prefix and never talk to the VeSync cloud, so there is no cross-wiring risk. If both are installed, the virtual parent emits a WARN at spawn time (see Log markers below) but proceeds normally.
+
+Verify steps:
+1. Check virtual parent's `fixtureMode` attribute is `ready`.
+2. Trigger `spawnFromFixture` command on the virtual parent with the fixture name + child label.
+3. Confirm child appears in `mcp__hubitat__list_devices` with the right driver name + DNI prefix `VirtualVeSync-`.
+4. Send commands via `send_command` to the spawned child.
+5. Read child attributes back via `get_attribute`.
+6. Pull logs and grep for `[DEV TOOL] Payload validated: <method>` (success) and `[DEV TOOL] Payload data keys mismatch` (FAIL signal).
+
+**Cleanup (always do this; even on FAIL/UNCERTAIN):**
+
+7. **Always run `send_command <virtualParentId> resetAllChildren` at the end of the test.** `resetAllChildren` calls `deleteChildDevice` on every spawned virtual child, so `VirtualVeSync-` devices get removed from the hub — they are throwaway test artifacts, never long-lived. Wait ~2s, then verify via `list_devices` that no `VirtualVeSync-` DNIs remain.
+8. **Do NOT delete the virtual parent device or the virtual parent driver.** Both are maintainer-installed and stay across test cycles. Cleanup is per-test-run, not per-session. Repeat A2 dispatches reuse the same parent device + driver.
+9. If the user manually exposed a spawned child to MCP for command access, the MCP exposure entry becomes stale after `resetAllChildren` deletes the underlying device. That's local config (not on-hub state); user can clean up the exposure list later. Just note it in your final report.
+
+PASS criteria for A2:
+- `[DEV TOOL] Spawned child <dni> bound to fixture <name>` — spawn succeeded
+- `[DEV TOOL] Payload validated: <method> keys=[...]` — for each command exercised
+- Child attributes populated correctly (parser worked end-to-end)
+- No `[DEV TOOL] Payload data keys mismatch` in logs (would indicate field-name regression)
+- No exception traces
+- `resetAllChildren` ran and `[DEV TOOL] All virtual children removed.` log marker present — children cleaned up
+
+What A2 does NOT catch (don't expect them in this mode): real VeSync API responses, `HTTP 200 inner=0` traces, `Heartbeat: synced` (no real polling), BP4 field-name regressions vs live API.
+
+If a driver covered by A2 is later acquired and tested via A1, that supersedes A2 for that specific driver.
+
+### Log markers specific to A2
+
+Healthy markers (all `[DEV TOOL]` prefixed):
+- `[DEV TOOL] Virtual parent installed.`
+- `[DEV TOOL] Spawned child <dni> bound to fixture <name>`
+- `[DEV TOOL] Payload validated: <method> keys=[...]`
+- `[DEV TOOL] sendBypassRequest from <dni>: method=<method>` — child invoked the virtual parent
+- `[DEV TOOL] Real 'VeSync Integration' parent app detected on this hub.` — coexistence WARN (informational; spawn proceeds normally)
+- `[DEV TOOL] All virtual children removed.` — `resetAllChildren` cleanup confirmation; expected at end of every A2 dispatch
+
+Failure markers:
+- `[DEV TOOL] Payload data keys mismatch for <method>: ours=[...], pyvesync=[...]` → field-name regression — FAIL
+- `[DEV TOOL] No fixture op for method '<method>'` → child invoked an unknown method (UNCERTAIN — could be a fixture gap or real bug; escalate)
+- `[DEV TOOL] sendBypassRequest from unbound child <dni>` → spawn-flow bug (FAIL)
+
+---
+
 ## Deploy workflow
 
 ### Step 1: Pre-flight
@@ -61,6 +131,8 @@ These are install-specific and not baked into this agent's knowledge.
 3. Verify the local source file is well-formed Groovy (basic eyeball: starts with `/*`, has `metadata {`, has `def applyStatus` if it's a child driver). Don't deep-validate — that's QA's job; just catch obvious file corruption.
 
 ### Step 2: Upload + deploy
+
+#### For driver/app files (most cases)
 
 1. Upload to Hubitat File Manager via curl:
    ```
@@ -74,6 +146,29 @@ These are install-specific and not baked into this agent's knowledge.
      confirm: true
    ```
 3. Confirm response shows `success: true` and `previousVersion` matches expected.
+
+#### For library files (BP20 smoke-test required)
+
+Hubitat library files are deployed via the `/library/saveOrUpdateJson` endpoint, NOT `update_driver_code`. The MCP server doesn't expose a library-deploy tool, so deployment goes via the hub's web UI or via direct HTTP. There's also a Hubitat platform bug (BP20) where the library parser silently rejects certain content shapes with `{"success":false,"message":"Internal error"}`. Lint catches some patterns; this smoke-test catches the rest.
+
+Library deploy procedure:
+
+1. Upload source to File Manager (same as drivers):
+   ```
+   curl -F "uploadFile=@<localLibPath>" -F "folder=/" "http://<hubIP>/hub/fileManager/upload"
+   ```
+
+2. Deploy via the Libraries Code editor + browser automation. If the orchestrator has Chrome/browser tools available:
+   - Navigate to `http://<hubIP>/library/editor/<libraryId>` (if updating existing) or `/library/create` (if installing new)
+   - Inject the file content into the CodeMirror editor (`document.querySelector('.CodeMirror').CodeMirror.setValue(text)`)
+   - Click the Save button
+   - **CRITICAL:** capture the network response from `POST /library/saveOrUpdateJson`. The HTTP status will be 200 even on failure. Parse the JSON body:
+     - `{"success":true, "id":<n>, "version":<n>}` → deploy succeeded; library is on the hub
+     - `{"success":false, "message":"Internal error"}` → BP20 trigger; library NOT saved; **return FAIL**
+
+3. If browser automation isn't available, the orchestrator (main session) handles library deploys; ops returns a deploy step labeled "manual library install required" and the orchestrator drives it.
+
+**BP20 smoke-test verdict logic:** any library-file deploy where the JSON response has `success:false` is an automatic FAIL with the response body verbatim in the report. Do NOT proceed to test-plan verification — the library isn't on the hub, downstream `#include` resolution will fail. Surface to the orchestrator immediately so the developer can rework the library content (typically: trim file-scope commentary; see BP20 entry in `vesync-driver-qa.md`).
 
 ### Step 3: Verify
 

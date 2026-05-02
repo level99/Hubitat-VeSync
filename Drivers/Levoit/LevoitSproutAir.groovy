@@ -75,6 +75,7 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.2.1  Initial release. All 6 LAP-B851S model codes + LAP-BAY-MAX01S
  *                        in a single driver. pyvesync VeSyncAirSprout class.
  *                        V2-style payload conventions (VeSyncAirBaseV2 inheritance).
@@ -83,13 +84,15 @@
  *                        and device_map.py. See CROSS-CHECK above.
  */
 
+#include level99.LevoitDiagnostics
+
 metadata {
     definition(
         name: "Levoit Sprout Air Purifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Sprout Air Purifier (LAP-B851S-WUS/-WEU/-AEUR/-AUS/-WNA, LAP-BAY-MAX01S) — fan 1-3, auto/sleep/manual modes, AQ sensors (AQLevel/PM2.5/PM1/PM10/AQI/VOC/CO2), child lock, display, nightlight (on/off/dim). pyvesync VeSyncAirSprout class (VeSyncAirBaseV2). V2-style payloads. No timer.",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -121,6 +124,11 @@ metadata {
         command "setChildLock",       [[name:"On/Off*",    type:"ENUM",   constraints:["on","off"]]]
         command "setNightlightMode",  [[name:"Mode*",      type:"ENUM",   constraints:["on","off","dim"]]]
         command "toggle"
+
+        attribute "diagnostics", "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online", "string"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -134,6 +142,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.4"
     runIn(3, "refresh")
     if (settings?.debugOutput) {
         runIn(1800, "logDebugOff")
@@ -152,14 +161,14 @@ def on(){
     logDebug "on()"
     def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
     if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-    else logError "Power on failed"
+    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
 }
 
 def off(){
     logDebug "off()"
     def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
     if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
-    else logError "Power off failed"
+    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
 def toggle(){
@@ -179,7 +188,7 @@ def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (mode as String).toLowerCase()
-    if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; return }
+    if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setPurifierMode"]); return }
     if (m == "manual") {
         // Manual established by setting fan speed (same as pyvesync VeSyncAirBaseV2.set_mode(MANUAL))
         setFanSpeed(state.lastFanSpeed ?: 1)
@@ -191,7 +200,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"
+        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setPurifierMode"])
     }
 }
 
@@ -210,7 +219,7 @@ def setFanSpeed(speed){
         device.sendEvent(name:"mode",     value: "manual")
         logInfo "Fan speed: ${spd}, mode: manual"
     } else {
-        logError "Fan speed write failed: ${spd}"
+        logError "Fan speed write failed: ${spd}"; recordError("Fan speed write failed: ${spd}", [method:"setLevel"])
     }
 }
 
@@ -224,7 +233,7 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: onOff)
         logInfo "Display: ${onOff}"
     } else {
-        logError "Display write failed"
+        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
 
@@ -238,7 +247,7 @@ def setChildLock(onOff){
         device.sendEvent(name:"childLock", value: onOff)
         logInfo "Child lock: ${onOff}"
     } else {
-        logError "Child lock write failed"
+        logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }
 }
 
@@ -252,13 +261,13 @@ def setNightlightMode(nlMode){
     logDebug "setNightlightMode(${nlMode})"
     if (nlMode == null) { logWarn "setNightlightMode called with null nlMode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (nlMode as String).toLowerCase()
-    if (!(m in ["on","off","dim"])) { logError "Invalid nightlight mode: ${m} -- must be: on, off, dim"; return }
+    if (!(m in ["on","off","dim"])) { logError "Invalid nightlight mode: ${m} -- must be: on, off, dim"; recordError("Invalid nightlight mode: ${m}", [method:"setNightLight"]); return }
     def resp = hubBypass("setNightLight", [night_light: m], "setNightLight(${m})")
     if (httpOk(resp)) {
         device.sendEvent(name:"nightlightOn", value: m)   // stores "on", "off", or "dim"
         logInfo "Nightlight: ${m}"
     } else {
-        logError "Nightlight write failed: ${m}"
+        logError "Nightlight write failed: ${m}"; recordError("Nightlight write failed: ${m}", [method:"setNightLight"])
     }
 }
 
@@ -271,7 +280,7 @@ def update(){
     def resp = hubBypass("getPurifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getPurifierStatus"
+        if (!status?.result) { logError "No status returned from getPurifierStatus"; recordError("No status returned from getPurifierStatus", [method:"update"]) }
         else applyStatus(status)
     }
 }
@@ -444,7 +453,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

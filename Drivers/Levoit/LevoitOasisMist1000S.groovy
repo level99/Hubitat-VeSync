@@ -71,6 +71,7 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.2.1  Initial release. US + EU OasisMist 1000S in a single driver.
  *                        pyvesync VeSyncHumid1000S class. V2-style payload conventions.
  *                        EU nightlight gated at runtime on state.deviceType == "LUH-M101S-WEUR".
@@ -79,13 +80,15 @@
  *                        and VeSyncHumid1000S class implementation. See CROSS-CHECK above.
  */
 
+#include level99.LevoitDiagnostics
+
 metadata {
     definition(
         name: "Levoit OasisMist 1000S Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit OasisMist 1000S (LUH-M101S-WUS/-WUSR/-WEUR) — mist 1-9, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display; WEUR adds nightlight (runtime-gated). pyvesync VeSyncHumid1000S class; V2-style payloads (powerSwitch/workMode/virtualLevel). No warm mist.",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -117,6 +120,11 @@ metadata {
         command "setNightlight",        [[name:"On/Off*",  type:"ENUM",   constraints:["on","off"]],
                                          [name:"Brightness", type:"NUMBER", description:"0-100 (0=off)"]]
         command "toggle"
+
+        attribute "diagnostics", "string"
+        // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+        attribute "online", "string"
+        command "captureDiagnostics"
     }
 
     preferences {
@@ -130,6 +138,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
+    state.driverVersion = "2.4"
     runIn(3, "refresh")
     if (settings?.debugOutput) {
         runIn(1800, "logDebugOff")
@@ -148,14 +157,14 @@ def on(){
     logDebug "on()"
     def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
     if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-    else logError "Power on failed"
+    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
 }
 
 def off(){
     logDebug "off()"
     def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
     if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
-    else logError "Power off failed"
+    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
 def toggle(){
@@ -172,14 +181,14 @@ def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
     String m = (mode as String).toLowerCase()
-    if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; return }
+    if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     def resp = hubBypass("setHumidityMode", [workMode: m], "setHumidityMode(${m})")
     if (httpOk(resp)) {
         state.mode = m
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"
+        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
 
@@ -196,7 +205,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: lvl)
         logInfo "Mist level: ${lvl}"
     } else {
-        logError "Mist level write failed: ${lvl}"
+        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"virtualLevel"])
     }
 }
 
@@ -213,7 +222,7 @@ def setHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"
+        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
     }
 }
 
@@ -228,7 +237,7 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: onOff)
         logInfo "Display: ${onOff}"
     } else {
-        logError "Display write failed"
+        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
 
@@ -243,7 +252,7 @@ def setAutoStop(onOff){
         device.sendEvent(name:"autoStopEnabled", value: onOff)
         logInfo "Auto-stop: ${onOff}"
     } else {
-        logError "Auto-stop write failed"
+        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"])
     }
 }
 
@@ -286,7 +295,7 @@ def setNightlight(onOff, brightness = null){
             device.sendEvent(name:"nightlightOn", value: onOffStr)
             logInfo "Nightlight: ${onOffStr}"
         } else {
-            logError "Nightlight toggle failed"
+            logError "Nightlight toggle failed"; recordError("Nightlight toggle failed", [method:"setNightLightStatus"])
         }
     } else {
         // Brightness control -- use setLightStatus (pyvesync set_nightlight_brightness path)
@@ -300,7 +309,7 @@ def setNightlight(onOff, brightness = null){
             device.sendEvent(name:"nightlightBrightness", value: br)
             logInfo "Nightlight: ${onOffStr}, brightness=${br}"
         } else {
-            logError "Nightlight brightness write failed"
+            logError "Nightlight brightness write failed"; recordError("Nightlight brightness write failed", [method:"setLightStatus"])
         }
     }
 }
@@ -314,7 +323,7 @@ def update(){
     def resp = hubBypass("getHumidifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) logError "No status returned from getHumidifierStatus"
+        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"update"]) }
         else applyStatus(status)
     }
 }
@@ -511,7 +520,7 @@ private boolean httpOk(resp){
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
 }
 

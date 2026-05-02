@@ -25,6 +25,9 @@ SOFTWARE.
 
 // History:
 //
+// 2026-04-29: v2.4  Added captureDiagnostics command + diagnostics attribute via
+//                  LevoitDiagnostics library. Added recordError() ring-buffer calls at
+//                  all logError / log.error sites.
 // 2026-04-28: v2.3 (community fork, level99/Hubitat-VeSync, by Dan Cox)
 //                  - Added childLock attribute + setChildLock command (Core-line "Display Lock")
 //                  - Added display read-back attribute (was write-only)
@@ -46,6 +49,7 @@ SOFTWARE.
 //                  Support for 'SwitchLevel' capability.
 // 2021-10-22: v1.0 Support for Levoit Air Purifier Core 200S / 400S
 
+#include level99.LevoitDiagnostics
 
 metadata {
     definition(
@@ -53,7 +57,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S / 300S air purifiers",
-        version: "2.3",
+        version: "2.4",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -68,6 +72,9 @@ metadata {
             attribute "timerRemain", "number";                         // Auto-off timer remaining (seconds; 0 when no timer)
 
             attribute "info", "string";                               // HTML
+            attribute "diagnostics", "string"
+            // "true" | "false" — parent marks "false" after 3 self-heal attempts fail; flips back to "true" on first successful poll (BP21)
+            attribute "online", "string"
 
             command "setDisplay", [[name:"Display*", type: "ENUM", description: "Display", constraints: ["on", "off"] ] ]
             command "setSpeed", [[name:"Speed*", type: "ENUM", description: "Speed", constraints: ["off", "low", "medium", "high"] ] ]
@@ -77,6 +84,7 @@ metadata {
             command "cancelTimer"
             command "resetFilter"
             command "toggle"
+            command "captureDiagnostics"
         }
 
     preferences {
@@ -94,6 +102,7 @@ def updated() {
 	logDebug "Updated with settings: ${settings}"
 
     state.clear()
+    state.driverVersion = "2.4"
     unschedule()
 	initialize()
 
@@ -178,6 +187,18 @@ def cycleSpeed() {
     setSpeed(speed)
 }
 
+// 2-arg setLevel overload — Hubitat SwitchLevel capability standard signature.
+// VeSync devices do NOT support hardware-level fade/duration, so the duration
+// parameter is intentionally ignored. Delegates to the 1-arg version.
+// Without this overload, any caller using the standard 2-arg form (Rule Machine
+// with duration, dashboard tiles, MCP setLevel(N, D), third-party apps) throws
+// MissingMethodException — Hubitat sandbox catches it silently and the command
+// fails without user feedback.
+def setLevel(value, duration)
+{
+    setLevel(value)
+}
+
 def setLevel(value)
 {
     logDebug "setLevel $value"
@@ -187,7 +208,7 @@ def setLevel(value)
     if(value < 33) speed = 1
     if(value >= 33 && value < 66) speed = 2
     if(value >= 66) speed = 3
-    
+
     sendEvent(name: "level", value: value)
     setSpeed(speed)
 }
@@ -355,10 +376,11 @@ def update() {
 			if (checkHttpResponse("update", resp))
 			{
                 def status = resp.data.result
-                if (status == null)
+                if (status == null) {
                     logError "No status returned from getPurifierStatus: ${resp.msg}"
-                else
-                    result = update(status, nightLight)                
+                    recordError("No status returned from getPurifierStatus", [site:"update"])
+                } else
+                    result = update(status, nightLight)
 			}
 		}
     return result
@@ -525,11 +547,13 @@ def checkHttpResponse(action, resp) {
 	else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500)
 	{
 		log.error "${action}: ${resp.status} - ${resp.getData()}"
+		recordError("${action}: ${resp.status}", [site:"checkHttpResponse"])
 		return false
 	}
 	else
 	{
 		log.error "${action}: unexpected HTTP response: ${resp.status}"
+		recordError("${action}: unexpected HTTP response: ${resp.status}", [site:"checkHttpResponse"])
 		return false
 	}
 }
