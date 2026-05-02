@@ -125,7 +125,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.2] Levoit OasisMist 450S/600S US+EU (LUH-O451S-WUS/-WUSR/-WEU, LUH-O601S-WUS/-KUS) — mist 1-9, warm mist 0-3, target humidity 40-80%, auto/sleep/manual modes, auto-stop, display; LUH-O451S-WEU (EU) adds RGB nightlight (ColorControl); canonical pyvesync payloads; RGB based on pyvesync PR #502 (preview)",
-        version: "2.4",
+        version: "2.4.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -205,7 +205,7 @@ def updated(){
     // state.clear() also removes rgbNightlightSetTime -- clears the 180s stale-data gate so
     // the first applyStatus after updated() always reads fresh RGB state from the device.
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4"
+    state.driverVersion = "2.4.1"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {

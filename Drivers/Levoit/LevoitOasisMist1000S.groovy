@@ -88,7 +88,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit OasisMist 1000S (LUH-M101S-WUS/-WUSR/-WEUR) — mist 1-9, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display; WEUR adds nightlight (runtime-gated). pyvesync VeSyncHumid1000S class; V2-style payloads (powerSwitch/workMode/virtualLevel). No warm mist.",
-        version: "2.4",
+        version: "2.4.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -138,7 +138,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4"
+    state.driverVersion = "2.4.1"
     runIn(3, "refresh")
     if (settings?.debugOutput) {
         runIn(1800, "logDebugOff")

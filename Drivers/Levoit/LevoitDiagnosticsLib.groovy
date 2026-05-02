@@ -414,7 +414,7 @@ private String getDriverVersion() {
             if (m) return m[0][1]
         }
     } catch (ignored) {}
-    return "2.4"
+    return "2.4.1"
 }
 
 /**

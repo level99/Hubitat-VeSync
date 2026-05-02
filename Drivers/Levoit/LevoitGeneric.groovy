@@ -51,7 +51,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Fall-through diagnostic driver for unsupported Levoit models. Provides best-effort power control and diagnostic capture for new-device-support issue filing.",
-        version: "2.4",
+        version: "2.4.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -82,7 +82,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4"
+    state.driverVersion = "2.4.1"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {

@@ -75,7 +75,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Tower Fan (LTF-F422S-WUS/WUSR/KEU/WJP) — power, fan speed 1-12, modes (normal/turbo/auto/sleep), oscillation, mute, display, timer, ambient temperature; canonical pyvesync payloads",
-        version: "2.4",
+        version: "2.4.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -136,7 +136,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4"
+    state.driverVersion = "2.4.1"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {

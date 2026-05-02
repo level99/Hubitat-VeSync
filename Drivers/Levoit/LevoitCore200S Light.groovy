@@ -49,7 +49,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S / 300S air purifiers' night light capability",
-        version: "2.4",
+        version: "2.4.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -76,7 +76,7 @@ def updated() {
 	logDebug "Updated with settings: ${settings}"
 
     state.clear()
-    state.driverVersion = "2.4"
+    state.driverVersion = "2.4.1"
     unschedule()
 	initialize()
 

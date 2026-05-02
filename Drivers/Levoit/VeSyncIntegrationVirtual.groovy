@@ -641,7 +641,7 @@ metadata {
         importUrl: "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/VeSyncIntegrationVirtual.groovy",
         documentationLink: "https://github.com/level99/Hubitat-VeSync/blob/main/CONTRIBUTING.md",
         singleThreaded: true,
-        version: "2.4"
+        version: "2.4.1"
     ) {
         capability "Refresh"
 
@@ -714,7 +714,7 @@ def installed() {
 
 def updated() {
     logDebug "updated()"
-    state.driverVersion = "2.4"
+    state.driverVersion = "2.4.1"
     // BP12 pref-seed
     if (!state.prefsSeeded) {
         if (settings?.descriptionTextEnable == null)

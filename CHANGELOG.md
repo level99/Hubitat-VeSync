@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-05-02
+
 ### Fixed
 
 - **BP23 — `setLevel(N)` now auto-turns-on the device when switch is off.** SwitchLevel capability convention is that calling `setLevel` on an off device should turn it on AND set the level. This was a pre-existing latent bug — the buggy pattern dates back to upstream v1.1 (July 2022) and was inherited by all subsequent SwitchLevel-implementing drivers in this fork. Affected Core 200S/300S/400S/600S, Vital 100S/200S, Tower Fan, Pedestal Fan — Room Lighting "Activate" actions and similar `setLevel(100)`-from-off scenarios silently failed (cloud accepted speed commands but device stayed off). Fixed via auto-on guard at top of `setLevel`. Superior 6000S was unaffected — already had the guard via `setMistLevel`.

@@ -50,7 +50,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Levoit Superior 6000S (LEH-S601S) evaporative humidifier — mist 1-9, target humidity, modes, drying mode, auto-stop, water pump cleaning, ambient temp; canonical pyvesync payloads",
-        version: "2.4",
+        version: "2.4.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -101,7 +101,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4"
+    state.driverVersion = "2.4.1"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
