@@ -54,7 +54,7 @@ metadata {
 			description: "Simple driver to act as a destination for notifications, and provide an attribute to display the last 5 on a tile.",
 			author: "Jean P. May, Jr.",
 			importUrl:"https://raw.githubusercontent.com/thebearmay/hubitat/main/notifyTile.groovy",
-			version: "2.4",
+			version: "2.4.1",
             singleThreaded: true
 		) {
 			capability "Notification"
@@ -87,7 +87,7 @@ metadata {
 
 	void updated(){
         logDebug "updated()"
-        state.driverVersion = "2.4"
+        state.driverVersion = "2.4.1"
         // Turn off debug log in 30 minutes (happy path — no hub reboot)
         if (settings?.debugOutput) {
             runIn(1800, "logsOff")

@@ -61,7 +61,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson and elfege (contributor)",
         description: "Supports controlling the Levoit 400S air purifier",
-        version: "2.4",
+        version: "2.4.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -116,7 +116,7 @@ def installed() {
 def updated() {
 	logDebug "Updated with settings: ${settings}"
     state.clear()
-    state.driverVersion = "2.4"
+    state.driverVersion = "2.4.1"
     unschedule()
 	initialize()
 
@@ -232,6 +232,11 @@ def setLevel(value, duration)
 def setLevel(value)
 {
     logDebug "setLevel $value"
+    // SwitchLevel convention: setLevel(0) means off (Z-Wave dimmer platform expectation).
+    if (value == 0) { off(); return }
+    // BP23: auto-on when switch is off (SwitchLevel capability convention).
+    // state.turningOn guard prevents recursive on()->setSpeed()->setLevel() loop.
+    if (!state.turningOn && device.currentValue("switch") != "on") on()
     def speed = 0
     setMode("manual") // always manual if setLevel() cmd was called
 

@@ -95,6 +95,22 @@ Two additional model codes present in pyvesync `device_map.py` that fall through
 
 Community hardware reports (a debug log showing the model code + `captureDiagnostics` output) will confirm routing and unblock adding these in the next polish round.
 
+### Architectural — class-library extraction
+
+Per-class shared libraries to collapse duplicated logic across driver families. Surfaced 2026-05-02 during the BP23 audit: Core line (200S/300S/400S/600S) has roughly 1,500-2,800 lines of near-byte-identical code across the 4 drivers; Vital line (100S/200S) ~600-1,000 lines; Fan line (Tower/Pedestal) ~400-600 lines.
+
+Three new libraries proposed:
+
+- **`LevoitCorePurifierLib.groovy`** — shared `setLevel`/`setSpeed`/`handleSpeed`/`setMode`/parsers/AQ logic for Core 200S/300S/400S/600S
+- **`LevoitVitalPurifierLib.groovy`** — shared paths for Vital 100S/200S
+- **`LevoitFanLib.groovy`** — shared paths for Tower Fan / Pedestal Fan
+
+**Long-term payoff:** every future bug affecting a class collapses to a 1-fix instead of 2-4. Retroactively dedupes BP1 (10 drivers), BP12 (5 driver shapes), BP14 (parent + every child command path), BP16 (every child), BP18 (17 method sites × 13 drivers), BP23 (8 drivers), and the next BP-N of the same shape.
+
+**Tradeoffs:** Hubitat library files have a known parser bug (BP20) — each new library file is fresh exposure surface; file-scope must stay zero-commentary. Library include semantics don't support method override; drivers needing per-instance variation either parameterize the library function or override locally (Hubitat sandbox precedence on local-vs-lib needs verification before relying on it). Each library ships via HPM as another `required: true` dependency users pick up via Update flow (precedent set by `LevoitDiagnosticsLib.groovy` in v2.4).
+
+**Sequencing:** Core line first (biggest payoff, most homogeneous), then Vital, then Fan. Each is its own dev/QA/tester cycle, ~6-10 hours per class lib.
+
 ### Tooling & dev experience
 
 - **NUMBER-input "NaN" UI quirk on `setSpeed`/`setMistLevel`/`setHumidity`/etc.** Hubitat's device-page command card renders `<input type="number">` for `NUMBER`-typed parameters. With no value bound, browsers display "NaN" until the user types. Affects every `NUMBER` command across this fork (Pedestal/Tower Fan `setSpeed`, all humidifiers' `setMistLevel` + `setHumidity`, EverestAir/Sprout `setFanSpeed`, etc.) and is a Hubitat platform behavior, not a per-driver bug. Speculative `range:` / `defaultValue:` keys on the parameter map were tried in v2.4 and don't take effect (not in Hubitat's documented command-parameter spec). Possible v2.5+ fix: convert `setSpeed` (and similar) to `ENUM` with explicit string constraints — gives a dropdown, eliminates NaN. Tradeoff: programmatic callers must handle string-typed input (a 1-line `setSpeed(val) { setSpeed(val as Integer) }` shim covers it). FanControl capability's own `setSpeed(named)` is unaffected. Worth doing as a cross-driver UX polish pass when a v2.5+ window opens.

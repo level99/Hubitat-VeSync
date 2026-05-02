@@ -178,6 +178,45 @@ class LevoitCore400SSpec extends HubitatSpec {
         req.data.containsKey("level")
     }
 
+    // -------------------------------------------------------------------------
+    // Bug Pattern #23: setLevel(N>0) auto-turns-on when switch is off
+    // -------------------------------------------------------------------------
+
+    def "BP23: setLevel(N>0) when switch is off calls on() before sending level command"() {
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setLevel(100) is called on an off device"
+        driver.setLevel(100)
+
+        then: "on() was called — setSwitch with enabled=true was sent before the speed command"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP23: setLevel(0) calls off() and does not send a speed command"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel(0) is called"
+        driver.setLevel(0)
+
+        then: "off() was called — setSwitch with enabled=false was sent"
+        def offReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == false }
+        offReq != null
+
+        and: "no setLevel speed command was sent"
+        testParent.allRequests.findAll { it.method == "setLevel" }.size() == 0
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
     def "AQI calculation produces a value between 0 and 500"() {
         given:
         settings.descriptionTextEnable = false

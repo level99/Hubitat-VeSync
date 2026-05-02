@@ -56,7 +56,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Vital 100S (LAP-V102S) — power, fan speed, mode, timer, AQ/PM2.5, filter health; canonical pyvesync payloads",
-        version: "2.4",
+        version: "2.4.1",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -106,7 +106,7 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4"
+    state.driverVersion = "2.4.1"
     runIn(3, "update")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -234,9 +234,14 @@ def setLevel(val, duration) {
 }
 
 // SwitchLevel convention: setLevel(0) turns the device off (matches Z-Wave dimmer platform expectation).
+// BP23: setLevel(N>0) auto-turns-on when switch is off (SwitchLevel capability convention).
 def setLevel(val){
     logDebug "setLevel $val"
     if (val == 0) { off(); return }
+    // BP23: auto-on when switch is off.
+    // state.turningOn is set by on() while configureOnState() runs async;
+    // skip the redundant on() call if a turn-on cycle is already in flight.
+    if (!state.turningOn && device.currentValue("switch") != "on") on()
     Integer lvl
     if (val < 20) lvl=1
     else if (val < 40) lvl=2
