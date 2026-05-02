@@ -685,11 +685,35 @@ State additions (parent-level — network outages affect all children identicall
 
 - `catch (IllegalStateException e)` — unchanged (connection-pool-shutdown path already existed; not a transient network error).
 - `catch (Exception e)` — new branch: calls `isNetworkException(e)` to classify.
-  - Network-class exceptions (`java.net.UnknownHostException`, `java.net.SocketTimeoutException`, `java.net.ConnectException`, `java.net.NoRouteToHostException`): first error of outage → `log.warn` + seed both state fields to `now()`; subsequent errors → `logDebug "BP22: still unreachable"`.
+  - Network-class exceptions (see `isNetworkException` below): first error of outage → `logWarn` + seed both state fields to `now()`; subsequent errors → `logDebug "BP22: still unreachable"`.
   - Non-network exceptions → original `logError` + `recordError` path unchanged.
-- Success path (after `httpPost(params, effectiveClosure)` returns without throwing): if `state.networkUnreachableSince != null` → emit `logInfo "BP22: VeSync API reachable again after ${durStr}"` + clear both state fields. Uses `formatOfflineDuration(sinceMillis)` (BP21 helper, reused).
+- Success path (after `httpPost(params, effectiveClosure)` returns without throwing): if `state.networkUnreachableSince != null` → emit `logInfo "BP22: VeSync API reachable again after ${durStr}"` + clear all three state fields (networkUnreachableSince, lastNetworkWarnAt, lastNetworkProbeAt). Uses `formatOfflineDuration(sinceMillis)` (BP21 helper, reused).
 
-`isNetworkException(Exception e)` helper: matches exception class name as a string to avoid classpath import issues in the Hubitat Groovy sandbox. Covers the four network-class exception types above.
+`isNetworkException(Exception e)` helper: walks the full cause chain (bounded to depth 10 to avoid infinite loops on cyclic causes) and checks each `Throwable.class.name` against the 8-class list. Cause-chain walk is required because live testing showed Apache HttpClient wraps the real network exception inside a generic wrapper — a flat top-level check misses these. String-based class name comparison avoids classpath import issues in the Hubitat Groovy sandbox. Covers 8 exception classes in two tiers:
+
+JDK layer (4 classes):
+- `java.net.UnknownHostException` — DNS failure
+- `java.net.SocketTimeoutException` — connect or read timeout
+- `java.net.ConnectException` — connection refused / unreachable
+- `java.net.NoRouteToHostException` — ICMP network-unreachable
+
+Apache HttpClient layer (4 classes — Hubitat's actual HTTP stack wraps JDK exceptions in these; live-observed during firewall block):
+- `org.apache.http.conn.ConnectTimeoutException` — connect timeout (firewall silent drop / SYN timeout)
+- `org.apache.http.conn.ConnectionPoolTimeoutException` — connection-pool exhaustion (cascading effect)
+- `org.apache.http.NoHttpResponseException` — server stopped responding after accepting connection
+- `org.apache.http.conn.HttpHostConnectException` — connection refused or ICMP unreachable at HttpClient layer
+
+When reviewing: if a new network-class exception surfaces in a live-log report that is not in this list, it should be added to `isNetworkException()` — not handled inline at the call site.
+
+Dual circuit-breaker (BP22 stall prevention): the per-call breaker in `sendBypassRequest()` is not sufficient on its own. Children are polled in a for-loop; all 6 dispatch `httpPost()` near-simultaneously. The first child to fail (~20s later) sets `networkUnreachableSince`, but the other 5 are already mid-`httpPost` and won't re-check. Result: first outage cycle still stalls ~120s. AND state may not propagate to in-flight closures in Hubitat's JSON-backed proxy.
+
+Two-layer fix:
+
+1. **Top-level circuit-breaker in `updateDevices()`** — added BEFORE the `driverReloading` guard, AFTER `emitNetworkWarnIfDue()`. When `state.networkUnreachableSince != null` and the probe interval hasn't elapsed, returns `false` immediately without iterating any children. When the interval HAS elapsed, sets `state.lastNetworkProbeAt = now()`, sets `state.networkProbeInFlight = true`, logs DEBUG "probing updateDevices cycle", and falls through to run the full cycle as a recovery probe. The remaining body (stale-CID cleanup, children for-loop, heartbeat) is wrapped in a `try {}` block; a `finally {}` clears `state.networkProbeInFlight` unconditionally at cycle end.
+
+2. **Per-call circuit-breaker in `sendBypassRequest()`** — still present; guards command-triggered `httpPost()` calls that arrive outside the polling path (e.g. user presses button while network is down). Condition is now `state.networkUnreachableSince != null && !state.networkProbeInFlight` — the `!networkProbeInFlight` guard bypasses the check when the top-level breaker has signalled "this IS the recovery probe", preventing a deadlock where the top-level updates `lastNetworkProbeAt = now()` and then each child's per-call check sees `sinceLastProbe=0` and skips.
+
+State additions: `state.networkProbeInFlight` (Boolean) — set to `true` only during a top-level recovery probe cycle; `null`/`false` at all other times. Must be cleared in `finally` so it cannot persist across cycles.
 
 `emitNetworkWarnIfDue()` helper (parallel to BP21's `emitOfflineWarnsIfDue()`):
 - Returns immediately if `state.networkUnreachableSince == null`.
@@ -710,11 +734,16 @@ Log tiering summary:
 **Check for this pattern** when reviewing:
 - Any modification to `sendBypassRequest()` catch blocks — verify the `isNetworkException` guard is not removed or bypassed; verify non-network exceptions still call `logError` (not silently swallowed).
 - Any new exception class that should be covered by BP22 — should be added to `isNetworkException()` (not hardcoded inline).
-- `emitNetworkWarnIfDue()` call site in `updateDevices()` — must come AFTER `emitOfflineWarnsIfDue()`, before the `driverReloading` guard.
+- `isNetworkException()` — must walk the cause chain (while loop on `t.cause`), not just check `e.class.name` at top level. A flat check misses wrapped exceptions (live-confirmed regression).
+- Top-level circuit-breaker in `updateDevices()` — must appear AFTER `emitNetworkWarnIfDue()`, BEFORE the `driverReloading` guard. If missing, all children stall in the first outage cycle despite the per-call breaker.
+- Per-call circuit-breaker in `sendBypassRequest()` — must appear BEFORE the `try { httpPost(...) }` block AND must check `!state.networkProbeInFlight`. If the flag check is missing, recovery probes from top-level are deadlocked.
+- `networkProbeInFlight` set before iterating children in the top-level probe path, cleared in `finally` (not just on success). If not in `finally`, a failing probe cycle leaves the flag set permanently, bypassing the per-call breaker forever.
+- `state.lastNetworkProbeAt` cleared in the recovery path — if omitted, the first successful probe will clear `networkUnreachableSince` but leave a stale probe timestamp that delays the next outage's first probe.
+- `emitNetworkWarnIfDue()` call site in `updateDevices()` — must come AFTER `emitOfflineWarnsIfDue()`, before the top-level circuit-breaker block.
 - Recovery detection — must be on the success path (after `httpPost` returns normally), NOT inside the closure (the closure doesn't know about network-layer exceptions; it only sees successful HTTP responses).
 - State null-coercion: `state.networkUnreachableSince as long` (not `as Long`) when used in arithmetic — Groovy coerces null `as long` to 0L; `as Long` returns null and NPEs in arithmetic. The actual implementation uses the null check before arithmetic, so this is a secondary concern, but flag it if seen without the null check.
 
-**Refutation evidence:** live-verified stop of ERROR spam during internet outage on maintainer's hub. Before: 6 ERRORs/min. After: one WARN at outage start, DEBUG-only during, INFO on recovery.
+**Refutation evidence:** live-verified stop of ERROR spam during internet outage on maintainer's hub. Before: 6 ERRORs/min. After: one WARN at outage start, DEBUG-only during, INFO on recovery. Per-call circuit-breaker added after live observation of 122,187ms poll cycles during firewall block. Top-level circuit-breaker added after live observation that per-call breaker was insufficient for the parallel-poll case — 35+ minutes of 120s+ poll cycles post first-WARN.
 
 ---
 

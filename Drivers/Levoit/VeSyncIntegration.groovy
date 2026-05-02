@@ -26,18 +26,25 @@ SOFTWARE.
 
 // History:
 //
-// 2026-05-01: v2.4  Bug Pattern #22 — HTTP-error log spam during network outages eliminated.
-//                  - sendBypassRequest() now distinguishes network-layer exceptions
-//                    (UnknownHostException, SocketTimeoutException, ConnectException,
-//                    NoRouteToHostException) from other failures.
+// 2026-05-01: v2.4  Bug Pattern #22 — HTTP-error log spam and poll-cycle stalls during
+//                  network outages eliminated.
+//                  - isNetworkException() classifies 8 exception classes (4 JDK + 4 Apache
+//                    HttpClient) via cause-chain walk (depth 10) — covers sandbox wrappers.
 //                  - First network error of an outage: one-time WARN + state.networkUnreachableSince
-//                    set. Subsequent errors during the same outage: DEBUG only (silent in normal logs).
-//                  - New emitNetworkWarnIfDue() helper: hourly WARN re-surface while unreachable;
-//                    defense-in-depth null-guard mirrors BP21's emitOfflineWarnsIfDue().
-//                  - Recovery: INFO "reachable again after Xh Ym" + both state fields cleared,
-//                    triggered on the first successful httpPost() completion.
-//                  - Non-network exceptions (e.g. IllegalStateException) keep existing logError path.
-//                  - New state: state.networkUnreachableSince (Long), state.lastNetworkWarnAt (Long).
+//                    set. Subsequent errors: DEBUG only (silent in normal logs).
+//                  - Dual circuit-breaker: (1) top-level in updateDevices() skips the entire
+//                    poll cycle during a known outage (prevents parallel-child stalls); (2)
+//                    per-call in sendBypassRequest() skips individual httpPost() for command-
+//                    triggered calls outside polling. Both use the same 5-minute probe interval.
+//                    Coordination via state.networkProbeInFlight flag: top-level sets it when
+//                    firing a recovery probe so per-call breaker doesn't re-block the probe.
+//                    Cleared in a try/finally in updateDevices().
+//                  - New emitNetworkWarnIfDue() helper: hourly WARN re-surface while unreachable.
+//                  - Recovery: INFO "reachable again after Xh Ym" + all state fields cleared
+//                    on first successful httpPost() completion.
+//                  - Non-network exceptions keep existing logError path.
+//                  - New state: state.networkUnreachableSince (Long), state.lastNetworkWarnAt (Long),
+//                    state.lastNetworkProbeAt (Long), state.networkProbeInFlight (Boolean).
 // 2026-05-01: v2.4  Bug Pattern #21 — bounded self-heal backoff for chronically-offline devices.
 //                  - ensurePollHealth() now caps self-heal Resync attempts per device at 3.
 //                    After 3 failed attempts the device is marked offline in state
@@ -678,23 +685,46 @@ private void emitOfflineWarnsIfDue() {
 }
 
 /**
- * Returns true if the exception is a network-layer error that BP22 should suppress (BP22).
+ * Returns true if the exception (or any cause in its chain) is a network-layer error
+ * that BP22 should suppress.
  *
- * Covered classes:
+ * JDK network exceptions:
  *   UnknownHostException   — DNS failure (hub lost internet or VeSync DNS down)
  *   SocketTimeoutException — connect or read timeout
  *   ConnectException       — connection refused / unreachable
  *   NoRouteToHostException — ICMP network-unreachable
  *
- * All four extend java.io.IOException → checking the class name avoids classpath
- * import issues in the Hubitat Groovy sandbox.
+ * Apache HttpClient exceptions (Hubitat's actual HTTP stack wraps JDK in these;
+ * live-observed: ConnectTimeoutException appears as the cause of a wrapper, not the
+ * top-level exception, so cause-chain walk is required):
+ *   ConnectTimeoutException       — connect timeout (firewall silent drop / SYN timeout)
+ *   ConnectionPoolTimeoutException — connection-pool exhaustion (cascading effect during outage)
+ *   NoHttpResponseException        — server stopped responding after accepting connection
+ *   HttpHostConnectException       — connection refused or ICMP unreachable at HttpClient layer
+ *
+ * String-based class.name comparison avoids classpath import issues in the Hubitat
+ * Groovy sandbox. Cause-chain walk (bounded to depth 10) handles sandbox/proxy wrappers
+ * that wrap the real network exception one or more levels deep.
  */
 private boolean isNetworkException(Exception e) {
-    String cn = e?.class?.name ?: ""
-    return cn == "java.net.UnknownHostException"   ||
-           cn == "java.net.SocketTimeoutException" ||
-           cn == "java.net.ConnectException"        ||
-           cn == "java.net.NoRouteToHostException"
+    Throwable t = e
+    int depth = 0
+    while (t != null && depth < 10) {
+        String cn = t?.class?.name ?: ""
+        if (cn == "java.net.UnknownHostException"                        ||
+            cn == "java.net.SocketTimeoutException"                      ||
+            cn == "java.net.ConnectException"                            ||
+            cn == "java.net.NoRouteToHostException"                      ||
+            cn == "org.apache.http.conn.ConnectTimeoutException"         ||
+            cn == "org.apache.http.conn.ConnectionPoolTimeoutException"  ||
+            cn == "org.apache.http.NoHttpResponseException"              ||
+            cn == "org.apache.http.conn.HttpHostConnectException") {
+            return true
+        }
+        t = t.cause
+        depth++
+    }
+    return false
 }
 
 /**
@@ -867,11 +897,48 @@ def Boolean updateDevices()
     // per-device offline); BP22 is parent-level and fires regardless of device count.
     emitNetworkWarnIfDue()
 
+    // BP22 top-level circuit-breaker: skip the entire poll cycle if the VeSync API is
+    // known-unreachable and the probe interval hasn't elapsed yet.
+    //
+    // WHY this is needed in addition to the per-call breaker in sendBypassRequest():
+    // Children are polled in a for-loop that dispatches all httpPost() calls near-
+    // simultaneously. The first child to fail (~20s later) sets networkUnreachableSince,
+    // but the other children are already mid-httpPost and won't re-check the breaker.
+    // Result: first outage cycle still stalls ~120s. AND because state propagation in
+    // Hubitat's JSON-backed proxy may not be visible to in-flight closures, subsequent
+    // cycles can stall too. Top-level breaker stops the whole cycle before any child
+    // dispatches, eliminating the stall entirely.
+    //
+    // The per-call breaker in sendBypassRequest() is still useful for command-triggered
+    // calls (e.g. user presses button while network is down) that arrive outside the
+    // normal polling path.
+    //
+    // Coordination: when firing a recovery probe here, set state.networkProbeInFlight so
+    // the per-call breaker doesn't re-block the probe call in each child's sendBypassRequest.
+    // Cleared in a try/finally below regardless of cycle success or failure.
+    if (state.networkUnreachableSince != null) {
+        long nowMs = now()
+        long lastProbeAt = (state.lastNetworkProbeAt as Long) ?: (state.networkUnreachableSince as Long)
+        long sinceLastProbe = nowMs - lastProbeAt
+        if (sinceLastProbe < 300000L) {
+            logDebug "BP22: skipping updateDevices cycle (network unreachable; next probe in ${(int)((300000L - sinceLastProbe) / 1000)}s)"
+            return false
+        }
+        // Probe interval elapsed — let the full cycle run as a recovery probe.
+        state.lastNetworkProbeAt = nowMs
+        state.networkProbeInFlight = true
+        logDebug "BP22: probing updateDevices cycle for network recovery (last probe ${(int)(sinceLastProbe / 1000)}s ago)"
+    }
+
     // Stop if driver is reloading
     if (state.driverReloading) {
         logDebug "Skipping updateDevices - driver reloading"
         return false
     }
+
+    // BP22: wrap remaining cycle body in try/finally so networkProbeInFlight is always
+    // cleared at cycle end, regardless of whether the probe succeeded, failed, or threw.
+    try {
 
     // Self-heal: remove cids from state.deviceList that have no corresponding child device.
     // This handles the case where addChildDevice silently returned a phantom handle during
@@ -1013,6 +1080,15 @@ def Boolean updateDevices()
     // Schedule a call to the timeout method. This will cancel any outstanding
     // schedules.
     runIn(5 * (int)settings.refreshInterval, "timeOutLevoit")
+
+    } finally {
+        // BP22: clear probe-in-flight flag regardless of cycle outcome.
+        // The flag is only set when the top-level circuit-breaker fires a recovery probe;
+        // clearing it here is a no-op in normal (non-outage) cycles.
+        if (state.networkProbeInFlight) {
+            state.remove('networkProbeInFlight')
+        }
+    }
 }
 
 /**
@@ -2244,6 +2320,28 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
         tracingClosure(resp)
     }
 
+    // BP22 per-call circuit-breaker: skip httpPost entirely when in a known network outage.
+    // Guards command-triggered calls (e.g. user pressing a button while network is down)
+    // that arrive outside the normal polling path. The top-level breaker in updateDevices()
+    // already handles the parallel-poll case; this is the fallback for non-poll callers.
+    //
+    // Skip if state.networkProbeInFlight is true: the top-level breaker in updateDevices()
+    // already determined that this cycle IS the recovery probe and set lastNetworkProbeAt.
+    // Without this bypass, the per-call check would see sinceLastProbe=0 and skip too,
+    // creating a deadlock where neither breaker allows the probe through.
+    if (state.networkUnreachableSince != null && !state.networkProbeInFlight) {
+        long nowMs = now()
+        long lastProbeAt = (state.lastNetworkProbeAt as Long) ?: (state.networkUnreachableSince as Long)
+        long sinceLastProbe = nowMs - lastProbeAt
+        if (sinceLastProbe < 300000L) {
+            logDebug "BP22: skipping httpPost (network unreachable; next probe in ${(int)((300000L - sinceLastProbe) / 1000)}s)"
+            return false
+        }
+        // 5+ minutes elapsed — let this call through as a probe for recovery.
+        state.lastNetworkProbeAt = nowMs
+        logDebug "BP22: probing httpPost for network recovery (last probe ${(int)(sinceLastProbe / 1000)}s ago)"
+    }
+
     try {
         httpPost(params, effectiveClosure)
         // Network success — check if we're recovering from an outage (BP22).
@@ -2252,6 +2350,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
             logInfo "BP22: VeSync API reachable again after ${durStr} unreachable."
             state.networkUnreachableSince = null
             state.lastNetworkWarnAt = null
+            state.lastNetworkProbeAt = null
         }
         return true
     }

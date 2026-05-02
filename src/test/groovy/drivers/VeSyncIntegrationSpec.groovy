@@ -3598,7 +3598,8 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         settings.debugOutput = true   // enable debug so we can assert the debug line
         long outageStart = driver.now() - 60000L   // outage started 1 min ago
         state.networkUnreachableSince = outageStart
-        state.lastNetworkWarnAt = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = driver.now() - 360000L   // last probe 6 min ago — interval expired, call passes through to httpPost
         testLog.warns.clear()
 
         def equip = new TestDevice()
@@ -3740,5 +3741,376 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         and: "lastNetworkWarnAt remains null"
         state.lastNetworkWarnAt == null
+    }
+
+    @groovy.transform.CompileDynamic
+    def "isNetworkException() recognises all 8 network-class exception FQCNs (R7)"(String fqcn) {
+        // R7: the BP22 classifier must return true for all 8 exception class names it
+        // documents — 4 JDK + 4 Apache HttpClient.
+        //
+        // Strategy — hybrid, because JVM security forbids defining classes in java.* packages:
+        //   java.net.*    → real JDK instances (already on classpath; new Foo('test'))
+        //   org.apache.*  → GroovyClassLoader synthesis (not a restricted package; class.name
+        //                   of the synthesised class matches the FQN that isNetworkException checks)
+        given: "a real exception instance whose class FQN is '${fqcn}'"
+        Exception e = buildExceptionForTest(fqcn)
+
+        when:
+        boolean result = driver.isNetworkException(e)
+
+        then:
+        result == true
+
+        where:
+        fqcn << [
+            'java.net.UnknownHostException',
+            'java.net.SocketTimeoutException',
+            'java.net.ConnectException',
+            'java.net.NoRouteToHostException',
+            'org.apache.http.conn.ConnectTimeoutException',
+            'org.apache.http.conn.ConnectionPoolTimeoutException',
+            'org.apache.http.NoHttpResponseException',
+            'org.apache.http.conn.HttpHostConnectException',
+        ]
+    }
+
+    /**
+     * Build a test exception whose getClass().getName() == fqcn.
+     *
+     * JDK java.net.* classes: instantiated directly (on classpath; JVM prohibits
+     * redefining java.* packages via any ClassLoader).
+     * Apache org.apache.http.* classes: synthesised via GroovyClassLoader (org.apache.*
+     * is not a restricted namespace; the generated class has the correct FQN).
+     */
+    private Exception buildExceptionForTest(String fqcn) {
+        if (fqcn.startsWith('java.net.')) {
+            switch (fqcn) {
+                case 'java.net.UnknownHostException':   return new java.net.UnknownHostException('test')
+                case 'java.net.SocketTimeoutException': return new java.net.SocketTimeoutException('test')
+                case 'java.net.ConnectException':       return new java.net.ConnectException('test')
+                case 'java.net.NoRouteToHostException': return new java.net.NoRouteToHostException('test')
+            }
+        }
+        // Apache HttpClient classes — synthesise via GroovyClassLoader
+        String simpleName = fqcn.substring(fqcn.lastIndexOf('.') + 1)
+        String packageName = fqcn.substring(0, fqcn.lastIndexOf('.'))
+        String src = """
+            package ${packageName}
+            class ${simpleName} extends RuntimeException {
+                ${simpleName}() { super('test') }
+            }
+        """
+        GroovyClassLoader gcl = new GroovyClassLoader()
+        Class<?> cls = gcl.parseClass(src)
+        return cls.getDeclaredConstructor().newInstance() as Exception
+    }
+
+    def "isNetworkException() returns false for non-network exceptions (R8)"(Exception e) {
+        // R8: non-network exceptions must NOT trigger BP22 suppression — they should
+        // follow the logError path so the user sees the real error.
+        expect:
+        !driver.isNetworkException(e)
+
+        where:
+        e << [
+            new NullPointerException("null in handler"),
+            new IllegalArgumentException("bad arg"),
+            new IllegalStateException("state error"),
+            new RuntimeException("generic"),
+            new groovy.lang.MissingPropertyException("prop", String),
+        ]
+    }
+
+    def "sendBypassRequest() skips httpPost within 5-minute probe interval during outage (R9)"() {
+        // R9: circuit-breaker. When networkUnreachableSince is set and lastNetworkProbeAt
+        // is recent (< 5 min), sendBypassRequest must return false without calling httpPost.
+        given: "outage in progress; last probe was 1 minute ago"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        long outageStart = driver.now() - 120000L   // 2 min outage
+        long recentProbe = driver.now() - 60000L    // probed 1 min ago (within 5-min window)
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = recentProbe
+
+        boolean httpPostCalled = false
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            httpPostCalled = true
+            throw new java.net.UnknownHostException("should not be reached")
+        }
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r9-cid")
+        equip.updateDataValue("configModule", "r9-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        when:
+        boolean result = driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "httpPost was NOT called (circuit open)"
+        !httpPostCalled
+
+        and: "returned false silently"
+        result == false
+
+        and: "lastNetworkProbeAt unchanged"
+        (state.lastNetworkProbeAt as Long) == recentProbe
+    }
+
+    def "sendBypassRequest() fires probe when 5-minute interval expires during outage (R10)"() {
+        // R10: after 5+ minutes since lastNetworkProbeAt, sendBypassRequest must let the
+        // call through as a probe attempt and update lastNetworkProbeAt to now().
+        given: "outage in progress; last probe was 6 minutes ago (interval expired)"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        long outageStart = driver.now() - 600000L   // 10 min outage
+        long staleProbe  = driver.now() - 360000L   // probed 6 min ago (> 5 min threshold)
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = staleProbe
+
+        boolean httpPostCalled = false
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            httpPostCalled = true
+            // Probe still fails — connection still down
+            throw new java.net.ConnectException("still unreachable")
+        }
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r10-cid")
+        equip.updateDataValue("configModule", "r10-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "httpPost WAS called (probe attempt fired)"
+        httpPostCalled
+
+        and: "lastNetworkProbeAt updated to driver.now()"
+        (state.lastNetworkProbeAt as Long) == driver.now()
+    }
+
+    def "sendBypassRequest() probe success clears all 3 BP22 state fields (R11)"() {
+        // R11: when the probe fires (interval expired) and httpPost succeeds, the
+        // recovery path must clear networkUnreachableSince, lastNetworkWarnAt, AND
+        // lastNetworkProbeAt — all three state fields.
+        given: "outage state set; probe interval expired; httpPost succeeds this time"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        long outageStart = driver.now() - 600000L   // 10 min outage
+        long staleProbe  = driver.now() - 360000L   // 6 min ago — probe fires
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = staleProbe
+        testLog.infos.clear()
+
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [code: 0, result: [code: 0, result: [:], traceId: "r11"]]
+            cb(fakeResp)
+        }
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r11-cid")
+        equip.updateDataValue("configModule", "r11-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "INFO recovery message emitted"
+        testLog.infos.any { it.contains("BP22") && it.contains("reachable again") }
+
+        and: "networkUnreachableSince cleared"
+        state.networkUnreachableSince == null
+
+        and: "lastNetworkWarnAt cleared"
+        state.lastNetworkWarnAt == null
+
+        and: "lastNetworkProbeAt cleared"
+        state.lastNetworkProbeAt == null
+    }
+
+    def "isNetworkException() walks cause chain to find wrapped network exceptions (R12)"() {
+        // R12: live observation — ConnectTimeoutException surfaced as the CAUSE of a
+        // generic wrapper, not as the top-level exception. The cause-chain walk must
+        // find it even when buried 1 or 2 levels deep. Also validates depth limit:
+        // a 12-exception chain doesn't infinite-loop.
+        given: "a wrapper containing a network exception as cause"
+        def inner = new java.net.UnknownHostException("dns failed")
+        def wrapper1 = new RuntimeException("wrapper", inner)
+        def wrapper2 = new RuntimeException("outer wrapper", wrapper1)
+
+        expect: "one level of wrapping — detected"
+        driver.isNetworkException(wrapper1)
+
+        and: "two levels of wrapping — detected"
+        driver.isNetworkException(wrapper2)
+
+        and: "a chain of 12 exceptions (beyond depth limit) — returns false without looping"
+        Exception chain = new RuntimeException("tail")
+        (1..12).each { chain = new RuntimeException("level-${it}", chain) }
+        !driver.isNetworkException(chain)
+
+        and: "null exception — returns false safely"
+        !driver.isNetworkException(null)
+    }
+
+    def "updateDevices() top-level circuit-breaker skips entire cycle when probe interval not elapsed (R13)"() {
+        // R13: during a known outage with a recent probe (< 5 min ago), updateDevices()
+        // must return false immediately — before iterating children or calling httpPost.
+        // This is the parallel-poll fix: none of the children dispatch their httpPost calls
+        // at all, so no stalls can occur.
+        given: "outage in progress; last probe 1 minute ago (interval not elapsed)"
+        settings.refreshInterval = 30
+        settings.debugOutput = true
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        long outageStart = driver.now() - 120000L    // outage for 2 min
+        long recentProbe = driver.now() - 60000L     // probed 1 min ago
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = recentProbe
+
+        // Register a child device — if the circuit-breaker works, it must never be iterated
+        boolean childUpdateCalled = false
+        def child = new TestDevice()
+        child.updateDataValue("deviceType", "LAP-V201S-WUS")
+        child.metaClass.update = { Map st, nl -> childUpdateCalled = true; true }
+        state.deviceList = ["R13-CID": "r13-cm"]
+        childDevices["R13-CID"] = child
+
+        boolean httpPostCalled = false
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            httpPostCalled = true
+            throw new java.net.SocketTimeoutException("should not be reached")
+        }
+
+        when:
+        boolean result = driver.updateDevices()
+
+        then: "cycle was skipped — returned false"
+        result == false
+
+        and: "httpPost was NOT called"
+        !httpPostCalled
+
+        and: "child update was NOT called"
+        !childUpdateCalled
+
+        and: "lastNetworkProbeAt unchanged"
+        (state.lastNetworkProbeAt as Long) == recentProbe
+
+        and: "one DEBUG log emitted for the skip"
+        testLog.debugs.any { it.contains("skipping updateDevices cycle") }
+    }
+
+    def "updateDevices() top-level circuit-breaker allows probe cycle when interval elapsed (R14)"() {
+        // R14: when the probe interval has elapsed (> 5 min since lastNetworkProbeAt),
+        // updateDevices() must let the full cycle run as a recovery probe, update
+        // lastNetworkProbeAt to now(), and set networkProbeInFlight before iterating.
+        // Here the probe still fails (outage continues) — verifies state update, not recovery.
+        given: "outage in progress; last probe 6 minutes ago (interval expired)"
+        settings.refreshInterval = 30
+        settings.debugOutput = true
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        long outageStart = driver.now() - 600000L   // outage for 10 min
+        long staleProbe  = driver.now() - 360000L   // probed 6 min ago
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = staleProbe
+
+        boolean httpPostCalled = false
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            httpPostCalled = true
+            throw new java.net.SocketTimeoutException("still unreachable")
+        }
+
+        def child = new TestDevice()
+        child.updateDataValue("deviceType", "LAP-V201S-WUS")
+        child.metaClass.update = { Map st, nl -> true }
+        state.deviceList = ["R14-CID": "r14-cm"]
+        childDevices["R14-CID"] = child
+
+        when:
+        driver.updateDevices()
+
+        then: "cycle ran — httpPost was called (probe attempt)"
+        httpPostCalled
+
+        and: "lastNetworkProbeAt updated to driver.now()"
+        (state.lastNetworkProbeAt as Long) == driver.now()
+
+        and: "DEBUG probe log emitted"
+        testLog.debugs.any { it.contains("probing updateDevices cycle") }
+    }
+
+    def "networkProbeInFlight bypasses per-call circuit-breaker in sendBypassRequest (R15)"() {
+        // R15: when state.networkProbeInFlight is true (set by the top-level breaker),
+        // the per-call circuit-breaker in sendBypassRequest() must bypass its short-circuit
+        // and allow the httpPost through. Without this, the top-level probe would set
+        // lastNetworkProbeAt = now() and then each child's per-call check would see
+        // sinceLastProbe=0 and skip — deadlock where no probe actually fires.
+        given: "outage state set but networkProbeInFlight signals this IS the probe"
+        settings.debugOutput = true
+        long outageStart = driver.now() - 600000L
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = driver.now()   // just updated by top-level breaker
+        state.networkProbeInFlight    = true            // top-level breaker set this
+
+        boolean httpPostCalled = false
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            httpPostCalled = true
+            // Probe still fails
+            throw new java.net.ConnectException("still unreachable")
+        }
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "r15-cid")
+        equip.updateDataValue("configModule", "r15-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "httpPost WAS called (per-call breaker bypassed by networkProbeInFlight)"
+        httpPostCalled
+    }
+
+    def "updateDevices() clears networkProbeInFlight in finally block after probe cycle (R16)"() {
+        // R16: networkProbeInFlight must be cleared at the end of updateDevices() regardless
+        // of whether the probe cycle succeeded or failed. The try/finally guarantee ensures
+        // the flag doesn't persist across cycles and re-disable the per-call breaker permanently.
+        given: "outage state with expired probe interval — cycle will run as probe"
+        settings.refreshInterval = 30
+        settings.debugOutput = true
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        long outageStart = driver.now() - 600000L
+        long staleProbe  = driver.now() - 360000L   // expired
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = staleProbe
+
+        // httpPost throws (outage continues) — verify finally clears flag even on failure
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            throw new java.net.SocketTimeoutException("still unreachable")
+        }
+
+        def child = new TestDevice()
+        child.updateDataValue("deviceType", "LAP-V201S-WUS")
+        child.metaClass.update = { Map st, nl -> true }
+        state.deviceList = ["R16-CID": "r16-cm"]
+        childDevices["R16-CID"] = child
+
+        when:
+        driver.updateDevices()
+
+        then: "networkProbeInFlight is null/false after cycle completes"
+        !state.networkProbeInFlight
     }
 }
