@@ -39,6 +39,8 @@ SOFTWARE.
 //                    payload data keys against pyvesync canonical shapes.
 //                  - [DEV TOOL] — Do NOT install for normal use.
 
+#include level99.LevoitChildBase
+
 import groovy.transform.Field
 
 // ---------------------------------------------------------------------------
@@ -1323,32 +1325,7 @@ String getFamilyFor(String fixtureName)        { FIXTURE_TO_FAMILY[fixtureName] 
 // ---------------------------------------------------------------------------
 // Logging helpers
 // ---------------------------------------------------------------------------
-
-private void logInfo(msg) {
-    if (settings?.descriptionTextEnable) log.info msg
-}
-
-private void logDebug(msg) {
-    if (settings?.debugOutput) log.debug msg
-}
-
-// Virtual parent always surfaces warns/errors — no pref gate
-private void logWarn(msg)  { log.warn  msg }
-private void logError(msg) { log.error msg }
-
-void logDebugOff() {
-    if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false])
-}
-
-// BP16: auto-disable stuck debugOutput after hub reboot
-// Called from sendBypassRequest, spawnFromFixture, stepFixtureResponse, and refresh().
-private void ensureDebugWatchdog() {
-    if (settings?.debugOutput && state.debugEnabledAt) {
-        Long elapsed = now() - (state.debugEnabledAt as Long)
-        if (elapsed > 30 * 60 * 1000) {
-            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling (post-reboot self-heal)"
-            device.updateSetting("debugOutput", [type:"bool", value:false])
-            state.remove("debugEnabledAt")
-        }
-    }
-}
+// logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
+// are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
+// Note: Virtual parent logWarn/logError had no pref gate (always surfaces) — the
+// lib versions are behaviorally identical (log.warn / log.error directly).

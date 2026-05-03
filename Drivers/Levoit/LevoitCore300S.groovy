@@ -54,6 +54,7 @@ SOFTWARE.
 // 2021-10-22: v1.0 Support for Levoit Air Purifier Core 200S / 400S
 
 #include level99.LevoitDiagnostics
+#include level99.LevoitChildBase
 
 metadata {
     definition(
@@ -360,39 +361,8 @@ def mapIntegerToSpeed(speed) {
     return "high";
 }
 
-def logDebug(msg) {
-    if (settings?.debugOutput) {
-		log.debug msg
-	}
-}
-
-def logInfo(msg) {
-    if (settings?.descriptionTextEnable) log.info msg
-}
-
-def logError(msg) {
-    log.error msg
-}
-
-void logDebugOff() {
-  //
-  // runIn() callback to disable "Debug" logging after 30 minutes
-  // Cannot be private
-  //
-  if (settings?.debugOutput) device.updateSetting("debugOutput", [type: "bool", value: false]);
-}
-
-// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
-private void ensureDebugWatchdog() {
-    if (settings?.debugOutput && state.debugEnabledAt) {
-        Long elapsed = now() - (state.debugEnabledAt as Long)
-        if (elapsed > 30 * 60 * 1000) {
-            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
-            device.updateSetting("debugOutput", [type:"bool", value:false])
-            state.remove("debugEnabledAt")
-        }
-    }
-}
+// logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
+// are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 
 def handlePower(on) {
 

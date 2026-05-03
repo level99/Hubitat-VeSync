@@ -49,6 +49,7 @@
  */
 
 #include level99.LevoitDiagnostics
+#include level99.LevoitChildBase
 
 metadata {
     definition(
@@ -572,22 +573,9 @@ def mapIntegerToSpeed(n){
     }
 }
 
-def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
-def logError(msg){ log.error msg }
-def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
-void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
-
-// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
-private void ensureDebugWatchdog() {
-    if (settings?.debugOutput && state.debugEnabledAt) {
-        Long elapsed = now() - (state.debugEnabledAt as Long)
-        if (elapsed > 30 * 60 * 1000) {
-            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
-            device.updateSetting("debugOutput", [type:"bool", value:false])
-            state.remove("debugEnabledAt")
-        }
-    }
-}
+// logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
+// are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
+// Note: logWarn was not previously defined locally in this driver; the lib adds it.
 
 // Hub/parent call wrapper
 private hubBypass(method, Map data=[:], tag=null, cb=null){

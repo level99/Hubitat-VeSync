@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Library refactor Phase 1 — `LevoitChildBaseLib.groovy`.** New shared library for child-driver cross-cutting helpers (`logInfo`/`logDebug`/`logError`/`logWarn`/`logDebugOff`/`ensureDebugWatchdog` + new `ensureSwitchOn` (BP23) + `requireNotNull` (BP18) helpers). First 6 drivers migrated: `LevoitClassic200S.groovy` (proof of concept) + 5 production-active drivers (`LevoitCore200S`, `LevoitCore200S Light`, `LevoitVital200S`, `LevoitSuperior6000S`, `LevoitPedestalFan`). Remaining 16 child drivers will migrate in follow-up cycles; non-migrated drivers continue to work unchanged (their local definitions stay in place until each is migrated).
+- **Library refactor Phase 1 — `LevoitChildBaseLib.groovy`.** New shared library for child-driver cross-cutting helpers (`logInfo`/`logDebug`/`logError`/`logWarn`/`logDebugOff`/`ensureDebugWatchdog` + new `ensureSwitchOn` (BP23) + `requireNotNull` (BP18) helpers). All 22 standard child drivers + virtual test parent migrated (23 files total). `Notification Tile` deferred — has its own local `ensureDebugWatchdog()` that calls `runIn(1800, "logsOff")`; including the lib would conflict on the duplicate watchdog method, and the `logsOff` callback name has no lib equivalent. Tracked for a focused rewrite review in TODO.md. Side-effects: `LevoitVital100S` and `LevoitGeneric` gain `logWarn` for the first time (previously undefined locally); `LevoitCore200S Light` gains `logError` (same). No behavioral changes to any other driver.
 
 ## [2.4.1] - 2026-05-02
 
