@@ -207,13 +207,6 @@ exemptions:
       on Core 200S (expected in Phase 2 Core line extraction batch).
 
   - rule_id: "RULE31_state_switch_dead_branch"
-    file: "Drivers/Levoit/LevoitCore300S.groovy"
-    reason: >
-      Layer-5 scaffold exemption: BP24-A dead-branch at cycleSpeed() line 211.
-      Same shape as Core 200S. Remove this entry when the Tier-1 BP24-A fix
-      lands on Core 300S (Phase 2 Core line extraction batch).
-
-  - rule_id: "RULE31_state_switch_dead_branch"
     file: "Drivers/Levoit/LevoitCore400S.groovy"
     reason: >
       Layer-5 scaffold exemption: BP24-A dead-branch at cycleSpeed() line 214.

@@ -212,6 +212,8 @@ def input(Object... a)    { /* no-op */  }
                 return new File("Drivers/Levoit/LevoitDiagnosticsLib.groovy")
             case "level99.LevoitChildBase":
                 return new File("Drivers/Levoit/LevoitChildBaseLib.groovy")
+            case "level99.LevoitCorePurifier":
+                return new File("Drivers/Levoit/LevoitCorePurifierLib.groovy")
             default:
                 return null
         }
