@@ -171,20 +171,83 @@ RUNIN_1800_PATTERN = re.compile(r'\brunIn\s*\(\s*1800\s*,')
 LOG_DEBUG_OFF_DEF_PATTERN = re.compile(r'\bvoid\s+log(?:Debug|s)Off\s*\(')
 DEBUG_PREF_DECL_PATTERN = re.compile(r'\bdebugOutput\b')
 
+# #include directive pattern: `#include level99.LibraryName`
+INCLUDE_PATTERN = re.compile(r'^#include\s+([\w.]+)\s*$', re.MULTILINE)
+
+# Cache of already-read library texts so each lib file is read at most once
+# per lint run (keyed by resolved Path).
+_lib_text_cache: dict = {}
+
+
+def _resolve_lib_path(ns_and_name: str, driver_path: Path) -> "Path | None":
+    """
+    Resolve a '#include level99.<LibName>' directive to the library file on disk.
+
+    Convention: namespace 'level99', library name 'LevoitChildBase' ->
+    'Drivers/Levoit/LevoitChildBaseLib.groovy' (relative to repo root).
+
+    driver_path is used to locate the repo root (go up until we find
+    'Drivers/Levoit' as a sibling).  Falls back to None if the file
+    does not exist.
+    """
+    parts = ns_and_name.split('.', 1)
+    if len(parts) != 2 or parts[0] != 'level99':
+        return None
+    lib_name = parts[1]  # e.g. "LevoitChildBase"
+    lib_filename = f"{lib_name}Lib.groovy"  # e.g. "LevoitChildBaseLib.groovy"
+
+    # Walk up from the driver file to find the Drivers/Levoit directory.
+    candidate = driver_path.parent / lib_filename
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def _included_lib_texts(raw_text: str, driver_path: Path) -> list:
+    """
+    Return the raw text of every library file #include'd by this driver source.
+    Results are cached; missing/unresolvable includes are silently skipped.
+    """
+    texts = []
+    for m in INCLUDE_PATTERN.finditer(raw_text):
+        ns_and_name = m.group(1)
+        lib_path = _resolve_lib_path(ns_and_name, driver_path)
+        if lib_path is None:
+            continue
+        if lib_path not in _lib_text_cache:
+            try:
+                _lib_text_cache[lib_path] = lib_path.read_text(encoding='utf-8')
+            except OSError:
+                _lib_text_cache[lib_path] = ''
+        text = _lib_text_cache[lib_path]
+        if text:
+            texts.append(text)
+    return texts
+
 
 def check_rule15_auto_disable_wiring(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
     """
     Every driver declaring a debugOutput preference must:
     1. Call runIn(1800, ...) in updated() when debugOutput is true
-    2. Define a logDebugOff() (or logsOff()) method that flips the setting
+    2. Define a logDebugOff() (or logsOff()) method — either in the driver
+       source itself OR in a library the driver #includes.
+
+    Library-aware: when a driver delegates its helpers to a shared library via
+    '#include level99.LevoitChildBase', the logDebugOff() definition lives in
+    the library file rather than the driver source.  Both locations satisfy the
+    rule; we check the driver first and fall back to included library files.
     """
     findings = []
     fname = path.name
     if fname not in DRIVERS_WITH_DEBUG_PREF:
         return findings
 
+    lib_texts = _included_lib_texts(raw_text, path)
+
     has_runin_1800 = bool(RUNIN_1800_PATTERN.search(raw_text))
-    has_logdebugoff_def = bool(LOG_DEBUG_OFF_DEF_PATTERN.search(raw_text))
+    # logDebugOff may live in the driver source or in any included library.
+    has_logdebugoff_def = bool(LOG_DEBUG_OFF_DEF_PATTERN.search(raw_text)) or \
+        any(bool(LOG_DEBUG_OFF_DEF_PATTERN.search(t)) for t in lib_texts)
 
     if not has_runin_1800:
         # Find the updated() method location for context
@@ -210,9 +273,11 @@ def check_rule15_auto_disable_wiring(path, raw_lines, cleaned_lines, raw_text, c
             title="Missing logDebugOff() / logsOff() method definition",
             path=path, rel_base=rel_base, lineno=1, lines=raw_lines,
             why="Rule 15: the runIn(1800, 'logDebugOff') callback needs a corresponding method "
-                "that actually flips the debugOutput setting back to false.",
+                "that actually flips the debugOutput setting back to false. Either define it "
+                "locally or include a library that provides it (e.g. #include level99.LevoitChildBase).",
             fix='Add: void logDebugOff() { '
-                'if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }',
+                'if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }'
+                '  -- or add #include level99.LevoitChildBase',
         ))
 
     return findings

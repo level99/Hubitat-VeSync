@@ -179,6 +179,13 @@
       "namespace": "level99",
       "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitDiagnosticsLib.groovy",
       "required": true
+    },
+    {
+      "id": "b7c3e1a9-5f2d-4e8b-a6c0-3d9f1b7e4a2c",
+      "name": "LevoitChildBase",
+      "namespace": "level99",
+      "location": "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitChildBaseLib.groovy",
+      "required": true
     }
   ]
 }

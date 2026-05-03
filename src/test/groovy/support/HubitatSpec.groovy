@@ -210,6 +210,8 @@ def input(Object... a)    { /* no-op */  }
         switch (nsAndName) {
             case "level99.LevoitDiagnostics":
                 return new File("Drivers/Levoit/LevoitDiagnosticsLib.groovy")
+            case "level99.LevoitChildBase":
+                return new File("Drivers/Levoit/LevoitChildBaseLib.groovy")
             default:
                 return null
         }

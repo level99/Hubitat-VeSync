@@ -42,6 +42,7 @@ SOFTWARE.
 
 
 #include level99.LevoitDiagnostics
+#include level99.LevoitChildBase
 
 metadata {
     definition(
@@ -193,36 +194,9 @@ def update(status) {
     return result
 }
 
-def logDebug(msg) {
-    if (settings?.debugOutput) {
-		log.debug msg
-	}
-}
-
-def logInfo(msg) {
-    if (settings?.descriptionTextEnable) log.info msg
-}
-
-void logDebugOff() {
-  //
-  // runIn() callback to disable "Debug" logging after 30 minutes
-  // Cannot be private
-  //
-  if (settings?.debugOutput) device.updateSetting("debugOutput", [type: "bool", value: false]);
-}
-
-// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
-// Core200S Light exception: called from update(status) (1-arg only; no 2-arg for this child).
-private void ensureDebugWatchdog() {
-    if (settings?.debugOutput && state.debugEnabledAt) {
-        Long elapsed = now() - (state.debugEnabledAt as Long)
-        if (elapsed > 30 * 60 * 1000) {
-            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
-            device.updateSetting("debugOutput", [type:"bool", value:false])
-            state.remove("debugEnabledAt")
-        }
-    }
-}
+// logDebug, logInfo, logDebugOff, ensureDebugWatchdog
+// are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
+// Note: logError is also provided by the lib (not previously defined locally in this driver).
 
 def checkHttpResponse(action, resp) {
 	if (resp.status == 200 || resp.status == 201 || resp.status == 204)

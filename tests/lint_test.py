@@ -546,6 +546,62 @@ class TestRule15AutoDisableWiring:
         findings = run_rule(check_rule15_auto_disable_wiring, self.BAD_NO_METHOD, "LevoitVital200S")
         assert any(f['rule_id'] == 'RULE15_missing_logdebugoff_method' for f in findings)
 
+    # --- Library-include-aware cases (Phase 1 migration) ---
+
+    # Driver that delegates logDebugOff to LevoitChildBase: has #include + runIn(1800)
+    # but no local void logDebugOff() definition.  Rule must resolve the lib and pass.
+    MIGRATED_VIA_LIB = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+        #include level99.LevoitChildBase
+        def updated() {
+            if (settings?.debugOutput) runIn(1800, "logDebugOff")
+        }
+        // logDebugOff provided by LevoitChildBase library -- no local definition
+    """)
+
+    # Driver that claims to use a lib but the lib doesn't exist (unknown include).
+    # The method is also absent from the driver source.  Rule must still FAIL.
+    UNKNOWN_LIB_NO_METHOD = textwrap.dedent("""\
+        #include level99.SomeNonExistentLib
+        def updated() {
+            if (settings?.debugOutput) runIn(1800, "logDebugOff")
+        }
+        // logDebugOff not present anywhere
+    """)
+
+    def test_lib_include_satisfies_logdebugoff_check(self):
+        # LevoitChildBaseLib.groovy exists on disk and defines void logDebugOff().
+        # A migrated driver referencing it via #include must pass RULE15.
+        findings = run_rule(
+            check_rule15_auto_disable_wiring, self.MIGRATED_VIA_LIB, "LevoitVital200S"
+        )
+        assert not any(f['rule_id'] == 'RULE15_missing_logdebugoff_method' for f in findings), \
+            "RULE15 should not fire when logDebugOff() is provided by an #included library"
+
+    def test_lib_include_does_not_satisfy_missing_runin(self):
+        # The library provides logDebugOff() but cannot supply runIn(1800, ...) —
+        # that call must appear in the driver's own updated().  Confirm still fails.
+        src_no_runin = textwrap.dedent("""\
+            #include level99.LevoitChildBase
+            def updated() {
+                // forgot runIn
+            }
+        """)
+        findings = run_rule(
+            check_rule15_auto_disable_wiring, src_no_runin, "LevoitVital200S"
+        )
+        assert any(f['rule_id'] == 'RULE15_missing_runin_1800' for f in findings), \
+            "RULE15_missing_runin_1800 must still fire even when lib provides logDebugOff()"
+
+    def test_unknown_lib_include_still_fails_when_method_absent(self):
+        # An #include for an unknown/non-existent library is silently skipped.
+        # If logDebugOff() is absent from both driver and lib, rule must FAIL.
+        findings = run_rule(
+            check_rule15_auto_disable_wiring, self.UNKNOWN_LIB_NO_METHOD, "LevoitVital200S"
+        )
+        assert any(f['rule_id'] == 'RULE15_missing_logdebugoff_method' for f in findings), \
+            "Unknown #include must not mask a genuinely missing logDebugOff()"
+
 
 # ---------------------------------------------------------------------------
 # Rule 17 — Sandbox safety

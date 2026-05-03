@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Library refactor Phase 1 — `LevoitChildBaseLib.groovy`.** New shared library for child-driver cross-cutting helpers (`logInfo`/`logDebug`/`logError`/`logWarn`/`logDebugOff`/`ensureDebugWatchdog` + new `ensureSwitchOn` (BP23) + `requireNotNull` (BP18) helpers). First 6 drivers migrated: `LevoitClassic200S.groovy` (proof of concept) + 5 production-active drivers (`LevoitCore200S`, `LevoitCore200S Light`, `LevoitVital200S`, `LevoitSuperior6000S`, `LevoitPedestalFan`). Remaining 16 child drivers will migrate in follow-up cycles; non-migrated drivers continue to work unchanged (their local definitions stay in place until each is migrated).
+
 ## [2.4.1] - 2026-05-02
 
 ### Fixed
