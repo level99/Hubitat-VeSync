@@ -206,20 +206,6 @@ exemptions:
       blocking on the fix. Remove this entry when the Tier-1 BP24-A fix lands
       on Core 200S (expected in Phase 2 Core line extraction batch).
 
-  - rule_id: "RULE31_state_switch_dead_branch"
-    file: "Drivers/Levoit/LevoitCore400S.groovy"
-    reason: >
-      Layer-5 scaffold exemption: BP24-A dead-branch at cycleSpeed() line 214.
-      Same shape as Core 200S. Remove this entry when the Tier-1 BP24-A fix
-      lands on Core 400S (Phase 2 Core line extraction batch).
-
-  - rule_id: "RULE31_state_switch_dead_branch"
-    file: "Drivers/Levoit/LevoitCore600S.groovy"
-    reason: >
-      Layer-5 scaffold exemption: BP24-A dead-branch at cycleSpeed() line 213.
-      Same shape as Core 200S. Remove this entry when the Tier-1 BP24-A fix
-      lands on Core 600S (Phase 2 Core line extraction batch).
-
   # ---------------------------------------------------------------------------
   # RULE32 — BP24-B/C auto-on guard missing exemptions
   # Entries are grouped by tier (Tier-1 = Fan line, Tier-2 = humidifier line,
