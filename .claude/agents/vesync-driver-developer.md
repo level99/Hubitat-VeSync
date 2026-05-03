@@ -227,6 +227,43 @@ When adding a new device-code (e.g. a regional variant of an existing model):
    void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
    ```
 
+### Named bug-pattern fix protocol
+
+When the orchestrator's prompt references a Bug Pattern catalog entry (e.g., *"BP24-A fix on Core line cycleSpeed"* / *"sweep BP18 across all child drivers"*), the fix is a **scope-aware** task — not just "fix the reported instance." Before writing any code, produce a **fix-scope statement**:
+
+1. **Audit all driver/library files in the affected scope for the pattern's shape.** Use the BP catalog entry's "Detection" guidance — grep patterns, method-name regexes, etc. For BP24-class auto-on-from-off: enumerate every `def setX` / `def cycleX` / capability-required command on every SwitchLevel/FanControl driver in the affected scope. For BP18-class null-guard: enumerate every command method that accepts a string argument that could be null from Rule Machine. Etc.
+
+2. **Output a fix-scope matrix.** Format: a table with rows `(file, method, pattern-shape-classification, current state)`. Examples:
+   ```
+   File                              Method            Class         Current
+   LevoitCore200S.groovy             cycleSpeed        SHOULD-ON     BP24-A (dead state.switch)
+   LevoitCore300S.groovy             cycleSpeed        SHOULD-ON     BP24-A (dead state.switch)
+   LevoitCore400S.groovy             cycleSpeed        SHOULD-ON     BP24-A (dead state.switch)
+   LevoitCore600S.groovy             cycleSpeed        SHOULD-ON     BP24-A (dead state.switch)
+   LevoitTowerFan.groovy             cycleSpeed        SHOULD-ON     BP24-B (no guard)
+   LevoitTowerFan.groovy             setSpeed(numeric) SHOULD-ON     BP24-B (no guard, indirect bypass)
+   ...
+   ```
+   Aim to capture every site that matches the BP signature, even if you intend to fix only some in this diff.
+
+3. **Identify in-scope vs out-of-scope sites.** Per the orchestrator's brief, which sites does this diff fix? Which are explicitly deferred?
+
+4. **For every out-of-scope site, write a one-line rationale.** *"Deferred — different bug shape (BP24-B no-guard vs BP24-A dead-branch); will be fixed in separate humidifier sweep batch."* Vague waivers like *"out of scope"* are NOT acceptable — every out-of-scope site needs a concrete reason that QA can validate.
+
+5. **Apply the fix to all in-scope sites in a single diff.** No "I'll fix the rest in a follow-up" if the orchestrator said class-wide.
+
+6. **Reference the BP entry in the commit message.** Format: `fix(BP24-A): Core line cycleSpeed dead-branch (4 drivers)` or `fix(BP24-B): humidifier setMistLevel auto-on sweep (8 drivers)`. The BP tag enables QA's fix-scope check (Section K of the QA review checklist) to find and verify the matrix.
+
+7. **Ship regression-guard tests with the fix.** Each driver fixed under a `class-wide` BP must have a Spock spec test exercising the fixed path. For BP24-class fixes: from-off-state command call asserting the device is on after the command. The test must FAIL on pre-fix code and PASS on post-fix code.
+
+**Why this protocol exists:** BP23's v2.4.1 fix patched only `setLevel(val)`. cycleSpeed had the same auto-on-from-off bug shape on 6 of 8 drivers, never got the fix, and shipped to v2.4.1 unfixed. Round 1.5 of v2.5 caught the gap one release later (33 broken call sites across 18 drivers under the renamed BP24 umbrella). The fix-scope matrix forces the dev agent to enumerate the full surface, not just the reported instance — closing the gap inside the same review cycle.
+
+**The BP catalog entry's `Fix scope:` line tells you which protocol applies:**
+- `Fix scope: per-instance` — the fix is correctly scoped to the reported method on the reported drivers; matrix can be skipped
+- `Fix scope: class-wide` — the matrix is required; every site that matches the signature must be in the diff or explicitly waived
+
+If the BP catalog entry doesn't have a `Fix scope:` line yet, it's an existing entry that hasn't been backfilled. Default to `class-wide` and produce the matrix; surface to the orchestrator that the BP entry needs the line backfilled.
+
 ### When adding a new device
 
 1. Confirm pyvesync supports it (check device_map.py).

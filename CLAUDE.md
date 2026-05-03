@@ -198,6 +198,24 @@ Why: each dev round = SendMessage cost + QA + tester re-runs downstream + ops re
 
 When NOT to batch: critical-path bugs blocking production (ship the fix immediately, batch the polish separately). Or when bug surfaces are fundamentally unrelated.
 
+### Cross-cutting audit when fixing a named bug pattern
+
+When fixing a bug tagged with a Bug Pattern catalog entry (BP1-BPN), the dev agent's diff MUST cover all entry points to the same semantic class — not just the reported one. Before writing code, dev produces an explicit **fix-scope statement**:
+
+- Enumerate every method/site that matches the pattern's shape across affected drivers (e.g., for BP23/BP24-class auto-on-from-off: every `def setX` / `def cycleX` / capability-required command on every SwitchLevel/FanControl driver in scope).
+- Identify which sites fall in the diff vs which are explicitly out-of-scope.
+- Waive any not-fixed-in-scope site with rationale (e.g., *"cycleSpeed entry point on Tower Fan defers to its own audit because the bypass-shape differs from the dead-state shape; tracked as BP24-B sweep"*).
+
+QA then verifies the fix-scope claim covers the real surface (Layer 3 of the BP-prevention defenses).
+
+Why: BP23's v2.4.1 fix patched only `setLevel(val)`. cycleSpeed had the same auto-on-from-off bug shape on 6 of 8 drivers, never got the fix, and shipped to v2.4.1 unfixed. Round 1.5 of v2.5 caught the gap one release later (33 broken call sites across 18 drivers under the renamed BP24 umbrella). The fix-scope discipline catches that gap in the same review cycle, instead of needing a separate v2.X+1 sweep release.
+
+Lives alongside "Batch fix-rounds, audit-first when triaging" above. That rule says *"audit-first when surfacing related bugs."* This rule says *"audit-first when applying a named-BP fix."* Together they cover both directions of the cross-cutting concern.
+
+**BP catalog entries reinforce this** with an explicit `Fix scope:` line per entry — `per-instance` (single method) or `class-wide` (every entry point to the semantic class). New entries (BP24+) include this always; existing entries (BP1-23) get backfilled when next touched.
+
+**Mechanical enforcement** (Layer 5 of the defense stack) closes any gap that judgment misses: lint rules grep for the pattern's signature on every `tests/lint.py --strict` run; new-driver Spock spec template requires a from-off regression test for every "MUST-ON" / "SHOULD-ON" classified command method.
+
 ### Pre-flight before any tester dispatch
 
 Before dispatching tester (or sending SendMessage to resume tester), confirm:
