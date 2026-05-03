@@ -57,3 +57,7 @@ TODO.md
 # Local dry-run artifact from tools/pyvesync-tracker/detect_devices.py
 # (CI writes this in cwd as a body-file for `gh issue create`; ephemeral.)
 new-devices.md
+
+# HPM bundle build artifacts. Bundles are uploaded as GitHub Release Assets;
+# the ZIP itself never enters git. tools/build-bundle.py writes here.
+bundles/

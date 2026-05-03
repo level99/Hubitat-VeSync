@@ -18,6 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Direct `log.*` standardization** — all 16 Category A `applyStatus raw r` diagnostic lines (previously `if (settings?.debugOutput) log.debug ...`) converted to `logDebug ...` (redundant pref-gate removed; lib helper gates identically). All 10 Category B `checkHttpResponse` `log.error` sites in Core 200S/300S/400S/600S and Core 200S Light converted to `logError`. `probeNightLight` in OasisMist 450S converted from 4 direct `log.info` calls to `logAlways`. All child drivers now route 100% of logging through library helpers; no direct `log.*` calls remain outside helper bodies.
 - **Defensive BP20 cleanup — library files now use `//` comments exclusively.** All body-scope `/** */` javadoc blocks in `LevoitChildBaseLib.groovy` (3 blocks) and `LevoitDiagnosticsLib.groovy` (10 blocks) converted to `//` line comments. One transient save failure was observed during a polish-pass deploy of `LevoitChildBaseLib.groovy`; not reproducible on retry, but the defensive policy (matching `tomw.broadlinkHelpers.groovy`'s known-good style) is to keep all `/* */` forms out of library files. RULE29 widened to also flag body-scope `/* */` and `/** */` blocks after the `library()` declaration, in addition to the existing file-scope check.
 
+## [2.4.2] - 2026-05-03
+
+### Fixed
+
+- **HPM library distribution — `LevoitDiagnostics` library now installs cleanly via HPM.** The v2.4 manifest used a `libraries[]` array to ship `LevoitDiagnosticsLib.groovy`. HPM silently ignores `libraries[]` (the schema isn't supported), so the library was never installed even though the manifest looked correct. Drivers errored on `#include level99.LevoitDiagnostics` after install or upgrade. Replaced with the Hubitat Bundle ZIP format referenced via `bundles[]`. The bundle is built from source via `tools/build-bundle.py` and shipped as a per-release GitHub Release Asset.
+
+### Changed
+
+- **Defensive BP20 alignment in `LevoitDiagnosticsLib.groovy`.** Body-scope `/** */` javadoc blocks (10 sites) converted to `//` line comments. Comment-only diff with no functional change. Reduces the surface area for the (intermittent) BP20 parser-rejection trigger on user hubs that may sit on slightly different firmware than the maintainer's. Aligns with `tomwpublic/broadlinkHelpers` library style as the known-good reference.
+- **`/cut-release` skill knows about `bundles[]`.** New Artifact C.6 reconciles `bundles[]` against `Drivers/Levoit/*Lib.groovy` source files; Artifact A's "Bundle URL versioning" rule auto-bumps location URLs that embed the release tag. The "Next steps for you" sequence now interleaves `tools/build-bundle.py` build + `gh release create` + URL verification BEFORE merge to main, so the asset URL is live before HPM users fetch the new manifest.
+
+### Added
+
+- **`tools/build-bundle.py`** — uv-runnable build script that produces `bundles/levoit_libraries.zip` from current source. Output is gitignored (binaries never enter git); upload happens via `gh release create` as a release asset. Reusable unchanged by the v2.5 GitHub Actions workflow that will automate the build on tag push.
+
 ## [2.4.1] - 2026-05-02
 
 ### Fixed
