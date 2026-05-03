@@ -6,6 +6,7 @@ rule without pulling in third-party packages.
 """
 
 import re
+from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -29,3 +30,59 @@ def is_library_file(source_text: str) -> bool:
     RULE18 manifest drivers-key check, RULE19 readme doc-sync).
     """
     return bool(LIBRARY_BLOCK_RE.search(source_text))
+
+
+# ---------------------------------------------------------------------------
+# #include directive resolution
+# ---------------------------------------------------------------------------
+
+# Matches `#include level99.LibraryName` at start of a line.
+_INCLUDE_PATTERN = re.compile(r'^#include\s+([\w.]+)\s*$', re.MULTILINE)
+
+# Module-level cache keyed by resolved Path so each lib file is read at most
+# once per lint process invocation.
+_lib_text_cache: dict = {}
+
+
+def resolve_lib_path(ns_and_name: str, driver_path: Path) -> "Path | None":
+    """
+    Resolve a ``#include level99.<LibName>`` directive to the library file on disk.
+
+    Convention: namespace ``level99``, library name ``LevoitChildBase`` ->
+    ``Drivers/Levoit/LevoitChildBaseLib.groovy`` (sibling of the driver file).
+
+    Returns None if the file cannot be found.
+    """
+    parts = ns_and_name.split('.', 1)
+    if len(parts) != 2 or parts[0] != 'level99':
+        return None
+    lib_name = parts[1]
+    lib_filename = f"{lib_name}Lib.groovy"
+    candidate = driver_path.parent / lib_filename
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def included_lib_texts(raw_text: str, driver_path: Path) -> list:
+    """
+    Return the raw text of every library file ``#include``'d by *raw_text*.
+
+    Results are cached per resolved path; missing/unresolvable includes are
+    silently skipped.  The returned list contains one string per resolved lib.
+    """
+    texts = []
+    for m in _INCLUDE_PATTERN.finditer(raw_text):
+        ns_and_name = m.group(1)
+        lib_path = resolve_lib_path(ns_and_name, driver_path)
+        if lib_path is None:
+            continue
+        if lib_path not in _lib_text_cache:
+            try:
+                _lib_text_cache[lib_path] = lib_path.read_text(encoding='utf-8')
+            except OSError:
+                _lib_text_cache[lib_path] = ''
+        text = _lib_text_cache[lib_path]
+        if text:
+            texts.append(text)
+    return texts

@@ -10,10 +10,13 @@ Rules:
 import re
 from pathlib import Path
 from .groovy_lite import clean_source, find_method_bodies
+from ._helpers import included_lib_texts
 
 PARENT_DRIVER = "VeSyncIntegration.groovy"
 
-# Drivers that should have debugOutput preference + auto-disable
+# Drivers that should have debugOutput preference + auto-disable.
+# When a driver delegates updated() / logDebugOff() to a shared library via
+# #include, the rule checks both the driver source and included lib texts.
 DRIVERS_WITH_DEBUG_PREF = {
     "VeSyncIntegration.groovy",
     "LevoitCore200S.groovy",
@@ -21,6 +24,7 @@ DRIVERS_WITH_DEBUG_PREF = {
     "LevoitCore300S.groovy",
     "LevoitCore400S.groovy",
     "LevoitCore600S.groovy",
+    "LevoitVital100S.groovy",
     "LevoitVital200S.groovy",
     "LevoitSuperior6000S.groovy",
     "Notification Tile.groovy",
@@ -171,58 +175,6 @@ RUNIN_1800_PATTERN = re.compile(r'\brunIn\s*\(\s*1800\s*,')
 LOG_DEBUG_OFF_DEF_PATTERN = re.compile(r'\bvoid\s+log(?:Debug|s)Off\s*\(')
 DEBUG_PREF_DECL_PATTERN = re.compile(r'\bdebugOutput\b')
 
-# #include directive pattern: `#include level99.LibraryName`
-INCLUDE_PATTERN = re.compile(r'^#include\s+([\w.]+)\s*$', re.MULTILINE)
-
-# Cache of already-read library texts so each lib file is read at most once
-# per lint run (keyed by resolved Path).
-_lib_text_cache: dict = {}
-
-
-def _resolve_lib_path(ns_and_name: str, driver_path: Path) -> "Path | None":
-    """
-    Resolve a '#include level99.<LibName>' directive to the library file on disk.
-
-    Convention: namespace 'level99', library name 'LevoitChildBase' ->
-    'Drivers/Levoit/LevoitChildBaseLib.groovy' (relative to repo root).
-
-    driver_path is used to locate the repo root (go up until we find
-    'Drivers/Levoit' as a sibling).  Falls back to None if the file
-    does not exist.
-    """
-    parts = ns_and_name.split('.', 1)
-    if len(parts) != 2 or parts[0] != 'level99':
-        return None
-    lib_name = parts[1]  # e.g. "LevoitChildBase"
-    lib_filename = f"{lib_name}Lib.groovy"  # e.g. "LevoitChildBaseLib.groovy"
-
-    # Walk up from the driver file to find the Drivers/Levoit directory.
-    candidate = driver_path.parent / lib_filename
-    if candidate.exists():
-        return candidate
-    return None
-
-
-def _included_lib_texts(raw_text: str, driver_path: Path) -> list:
-    """
-    Return the raw text of every library file #include'd by this driver source.
-    Results are cached; missing/unresolvable includes are silently skipped.
-    """
-    texts = []
-    for m in INCLUDE_PATTERN.finditer(raw_text):
-        ns_and_name = m.group(1)
-        lib_path = _resolve_lib_path(ns_and_name, driver_path)
-        if lib_path is None:
-            continue
-        if lib_path not in _lib_text_cache:
-            try:
-                _lib_text_cache[lib_path] = lib_path.read_text(encoding='utf-8')
-            except OSError:
-                _lib_text_cache[lib_path] = ''
-        text = _lib_text_cache[lib_path]
-        if text:
-            texts.append(text)
-    return texts
 
 
 def check_rule15_auto_disable_wiring(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
@@ -232,19 +184,21 @@ def check_rule15_auto_disable_wiring(path, raw_lines, cleaned_lines, raw_text, c
     2. Define a logDebugOff() (or logsOff()) method — either in the driver
        source itself OR in a library the driver #includes.
 
-    Library-aware: when a driver delegates its helpers to a shared library via
-    '#include level99.LevoitChildBase', the logDebugOff() definition lives in
-    the library file rather than the driver source.  Both locations satisfy the
-    rule; we check the driver first and fall back to included library files.
+    Library-aware: when a driver delegates updated() / logDebugOff() to a shared
+    library via '#include level99.<LibName>', both the runIn(1800, ...) call and
+    the logDebugOff() definition live in the library rather than the driver source.
+    We check the driver first and fall back to included library file texts for both.
     """
     findings = []
     fname = path.name
     if fname not in DRIVERS_WITH_DEBUG_PREF:
         return findings
 
-    lib_texts = _included_lib_texts(raw_text, path)
+    lib_texts = included_lib_texts(raw_text, path)
 
-    has_runin_1800 = bool(RUNIN_1800_PATTERN.search(raw_text))
+    # runIn(1800, ...) may live in updated() in the driver or in an included library.
+    has_runin_1800 = bool(RUNIN_1800_PATTERN.search(raw_text)) or \
+        any(bool(RUNIN_1800_PATTERN.search(t)) for t in lib_texts)
     # logDebugOff may live in the driver source or in any included library.
     has_logdebugoff_def = bool(LOG_DEBUG_OFF_DEF_PATTERN.search(raw_text)) or \
         any(bool(LOG_DEBUG_OFF_DEF_PATTERN.search(t)) for t in lib_texts)
