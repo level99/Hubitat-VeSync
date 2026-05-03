@@ -559,4 +559,27 @@ class LevoitVital200SSpec extends HubitatSpec {
         and: "no error was logged"
         testLog.errors.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // BP24-C: cycleSpeed() from off-state turns the device on
+    // -------------------------------------------------------------------------
+
+    def "BP24-C: cycleSpeed() from off-state turns the device on before sending speed command"() {
+        // BP24-C fix: cycleSpeed() calls ensureSwitchOn() (from LevoitChildBase) at entry,
+        // which calls on() if the device is off. Previously the on() guard read a never-set
+        // state.switch field (permanent dead branch) so the device stayed off.
+        given: "device is off and turningOn flag is clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove('turningOn')
+
+        when: "cycleSpeed is invoked on an off device"
+        driver.cycleSpeed()
+
+        then: "setSwitch with powerSwitch=1 was sent (the on() call fired)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+
+        and: "no errors were logged"
+        testLog.errors.isEmpty()
+    }
 }

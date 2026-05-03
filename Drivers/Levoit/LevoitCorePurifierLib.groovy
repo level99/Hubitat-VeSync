@@ -57,6 +57,8 @@ def toggle() {
 
 def setDisplay(displayOn) {
     logDebug "setDisplay(${displayOn})"
+    // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
+    if (device.currentValue("display") == displayOn) return
     handleDisplayOn(displayOn)
 }
 
@@ -137,6 +139,8 @@ def handleDisplayOn(displayOn)
 def setChildLock(value) {
     // Core-line API uses child_lock (boolean); Vital-line API uses childLockSwitch (integer). Intentional divergence per pyvesync class hierarchy.
     logDebug "setChildLock(${value})"
+    // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
+    if (device.currentValue("childLock") == value) return
     def result = false
     parent.sendBypassRequest(device, [
                 data: [ child_lock: (value == "on") ],
