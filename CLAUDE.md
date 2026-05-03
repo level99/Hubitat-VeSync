@@ -301,6 +301,42 @@ Output is only ~3% of total. **Do not reduce verdict verbosity** — output fide
 
 ---
 
+## Operations dispatch: model selection
+
+The `vesync-driver-operations` agent defaults to **Haiku** because log-dominated work (100KB log fetches → 1KB structured PASS/FAIL summaries) is exactly Haiku's sweet spot. But Round 3+4 of v2.5 surfaced a fragility: when the dispatch involves multi-endpoint diagnostic reasoning, error-classification, or hypothesis-testing, Haiku tends to lock onto its first wrong hypothesis and push forward instead of falling back. Sonnet has noticeably better recovery in that mode. Cost-wise Sonnet is ~5× more expensive per token than Haiku, so reserve elevation for cases where the reasoning shape genuinely matters.
+
+### Default: Haiku
+
+Use Haiku for the typical case (no `model:` override needed; agent definition's `model: haiku` frontmatter handles it):
+
+- Deploy a known-shape driver via `update_driver_code` (driver already exists on hub, just swapping source)
+- Exercise N pre-specified commands via `send_command` and verify attribute round-trip
+- Scan logs for canonical marker phrases listed in the dispatch (matches the bug-pattern catalog directly)
+- Structured PASS/FAIL on a single hub interaction with a clear test plan
+- A2 virtual-parent spawn-and-test cycles (fixture name + child label given; `[DEV TOOL]` markers checked)
+- Pure RPC: backup creation, file uploads, `list_devices` queries
+
+### Elevate to Sonnet
+
+Pass `model: "sonnet"` in the `Agent({...})` dispatch (or `model: "sonnet"` override on `SendMessage` resume — whatever the runtime supports) for:
+
+- **Hub-state investigation across multiple endpoints.** Round 4's "is the lib actually saved on the hub" took 5+ endpoint probes + DOM inspection — Haiku locked onto "library missing from hub entirely" after one failed probe. Sonnet would have triangulated.
+- **Error-classification with discrimination tables.** The BP20 vs JSON-encoding-bug distinction (`"Internal error"` vs `"Malformed library definition"`) is documented in the ops agent's own definition, but Haiku read it and still misclassified twice. The discrimination requires holding two near-identical error messages and applying conditional logic per the response — Sonnet handles that; Haiku doesn't reliably.
+- **Library save / install via `/library/saveOrUpdateJson`.** Multi-step diagnosis if it fails (first save, parse response, classify error, recover). Always Sonnet for these — the failure modes need real reasoning.
+- **First-time integration verification.** Round 4's first triple-include compile, Round 3's first lib smoke test — anything where the hub state is novel and the dispatch can't enumerate every possible failure shape.
+- **Conditional logic in the dispatch brief.** Any time the brief says "if X happened, do Y; if Z, do W" instead of "do these N things in sequence." Sonnet picks branches; Haiku takes the first branch and keeps going even when symptoms diverge.
+- **Anything where the agent needs to second-guess its own first hypothesis.** This is the meta-property: Haiku's failure mode in this codebase is hypothesis-lock-in. If the work involves baseline-checking against existing files (BP20 discrimination rule), comparing observed state to expected, or recovering from a failed first attempt, Sonnet is worth the cost.
+
+### Trip-wire signal
+
+If Haiku flags UNCERTAIN twice in one session for non-environmental reasons (its own reasoning, not VeSync API flakes or transient hub state), elevate to Sonnet for the next round in that session. The trip-wire prevents grinding multiple Haiku rounds on a problem the model can't solve.
+
+### Alternative: orchestrator-direct
+
+For investigative / exploratory hub work where even Sonnet ops would be coaching-heavy, the orchestrator (main session) can do hub investigation directly — `curl` against documented endpoints, MCP tool calls, browser MCP for SPA-data inspection. Direct work bypasses agent dispatch overhead and is often cheaper than the equivalent Sonnet round when the work is genuinely exploratory rather than mechanical. Reserve agent dispatch for repeatable verification patterns (deploy, exercise, scan, report); use orchestrator-direct for "what's actually on this hub right now" probes.
+
+---
+
 ## Two deployment contexts
 
 After QA approval, the operations layer verifies on a real Hubitat hub. Three sub-modes — pick based on whether MCP is available AND whether real device hardware is owned for the driver under test.
