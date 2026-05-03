@@ -722,7 +722,6 @@ def installed() {
 
 def updated() {
     logDebug "updated()"
-    state.driverVersion = "2.4.1"
     // BP12 pref-seed
     if (!state.prefsSeeded) {
         if (settings?.descriptionTextEnable == null)

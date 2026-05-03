@@ -386,9 +386,11 @@ private List getErrorHistory(String dni) {
     return slot
 }
 
-// Read the driver version from the device metadata, then from the
-// driver's version field if available.
-// Falls back to "2.4.1" (current codebase default).
+// Read the driver version from state.driverVersion (set during updated() on some drivers),
+// then fall back to parsing a version suffix from the driver typeName, then to "unknown".
+// Note: v2.5+ drivers no longer set state.driverVersion (the write was dropped fork-wide),
+// so the typeName parse is now the primary fallback; most typeNames don't include a version
+// suffix, so "unknown" is the expected result for most v2.5+ drivers.
 private String getDriverVersion() {
     try {
         if (state.driverVersion) return state.driverVersion as String
@@ -400,7 +402,7 @@ private String getDriverVersion() {
             if (m) return m[0][1]
         }
     } catch (ignored) {}
-    return "2.4.1"
+    return "unknown"
 }
 
 // Get the model code for this device.

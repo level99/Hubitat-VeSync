@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Vital line `setLevel` log message — V200S said "mist level" instead of "fan level"** (copy-paste from humidifier driver; latent since the V201S driver was added). Now logs the correct device class via the shared `LevoitVitalPurifier` library.
+- **Core line `handleDisplayOn` now emits `display` event on success.** Previously the cloud call was made but the attribute only updated on the next poll cycle (up to 30s later). Now emits `display` event immediately after the cloud confirms the change, matching the Vital line's `setDisplay` behavior. Affects Core 200S/300S/400S/600S.
+- **`state.driverVersion` stale-value write dropped fork-wide.** All 19 driver files and `LevoitVitalPurifierLib.groovy` were writing `state.driverVersion = "2.4.1"` in `updated()`, causing `LevoitDiagnosticsLib.getDriverVersion()` to return a stale hardcoded value instead of the actual runtime version. Writes removed across all 19 sites. `getDriverVersion()` final fallback updated from `"2.4.1"` to `"unknown"` with a comment explaining the v2.5+ behavior change.
+- **Vital lib `setSpeed` inline auto-on guard replaced with `ensureSwitchOn()` helper.** The inline `if (!state.turningOn && ...) on()` guard in `setSpeed` was functionally equivalent to but diverged from the canonical `ensureSwitchOn()` helper from `LevoitChildBase`. Now uses the helper for consistency. No behavior change.
+
+### Added
+
+- **Regression-guard Spock specs — C3 gate (24 new) and BP18 null-guard (14 new).** C3 specs added to Vital 100S/200S (4 each) and Core 200S/300S/400S/600S (4 each), verifying both the no-op gate (already-matching value suppresses the API call) and the first-call path (value change fires the API call). BP18 specs added to Vital 100S/200S (7 each), covering `setMode`/`setSpeed`/`setDisplay`/`setChildLock`/`setAutoPreference`/`setPetMode`/`setRoomSize` null-input rejection paths.
 
 - **`aqi` attribute silently null since v2.3 on Core 300S/400S/600S.** `LevoitCorePurifierLib` emitted the AQI value under attribute name `"AQI"` (uppercase); drivers declare `attribute "aqi", "number"` (lowercase). Hubitat is case-sensitive — dashboards and Rule Machine rules referencing `aqi` saw null. Fixed by correcting the `handleEvent` call to `"aqi"` (lowercase). Also corrects the matching Spock assertion in `LevoitCore400SSpec`.
 

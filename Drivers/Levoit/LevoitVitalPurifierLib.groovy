@@ -55,7 +55,6 @@ def installed() {
 def updated() {
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4.1"
     runIn(3, "update")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -225,8 +224,7 @@ def setSpeed(spd) {
     if (spd=="off") return off()
     if (spd=="sleep") { setMode("sleep"); device.sendEvent(name:"speed", value:"on"); return }
 
-    // Only check power if we're not already turning on
-    if (!state.turningOn && device.currentValue("switch")!="on") on()
+    ensureSwitchOn()
 
     // setLevel establishes manual mode + speed atomically; no setMode("manual") pre-call needed (V2 quirk)
     def lvl = mapSpeedToInteger(spd)

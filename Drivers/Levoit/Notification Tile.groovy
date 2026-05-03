@@ -87,7 +87,6 @@ metadata {
 
 	void updated(){
         logDebug "updated()"
-        state.driverVersion = "2.4.1"
         // Turn off debug log in 30 minutes (happy path — no hub reboot)
         if (settings?.debugOutput) {
             runIn(1800, "logsOff")

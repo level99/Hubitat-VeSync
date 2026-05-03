@@ -326,7 +326,6 @@ def updated() {
         state.remove('accountID')
     }
     state.lastRegion = newRegion
-    state.driverVersion = "2.4.1"
 
     // Set flag to stop any running tasks from old driver instance
     state.driverReloading = true

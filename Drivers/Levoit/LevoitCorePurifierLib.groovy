@@ -130,6 +130,8 @@ def handleDisplayOn(displayOn)
 			if (checkHttpResponse("handleDisplayOn", resp))
 			{
                 logDebug "Set display"
+                device.sendEvent(name: "display", value: displayOn)
+                logInfo "Display: ${displayOn}"
 				result = true
 			}
 		}

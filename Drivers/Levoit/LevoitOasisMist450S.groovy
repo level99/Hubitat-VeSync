@@ -206,7 +206,6 @@ def updated(){
     // state.clear() also removes rgbNightlightSetTime -- clears the 180s stale-data gate so
     // the first applyStatus after updated() always reads fresh RGB state from the device.
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4.1"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {

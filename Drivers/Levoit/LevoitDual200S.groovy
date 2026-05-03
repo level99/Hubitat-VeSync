@@ -148,7 +148,6 @@ def updated(){
     // state.clear() above removes all state including firmwareVariant -- firmware updates get
     // re-detected on next setMode("auto") call (see sendModeRequest fallback logic below).
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4.1"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {

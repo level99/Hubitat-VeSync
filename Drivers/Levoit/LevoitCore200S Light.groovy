@@ -77,7 +77,6 @@ def updated() {
 	logDebug "Updated with settings: ${settings}"
 
     state.clear()
-    state.driverVersion = "2.4.1"
     unschedule()
 	initialize()
 
