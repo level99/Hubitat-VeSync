@@ -25,6 +25,12 @@ SOFTWARE.
 
 // History:
 //
+// 2026-05-03: v2.5 (community fork, level99/Hubitat-VeSync, by Dan Cox)
+//                  - Align namespace to "NiklasGustafsson" to match all child drivers.
+//                    Resolves cross-namespace addChildDevice failure unmasked by v2.4.2
+//                    HPM bundle-install fix. Fallback namespace loop removed; single
+//                    direct addChildDevice call now succeeds.
+//
 // 2026-04-29: v2.3 (community fork, level99/Hubitat-VeSync, by Dan Cox)
 //                  - Phase 1.7: 5-family template architecture (v1_purifier, v2_purifier,
 //                    v1_humidifier, v2_humidifier, fan) + 18 remaining fixture spawn surfaces.
@@ -637,7 +643,7 @@ import groovy.transform.Field
 metadata {
     definition(
         name: "VeSync Virtual Test Parent",
-        namespace: "level99",
+        namespace: "NiklasGustafsson",
         author: "Dan Cox",
         description: "[DEV TOOL] Fixture-driven test harness for child driver development without owning the hardware. Do NOT install for normal use — does not connect to VeSync cloud.",
         importUrl: "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/VeSyncIntegrationVirtual.groovy",
@@ -848,24 +854,15 @@ def spawnFromFixture(String fixtureName, String childLabel) {
     sendEvent(name: "fixtureMode", value: "spawning")
 
     def child
-    List<String> namespacesToTry = ["NiklasGustafsson", "level99"]
-    for (String ns : namespacesToTry) {
-        try {
-            child = addChildDevice(ns, driverName, virtualDni,
-                                   [label: childLabel ?: fixtureName, isComponent: false])
-            logDebug "[DEV TOOL] Successfully spawned child in namespace '${ns}'"
-            break
-        } catch (Exception e) {
-            logDebug "[DEV TOOL] Namespace '${ns}' failed: ${e.message}"
-            if (ns == namespacesToTry[-1]) {
-                // Last namespace failed
-                logError "[DEV TOOL] addChildDevice failed for '${driverName}': ${e.message}. " +
-                         "Ensure the driver '${driverName}' is installed on this hub."
-                sendEvent(name: "fixtureMode", value: "ready")
-                return
-            }
-            // Try next namespace
-        }
+    try {
+        child = addChildDevice("NiklasGustafsson", driverName, virtualDni,
+                               [label: childLabel ?: fixtureName, isComponent: false])
+        logDebug "[DEV TOOL] Successfully spawned '${driverName}'"
+    } catch (Exception e) {
+        logError "[DEV TOOL] addChildDevice failed for '${driverName}': ${e.message}. " +
+                 "Ensure the driver '${driverName}' is installed on this hub."
+        sendEvent(name: "fixtureMode", value: "ready")
+        return
     }
 
     if (!child) {
