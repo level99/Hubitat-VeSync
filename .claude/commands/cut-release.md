@@ -134,18 +134,61 @@ Reconcile `levoitManifest.json`'s `drivers` array against the actual files in `D
 
 Show the proposed additions in the approval round so the user can see what's being added. The user should confirm UUIDs are sensible and the `required: false` default is right (most drivers are optional; only the parent integration is required).
 
-### Artifact C.6 — Manifest `bundles` array reconciliation
+### Artifact C.6 — Manifest `bundles` array reconciliation (BLOCKING — gates the cut)
 
-Reconcile `levoitManifest.json`'s `bundles[]` array (if present) against the actual library files in `Drivers/Levoit/*Lib.groovy`:
+Reconcile `levoitManifest.json`'s `bundles[]` array (if present) against the actual library files in `Drivers/Levoit/*Lib.groovy` AND the `tools/build-bundle.py` `LIBS` array. Findings here are BLOCKING — the cut MUST NOT proceed until each is resolved or explicitly waived by the user with rationale captured in the proposal.
+
+**Why BLOCKING:** v2.4 shipped with `libraries[]` schema entries that HPM silently dropped (every user's drivers compile-failed on update). v2.5 development surfaced a malformed second `bundles[]` entry pointing at a raw `.groovy` URL (would have shipped a non-functional bundle). Both failure modes had near-zero user-facing diagnostic — symptoms surfaced as widespread `MissingMethodException` after HPM update. Cut-release is the last gate before publication; advisory warnings here have already proven insufficient.
 
 1. Glob `Drivers/Levoit/*Lib.groovy` to list current library source files.
 2. Parse `levoitManifest.json` and extract the `bundles[]` array entries.
-3. Each bundle conceptually wraps one or more library files. For v2.4.2's single-bundle setup, the `levoit_libraries` bundle contains all `*Lib.groovy` files in `Drivers/Levoit/` (currently just `LevoitDiagnosticsLib.groovy`). As more libraries land (Phase 2-6 of the library extraction roadmap), they may stay in one bundle or split into per-family bundles — design choice per release.
-4. **Detection — library file with no bundle reference:** if a `*Lib.groovy` file exists in source but `tools/build-bundle.py` doesn't include it in any bundle's build output AND no `bundles[]` entry references that bundle, surface a WARNING: *"Library file `<filename>` exists but is not declared in any bundle's build-script. Will not ship to HPM users."* Do NOT auto-add — bundle composition is a release-architecture decision. Suggest the user either (a) add the file to `tools/build-bundle.py`, or (b) accept that the library is dev-only / not for HPM distribution.
-5. **Detection — bundle entry with no source backing:** if `bundles[]` references a bundle whose corresponding library files no longer exist in source, surface a WARNING in the same shape as Artifact C.5's drivers-removal warning. Removing a library that drivers `#include` would orphan every install (Bug Pattern #9 family). Do NOT auto-remove.
-6. Each `bundles[].location` URL must be non-empty, https://, and (if matching the GitHub Releases pattern `https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/<filename>.zip`) embed the new version per Artifact A's "Bundle URL versioning" rule.
+3. Parse `tools/build-bundle.py` and extract the `LIBS` array entries (each entry has `source` path + `dest` filename).
+4. Each bundle conceptually wraps one or more library files. For v2.4.2's single-bundle setup, the `levoit_libraries` bundle contains all `*Lib.groovy` files in `Drivers/Levoit/`. As more libraries land (Phase 2-6 of the library extraction roadmap), they may stay in one bundle or split into per-family bundles — design choice per release.
+
+**BLOCKING checks (each MUST pass):**
+
+5. **Build-script completeness:** every `*Lib.groovy` file in `Drivers/Levoit/` MUST appear as a `source` path in the `LIBS` array of `tools/build-bundle.py`. If a lib is missing, every driver `#include`-ing that lib will compile-fail on HPM update. Surface as BLOCKING with the missing filename + suggested fix (add to `LIBS`). Do NOT auto-add — bundle composition is a release-architecture decision; the user confirms.
+
+6. **Bundle entry shape:** every `bundles[]` entry's `location` URL MUST end in `.zip` (case-insensitive). The Hubitat HPM `bundles[]` schema expects ZIP archives, NOT raw `.groovy` files. A `bundles[]` entry pointing at `https://raw.githubusercontent.com/.../*.groovy` is malformed — it will fail HPM install with no clear error. Surface as BLOCKING with the offending entry + suggested fix (either move to a real ZIP bundle, or remove the entry entirely if it was an attempted workaround for a missing-from-build-script lib).
+
+7. **Bundle entry has source backing:** if `bundles[]` references a bundle whose corresponding library files no longer exist in source, surface as BLOCKING in the same shape as Artifact C.5's drivers-removal warning. Removing a library that drivers `#include` would orphan every install (Bug Pattern #9 family). Do NOT auto-remove.
+
+8. **Built-ZIP integrity (post-build, before `gh release create`):** after running `uv run --python 3.12 tools/build-bundle.py` (in the "Next steps for you" sequence at step 4), the produced ZIP MUST contain:
+   - One file per entry in `LIBS` (named per the `dest` field — typically `<namespace>.<libName>.groovy`)
+   - An `install.txt` AND `update.txt` whose `library X` lines exactly match the `dest` filenames in the ZIP
+   
+   Verify by `unzip -p bundles/levoit_libraries.zip install.txt | grep "^library "` and cross-checking against `unzip -l bundles/levoit_libraries.zip | grep ".groovy"`. If counts or names don't match, the build script silently produced an incomplete bundle. BLOCKING — fix the build script before continuing to `gh release create`.
+
+9. **Post-`gh release create` asset content verification (in step 6 of the "Next steps for you" sequence):** after the asset URL is verified to serve (HTTP 302), download the actual ZIP and re-verify it contains every expected library:
+   ```bash
+   curl -L -o /tmp/v<version>_levoit_libraries.zip \
+     https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/levoit_libraries.zip
+   unzip -l /tmp/v<version>_levoit_libraries.zip
+   ```
+   Confirm visually that every `*Lib.groovy` file is in the ZIP. BLOCKING — if any lib is missing, the asset upload was incomplete; delete the release with `gh release delete v<version>` and retry step 5.
+
+10. **URL versioning:** each `bundles[].location` URL must be non-empty, `https://`, and (if matching the GitHub Releases pattern `https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/<filename>.zip`) embed the new version per Artifact A's "Bundle URL versioning" rule.
 
 If `bundles[]` is absent or empty AND no `*Lib.groovy` files exist in source, skip silently — this is a pre-library-era release.
+
+### Artifact C.6.1 — `HubitatSpec.groovy` resolver coverage (BLOCKING)
+
+For every `#include level99.<LibraryName>` directive across `Drivers/Levoit/*.groovy`, verify a matching `case "level99.<LibraryName>":` exists in `src/test/groovy/support/HubitatSpec.groovy:resolveLibraryFile()`. Without the case:
+
+- The Spock test harness silently drops the `#include` during driver compile — the lib's methods aren't visible to the driver under test.
+- Spock specs that exercise lib-provided methods fail with `MissingMethodException` cascades (Round 4 surfaced this when the post-Round-3 `LevoitCorePurifier` resolver case was missing — 17 specs failed with cryptic errors before the gap was diagnosed).
+
+Procedure:
+
+1. Grep all driver source files for `#include level99\.\S+`:
+   ```bash
+   grep -rho '^#include level99\.\S\+' Drivers/Levoit/*.groovy | sort -u
+   ```
+2. Read `src/test/groovy/support/HubitatSpec.groovy` and extract every `case "level99.<X>":` from the `resolveLibraryFile` switch.
+3. Compare: every `#include` reference MUST have a matching `case`. Surface as BLOCKING any `#include` reference without a case, naming the gap and the file path expected.
+4. The reverse direction (case in resolver but no driver `#include`s it) is NOT a BLOCKING — could be a dev-only lib for future use. Surface as INFO only.
+
+This artifact protects against the silent-failure mode the post-Round-4 throw (`IllegalArgumentException` instead of `return null`) catches at runtime — but cut-release validates statically before any test runs, gating the cut.
 
 ### Artifact D — `ROADMAP.md` update
 
@@ -371,7 +414,11 @@ Output a single message structured as:
 
 ### Artifact C.6 — manifest bundles-array reconciliation
 
-<list of additions / WARNINGs / "bundles[] absent — skipping" / "No drift detected; bundle URL bumped to v<version>">
+<list of BLOCKING failures (build-script gap, malformed location URLs, missing source backing) OR "No issues detected; bundle URL bumped to v<version>">
+
+### Artifact C.6.1 — HubitatSpec resolver coverage
+
+<list of BLOCKING gaps (driver `#include`s a lib with no resolver case) OR "All N driver `#include` directives have matching resolver cases">
 
 ### Artifact D — ROADMAP.md updates
 
@@ -454,6 +501,15 @@ Next steps for you:
      has a bundles[] array — otherwise skip to step 7):
        uv run --python 3.12 tools/build-bundle.py
      Verify output at bundles/levoit_libraries.zip (gitignored, never committed).
+
+     POST-BUILD INTEGRITY CHECK (BLOCKING per Artifact C.6 step 8):
+       unzip -l bundles/levoit_libraries.zip
+       unzip -p bundles/levoit_libraries.zip install.txt
+     The ZIP MUST contain one .groovy file per LIBS entry in tools/build-bundle.py
+     PLUS install.txt + update.txt. Every `library X` line in install.txt MUST
+     match a corresponding .groovy file inside the ZIP. If counts/names mismatch,
+     the build script silently produced an incomplete bundle — STOP, fix the
+     build script, rebuild before continuing to step 5.
   5. Create the GitHub Release WITH the bundle asset attached. This creates the
      tag, publishes the release, and uploads the asset URL the manifest references:
        gh release create v<version> \
@@ -461,10 +517,19 @@ Next steps for you:
          --title "v<version> — <release subject>" \
          --notes-file <release notes file> \
          ./bundles/levoit_libraries.zip
-  6. Verify the asset URL serves BEFORE merging to main:
+  6. Verify the asset URL serves AND content is complete BEFORE merging to main:
        curl -I https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/levoit_libraries.zip
      Expect HTTP 302 (redirect chain to GitHub's S3 storage). If 404, the asset
      upload failed — re-check step 5 and re-verify before proceeding.
+
+     POST-UPLOAD CONTENT VERIFICATION (BLOCKING per Artifact C.6 step 9):
+       curl -L -o /tmp/v<version>_levoit_libraries.zip \
+         https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/levoit_libraries.zip
+       unzip -l /tmp/v<version>_levoit_libraries.zip
+     Confirm visually that every *Lib.groovy referenced by any driver `#include`
+     is present in the ZIP. If any lib is missing, the asset upload was
+     incomplete — delete the release with `gh release delete v<version>` and
+     retry step 5. Do NOT proceed to step 7 with an incomplete asset live.
   7. Open PR <branch> -> main via `gh pr create` (preview-before-publish: ask
      for a body draft). PR path is REQUIRED — every release goes through PR
      review even for one-line hotfixes. Do NOT propose direct/fast-forward
