@@ -624,6 +624,15 @@ NEVER inside the library source itself. Section dividers between functions insid
 
 **Runtime smoke test (deterministic catch):** `vesync-driver-operations` agent, on any library-file deploy, must POST the source to `/library/saveOrUpdateJson` and verify `success:true` in the response BEFORE reporting deployment success. If save fails, ops returns FAIL with the JSON body. This catches ANY trigger pattern at deploy time regardless of what slipped past lint or convention.
 
+**BP20 vs. JSON-encoding-bug discrimination (do NOT confuse):** the endpoint produces TWO distinct `success:false` messages with opposite root causes:
+
+| `message:` value | Root cause | Action |
+|---|---|---|
+| `"Internal error"` | BP20 — content trigger in source file. Library NOT saved. | Edit source (trim file-scope commentary). |
+| `"Malformed library definition"` | JSON encoding bug in the curl/HTTP request body — raw UTF-8 bytes vs. `json.dumps()`-escaped body. NOT a content issue. | Fix the request recipe; **do NOT edit source**. |
+
+Live-evidence (2026-05-03, v2.5 Round 3): ops agent attempted a save with raw curl `-d "<json with em-dash>"` body construction, got `"Malformed library definition"`, misdiagnosed as "BP20-class em-dash content trigger" and escalated for source edit. Baseline-check (em-dashes already exist throughout `LevoitChildBaseLib.groovy` and `LevoitDiagnosticsLib.groovy`, both currently saved successfully on test+prod hubs) refuted the content hypothesis. Re-save via `uv run --python 3.12 --with requests` + `json.dumps()` (which auto-escapes UTF-8 to `\uXXXX`) succeeded with source unchanged. Em-dashes are not BP20 triggers; the issue was raw UTF-8 in the JSON request body. **Diagnostic discipline:** before flagging any character or content-shape as a BP20 trigger, verify the same shape doesn't exist in already-saved libraries on the hub.
+
 **Live-evidence:** surfaced 2026-04-30 during v2.4 Phase 5 release prep — `LevoitDiagnosticsLib.groovy` (~425 lines / ~17.5 KB) consistently failed Save with "Internal error". ~30 in-browser variant tests (CodeMirror.setValue + Save + response capture) isolated the original `/* */` trigger. Workaround applied: convert doc block to `//` line comments. Then during the UX refactor a NOTE block of `// line comments` explaining the workaround was added — that ALSO triggered the bug despite being all-`//`. Removing the NOTE block restored save. Subsequent bisection of the dev-refactored 22 KB version showed the 4 modified function bodies save in any combination, but adding back the dev's expanded section comments tipped it back into failure. The shipped v2.4 library has ZERO file-scope commentary between the MIT header and `library(`; all explanation lives in CONTRIBUTING.md, this BP entry, and the dev/QA agent specs.
 
 **Flag this pattern** when reviewing any library file diff. Specifically flag:

@@ -149,26 +149,62 @@ Failure markers:
 
 #### For library files (BP20 smoke-test required)
 
-Hubitat library files are deployed via the `/library/saveOrUpdateJson` endpoint, NOT `update_driver_code`. The MCP server doesn't expose a library-deploy tool, so deployment goes via the hub's web UI or via direct HTTP. There's also a Hubitat platform bug (BP20) where the library parser silently rejects certain content shapes with `{"success":false,"message":"Internal error"}`. Lint catches some patterns; this smoke-test catches the rest.
+Hubitat library files are deployed via the `/library/saveOrUpdateJson` endpoint, NOT `update_driver_code`. The MCP server doesn't expose a library-deploy tool, so deployment goes via direct HTTP POST or browser automation. The endpoint is finicky in two distinct ways — **`success:false` is not always a content issue. Discriminate by the `message:` field BEFORE concluding root cause:**
+
+| `message:` value | Root cause | Fix path |
+|---|---|---|
+| `"Internal error"` | **BP20 platform bug** — library parser rejects certain content shapes (file-scope commentary, dense `//` blocks, paraphrased trigger text). Library NOT saved on hub. | Trim file-scope commentary in source. See BP20 entry in `vesync-driver-qa.md`. Feed back to dev. |
+| `"Malformed library definition"` | **JSON encoding bug** in YOUR request body. The Hubitat JSON parser rejected the request itself before the library parser even ran. NOT a content issue with the source file. | Fix the request construction (use `json.dumps()`), retry. **Do NOT edit the source.** |
+
+These two messages look superficially similar but mean opposite things. Misdiagnosis wastes a round of dev/QA work and may "fix" a non-bug by editing source unnecessarily.
 
 Library deploy procedure:
 
-1. Upload source to File Manager (same as drivers):
+1. **Baseline-check first (diagnostic discipline).** Before concluding any save failure is a content issue, verify whether the same content shape exists in libraries already saved on this hub. Example: if the failing lib has em-dashes in its `author:` field and `LevoitDiagnosticsLib.groovy` already has em-dashes throughout AND is currently saved on the hub → em-dashes are NOT the trigger. Look elsewhere (encoding, request construction, a different content-shape). This rule prevents the "agent hallucinates a content rule from one failing case" pattern.
+
+2. Upload source to File Manager (optional — only needed for `update_driver_code`-style flows; library save uses the HTTP endpoint directly):
    ```
    curl -F "uploadFile=@<localLibPath>" -F "folder=/" "http://<hubIP>/hub/fileManager/upload"
    ```
 
-2. Deploy via the Libraries Code editor + browser automation. If the orchestrator has Chrome/browser tools available:
-   - Navigate to `http://<hubIP>/library/editor/<libraryId>` (if updating existing) or `/library/create` (if installing new)
-   - Inject the file content into the CodeMirror editor (`document.querySelector('.CodeMirror').CodeMirror.setValue(text)`)
-   - Click the Save button
-   - **CRITICAL:** capture the network response from `POST /library/saveOrUpdateJson`. The HTTP status will be 200 even on failure. Parse the JSON body:
-     - `{"success":true, "id":<n>, "version":<n>}` → deploy succeeded; library is on the hub
-     - `{"success":false, "message":"Internal error"}` → BP20 trigger; library NOT saved; **return FAIL**
+3. **Save via the canonical Python recipe.** Use `uv run --python 3.12 --with requests` to avoid encoding pitfalls. `json.dumps()` produces strict ASCII-7 output regardless of UTF-8 content in the source, which the Hubitat JSON parser accepts unconditionally. **DO NOT use `curl -d '<inline raw json>'`** with a UTF-8 source — the raw bytes will trip the JSON parser with the misleading "Malformed library definition" error. Canonical recipe:
 
-3. If browser automation isn't available, the orchestrator (main session) handles library deploys; ops returns a deploy step labeled "manual library install required" and the orchestrator drives it.
+   ```bash
+   uv run --python 3.12 --with requests python -c '
+   import json, requests, sys
+   src = open(sys.argv[1], encoding="utf-8").read()
+   body = json.dumps({
+       "id": <existingId-or-null>,
+       "name": "<library-name-from-library(name:)-field>",
+       "namespace": "<namespace-from-library(namespace:)-field>",
+       "type": "groovy",
+       "source": src,
+   })
+   r = requests.post(
+       "http://<hubIP>/library/saveOrUpdateJson",
+       data=body,
+       headers={"Content-Type": "application/json; charset=utf-8"},
+   )
+   print(r.status_code, r.text)
+   ' <localLibPath>
+   ```
 
-**BP20 smoke-test verdict logic:** any library-file deploy where the JSON response has `success:false` is an automatic FAIL with the response body verbatim in the report. Do NOT proceed to test-plan verification — the library isn't on the hub, downstream `#include` resolution will fail. Surface to the orchestrator immediately so the developer can rework the library content (typically: trim file-scope commentary; see BP20 entry in `vesync-driver-qa.md`).
+   For new libraries: `id: null`. For updates: `id: <existing-library-id>` (look up via `curl http://<hubIP>/library/list` and grep for the library name).
+
+4. **Parse the response.** HTTP status will be 200 even on failure. Parse the JSON body and verdict per the table above:
+   - `{"success":true, "id":<n>, "version":<n>}` → deploy succeeded; library is on the hub
+   - `{"success":false, "message":"Internal error"}` → BP20 content trigger; **return FAIL**, escalate to dev (do not retry)
+   - `{"success":false, "message":"Malformed library definition"}` → encoding bug; **fix YOUR recipe and retry** (do not escalate; do not edit source)
+
+5. **Cleanup any duplicate libraries created during retries.** If you tested the recipe before getting it right and accidentally created multiple libraries with the same name, delete the extras via `curl -s "http://<hubIP>/library/deleteLibrary/<id>"` (returns empty body on success, JSON error on "Library is in use" — but a freshly-created library has no `#include` consumers yet, so deletion should always succeed). Leaving duplicates on the hub creates noise and confuses subsequent operations.
+
+6. **Verify save persisted.** After a successful save, fetch the library list (`curl http://<hubIP>/library/list`) and confirm the library appears with the expected name + namespace + the returned ID.
+
+**Verdict logic for library deploys:**
+- `success:true` → proceed to verification (or report PASS if save was the only step)
+- `success:false, "Internal error"` → automatic FAIL, response body verbatim in report, escalate to dev
+- `success:false, "Malformed library definition"` → fix the recipe and retry; only escalate if proper-recipe save STILL fails (then it's a real BP20-class trigger, separate from encoding)
+- Any other ambiguous response → UNCERTAIN, paste full body, ask orchestrator
 
 ### Step 3: Verify
 
