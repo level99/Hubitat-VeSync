@@ -26,6 +26,12 @@ library(
     importUrl: "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitCorePurifierLib.groovy"
 )
 
+// Library contract:
+//   REQUIRES: #include level99.LevoitDiagnostics  (provides recordError)
+//   REQUIRES: #include level99.LevoitChildBase    (provides logInfo/logDebug/logError/ensureSwitchOn)
+//   REQUIRES: host driver provides `def mapSpeedToInteger(speed)` returning Integer
+//   PROVIDES: see Group 1 + Group 2 sections below for the 21 methods supplied.
+
 // ---- Group 1: Shared 14 — called by all four Core drivers (200S/300S/400S/600S) ----
 
 def installed() {
@@ -224,6 +230,14 @@ def setAutoMode(mode) {
 }
 
 def setAutoMode(mode, roomSize) {
+    // 200S guard: 200S firmware doesn't support setAutoPreference (no AQ sensor).
+    // The lib is shared but the cloud rejects this call on 200S. Block at lib boundary
+    // to prevent state divergence + log noise on Rule Machine / MCP misuse.
+    if (device.typeName?.contains("Core200S")) {
+        logDebug "setAutoMode is not supported on Core 200S (no AQ sensor); ignoring"
+        return
+    }
+
     logDebug "setAutoMode(${mode}, ${roomSize})"
 
     if (mode == "efficient") {
@@ -309,7 +323,7 @@ private void updateAQIandFilter(String val, filter) {
         else if (pm < 350.5) aqi = convertRange(pm, 250.5, 350.4, 301, 400);
         else                 aqi = convertRange(pm, 350.5, 500.4, 401, 500);
 
-        handleEvent("AQI", aqi);
+        handleEvent("aqi", aqi);
 
         String danger;
         String color;

@@ -221,7 +221,7 @@ def setLevel(value)
     if(value >= 33 && value < 66) speed = 2
     if(value >= 66) speed = 3
 
-    sendEvent(name: "level", value: value)
+    device.sendEvent(name: "level", value: value)
     setSpeed(speed)
 }
 

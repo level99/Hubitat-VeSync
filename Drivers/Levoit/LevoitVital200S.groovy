@@ -211,9 +211,9 @@ def toggle(){
 
 def cycleSpeed(){
     logDebug "cycleSpeed()"
+    ensureSwitchOn()    // BP24-C fix — replaces inline non-re-entrance-safe check
     def cur = state.speed ?: "low"
     def next = ["sleep":"low","low":"medium","medium":"high","high":"max","max":"sleep"][cur] ?: "low"
-    if (device.currentValue("switch")!="on") on()
     setSpeed(next)
 }
 

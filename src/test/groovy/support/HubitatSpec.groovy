@@ -215,7 +215,9 @@ def input(Object... a)    { /* no-op */  }
             case "level99.LevoitCorePurifier":
                 return new File("Drivers/Levoit/LevoitCorePurifierLib.groovy")
             default:
-                return null
+                throw new IllegalArgumentException(
+                    "HubitatSpec.resolveLibraryFile() has no resolver for #include ${nsAndName}. " +
+                    "Add a case to resolveLibraryFile() pointing at the on-disk library file.")
         }
     }
 

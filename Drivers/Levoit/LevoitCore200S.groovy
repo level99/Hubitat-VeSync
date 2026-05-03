@@ -127,7 +127,7 @@ def on() {
     try {
         handlePower(true)
         logInfo "Power on"
-        device.sendEvent(name: "switch", value: "on")
+        handleEvent("switch", "on")
 
         if (state.speed != null) {
             setSpeed(state.speed)
@@ -155,8 +155,8 @@ def off() {
     try {
         handlePower(false)
         logInfo "Power off"
-        device.sendEvent(name: "switch", value: "off")
-        device.sendEvent(name: "speed", value: "off")
+        handleEvent("switch", "off")
+        handleEvent("speed", "off")
     } finally {
         state.remove('turningOff')
     }
@@ -197,7 +197,7 @@ def setLevel(value)
     if(value >= 33 && value < 66) speed = 2
     if(value >= 66) speed = 3
 
-    sendEvent(name: "level", value: value)
+    device.sendEvent(name: "level", value: value)
     setSpeed(speed)
 }
 
@@ -208,19 +208,19 @@ def setSpeed(speed) {
     }
     else if (speed == "sleep") {
         setMode(speed)
-        device.sendEvent(name: "speed", value: "on")
+        handleEvent("speed", "on")
     }
     else if (state.mode == "manual") {
         handleSpeed(speed)
         state.speed = speed
-        device.sendEvent(name: "speed", value: speed)
+        handleEvent("speed", speed)
         logInfo "Speed: ${speed}"
     }
     else if (state.mode == "sleep") {
         setMode("manual")
         handleSpeed(speed)
         state.speed = speed
-        device.sendEvent(name: "speed", value: speed)
+        handleEvent("speed", speed)
         logInfo "Speed: ${speed}"
     }
 }
@@ -229,15 +229,15 @@ def setMode(mode) {
     logDebug "setMode(${mode})"
     handleMode(mode)
     state.mode = mode
-	device.sendEvent(name: "mode", value: mode)
+    handleEvent("mode", mode)
     logInfo "Mode: ${mode}"
     switch(mode)
     {
         case "manual":
-            device.sendEvent(name: "speed", value: state.speed)
+            handleEvent("speed", state.speed)
             break;
         case "sleep":
-            device.sendEvent(name: "speed", value: "on")
+            handleEvent("speed", "on")
             break;
     }
 }

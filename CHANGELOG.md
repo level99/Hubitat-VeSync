@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`aqi` attribute silently null since v2.3 on Core 300S/400S/600S.** `LevoitCorePurifierLib` emitted the AQI value under attribute name `"AQI"` (uppercase); drivers declare `attribute "aqi", "number"` (lowercase). Hubitat is case-sensitive — dashboards and Rule Machine rules referencing `aqi` saw null. Fixed by correcting the `handleEvent` call to `"aqi"` (lowercase). Also corrects the matching Spock assertion in `LevoitCore400SSpec`.
+
 ### Added
 
 - **Layer 5 mechanical enforcement for BP24 auto-on-from-off discipline.** Two new lint rules prevent new drivers from shipping without the canonical auto-on guard on configure-style commands: RULE31 (`bp24_state_switch_dead_branch.py`) flags any read of `state.switch` in a conditional (permanently-dead branch — `state.switch` is never written; the guard never fires), and RULE32 (`bp24_auto_on_guard_missing.py`) flags SHOULD-ON methods (`cycleSpeed`, `setMistLevel`, `setSpeed`, `setFanSpeed`, `setMode` on most device families, `setWarmMistLevel`) that make API calls without the `device.currentValue("switch")` guard. RULE32 supports a per-method SKIP-OK / NO-ON exception list (`bp24_auto_on_exemptions` in `lint_config.yaml`). All 35 pre-existing violations on the current tree are scaffold-exempted with Tier-1/2/3 removal TODOs; the rules activate against any NEW violation immediately. CONTRIBUTING.md updated with the BP24 step in "Adding a new device driver", RULE31/RULE32 rows in the conventions table, and the from-off Spock test pattern contract.
