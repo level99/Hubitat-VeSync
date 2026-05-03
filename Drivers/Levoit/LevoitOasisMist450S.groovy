@@ -636,28 +636,28 @@ def probeNightLight(){
     // night_light_brightness is the canonical pyvesync field name for this model class.
     def resp = hubBypass("setNightLightBrightness", [night_light_brightness: 50], "probeNightLight")
     // Probe response handler: always log at INFO regardless of settings (diagnostic intent).
-    // Direct log.info (not logInfo) is intentional and acceptable here: child drivers don't
-    // handle accountID/token, so bypassing sanitize() carries no credential-exposure risk.
+    // Uses logAlways (no descriptionTextEnable gate) so the result is visible to the user
+    // without needing to enable logging prefs. logAlways routes through the lib helper
+    // (log.info directly) — no credential exposure risk since child drivers don't carry auth.
     // The inner code is the key signal -- 0 = device accepted, non-zero = device rejected.
     def innerCode = resp?.data?.result?.code
     if (innerCode == null) {
         // Null inner code: response was malformed or device is offline.
-        // Log at INFO so it is visible even without debugOutput.
-        log.info "[OasisMist 450S] Nightlight probe INCONCLUSIVE -- no inner code in response " +
+        logAlways "[OasisMist 450S] Nightlight probe INCONCLUSIVE -- no inner code in response " +
             "(device may be offline or API returned malformed response). " +
             "If device is online, try again. Otherwise report: resp=${resp} on pyvesync issue #500."
         return
     }
     Integer code = innerCode as Integer
     if (code == 0) {
-        log.info "[OasisMist 450S] Nightlight probe SUCCESS -- your device accepts " +
+        logAlways "[OasisMist 450S] Nightlight probe SUCCESS -- your device accepts " +
             "setNightLightBrightness (inner code 0). " +
             "Please paste this log line on the Hubitat community thread or pyvesync issue #500 " +
             "(https://github.com/webdjoe/pyvesync/issues/500) as evidence. " +
             "Model: LUH-O451S-WUSR nightlight CONFIRMED. This data supports adding nightlight " +
             "support in a future driver version."
     } else {
-        log.info "[OasisMist 450S] Nightlight probe REJECTED (inner code: ${code}) -- " +
+        logAlways "[OasisMist 450S] Nightlight probe REJECTED (inner code: ${code}) -- " +
             "your device does not support setNightLightBrightness, matching the v2.1 driver " +
             "assumption (no nightlight hardware). No action needed. " +
             "If you want to share this result: post on pyvesync issue #500 " +
@@ -748,7 +748,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic raw dump -- gated by debugOutput. Keep for ongoing field diagnostics.
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // OasisMist 450S response uses `enabled` (boolean), NOT `powerSwitch` (int)

@@ -70,6 +70,8 @@ def rule_ids(findings):
 from lint_rules.groovy_javadoc_terminator import check_rule26_javadoc_terminator
 from lint_rules.bp18_null_guard import check_rule27_bp18_null_guard
 from lint_rules.captureDiagnostics_presence import check_rule28_capturediagnostics_presence
+from lint_rules.library_no_top_block_comment import check_rule29_library_no_top_block_comment
+from lint_rules.direct_log_calls import check_rule30_direct_log_in_driver
 from lint_rules.bug_patterns import (
     check_bp1_missing_2arg_update,
     check_bp2_hardcoded_purifier_method,
@@ -1533,6 +1535,289 @@ class TestRule28CaptureDiagnosticsPresence:
             rel_base=REPO_ROOT,
         )
         assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# Rule 30 — Direct log.X calls in driver body
+# ---------------------------------------------------------------------------
+
+class TestRule30DirectLogInDriver:
+    # Good: all calls routed through helpers; no direct log.X in body.
+    GOOD_MIGRATED = textwrap.dedent("""\
+        #include level99.LevoitChildBase
+        metadata { definition(name: "Test Driver", namespace: "ns", author: "a") {} }
+        def applyStatus(status) {
+            logDebug "some debug msg"
+            logInfo "some info msg"
+            logError "some error msg"
+            logWarn "some warn msg"
+            logAlways "always visible"
+        }
+        // logDebug, logInfo, etc. provided by lib
+    """)
+
+    # Good: helper method body legitimately contains log.X — must NOT be flagged.
+    GOOD_HELPER_BODY = textwrap.dedent("""\
+        metadata { definition(name: "Test Driver", namespace: "ns", author: "a") {} }
+        def logDebug(msg) { if (settings?.debugOutput) log.debug msg }
+        def logInfo(msg)  { if (settings?.descriptionTextEnable) log.info msg }
+        def logError(msg) { log.error msg }
+        void logDebugOff() { device.updateSetting("debugOutput", [type:"bool", value:false]) }
+        def applyStatus(status) {
+            logDebug "ok"
+        }
+    """)
+
+    # Good: library file — direct log.X inside helper bodies is correct, rule must not fire.
+    GOOD_LIBRARY_FILE = textwrap.dedent("""\
+        library(name: "TestLib", namespace: "level99", author: "a", description: "d",
+                importUrl: "http://example.com", documentationLink: "http://example.com")
+        def logDebug(msg) { if (settings?.debugOutput) log.debug msg }
+        def logInfo(msg)  { log.info msg }
+    """)
+
+    # Good: VeSyncIntegration.groovy is excluded by name.
+    GOOD_PARENT_EXCLUDED = textwrap.dedent("""\
+        metadata { definition(name: "VeSync Integration", namespace: "ns", author: "a") {} }
+        def logInfo(msg) { if (settings?.descriptionTextEnable) log.info sanitize(msg) }
+        def someMethod() { log.info "direct but excluded by filename" }
+    """)
+
+    # Bad: direct log.debug in driver body outside helper.
+    BAD_DIRECT_LOG_DEBUG = textwrap.dedent("""\
+        metadata { definition(name: "Test Driver", namespace: "ns", author: "a") {} }
+        def applyStatus(status) {
+            if (settings?.debugOutput) log.debug "raw diagnostic"
+        }
+        def logDebug(msg) { if (settings?.debugOutput) log.debug msg }
+    """)
+
+    # Bad: direct log.info in driver body (should use logInfo or logAlways).
+    BAD_DIRECT_LOG_INFO = textwrap.dedent("""\
+        metadata { definition(name: "Test Driver", namespace: "ns", author: "a") {} }
+        def probeDevice() {
+            log.info "probe result"
+        }
+        def logInfo(msg) { if (settings?.descriptionTextEnable) log.info msg }
+    """)
+
+    # Bad: direct log.error in driver body.
+    BAD_DIRECT_LOG_ERROR = textwrap.dedent("""\
+        metadata { definition(name: "Test Driver", namespace: "ns", author: "a") {} }
+        def checkHttpResponse(action, resp) {
+            log.error "${action}: ${resp.status}"
+        }
+        def logError(msg) { log.error msg }
+    """)
+
+    def test_migrated_driver_passes(self):
+        findings = run_rule(check_rule30_direct_log_in_driver, self.GOOD_MIGRATED, "LevoitVital200S")
+        assert not any(f['rule_id'] == 'RULE30_direct_log_in_driver' for f in findings), \
+            "Migrated driver using lib helpers must pass RULE30"
+
+    def test_helper_body_exempt(self):
+        # Direct log.X inside def logDebug() / def logInfo() bodies must not be flagged.
+        findings = run_rule(check_rule30_direct_log_in_driver, self.GOOD_HELPER_BODY, "LevoitVital200S")
+        assert not any(f['rule_id'] == 'RULE30_direct_log_in_driver' for f in findings), \
+            "log.X inside helper method bodies must not trigger RULE30"
+
+    def test_library_file_exempt(self):
+        # Library files are excluded from RULE30.
+        findings = run_rule(check_rule30_direct_log_in_driver, self.GOOD_LIBRARY_FILE, "LevoitChildBaseLib")
+        assert not any(f['rule_id'] == 'RULE30_direct_log_in_driver' for f in findings), \
+            "Library file log.X calls must not trigger RULE30"
+
+    def test_parent_driver_excluded_by_name(self):
+        # VeSyncIntegration.groovy is excluded.
+        findings = run_rule(check_rule30_direct_log_in_driver, self.GOOD_PARENT_EXCLUDED, "VeSyncIntegration")
+        assert not any(f['rule_id'] == 'RULE30_direct_log_in_driver' for f in findings), \
+            "VeSyncIntegration.groovy must be excluded from RULE30"
+
+    def test_direct_log_debug_fails(self):
+        findings = run_rule(check_rule30_direct_log_in_driver, self.BAD_DIRECT_LOG_DEBUG, "LevoitVital200S")
+        assert any(f['rule_id'] == 'RULE30_direct_log_in_driver' for f in findings), \
+            "Direct log.debug in driver body must trigger RULE30"
+
+    def test_direct_log_info_fails(self):
+        findings = run_rule(check_rule30_direct_log_in_driver, self.BAD_DIRECT_LOG_INFO, "LevoitVital200S")
+        assert any(f['rule_id'] == 'RULE30_direct_log_in_driver' for f in findings), \
+            "Direct log.info in driver body must trigger RULE30"
+
+    def test_direct_log_error_fails(self):
+        findings = run_rule(check_rule30_direct_log_in_driver, self.BAD_DIRECT_LOG_ERROR, "LevoitVital200S")
+        assert any(f['rule_id'] == 'RULE30_direct_log_in_driver' for f in findings), \
+            "Direct log.error in driver body must trigger RULE30"
+
+    def test_notification_tile_excluded_by_name(self):
+        # Notification Tile.groovy is excluded (logsOff() pattern, deferred).
+        src = textwrap.dedent("""\
+            metadata { definition(name: "Notification Tile", namespace: "ns", author: "a") {} }
+            def deviceNotification(msg) {
+                log.debug "raw debug in body"
+            }
+        """)
+        findings = run_rule(
+            check_rule30_direct_log_in_driver, src, "Notification Tile"
+        )
+        assert not any(f['rule_id'] == 'RULE30_direct_log_in_driver' for f in findings), \
+            "Notification Tile.groovy must be excluded from RULE30"
+
+
+# ---------------------------------------------------------------------------
+# TestRule29LibraryNoBlockComment
+# ---------------------------------------------------------------------------
+
+class TestRule29LibraryNoBlockComment:
+    """RULE29: /* */ block comments forbidden in Hubitat library files."""
+
+    # ---- file-scope fixtures ----
+
+    GOOD_MIT_ONLY = textwrap.dedent("""\
+        /*
+         * MIT License
+         */
+
+        library(
+            name: "MyLib",
+            namespace: "ns",
+            author: "a"
+        )
+
+        // This is a line comment — fine.
+        def foo() { return 1 }
+    """)
+
+    GOOD_BODY_LINE_COMMENTS_ONLY = textwrap.dedent("""\
+        /*
+         * MIT License
+         */
+
+        library(
+            name: "MyLib",
+            namespace: "ns",
+            author: "a"
+        )
+
+        // Helper: does something useful.
+        // Returns true on success.
+        def foo() { return true }
+
+        // Another helper.
+        def bar() { return false }
+    """)
+
+    BAD_FILE_SCOPE_SECOND_BLOCK = textwrap.dedent("""\
+        /*
+         * MIT License
+         */
+
+        /* Second block comment before library() — forbidden */
+
+        library(
+            name: "MyLib",
+            namespace: "ns",
+            author: "a"
+        )
+
+        def foo() { return 1 }
+    """)
+
+    BAD_BODY_SCOPE_JAVADOC = textwrap.dedent("""\
+        /*
+         * MIT License
+         */
+
+        library(
+            name: "MyLib",
+            namespace: "ns",
+            author: "a"
+        )
+
+        /**
+         * This is a javadoc block after library() — forbidden in library files.
+         */
+        def foo() { return 1 }
+    """)
+
+    BAD_BODY_SCOPE_PLAIN_BLOCK = textwrap.dedent("""\
+        /*
+         * MIT License
+         */
+
+        library(
+            name: "MyLib",
+            namespace: "ns",
+            author: "a"
+        )
+
+        /* A plain block comment after library() — also forbidden */
+        def foo() { return 1 }
+    """)
+
+    GOOD_DRIVER_BODY_SCOPE_JAVADOC = textwrap.dedent("""\
+        /*
+         * MIT License
+         */
+
+        metadata {
+            definition(name: "Levoit Driver", namespace: "level99", author: "a") {
+                capability "Switch"
+            }
+        }
+
+        /**
+         * This is a javadoc block in a DRIVER file — RULE29 does not apply to drivers.
+         */
+        def foo() { return 1 }
+    """)
+
+    # ---- tests ----
+
+    def test_good_mit_only_passes(self):
+        findings = run_rule(
+            check_rule29_library_no_top_block_comment,
+            self.GOOD_MIT_ONLY, "LevoitChildBaseLib"
+        )
+        assert not findings, "Library with only MIT header /* */ must pass RULE29"
+
+    def test_good_body_line_comments_only_passes(self):
+        findings = run_rule(
+            check_rule29_library_no_top_block_comment,
+            self.GOOD_BODY_LINE_COMMENTS_ONLY, "LevoitChildBaseLib"
+        )
+        assert not findings, "Library with only // comments in body must pass RULE29"
+
+    def test_file_scope_second_block_fails(self):
+        findings = run_rule(
+            check_rule29_library_no_top_block_comment,
+            self.BAD_FILE_SCOPE_SECOND_BLOCK, "LevoitChildBaseLib"
+        )
+        assert any(f['rule_id'] == 'RULE29_library_block_comment_at_top' for f in findings), \
+            "Second /* */ block before library() must fail RULE29 (file-scope)"
+
+    def test_body_scope_javadoc_fails(self):
+        findings = run_rule(
+            check_rule29_library_no_top_block_comment,
+            self.BAD_BODY_SCOPE_JAVADOC, "LevoitChildBaseLib"
+        )
+        assert any(f['rule_id'] == 'RULE29_library_block_comment_in_body' for f in findings), \
+            "/** */ javadoc block after library() must fail RULE29 (body-scope)"
+
+    def test_body_scope_plain_block_fails(self):
+        findings = run_rule(
+            check_rule29_library_no_top_block_comment,
+            self.BAD_BODY_SCOPE_PLAIN_BLOCK, "LevoitChildBaseLib"
+        )
+        assert any(f['rule_id'] == 'RULE29_library_block_comment_in_body' for f in findings), \
+            "/* */ plain block after library() must fail RULE29 (body-scope)"
+
+    def test_driver_file_body_scope_javadoc_exempt(self):
+        # Driver files (definition() block) are not subject to RULE29.
+        findings = run_rule(
+            check_rule29_library_no_top_block_comment,
+            self.GOOD_DRIVER_BODY_SCOPE_JAVADOC, "LevoitVital200S"
+        )
+        assert not findings, "Driver file /* */ blocks must be exempt from RULE29"
 
 
 # ---------------------------------------------------------------------------

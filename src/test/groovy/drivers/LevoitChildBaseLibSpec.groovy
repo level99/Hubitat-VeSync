@@ -11,10 +11,11 @@ import support.HubitatSpec
  * before compiling.
  *
  * Covers:
- *   logInfo   — fires only when descriptionTextEnable is true
- *   logDebug  — fires only when debugOutput is true
- *   logError  — always fires (unconditional)
- *   logWarn   — always fires (unconditional)
+ *   logInfo    — fires only when descriptionTextEnable is true
+ *   logDebug   — fires only when debugOutput is true
+ *   logError   — always fires (unconditional)
+ *   logWarn    — always fires (unconditional)
+ *   logAlways  — always fires regardless of descriptionTextEnable (for user-invoked diagnostics)
  *   logDebugOff — clears debugOutput pref when true; no-op when false
  *   ensureDebugWatchdog (BP16) — no-ops when <30 min elapsed; disables + clears when >=30 min
  *   ensureSwitchOn (BP23) — calls on() when switch is off and not already turning on;
@@ -350,5 +351,42 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
 
         then:
         testLog.warns.any { it.contains("setNightLightMode") }
+    }
+
+    // -------------------------------------------------------------------------
+    // logAlways
+    // -------------------------------------------------------------------------
+
+    def "logAlways emits info regardless of descriptionTextEnable=true"() {
+        given:
+        settings.descriptionTextEnable = true
+
+        when:
+        driver.logAlways("probe result always-on")
+
+        then:
+        testLog.infos.contains("probe result always-on")
+    }
+
+    def "logAlways emits info even when descriptionTextEnable=false"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.logAlways("probe result pref disabled")
+
+        then: "logAlways has no pref gate — output regardless"
+        testLog.infos.contains("probe result pref disabled")
+    }
+
+    def "logAlways emits info even when descriptionTextEnable is null"() {
+        given:
+        settings.descriptionTextEnable = null
+
+        when:
+        driver.logAlways("probe result pref null")
+
+        then: "logAlways has no pref gate — null pref does not suppress it"
+        testLog.infos.contains("probe result pref null")
     }
 }

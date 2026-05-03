@@ -452,7 +452,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic: gated by debugOutput pref — quiet in production, easy to triage when needed.
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     def powerOn = r.powerSwitch == 1
     device.sendEvent(name:"switch", value: powerOn ? "on" : "off")

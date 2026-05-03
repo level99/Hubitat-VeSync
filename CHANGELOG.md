@@ -9,7 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`logAlways` helper in `LevoitChildBaseLib.groovy`** — new always-on info log (no `descriptionTextEnable` gate) for user-invoked diagnostics that must always appear. Used by `probeNightLight` in OasisMist 450S (replaces the now-removed direct `log.info` calls there). Available to all drivers via `#include level99.LevoitChildBase`.
+- **RULE30 lint rule** (`tests/lint_rules/direct_log_calls.py`) — flags direct `log.info`/`log.debug`/`log.warn`/`log.error` calls in child driver body code. Exclusions: `VeSyncIntegration.groovy` (parent, sanitize-wrapped), `Notification Tile.groovy` (deferred), library files. Passes clean on current working tree; prevents future `log.*` drift from accumulating silently.
 - **Library refactor Phase 1 — `LevoitChildBaseLib.groovy`.** New shared library for child-driver cross-cutting helpers (`logInfo`/`logDebug`/`logError`/`logWarn`/`logDebugOff`/`ensureDebugWatchdog` + new `ensureSwitchOn` (BP23) + `requireNotNull` (BP18) helpers). All 22 standard child drivers + virtual test parent migrated (23 files total). `Notification Tile` deferred — has its own local `ensureDebugWatchdog()` that calls `runIn(1800, "logsOff")`; including the lib would conflict on the duplicate watchdog method, and the `logsOff` callback name has no lib equivalent. Tracked for a focused rewrite review in TODO.md. Side-effects: `LevoitVital100S` and `LevoitGeneric` gain `logWarn` for the first time (previously undefined locally); `LevoitCore200S Light` gains `logError` (same). No behavioral changes to any other driver.
+
+### Changed
+
+- **Direct `log.*` standardization** — all 16 Category A `applyStatus raw r` diagnostic lines (previously `if (settings?.debugOutput) log.debug ...`) converted to `logDebug ...` (redundant pref-gate removed; lib helper gates identically). All 10 Category B `checkHttpResponse` `log.error` sites in Core 200S/300S/400S/600S and Core 200S Light converted to `logError`. `probeNightLight` in OasisMist 450S converted from 4 direct `log.info` calls to `logAlways`. All child drivers now route 100% of logging through library helpers; no direct `log.*` calls remain outside helper bodies.
+- **Defensive BP20 cleanup — library files now use `//` comments exclusively.** All body-scope `/** */` javadoc blocks in `LevoitChildBaseLib.groovy` (3 blocks) and `LevoitDiagnosticsLib.groovy` (10 blocks) converted to `//` line comments. One transient save failure was observed during a polish-pass deploy of `LevoitChildBaseLib.groovy`; not reproducible on retry, but the defensive policy (matching `tomw.broadlinkHelpers.groovy`'s known-good style) is to keep all `/* */` forms out of library files. RULE29 widened to also flag body-scope `/* */` and `/** */` blocks after the `library()` declaration, in addition to the existing file-scope check.
 
 ## [2.4.1] - 2026-05-02
 

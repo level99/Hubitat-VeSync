@@ -203,12 +203,12 @@ def checkHttpResponse(action, resp) {
 		return true
 	else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500)
 	{
-		log.error "${action}: ${resp.status} - ${resp.getData()}"; recordError("${action}: HTTP ${resp.status}", [site:"checkHttpResponse"])
+		logError "${action}: ${resp.status} - ${resp.getData()}"; recordError("${action}: HTTP ${resp.status}", [site:"checkHttpResponse"])
 		return false
 	}
 	else
 	{
-		log.error "${action}: unexpected HTTP response: ${resp.status}"; recordError("${action}: unexpected HTTP ${resp.status}", [site:"checkHttpResponse"])
+		logError "${action}: unexpected HTTP response: ${resp.status}"; recordError("${action}: unexpected HTTP ${resp.status}", [site:"checkHttpResponse"])
 		return false
 	}
 }

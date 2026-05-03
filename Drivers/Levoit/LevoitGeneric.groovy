@@ -239,7 +239,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic raw dump — gated by debugOutput
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // Detect device shape by field presence
     String detectedCompat = detectShape(r)

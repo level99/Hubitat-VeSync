@@ -340,7 +340,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic raw dump -- gated by debugOutput.
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // Classic 200S response uses `enabled` (boolean), same as other VeSyncHumid200300S class devices

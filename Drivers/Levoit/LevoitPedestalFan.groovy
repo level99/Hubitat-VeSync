@@ -673,7 +673,7 @@ def applyStatus(status){
     }
     // Diagnostic raw dump -- gated by debugOutput. Keep for ongoing field diagnostics.
     // Use this log line when a community member reports "device discovered but no data".
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     boolean powerOn = (r.powerSwitch as Integer) == 1

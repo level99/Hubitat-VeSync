@@ -373,7 +373,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic raw dump (debugOutput-gated). Keep for ongoing field diagnostics.
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // 1000S response: powerSwitch (int 0|1) NOT `enabled` (bool).

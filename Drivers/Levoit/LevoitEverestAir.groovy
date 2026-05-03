@@ -356,7 +356,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic raw dump (debugOutput-gated).
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     def powerRaw = r.powerSwitch

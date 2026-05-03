@@ -357,7 +357,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic raw dump -- gated by debugOutput.
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // CROSS-CHECK: LV600S Hub Connect response uses `powerSwitch` (int 0|1), NOT `enabled` (bool).

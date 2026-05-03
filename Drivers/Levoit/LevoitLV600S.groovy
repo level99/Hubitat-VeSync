@@ -425,7 +425,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic raw dump -- gated by debugOutput. Keep for ongoing field diagnostics.
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // LV600S response uses `enabled` (boolean), NOT `powerSwitch` (int)
