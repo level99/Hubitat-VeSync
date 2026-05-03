@@ -95,6 +95,56 @@ pii_token_allowlist:
 
 
 # ---------------------------------------------------------------------------
+# RULE32 — BP24 per-method SKIP-OK / NO-ON exemptions
+# ---------------------------------------------------------------------------
+# Each entry exempts a specific (file, method) pair from RULE32's auto-on
+# guard check.  Use this for methods intentionally classified as SKIP-OK
+# or NO-ON per the BP24 taxonomy.
+#
+# Required fields:
+#   file     — repo-root-relative path using forward slashes
+#   method   — exact Groovy method name (e.g. "setMode")
+#   rationale — REQUIRED non-empty explanation; empty string causes rule to skip silently
+#
+# SKIP-OK: V2 API rejects the command while device is off; on() internally
+#   configures the mode, so an external auto-on would race-condition against
+#   on()'s own mode init.  Returning false silently when off is acceptable;
+#   user follows up with explicit on().
+# NO-ON:   The command configures a setting that takes effect on next power-on.
+#   Silently powering on would be surprising; no auto-on appropriate.
+#
+# Note: this list is consulted by tests/lint_rules/bp24_auto_on_guard_missing.py
+# directly (not via the standard exemptions mechanism in lint.py).  A method
+# listed here must also have the guard ALREADY PRESENT OR ABSENT based on its
+# classification — this list only suppresses the RULE32 FAIL finding; it does
+# not change whether a guard is required.
+
+bp24_auto_on_exemptions:
+  # Vital 100S / 200S setMode: SKIP-OK — V2 API (VeSyncAirPurifierHA) rejects
+  # mode changes while the device is off.  on() internally calls setMode as
+  # part of its configureOnState() sequence; an external auto-on from setMode
+  # would race against that sequence.  The Vital drivers already have the
+  # !state.turningOn guard implemented correctly; RULE32 would not fire on them
+  # anyway (guard is present), but documenting SKIP-OK classification here for
+  # clarity when future drivers are added.
+  - file: "Drivers/Levoit/LevoitVital100S.groovy"
+    method: "setMode"
+    rationale: >
+      SKIP-OK: V2 API rejects mode changes on off-state Vital 100S. on()
+      internally configures workMode; external auto-on from setMode races
+      against on()'s own mode init. Vital 100S setMode already has the
+      !state.turningOn guard and returns early if switch is off. Consistent
+      with pyvesync VeSyncAirPurifierHA class behavior.
+  - file: "Drivers/Levoit/LevoitVital200S.groovy"
+    method: "setMode"
+    rationale: >
+      SKIP-OK: Same as Vital 100S. V2 API rejects mode changes on off-state
+      Vital 200S. on() configures workMode internally; external auto-on races.
+      Already has !state.turningOn guard. Consistent with pyvesync
+      VeSyncAirPurifierHA class behavior.
+
+
+# ---------------------------------------------------------------------------
 # Manifest consistency: files excluded from manifest check
 # ---------------------------------------------------------------------------
 # Filenames (basename only) that intentionally have no manifest entry.
@@ -139,3 +189,170 @@ exemptions:
       Adding a 2-arg signature would be misleading and would mask the
       intentional design. See LevoitCore200S.groovy update() for the
       explicit dispatch pattern.
+
+  # ---------------------------------------------------------------------------
+  # RULE31 — BP24-A dead-state.switch-branch exemptions (Tier-1, 4 sites)
+  # TODO: remove each entry when the corresponding BP24-A Tier-1 fix lands.
+  # The fix replaces `if (state.switch == "off") { on() }` in cycleSpeed()
+  # with `if (!state.turningOn && device.currentValue("switch") != "on") on()`.
+  # ---------------------------------------------------------------------------
+
+  - rule_id: "RULE31_state_switch_dead_branch"
+    file: "Drivers/Levoit/LevoitCore200S.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-A dead-branch at cycleSpeed() line 184.
+      `state.switch` is never written; the guard is permanently dead.
+      Exempted temporarily so Layer-5 lint rules ship on release/v2.5 without
+      blocking on the fix. Remove this entry when the Tier-1 BP24-A fix lands
+      on Core 200S (expected in Phase 2 Core line extraction batch).
+
+  - rule_id: "RULE31_state_switch_dead_branch"
+    file: "Drivers/Levoit/LevoitCore300S.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-A dead-branch at cycleSpeed() line 211.
+      Same shape as Core 200S. Remove this entry when the Tier-1 BP24-A fix
+      lands on Core 300S (Phase 2 Core line extraction batch).
+
+  - rule_id: "RULE31_state_switch_dead_branch"
+    file: "Drivers/Levoit/LevoitCore400S.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-A dead-branch at cycleSpeed() line 214.
+      Same shape as Core 200S. Remove this entry when the Tier-1 BP24-A fix
+      lands on Core 400S (Phase 2 Core line extraction batch).
+
+  - rule_id: "RULE31_state_switch_dead_branch"
+    file: "Drivers/Levoit/LevoitCore600S.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-A dead-branch at cycleSpeed() line 213.
+      Same shape as Core 200S. Remove this entry when the Tier-1 BP24-A fix
+      lands on Core 600S (Phase 2 Core line extraction batch).
+
+  # ---------------------------------------------------------------------------
+  # RULE32 — BP24-B/C auto-on guard missing exemptions
+  # Entries are grouped by tier (Tier-1 = Fan line, Tier-2 = humidifier line,
+  # Tier-3 = EverestAir/SproutAir, pending live-capture of API behavior).
+  # TODO: remove each entry when the corresponding BP24 fix sweep lands.
+  # ---------------------------------------------------------------------------
+
+  # -- Tier-1: Fan line (TowerFan, PedestalFan) — setSpeed, cycleSpeed, setMode --
+  # Fix expected in Phase 2 / same batch as Core line BP24-A fixes.
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitTowerFan.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setSpeed() line 200, cycleSpeed()
+      line 225, and setMode() line 281. None of these methods check
+      device.currentValue("switch") before calling hubBypass. setSpeed and
+      cycleSpeed are SHOULD-ON (auto-on matches user intent for >=95% of
+      automation invocations). setMode classification is pending live-capture
+      of API behavior while off (potentially SKIP-OK if V2 API rejects mode
+      changes while off — same concern as Vital line setMode). Remove this
+      entry when the Tier-1 BP24-B fix lands on TowerFan and the mode
+      classification is resolved.
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitPedestalFan.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setSpeed() line 284, cycleSpeed()
+      line 309, and setMode() line 363. Same shape as TowerFan. setSpeed and
+      cycleSpeed are SHOULD-ON. setMode classification is pending live-capture.
+      Remove this entry when the Tier-1 BP24-B fix lands on PedestalFan and
+      the mode classification is resolved.
+
+  # -- Tier-2: Humidifier line — setMistLevel, setWarmMistLevel, setMode --
+  # Fix expected in separate humidifier sweep batch (after Tier-1).
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitClassic200S.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setMode() line 192 and
+      setMistLevel() line 219. Both are SHOULD-ON (humidifier configure commands
+      should auto-on). Remove this entry when the Tier-2 humidifier BP24-B
+      fix sweep lands on Classic 200S.
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitClassic300S.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setMode() line 141 and
+      setMistLevel() line 170. Both are SHOULD-ON. Remove this entry when the
+      Tier-2 humidifier BP24-B fix sweep lands on Classic 300S.
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitDual200S.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setMode() line 211 and
+      setMistLevel() line 276. Both are SHOULD-ON. Remove this entry when the
+      Tier-2 humidifier BP24-B fix sweep lands on Dual 200S.
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitLV600S.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setMode() line 194, setMistLevel()
+      line 251, and setWarmMistLevel() line 286. All three are SHOULD-ON.
+      Remove this entry when the Tier-2 humidifier BP24-B fix sweep lands
+      on LV600S.
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitLV600SHubConnect.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setMode() line 201, setMistLevel()
+      line 229, and setWarmMistLevel() line 249. All three are SHOULD-ON.
+      Remove this entry when the Tier-2 humidifier BP24-B fix sweep lands
+      on LV600S Hub Connect.
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitOasisMist450S.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setMode() line 268, setMistLevel()
+      line 323, and setWarmMistLevel() line 354. All three are SHOULD-ON.
+      Remove this entry when the Tier-2 humidifier BP24-B fix sweep lands
+      on OasisMist 450S.
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitOasisMist1000S.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setMode() line 181 and
+      setMistLevel() line 200. Both are SHOULD-ON. Remove this entry when the
+      Tier-2 humidifier BP24-B fix sweep lands on OasisMist 1000S.
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitSproutHumidifier.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setMode() line 194 and
+      setMistLevel() line 215. Both are SHOULD-ON. Remove this entry when the
+      Tier-2 humidifier BP24-B fix sweep lands on Sprout Humidifier.
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitSuperior6000S.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setMode() line 143 (no guard) and
+      BP24-C on setMistLevel() line 162 (partial guard — has
+      device.currentValue("switch") check but missing !state.turningOn
+      re-entrance flag). setMode is SHOULD-ON; setMistLevel is SHOULD-ON.
+      Remove this entry when the Tier-2 humidifier BP24-B/C fix sweep lands
+      on Superior 6000S.
+
+  # -- Tier-3: EverestAir / SproutAir setMode + setFanSpeed --
+  # Deferred: API behavior while device is off is unconfirmed (live-capture
+  # needed before classifying setMode as SHOULD-ON vs SKIP-OK). setFanSpeed
+  # is more clearly SHOULD-ON but bundled with setMode for same-diff coherence.
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitEverestAir.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setMode() line 206 and setFanSpeed()
+      line 234. setFanSpeed is SHOULD-ON. setMode classification is deferred
+      pending live-capture: EverestAir uses V2 API (VeSyncAirBaseV2 class),
+      and if the V2 API rejects mode changes while off (same behaviour as Vital
+      line setMode), then setMode is SKIP-OK rather than SHOULD-ON. Remove this
+      entry when Tier-3 live-capture confirms the mode classification and the
+      BP24-B fix lands on EverestAir.
+
+  - rule_id: "RULE32_auto_on_guard_missing"
+    file: "Drivers/Levoit/LevoitSproutAir.groovy"
+    reason: >
+      Layer-5 scaffold exemption: BP24-B on setMode() line 188 and setFanSpeed()
+      line 212. setFanSpeed is SHOULD-ON. setMode classification deferred
+      pending live-capture (same V2-API concern as EverestAir). Remove this
+      entry when Tier-3 live-capture confirms the mode classification and the
+      BP24-B fix lands on SproutAir.

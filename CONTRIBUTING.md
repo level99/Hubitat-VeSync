@@ -162,8 +162,18 @@ This is the most common substantive contribution. The flow is:
     attribute "diagnostics", "string"
     ```
     Where the driver currently calls `log.error(...)` (parser failures, write-failure paths, etc.), add a parallel `recordError(message, contextMap)` call with relevant context (`[site:"setMode", value:requestedMode]` etc.). The library handles ring-buffer storage and pre-fills bug-report URLs from this data. See any v2.4+ driver for examples.
-11. **Add a Spock spec at `src/test/groovy/drivers/<DriverName>Spec.groovy`** — copy the closest existing spec as a template. Cover at minimum: happy-path setSwitch, setMode, applyStatus parsing of the canonical fixture, and any device-specific commands. The harness uses the Hubitat sandbox mock and resolves the `#include` library directive automatically.
-12. **Run lint + Spock locally** — `./gradlew test` and `uv run --python 3.12 tests/lint.py`. Both should pass before opening a PR.
+11. **Apply BP24 auto-on-from-off discipline.** For each command method you declare, classify it per Bug Pattern #24's taxonomy (MUST-ON / SHOULD-ON / SKIP-OK / NO-ON — see `.claude/agents/vesync-driver-qa.md` BP24 catalog entry for the full classification chart and sub-shape descriptions):
+    - **SHOULD-ON methods** (`cycleSpeed`, `setSpeed`, `setMistLevel`, `setWarmMistLevel`, `setFanSpeed`, `setMode` on most device families): add the canonical guard at method entry (after parameter validation, before the API call):
+      ```groovy
+      if (!state.turningOn && device.currentValue("switch") != "on") on()
+      ```
+      `on()` must set `state.turningOn = true` in a `try/finally` block (with `state.remove('turningOn')` in `finally`) so the guard doesn't recurse.
+    - **SKIP-OK methods** (Vital line `setMode`, any V2-API driver where the API rejects mode changes while off): no guard. Document the classification in a comment.
+    - **NO-ON methods** (`setChildLock`, `setDisplay`, `setTimer`, `cancelTimer`, `resetFilter`, `setDryingMode`, preference-config setters): no guard. These configure settings that take effect on next power-on; silently powering on would be surprising.
+    Lint RULE31 + RULE32 enforce these conventions; missing guards on SHOULD-ON methods will fail `uv run --python 3.12 tests/lint.py --strict`. If a method is intentionally SKIP-OK or NO-ON, add an entry to the `bp24_auto_on_exemptions` list in `tests/lint_config.yaml` with a substantive `rationale` field.
+    Add a from-off-state Spock test for every SHOULD-ON command (see "from-off Spock test pattern" below). Missing tests for SHOULD-ON methods are flagged by QA review.
+12. **Add a Spock spec at `src/test/groovy/drivers/<DriverName>Spec.groovy`** — copy the closest existing spec as a template. Cover at minimum: happy-path setSwitch, setMode, applyStatus parsing of the canonical fixture, and any device-specific commands. The harness uses the Hubitat sandbox mock and resolves the `#include` library directive automatically.
+13. **Run lint + Spock locally** — `./gradlew test` and `uv run --python 3.12 tests/lint.py`. Both should pass before opening a PR.
 
 ### Preview drivers (no maintainer hardware)
 
@@ -263,6 +273,41 @@ The Spock harness + 22 lint rules catch a long tail of regressions. Most of thes
 | **BP21 — Self-heal-loop bound on offline devices** | Convention | After 3 failed `ensurePollHealth()` self-heal attempts, mark the device offline in `state.offlineDevices` and suppress further self-heal triggers until recovery (vs. previous infinite ~5min self-heal cycle on chronically-offline devices that produced per-poll ERROR spam). Per-child `online` attribute (`"true"` / `"false"`) exposes state to dashboards and Rule Machine. Logging is tiered DEBUG/INFO/WARN with hourly re-surface while a device stays offline. |
 | **BP22 — HTTP-error log dedup during outages** | Convention | First network-class exception (UnknownHostException / SocketTimeoutException / ConnectException / NoRouteToHostException + Apache HttpClient equivalents) logs one-time WARN and sets `state.networkUnreachableSince` + `state.lastNetworkWarnAt` (parent-level — outages affect all children identically). Subsequent errors are DEBUG-only. `emitNetworkWarnIfDue()` re-surfaces a WARN hourly while still down. Recovery on first successful httpPost → INFO with elapsed duration + state cleared. Dual circuit-breaker: top-level at `updateDevices()` skips entire poll cycle during a known outage; per-call in `sendBypassRequest()` guards command-triggered calls. Both probe every 5 minutes for recovery; coordinate via `state.networkProbeInFlight` flag. Cause-chain walk (depth 10) handles sandbox/proxy exception wrappers. |
 | **BP23 — `setLevel` auto-on guard** | Convention | `setLevel(N>0)` on a SwitchLevel-implementing driver must auto-turn-on the device when switch is off (SwitchLevel capability convention). Guard pattern: `if (!state.turningOn && device.currentValue("switch") != "on") on()` at top of `setLevel`, immediately after the `if (val == 0) { off(); return }` early-return. The `state.turningOn` re-entrance flag (set by `on()` in a try/finally block) prevents recursion if `on()` internally re-enters the speed/level path. Affects every dimmer-style Levoit driver: Core 200S/300S/400S/600S, Vital 100S/200S, Tower Fan, Pedestal Fan. Superior 6000S has the equivalent guard inside `setMistLevel`. |
+| **BP24-A — Dead `state.switch` guard** | RULE31 | `state.switch` is never written in any driver (power state is tracked via `device.sendEvent(name:"switch",...)` and read via `device.currentValue("switch")`). Any conditional that reads `state.switch` (e.g. `if (state.switch == "off") { on() }`) is a permanently-dead branch — the guard never fires. Flag: any `state.switch` read in a conditional anywhere in `Drivers/Levoit/*.groovy`. Fix: replace with the canonical `if (!state.turningOn && device.currentValue("switch") != "on") on()` guard. |
+| **BP24-B/C — Auto-on guard missing on configure-style commands** | RULE32 | SHOULD-ON configure-style command methods (`cycleSpeed`, `setSpeed`, `setMistLevel`, `setWarmMistLevel`, `setFanSpeed`, `setMode` on most device families) must check `device.currentValue("switch") != "on"` before making API calls, and must also include the `!state.turningOn` re-entrance flag. Methods without any guard (BP24-B) or with guard but missing `state.turningOn` (BP24-C) fail the rule. SKIP-OK and NO-ON methods are excluded via `bp24_auto_on_exemptions` in `tests/lint_config.yaml`. See "from-off Spock test pattern" below for the required regression test shape. |
+
+### from-off Spock test pattern (required for SHOULD-ON commands)
+
+Every SHOULD-ON command method on a new driver must ship with a from-off-state Spock test. This is the regression guard that catches BP24 violations at unit-test time. The harness exposes captured events via `testDevice.events` (a `List<Map>` on `TestDevice`); use `lastEventValue(name)` for value-only checks and `testDevice.events` for ordering or list-shape assertions. Canonical pattern:
+
+```groovy
+def "setMistLevel from off-state turns on the device first (Bug Pattern #24)"() {
+    given: "device is currently off"
+    driver.on()                              // establish known on state
+    driver.off()                             // then turn it off
+    testDevice.events.clear()                // reset event capture
+
+    when: "setMistLevel is called on an off device"
+    driver.setMistLevel(5)
+
+    then: "switch event fires (value 'on') before the level event"
+    testDevice.events.any { it.name == "switch" && it.value == "on" }
+    testDevice.events.any { it.name == "virtualLevel" }
+    // switch must appear before the configure event in the sequence
+    testDevice.events.findIndexOf { it.name == "switch" } <
+        testDevice.events.findIndexOf { it.name == "virtualLevel" }
+}
+```
+
+Substitute the method and configure-event attribute name (`virtualLevel` for mist level; `level` / `speed` for fan; etc.) as appropriate for the driver under test. The test must:
+- Start from a known off state
+- Call the SHOULD-ON method with a valid parameter
+- Assert that a `switch: on` event fires (via `testDevice.events.any { ... }`)
+- Assert that the `switch` event appears before the configure event in `testDevice.events` ordering
+
+This test fails on pre-fix code (no guard → device stays off → no switch event) and passes on post-fix code (guard present → `on()` fires → switch event emitted).
+
+The order assertion (`findIndexOf < findIndexOf`) is the load-bearing check — `lastEventValue("switch") == "on"` alone would pass even if the switch event came AFTER the configure event (which would be a different latent bug). Use `testDevice.events` ordering for the from-off test; use `lastEventValue` only for terminal-value spot checks. See `LevoitVital200SSpec.groovy` for live examples of both helpers.
 
 ### Full lint rule list
 

@@ -141,6 +141,7 @@ def _collect_per_file_rules():
         driver_app_only_api, agent_pointer_integrity, bp16_watchdog_call_site,
         groovy_javadoc_terminator, bp18_null_guard, captureDiagnostics_presence,
         library_no_top_block_comment, direct_log_calls,
+        bp24_state_switch_dead_branch, bp24_auto_on_guard_missing,
     )
     rules = []
     for module in [
@@ -148,6 +149,7 @@ def _collect_per_file_rules():
         driver_app_only_api, agent_pointer_integrity, bp16_watchdog_call_site,
         groovy_javadoc_terminator, bp18_null_guard, captureDiagnostics_presence,
         library_no_top_block_comment, direct_log_calls,
+        bp24_state_switch_dead_branch, bp24_auto_on_guard_missing,
     ]:
         rules.extend(module.ALL_RULES)
     return rules
