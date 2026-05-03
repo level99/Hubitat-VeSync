@@ -393,4 +393,59 @@ class LevoitCore200SSpec extends HubitatSpec {
         and: "no error was logged"
         testLog.errors.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #24-A: cycleSpeed() auto-turns-on when switch is off
+    // -------------------------------------------------------------------------
+
+    def "BP24-A: cycleSpeed() from off-state turns the device on before sending speed command"() {
+        // Pre-fix code had a dead `if (state.switch == "off") { on() }` branch.
+        // state.switch is never set (it's device.currentValue("switch") that matters),
+        // so the guard never fired and the device stayed physically off.
+        // Post-fix: ensureSwitchOn() checks device.currentValue("switch") != "on" correctly.
+        given: "device is off and state.turningOn is not set"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+
+        when: "cycleSpeed() is called on an off device"
+        driver.cycleSpeed()
+
+        then: "on() was called — setSwitch with enabled=true was sent"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "state.turningOn is cleared after the call (no re-entrance leak)"
+        !state.containsKey("turningOn")
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // D2: off() emits speed:off for capability parity
+    // -------------------------------------------------------------------------
+
+    def "D2: off() emits both switch:off and speed:off events for capability parity"() {
+        // Pre-fix off() only emitted switch:off. D2 fix adds speed:off to match the
+        // AQ-group Core drivers (300S/400S/600S) which already emitted both.
+        // Without speed:off, FanControl consumers see a stale speed attribute after
+        // the device is turned off.
+        given: "device is on with a known speed"
+        settings.descriptionTextEnable = false
+        state.speed = "medium"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "off() is called"
+        driver.off()
+
+        then: "switch:off event was emitted"
+        testDevice.events.find { it.name == "switch" && it.value == "off" } != null
+
+        and: "speed:off event was emitted (D2 parity with AQ-group Core drivers)"
+        testDevice.events.find { it.name == "speed" && it.value == "off" } != null
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
 }

@@ -327,4 +327,31 @@ class LevoitCore600SSpec extends HubitatSpec {
         and: "no error was logged"
         testLog.errors.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #24-A: cycleSpeed() auto-turns-on when switch is off
+    // -------------------------------------------------------------------------
+
+    def "BP24-A: cycleSpeed() from off-state turns the device on before sending speed command"() {
+        // Pre-fix code had a dead `if (state.switch == "off") { on() }` branch (600S used the
+        // switch/case form with 4 speeds, same shape). state.switch is never set;
+        // ensureSwitchOn() checks device.currentValue("switch") correctly.
+        given: "device is off and state.turningOn is not set"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+
+        when: "cycleSpeed() is called on an off device"
+        driver.cycleSpeed()
+
+        then: "on() was called — setSwitch with enabled=true was sent"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "state.turningOn is cleared after the call (no re-entrance leak)"
+        !state.containsKey("turningOn")
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
 }
