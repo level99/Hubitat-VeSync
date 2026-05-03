@@ -236,6 +236,85 @@ Run `[ -f Drivers/Levoit/readme.md ] && echo "present" || echo "absent"` to chec
 
   If no drift detected: report *"No Drivers/Levoit/readme.md top-blurb drift detected this release."*
 
+### Artifact J — Hubitat community-thread announcement draft
+
+Always draft a community-thread announcement post for every release, regardless of severity (major / minor / patch). The user posts manually on the [Hubitat thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) — DO NOT auto-apply / write to disk / post anything. This artifact's output is just the draft for the user to copy.
+
+**Strict format (match existing announcements verbatim — v2.4 / v2.3 / v2.2.1 are the references):**
+
+```
+**v<X.Y[.Z]> is live — <em-dash subtitle, single-line summary, ~6-12 words>**
+
+Released: [Release v<X.Y[.Z]>](https://github.com/level99/Hubitat-VeSync/releases/tag/v<X.Y[.Z]>)
+
+**To update:** HPM → Update → "Levoit Air Purifiers, Humidifiers, and Fans". Existing devices upgrade in place; no re-pairing.
+
+### <Section header — H3, see "Section conventions" below>
+
+- **<Bullet subject in bold, ending with period.>** <Description: user-visible scenario where the bug bit OR what the new feature does. Include device family list if narrow.>
+- **<Next bullet.>** ...
+
+### <Optional second section>
+
+...
+
+### If you own <relevant device for community testing call>
+
+<Paragraph requesting community help on devices the maintainer can't test.>
+
+[Release notes](https://github.com/level99/Hubitat-VeSync/releases/tag/v<X.Y[.Z]>) · [CHANGELOG](https://github.com/level99/Hubitat-VeSync/blob/main/CHANGELOG.md) · [ROADMAP for v<NEXT>](https://github.com/level99/Hubitat-VeSync/blob/main/ROADMAP.md)
+```
+
+**Section conventions** (use H3 `###`, NOT H2 — convention shifted from v2.2.1's `##` to v2.3+ `###`):
+
+| Section header | When to include |
+|---|---|
+| `### Bug fixes` | Always for patch releases. Common in major/minor too. |
+| `### New features` | Major/minor when adding capabilities to existing drivers (e.g., `online` attribute, `captureDiagnostics`) |
+| `### New drivers (preview — community feedback welcome if you own one)` | Major/minor when adding new device drivers as preview |
+| `### <Driver> line back-fill (<scope>)` | Major/minor when filling in capability gaps on existing driver line (e.g., "Core line back-fill (Core 200S/300S/400S/600S)") |
+| `### <Device> moves out of preview (\`<MODEL-CODE>\`)` | When promoting a preview driver to released after live verification |
+| `### Other devices` | Small additions like new regional model code variants |
+| `### If you own <X>` | When asking for community testing help on a specific device the maintainer can't verify |
+
+**Bullet style:**
+
+- **Bug-fix bullets:** lead with the user-visible symptom (what they noticed in their hub), bolded as the subject, then explain what's fixed. Pattern: `- **<Symptom>.** <Where it bit users>. <What the fix does>.`
+  - Example: `- **ERROR: No status returned from getPurifierStatus after a VeSync firmware update or device re-pair** — closes the v2.3 self-heal regression. Polling now recovers without user action; no manual Resync needed.`
+- **Feature bullets:** lead with the feature name, bolded as the subject, then explain what users can do with it. Pattern: `- **<Feature name>.** <What users can do with it>.`
+  - Example: `- **Per-device offline detection.** Every Levoit child device exposes a new \`online\` attribute (\`true\` / \`false\`)...`
+
+**Patch-release variant** (e.g., v2.2.1 / v2.4.1):
+
+- Often a single bullet under `### Bug fixes`
+- No `### If you own...` section (no new device support to test)
+- Total length: ~120-150 words
+- Title subtitle: short and specific (e.g., "setLevel auto-on hotfix" / "Resync crash fix")
+
+**Major/minor-release variant** (e.g., v2.2 / v2.3 / v2.4):
+
+- Multiple sections (Bug fixes + New features + New drivers + ...)
+- Usually includes `### If you own <preview device>` community-feedback section
+- Total length: ~200-380 words
+- Title subtitle: comma-separated headline summary (e.g., "per-device offline detection, captureDiagnostics, Pedestal Fan write-path")
+
+**TMI rules (HARD — match the rest of the cut-release procedure):**
+
+- **No maintainer-environment references** — never write "the maintainer's hub", "post-deploy on dev1064", "verified on Master Air Purifier 1070", etc. Generalize to "live-verified on hub" or drop.
+- **No personal/family detail** — never write "the kid's nap routine", "the noise machine", or anything specific to the maintainer's domestic setup.
+- **No implementation jargon end-users won't recognize** — skip `MissingMethodException`, `state.turningOn`, "sandbox-swallowed", "re-entrance flag", lint rule numbers, exception class FQNs. Reword in plain language symptom + outcome.
+- **No pipeline-process detail** — never mention dev/QA/tester rounds, agent dispatches, model choices, "QA APPROVE'd through 3 rounds".
+- **No CI infrastructure changes** — uv-pin / setup-action chores / dependabot bumps / etc. don't belong in the user-facing announce. They live in CHANGELOG / commit / GitHub Release for archaeology.
+- **Skip latent bug fixes that were sandbox-swallowed in production** — if a bug never produced user-visible behavior pre-fix, don't list it (users won't recognize the change). Same logic as the manifest releaseNotes guidance.
+
+**Sources for content:**
+
+- Title subtitle: derived from the CHANGELOG `[<version>]` headline + commit messages. Match `levoitManifest.json` releaseNotes line tone.
+- Bullets: parsed from the CHANGELOG entry, but rewritten user-facing (CHANGELOG is more technical; community announce is plain-language).
+- "If you own X" section: only when ROADMAP.md or recent CHANGELOG flags a community-tester ask for a specific device.
+
+**Output:** show the draft verbatim (in a code block) so the user can copy-paste. NEVER post it; the user posts manually.
+
 ## Step 5 — Present for approval
 
 Output a single message structured as:
@@ -299,6 +378,14 @@ Output a single message structured as:
 
 <unified diff or proposed-row snippet, or "No Drivers/Levoit/readme.md top-blurb drift detected this release" or "Drivers/Levoit/readme.md not present — skipping">
 
+### Artifact J — Hubitat community-thread announcement draft
+
+\`\`\`
+<full announcement draft, verbatim, in the format documented in Step 4 Artifact J — title + Released-link + To update + sections + footer>
+\`\`\`
+
+(Draft only. The user posts manually on the Hubitat community thread; this artifact never auto-applies.)
+
 ---
 
 Approve to apply, or tell me what to change.
@@ -320,6 +407,7 @@ After explicit approval (e.g., "approved", "go", "ship it"):
 - Apply any Artifact G `README.md` edits if proposed and approved.
 - Apply any Artifact H `repository.json` edits if proposed and approved.
 - Apply any Artifact I `Drivers/Levoit/readme.md` edits if proposed and approved.
+- **Artifact J community announcement draft is NEVER auto-applied** — it lives in the Step 5 proposal output for the user to copy-paste manually onto the Hubitat thread. Do not write to disk. Do not post anywhere. Do not commit.
 
 Do NOT commit. Do NOT tag. Do NOT push.
 
@@ -351,7 +439,10 @@ Next steps for you:
        git tag -a v<version> -m "<release subject>"
        git push origin v<version>
   8. Publish the GitHub Release for the new tag (gh release create or via web UI)
-  9. Community-thread announce (Hubitat forum) with migration notes if applicable
+  9. Hubitat community-thread announce — copy-paste the Artifact J draft from
+     the Step 5 proposal output (no edits needed; format matches v2.4 / v2.3 /
+     v2.2.1 conventions). Post on:
+     https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499
 
 Note: TODO.md is gitignored, so even if it was updated it stays local-only.
 Don't try to git-add it.

@@ -95,21 +95,26 @@ Two additional model codes present in pyvesync `device_map.py` that fall through
 
 Community hardware reports (a debug log showing the model code + `captureDiagnostics` output) will confirm routing and unblock adding these in the next polish round.
 
-### Architectural — class-library extraction
+### Architectural — library extraction refactor (6-phase, headline architectural item)
 
-Per-class shared libraries to collapse duplicated logic across driver families. Surfaced 2026-05-02 during the BP23 audit: Core line (200S/300S/400S/600S) has roughly 1,500-2,800 lines of near-byte-identical code across the 4 drivers; Vital line (100S/200S) ~600-1,000 lines; Fan line (Tower/Pedestal) ~400-600 lines.
+Driver duplication is significant: 22 child drivers carry ~4,500-5,000 lines of duplicated logic — cross-cutting boilerplate (HTTP plumbing, log helpers, lifecycle hooks, BP16 watchdogs, BP18 null-guards) plus per-class parallel implementations (Core / Vital / Fan / V1-humidifier / V2-humidifier line `setLevel` / `setSpeed` / parsers / mode handling). Extracting into a general library + 5 class libraries collapses the duplication, eliminates the recurring "BP-N applies to N drivers, fix in N places" bug shape, and meaningfully reduces LLM-token cost when working on the repo.
 
-Three new libraries proposed:
+**Phase plan (each phase is its own dev/QA/tester cycle, its own PR):**
 
-- **`LevoitCorePurifierLib.groovy`** — shared `setLevel`/`setSpeed`/`handleSpeed`/`setMode`/parsers/AQ logic for Core 200S/300S/400S/600S
-- **`LevoitVitalPurifierLib.groovy`** — shared paths for Vital 100S/200S
-- **`LevoitFanLib.groovy`** — shared paths for Tower Fan / Pedestal Fan
+1. **`LevoitChildBaseLib.groovy`** — general/cross-cutting helpers (HTTP plumbing, log helpers, lifecycle hooks, `toggle`, BP16 `ensureDebugWatchdog`, BP23 `ensureSwitchOn`, BP18 null-guard, 2-arg `setLevel(val, duration)` overload). Touches 16-24 drivers; ~1,500-2,000 lines collapsed into ~250-line library. Phase 1 also includes a one-time validation experiment to confirm Hubitat library `local-override-precedence` behavior — drivers needing to deviate from a library function need a known mechanism.
+2. **`LevoitCorePurifierLib.groovy`** — Core 200S/300S/400S/600S shared `setLevel`/`setSpeed`/`handleSpeed`/`setMode`/parsers/AQ/PM2.5 logic. Most homogeneous class; ~1,400 lines dedup.
+3. **`LevoitV1HumidifierLib.groovy`** — Classic 200S/300S, Dual 200S, LV600S, OasisMist 450S shared mist-level / mode / parser logic. ~1,000 lines dedup.
+4. **`LevoitV2HumidifierLib.groovy`** — Superior 6000S, LV600S Hub Connect, OasisMist 1000S, Sprout Humidifier shared logic. ~800 lines dedup.
+5. **`LevoitVitalPurifierLib.groovy`** — Vital 100S/200S shared logic. ~700 lines dedup.
+6. **`LevoitFanLib.groovy`** — Tower / Pedestal Fan shared logic. ~500 lines dedup.
 
-**Long-term payoff:** every future bug affecting a class collapses to a 1-fix instead of 2-4. Retroactively dedupes BP1 (10 drivers), BP12 (5 driver shapes), BP14 (parent + every child command path), BP16 (every child), BP18 (17 method sites × 13 drivers), BP23 (8 drivers), and the next BP-N of the same shape.
+**Total dedup:** ~4,500 lines collapsed into ~1,300 lines of library code; net driver-codebase line-count drops from 17,471 → ~13,000 (-26%). Each future BP-N collapses to a 1-fix instead of N. Retroactively dedupes BP1 (10 drivers), BP12 (5 shapes), BP14 (parent + every child command path), BP16 (every child), BP18 (17 method sites × 13 drivers), BP23 (8 drivers).
 
-**Tradeoffs:** Hubitat library files have a known parser bug (BP20) — each new library file is fresh exposure surface; file-scope must stay zero-commentary. Library include semantics don't support method override; drivers needing per-instance variation either parameterize the library function or override locally (Hubitat sandbox precedence on local-vs-lib needs verification before relying on it). Each library ships via HPM as another `required: true` dependency users pick up via Update flow (precedent set by `LevoitDiagnosticsLib.groovy` in v2.4).
+**Tradeoffs:** Hubitat library files carry BP20 platform-parser exposure (lint RULE29 + ops-agent library-deploy smoke-test mitigate). Library include semantics don't support method override; drivers needing per-instance variation either parameterize the library function or override locally (Phase 1 validates the override-precedence behavior). Each library ships via HPM as `required: true` (precedent: `LevoitDiagnosticsLib.groovy` in v2.4).
 
-**Sequencing:** Core line first (biggest payoff, most homogeneous), then Vital, then Fan. Each is its own dev/QA/tester cycle, ~6-10 hours per class lib.
+**Sequencing:** Phase 1 in v2.5 (highest leverage, lowest risk). Phase 2 (Core line) in v2.6. Phases 3-6 staged across v2.7+ based on bandwidth and any new BP-N pressure. ~30-50 hours total work; each phase ~6-10 hr.
+
+**Don't bundle phases.** Each library is its own architecture decision with its own validation surface. Discrete phases let learnings from Phase 1 inform Phase 2+ design.
 
 ### Tooling & dev experience
 
