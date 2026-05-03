@@ -377,8 +377,17 @@ Next steps for you:
        curl -I https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/levoit_libraries.zip
      Expect HTTP 302 (redirect chain to GitHub's S3 storage). If 404, the asset
      upload failed — re-check step 5 and re-verify before proceeding.
-  7. Open PR <branch> -> main (preview-before-publish: ask for a body draft)
-  8. Iterate on PR review (Gemini auto-review + maintainer comments)
+  7. Open PR <branch> -> main via `gh pr create` (preview-before-publish: ask
+     for a body draft). PR path is REQUIRED — every release goes through PR
+     review even for one-line hotfixes. Do NOT propose direct/fast-forward
+     merge as an alternative; the maintainer's branch-protection admin-bypass
+     exists for genuine emergency hotfixes (production-broken-now scenarios),
+     not for cut-release flow. Bypass is the maintainer's call to invoke at
+     the time of the actual emergency, not a cut-release option to surface.
+  8. Iterate on PR review. Gemini Code Assist auto-fires on PR open
+     (configured via .gemini/config.yaml); maintainer reviews + addresses
+     Gemini feedback. Both must be addressed (or explicitly waived with
+     rationale) before merge.
   9. Squash-merge to main once review is clean
  10. Community-thread announce (Hubitat forum) with migration notes if applicable
 
