@@ -630,9 +630,11 @@ class LevoitVital100SSpec extends HubitatSpec {
     // -------------------------------------------------------------------------
 
     def "BP24-C: cycleSpeed() from off-state turns the device on before sending speed command"() {
-        // BP24-C fix: cycleSpeed() calls ensureSwitchOn() (from LevoitChildBase) at entry,
-        // which calls on() if the device is off. Previously the on() guard read a never-set
-        // state.switch field (permanent dead branch) so the device stayed off.
+        // BP24-C fix: cycleSpeed() previously had `if (device.currentValue("switch") != "on") on()`
+        // which lacked the `!state.turningOn` re-entrance flag — risk of recursive on() chain
+        // under concurrent calls. Now uses ensureSwitchOn() (from LevoitChildBase) which has
+        // the correct guard: `!state.turningOn && device.currentValue("switch") != "on" → on()`.
+        // (Distinct from BP24-A's `state.switch` dead-branch shape on the Core line.)
         given: "device is off and turningOn flag is clear"
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "off"])
