@@ -448,4 +448,62 @@ class LevoitCore200SSpec extends HubitatSpec {
         and: "no error was logged"
         testLog.errors.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // C3: state-change gate — setChildLock and setDisplay (retroactive fix via lib)
+    // -------------------------------------------------------------------------
+
+    def "C3: setChildLock('on') when childLock is already 'on' is a no-op (no API call)"() {
+        given: "childLock is already on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when:
+        driver.setChildLock("on")
+
+        then: "no setChildLock API call was made"
+        testParent.allRequests.find { it.method == "setChildLock" } == null
+
+        and: "no errors logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "C3: setChildLock('on') when childLock is 'off' does send the API call"() {
+        given: "childLock is currently off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when:
+        driver.setChildLock("on")
+
+        then: "setChildLock API call was made"
+        testParent.allRequests.find { it.method == "setChildLock" } != null
+    }
+
+    def "C3: setDisplay('on') when display is already 'on' is a no-op (no API call)"() {
+        given: "display is already on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "on"])
+
+        when:
+        driver.setDisplay("on")
+
+        then: "no setDisplay API call was made"
+        testParent.allRequests.find { it.method == "setDisplay" } == null
+
+        and: "no errors logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "C3: setDisplay('on') when display is 'off' does send the API call"() {
+        given: "display is currently off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "off"])
+
+        when:
+        driver.setDisplay("on")
+
+        then: "setDisplay API call was made"
+        testParent.allRequests.find { it.method == "setDisplay" } != null
+    }
 }
