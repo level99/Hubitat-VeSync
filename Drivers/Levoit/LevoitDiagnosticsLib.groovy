@@ -40,17 +40,15 @@ library(
 // parent) are safe because sanitize() strips email/token/accountID.
 // ---------------------------------------------------------------------------
 
-/**
- * Append one error entry to the ring buffer for this device.
- *
- * @param msg         Error message string (sanitized by caller before passing).
- * @param ctx         Optional Map of additional context fields (e.g. [method:"getPurifierStatus"]).
- * @param overrideDni When non-null, store the entry under this DNI instead of the
- *                    calling device's own DNI. Used by the parent driver when logging
- *                    a per-child failure (e.g. "No status returned for <childDni>") so
- *                    that captureDiagnosticsFor(childDni) finds the error in the child's
- *                    slot rather than the parent's slot.
- */
+// Append one error entry to the ring buffer for this device.
+//
+// @param msg         Error message string (sanitized by caller before passing).
+// @param ctx         Optional Map of additional context fields (e.g. [method:"getPurifierStatus"]).
+// @param overrideDni When non-null, store the entry under this DNI instead of the
+//                    calling device's own DNI. Used by the parent driver when logging
+//                    a per-child failure (e.g. "No status returned for <childDni>") so
+//                    that captureDiagnosticsFor(childDni) finds the error in the child's
+//                    slot rather than the parent's slot.
 void recordError(String msg, Map ctx = [:], String overrideDni = null) {
     if (device == null) return   // defensive — should never happen in driver context
 
@@ -86,10 +84,8 @@ void recordError(String msg, Map ctx = [:], String overrideDni = null) {
 // Logs [DIAG] completion at INFO so users can see it happened without debug on.
 // ---------------------------------------------------------------------------
 
-/**
- * Build, store, and log a diagnostics snapshot for this device.
- * Called as a Hubitat command from the device page.
- */
+// Build, store, and log a diagnostics snapshot for this device.
+// Called as a Hubitat command from the device page.
 void captureDiagnostics() {
     logDebug "captureDiagnostics()"
 
@@ -178,13 +174,11 @@ void captureDiagnostics() {
 // buildDiagnosticBlock — assemble the markdown dump
 // ---------------------------------------------------------------------------
 
-/**
- * Assemble the full markdown diagnostic block.
- *
- * @param opts Map containing: driverName, driverVersion, modelCode, hubFw, dni,
- *             parentCtx (Map), errors (List), attrSnap (Map)
- * @return     Markdown string suitable for the diagnostics attribute and the GitHub issue body.
- */
+// Assemble the full markdown diagnostic block.
+//
+// @param opts Map containing: driverName, driverVersion, modelCode, hubFw, dni,
+//             parentCtx (Map), errors (List), attrSnap (Map)
+// @return     Markdown string suitable for the diagnostics attribute and the GitHub issue body.
 String buildDiagnosticBlock(Map opts) {
     String driverName    = opts.driverName    ?: "Unknown"
     String driverVersion = opts.driverVersion ?: "?"
@@ -289,13 +283,11 @@ String buildDiagnosticBlock(Map opts) {
 // block manually from the diagnostics attribute.
 // ---------------------------------------------------------------------------
 
-/**
- * Build a GitHub issues pre-fill URL from the given fields map.
- * Keys must match the YAML issue template field IDs (see comment above).
- *
- * @param fields  Map of field-id → field-value strings.
- * @return        Pre-filled GitHub new-issue URL (string).
- */
+// Build a GitHub issues pre-fill URL from the given fields map.
+// Keys must match the YAML issue template field IDs (see comment above).
+//
+// @param fields  Map of field-id → field-value strings.
+// @return        Pre-filled GitHub new-issue URL (string).
 String buildIssueUrl(Map fields) {
     String base = "https://github.com/level99/Hubitat-VeSync/issues/new"
 
@@ -374,10 +366,8 @@ String buildIssueUrl(Map fields) {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/**
- * URL-encode a string for use in query parameters.
- * Uses percent-encoding; spaces become %20 (not +) per RFC 3986.
- */
+// URL-encode a string for use in query parameters.
+// Uses percent-encoding; spaces become %20 (not +) per RFC 3986.
 private String urlEncode(String s) {
     if (!s) return ""
     try {
@@ -387,10 +377,8 @@ private String urlEncode(String s) {
     }
 }
 
-/**
- * Return the error history list for the given DNI from state.errorHistory.
- * Returns an empty list if no history exists.
- */
+// Return the error history list for the given DNI from state.errorHistory.
+// Returns an empty list if no history exists.
 private List getErrorHistory(String dni) {
     if (!dni) return []
     Map history = (state.errorHistory ?: [:]) as Map
@@ -398,11 +386,9 @@ private List getErrorHistory(String dni) {
     return slot
 }
 
-/**
- * Read the driver version from the device metadata, then from the
- * driver's version field if available.
- * Falls back to "2.3" (current codebase default).
- */
+// Read the driver version from the device metadata, then from the
+// driver's version field if available.
+// Falls back to "2.4.1" (current codebase default).
 private String getDriverVersion() {
     try {
         if (state.driverVersion) return state.driverVersion as String
@@ -417,18 +403,14 @@ private String getDriverVersion() {
     return "2.4.1"
 }
 
-/**
- * Get the model code for this device.
- * Reads from device.getDataValue("deviceType"), the VeSync raw model code.
- */
+// Get the model code for this device.
+// Reads from device.getDataValue("deviceType"), the VeSync raw model code.
 private String getModelCode() {
     try { return device?.getDataValue("deviceType") ?: "UNKNOWN" } catch (ignored) { return "UNKNOWN" }
 }
 
-/**
- * Get the hub firmware version.
- * Uses location.hsmStatus on older firmware; falls back to a best-effort string.
- */
+// Get the hub firmware version.
+// Uses location.hsmStatus on older firmware; falls back to a best-effort string.
 private String getHubFirmware() {
     try {
         // location.hsmStatus is not firmware — try the hub version string via location
@@ -443,11 +425,9 @@ private String getHubFirmware() {
     return "unknown"
 }
 
-/**
- * Capture a snapshot of current attribute values.
- * Uses device.currentStates() — available on all Hubitat devices.
- * Returns a Map of name -> value (most recent value per attribute).
- */
+// Capture a snapshot of current attribute values.
+// Uses device.currentStates() — available on all Hubitat devices.
+// Returns a Map of name -> value (most recent value per attribute).
 private Map captureAttributeSnapshot() {
     Map snap = [:]
     try {

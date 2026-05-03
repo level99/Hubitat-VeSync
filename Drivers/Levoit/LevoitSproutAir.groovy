@@ -92,7 +92,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Sprout Air Purifier (LAP-B851S-WUS/-WEU/-AEUR/-AUS/-WNA, LAP-BAY-MAX01S) — fan 1-3, auto/sleep/manual modes, AQ sensors (AQLevel/PM2.5/PM1/PM10/AQI/VOC/CO2), child lock, display, nightlight (on/off/dim). pyvesync VeSyncAirSprout class (VeSyncAirBaseV2). V2-style payloads. No timer.",
-        version: "2.4.1",
+        version: "2.4.2",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"

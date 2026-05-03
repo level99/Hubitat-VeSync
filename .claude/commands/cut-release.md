@@ -69,6 +69,8 @@ Then collect, in parallel:
 
   When applying: read the current `releaseNotes` value, prepend the new line + `\n`, preserve all existing lines verbatim. Do not edit historical entries.
 
+- **Bundle URL versioning.** If `levoitManifest.json` has a `bundles[]` array, every entry's `location` URL is checked. URLs of the form `https://github.com/level99/Hubitat-VeSync/releases/download/v<old>/<filename>.zip` MUST bump to `v<new>/...` to match the new tag — even if the bundle contents are byte-identical. The asset is per-release-tag immutable; the new release-tag's asset has its own URL. If `bundles[]` is missing or empty, skip silently. If `location` does NOT match the GitHub Releases pattern (e.g. third-party CDN), do not auto-bump — surface as INFO and ask user.
+
 ### Artifact B — `CHANGELOG.md` entry
 
 Use [Keep-a-Changelog](https://keepachangelog.com/en/1.1.0/) format. If `CHANGELOG.md` doesn't exist, create it with the standard preamble + the new entry. If it exists, prepend the new entry below `## [Unreleased]` (or below the top-of-file preamble if there's no Unreleased section).
@@ -131,6 +133,19 @@ Reconcile `levoitManifest.json`'s `drivers` array against the actual files in `D
    - **In both, but `name` or `namespace` mismatched** → driver file's `definition()` was edited in a way that drifts from the manifest. Surface as a WARNING — driver-name changes orphan devices (Bug Pattern #9). Suggest reverting the source-side edit OR explicitly accepting the drift if intentional.
 
 Show the proposed additions in the approval round so the user can see what's being added. The user should confirm UUIDs are sensible and the `required: false` default is right (most drivers are optional; only the parent integration is required).
+
+### Artifact C.6 — Manifest `bundles` array reconciliation
+
+Reconcile `levoitManifest.json`'s `bundles[]` array (if present) against the actual library files in `Drivers/Levoit/*Lib.groovy`:
+
+1. Glob `Drivers/Levoit/*Lib.groovy` to list current library source files.
+2. Parse `levoitManifest.json` and extract the `bundles[]` array entries.
+3. Each bundle conceptually wraps one or more library files. For v2.4.2's single-bundle setup, the `levoit_libraries` bundle contains all `*Lib.groovy` files in `Drivers/Levoit/` (currently just `LevoitDiagnosticsLib.groovy`). As more libraries land (Phase 2-6 of the library extraction roadmap), they may stay in one bundle or split into per-family bundles — design choice per release.
+4. **Detection — library file with no bundle reference:** if a `*Lib.groovy` file exists in source but `tools/build-bundle.py` doesn't include it in any bundle's build output AND no `bundles[]` entry references that bundle, surface a WARNING: *"Library file `<filename>` exists but is not declared in any bundle's build-script. Will not ship to HPM users."* Do NOT auto-add — bundle composition is a release-architecture decision. Suggest the user either (a) add the file to `tools/build-bundle.py`, or (b) accept that the library is dev-only / not for HPM distribution.
+5. **Detection — bundle entry with no source backing:** if `bundles[]` references a bundle whose corresponding library files no longer exist in source, surface a WARNING in the same shape as Artifact C.5's drivers-removal warning. Removing a library that drivers `#include` would orphan every install (Bug Pattern #9 family). Do NOT auto-remove.
+6. Each `bundles[].location` URL must be non-empty, https://, and (if matching the GitHub Releases pattern `https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/<filename>.zip`) embed the new version per Artifact A's "Bundle URL versioning" rule.
+
+If `bundles[]` is absent or empty AND no `*Lib.groovy` files exist in source, skip silently — this is a pre-library-era release.
 
 ### Artifact D — `ROADMAP.md` update
 
@@ -275,6 +290,10 @@ Output a single message structured as:
 
 <list of additions / WARNINGs / "No drift detected">
 
+### Artifact C.6 — manifest bundles-array reconciliation
+
+<list of additions / WARNINGs / "bundles[] absent — skipping" / "No drift detected; bundle URL bumped to v<version>">
+
 ### Artifact D — ROADMAP.md updates
 
 <unified diff or proposed-section snippet, or "No roadmap content advanced this release">
@@ -310,7 +329,7 @@ Wait for explicit approval. If the user redirects on any artifact, redraft that 
 
 After explicit approval (e.g., "approved", "go", "ship it"):
 
-- Edit `levoitManifest.json`: update `version`, `dateReleased`, `releaseNotes`. Apply any Artifact C.5 drivers-array additions (do NOT remove entries on `WARNING:` cases — those need human-only review per the spec). Leave `packageName`, `author`, `documentationLink`, `communityLink`, `licenseFile` untouched (those are stable fields changed manually outside of release cuts).
+- Edit `levoitManifest.json`: update `version`, `dateReleased`, `releaseNotes`. Apply any Artifact C.5 drivers-array additions (do NOT remove entries on `WARNING:` cases — those need human-only review per the spec). Apply Artifact C.6 bundles-array URL version bumps (location URLs of the form `releases/download/v<old>/...` → `releases/download/v<new>/...`). Leave `packageName`, `author`, `documentationLink`, `communityLink`, `licenseFile` untouched (those are stable fields changed manually outside of release cuts).
 - Edit (or create) `CHANGELOG.md`: prepend the new entry per Step 4 Artifact B.
 - Apply any Artifact C edits if applicable (runtime DRIVER_VERSION constants).
 - Apply Artifact C.7 edits: for each `.groovy` file in `Drivers/Levoit/`, update or add the `version:` field inside `definition()` to match the new package version.
@@ -343,18 +362,51 @@ Next steps for you:
   1. Review with: git diff
   2. Commit (preview-before-publish: ask for a message draft)
   3. Push the release branch to origin: git push -u origin <branch>
-  4. Open PR <branch> -> main (preview-before-publish: ask for a body draft)
-  5. Iterate on PR review (Gemini auto-review + maintainer comments)
-  6. Squash-merge to main once review is clean
-  7. Tag the squash commit on main:
-       git checkout main && git pull
-       git tag -a v<version> -m "<release subject>"
-       git push origin v<version>
-  8. Publish the GitHub Release for the new tag (gh release create or via web UI)
-  9. Community-thread announce (Hubitat forum) with migration notes if applicable
+  4. Build the HPM bundle ZIP from current source (only if levoitManifest.json
+     has a bundles[] array — otherwise skip to step 7):
+       uv run --python 3.12 tools/build-bundle.py
+     Verify output at bundles/levoit_libraries.zip (gitignored, never committed).
+  5. Create the GitHub Release WITH the bundle asset attached. This creates the
+     tag, publishes the release, and uploads the asset URL the manifest references:
+       gh release create v<version> \
+         --target release/v<version> \
+         --title "v<version> — <release subject>" \
+         --notes-file <release notes file> \
+         ./bundles/levoit_libraries.zip
+  6. Verify the asset URL serves BEFORE merging to main:
+       curl -I https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/levoit_libraries.zip
+     Expect HTTP 302 (redirect chain to GitHub's S3 storage). If 404, the asset
+     upload failed — re-check step 5 and re-verify before proceeding.
+  7. Open PR <branch> -> main via `gh pr create` (preview-before-publish: ask
+     for a body draft). PR path is REQUIRED — every release goes through PR
+     review even for one-line hotfixes. Do NOT propose direct/fast-forward
+     merge as an alternative; the maintainer's branch-protection admin-bypass
+     exists for genuine emergency hotfixes (production-broken-now scenarios),
+     not for cut-release flow. Bypass is the maintainer's call to invoke at
+     the time of the actual emergency, not a cut-release option to surface.
+  8. Iterate on PR review. Gemini Code Assist auto-fires on PR open
+     (configured via .gemini/config.yaml); maintainer reviews + addresses
+     Gemini feedback. Both must be addressed (or explicitly waived with
+     rationale) before merge.
+  9. Squash-merge to main once review is clean
+ 10. Community-thread announce (Hubitat forum) with migration notes if applicable
 
 Note: TODO.md is gitignored, so even if it was updated it stays local-only.
 Don't try to git-add it.
+
+ORDERING WHY: the bundle asset URL must be live BEFORE the manifest on `main`
+references it. HPM users clicking Update fetch the manifest from `main` and
+immediately try to fetch the bundle from the URL it specifies. If the merge
+happens before `gh release create`, there is a window where the manifest is
+published but the asset URL returns 404 — Update fails and users are stuck.
+Steps 4-6 close that window: build the artifact, publish the release+tag with
+the asset attached, verify the URL, THEN merge.
+
+For releases that do NOT change any library source AND do NOT need a bundle URL
+bump (rare — typically only patch releases that fix a single driver and don't
+touch a *Lib.groovy file), skip steps 4-6 entirely and renumber 7 onward.
+Re-using a prior release's bundle is fine; the manifest's bundle URL just
+points at the prior tag's asset.
 ```
 
 Stop. The user owns commit/push/PR/tag/release under preview-before-publish.
@@ -362,8 +414,10 @@ Stop. The user owns commit/push/PR/tag/release under preview-before-publish.
 ## Notes
 
 - This procedure does NOT push to remote, does NOT open a PR, does NOT tag, does NOT update GitHub releases. Those happen across the steps above:
-  * Push branch and open PR are POST-CUT, PRE-MERGE (steps 3-5).
-  * Tag and GitHub Release are POST-MERGE (steps 7-8) -- tag the squash commit on main, NOT the release branch tip (the tag is what users install via HPM, and HPM resolves URLs against main).
+  * Push branch is POST-CUT (step 3).
+  * Build bundle ZIP + `gh release create` (which creates the tag and uploads the asset) + URL verification are POST-CUT, PRE-MERGE (steps 4-6) — required ordering so the asset URL is live before HPM users fetch the manifest from main.
+  * Open PR + iterate review + squash-merge are POST-RELEASE-PUBLISH (steps 7-9).
+  * `gh release create` targets the release branch HEAD (e.g. `--target release/v<version>`); the resulting tag points at that commit. After squash-merge to main, the same commit lives on main's history (fast-forward or squash-merge equivalent), so the tag remains valid for HPM URL resolution.
 - If the user runs this with uncommitted in-progress work other than `TODO.md`, stop and ask — they may have intended to commit first.
 - The `TODO.md` file is intentionally gitignored / not part of releases. Do not surface it in the release diff.
 - For dry-run / preview-only mode, the user can say "draft only, don't apply" — produce Step 5 output and stop without waiting for approval.

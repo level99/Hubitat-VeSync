@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-05-03
+
+### Fixed
+
+- **HPM library distribution — `LevoitDiagnostics` library now installs cleanly via HPM.** The v2.4 manifest used a `libraries[]` array to ship `LevoitDiagnosticsLib.groovy`. HPM silently ignores `libraries[]` (the schema isn't supported), so the library was never installed even though the manifest looked correct. Drivers errored on `#include level99.LevoitDiagnostics` after install or upgrade. Replaced with the Hubitat Bundle ZIP format referenced via `bundles[]`. The bundle is built from source via `tools/build-bundle.py` and shipped as a per-release GitHub Release Asset.
+
+### Changed
+
+- **Defensive BP20 alignment in `LevoitDiagnosticsLib.groovy`.** Body-scope `/** */` javadoc blocks (10 sites) converted to `//` line comments. Comment-only diff with no functional change. Reduces the surface area for the (intermittent) BP20 parser-rejection trigger on user hubs that may sit on slightly different firmware than the maintainer's. Aligns with `tomwpublic/broadlinkHelpers` library style as the known-good reference.
+- **`/cut-release` skill knows about `bundles[]`.** New Artifact C.6 reconciles `bundles[]` against `Drivers/Levoit/*Lib.groovy` source files; Artifact A's "Bundle URL versioning" rule auto-bumps location URLs that embed the release tag. The "Next steps for you" sequence now interleaves `tools/build-bundle.py` build + `gh release create` + URL verification BEFORE merge to main, so the asset URL is live before HPM users fetch the new manifest.
+
+### Added
+
+- **`tools/build-bundle.py`** — uv-runnable build script that produces `bundles/levoit_libraries.zip` from current source. Output is gitignored (binaries never enter git); upload happens via `gh release create` as a release asset. Reusable unchanged by the v2.5 GitHub Actions workflow that will automate the build on tag push.
+
 ## [2.4.1] - 2026-05-02
 
 ### Fixed
