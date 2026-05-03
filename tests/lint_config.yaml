@@ -191,22 +191,6 @@ exemptions:
       explicit dispatch pattern.
 
   # ---------------------------------------------------------------------------
-  # RULE31 — BP24-A dead-state.switch-branch exemptions (Tier-1, 4 sites)
-  # TODO: remove each entry when the corresponding BP24-A Tier-1 fix lands.
-  # The fix replaces `if (state.switch == "off") { on() }` in cycleSpeed()
-  # with `if (!state.turningOn && device.currentValue("switch") != "on") on()`.
-  # ---------------------------------------------------------------------------
-
-  - rule_id: "RULE31_state_switch_dead_branch"
-    file: "Drivers/Levoit/LevoitCore200S.groovy"
-    reason: >
-      Layer-5 scaffold exemption: BP24-A dead-branch at cycleSpeed() line 184.
-      `state.switch` is never written; the guard is permanently dead.
-      Exempted temporarily so Layer-5 lint rules ship on release/v2.5 without
-      blocking on the fix. Remove this entry when the Tier-1 BP24-A fix lands
-      on Core 200S (expected in Phase 2 Core line extraction batch).
-
-  # ---------------------------------------------------------------------------
   # RULE32 — BP24-B/C auto-on guard missing exemptions
   # Entries are grouped by tier (Tier-1 = Fan line, Tier-2 = humidifier line,
   # Tier-3 = EverestAir/SproutAir, pending live-capture of API behavior).

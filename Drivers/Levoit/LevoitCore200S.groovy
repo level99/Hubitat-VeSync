@@ -1,4 +1,4 @@
-/* 
+/*
 
 MIT License
 
@@ -25,6 +25,12 @@ SOFTWARE.
 
 // History:
 //
+// 2026-05-03: v2.5  Migrated to LevoitCorePurifier shared library (Phase 2, Round 6).
+//                  Removed 14 shared methods now provided by LevoitCorePurifierLib.
+//                  BP24-A fix: cycleSpeed() dead state.switch branch replaced with
+//                  ensureSwitchOn() from LevoitChildBase.
+//                  D2 fix: off() now emits speed:off for capability parity with
+//                  other Core line drivers.
 // 2026-04-29: v2.4  Added captureDiagnostics command + diagnostics attribute via
 //                  LevoitDiagnostics library. Added recordError() ring-buffer calls at
 //                  all logError / log.error sites.
@@ -51,6 +57,7 @@ SOFTWARE.
 
 #include level99.LevoitDiagnostics
 #include level99.LevoitChildBase
+#include level99.LevoitCorePurifier
 
 metadata {
     definition(
@@ -94,16 +101,10 @@ metadata {
     }
 }
 
-def installed() {
-	logDebug "Installed with settings: ${settings}"
-    updated();
-}
-
 def updated() {
 	logDebug "Updated with settings: ${settings}"
 
     state.clear()
-    state.driverVersion = "2.4.1"
     unschedule()
 	initialize()
 
@@ -116,14 +117,6 @@ def updated() {
     } else {
         state.remove("debugEnabledAt")
     }
-}
-
-def uninstalled() {
-	logDebug "Uninstalled app"
-}
-
-def initialize() {
-	logDebug "initializing"
 }
 
 def on() {
@@ -163,28 +156,17 @@ def off() {
         handlePower(false)
         logInfo "Power off"
         device.sendEvent(name: "switch", value: "off")
+        device.sendEvent(name: "speed", value: "off")
     } finally {
         state.remove('turningOff')
     }
 }
 
-def toggle() {
-    logDebug "toggle()"
-	if (device.currentValue("switch") == "on")
-		off()
-	else
-		on()
-}
-
 def cycleSpeed() {
     logDebug "cycleSpeed()"
+    ensureSwitchOn()    // BP24-A fix — replaces dead state.switch == "off" branch
 
     def speed = (state.speed == "low") ? "medium" : ( (state.speed == "medium") ? "high" : "low")
-    
-    if (state.switch == "off")
-    {
-        on()
-    }
     setSpeed(speed)
 }
 
@@ -260,11 +242,6 @@ def setMode(mode) {
     }
 }
 
-def setDisplay(displayOn) {
-    logDebug "setDisplay(${displayOn})"
-    handleDisplayOn(displayOn)
-}
-
 def mapSpeedToInteger(speed) {
     return (speed == "low") ? 1 : ( (speed == "medium") ? 2 : 3)
 }
@@ -277,62 +254,11 @@ def mapIntegerToSpeed(speed) {
     return (speed == 1) ? "low" : ( (speed == 2) ? "medium" : "high")
 }
 
-// logDebug, logError, logInfo, logDebugOff, ensureDebugWatchdog
+// logDebug, logError, logInfo, logDebugOff, ensureDebugWatchdog, ensureSwitchOn
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
-
-def handlePower(on) {
-
-    def result = false
-
-    parent.sendBypassRequest(device, [
-                data: [ enabled: on, id: 0 ],
-                "method": "setSwitch",
-                "source": "APP" ]) { resp ->
-			if (checkHttpResponse("handleOn", resp))
-			{
-                def operation = on ? "ON" : "OFF"
-                logDebug "turned ${operation}()"
-				result = true
-			}
-		}
-    return result
-}
-
-def handleSpeed(speed) {
-
-    def result = false
-
-    parent.sendBypassRequest(device, [
-                data: [ level: mapSpeedToInteger(speed), id: 0, type: "wind" ],
-                "method": "setLevel",
-                "source": "APP"
-            ]) { resp ->
-			if (checkHttpResponse("handleSpeed", resp))
-			{
-                logDebug "Set speed"
-				result = true
-			}
-		}
-    return result
-}
-
-def handleMode(mode) {
-
-    def result = false
-
-    parent.sendBypassRequest(device, [
-                data: [ "mode": mode ],
-                "method": "setPurifierMode",
-                "source": "APP"
-            ]) { resp ->
-			if (checkHttpResponse("handleMode", resp))
-			{
-                logDebug "Set mode"
-				result = true
-			}
-		}
-    return result
-}
+// installed, uninstalled, initialize, toggle, setDisplay, handlePower, handleSpeed,
+// handleMode, handleDisplayOn, setChildLock, setTimer, cancelTimer, resetFilter,
+// checkHttpResponse are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
 
 def update() {
 
@@ -420,114 +346,4 @@ def update(status, nightLight)
     }
 
     return status
-}
-
-def setChildLock(value) {
-    // Core-line API uses child_lock (boolean); Vital-line API uses childLockSwitch (integer). Intentional divergence per pyvesync class hierarchy.
-    logDebug "setChildLock(${value})"
-    def result = false
-    parent.sendBypassRequest(device, [
-                data: [ child_lock: (value == "on") ],
-                "method": "setChildLock",
-                "source": "APP"
-            ]) { resp ->
-        if (checkHttpResponse("setChildLock", resp)) {
-            device.sendEvent(name: "childLock", value: value)
-            logInfo "Child lock (Display Lock): ${value}"
-            result = true
-        }
-    }
-    return result
-}
-
-def setTimer(seconds) {
-    int secs = (seconds as Integer) ?: 0
-    logDebug "setTimer(${secs}s)"
-    if (secs <= 0) { cancelTimer(); return }
-    def result = false
-    parent.sendBypassRequest(device, [
-                data: [ action: "off", total: secs ],
-                "method": "addTimer",
-                "source": "APP"
-            ]) { resp ->
-        if (checkHttpResponse("setTimer", resp)) {
-            def tid = resp?.data?.result?.id
-            if (tid != null) state.timerId = tid
-            logInfo "Timer set: power off in ${secs}s (id=${tid})"
-            result = true
-        }
-    }
-    return result
-}
-
-def cancelTimer() {
-    logDebug "cancelTimer()"
-    if (!state.timerId) { logDebug "No active timer to cancel"; return }
-    def result = false
-    parent.sendBypassRequest(device, [
-                data: [ id: state.timerId ],
-                "method": "delTimer",
-                "source": "APP"
-            ]) { resp ->
-        if (checkHttpResponse("cancelTimer", resp)) {
-            state.remove("timerId")
-            logInfo "Timer cancelled"
-            result = true
-        }
-    }
-    return result
-}
-
-def resetFilter() {
-    logDebug "resetFilter()"
-    def result = false
-    parent.sendBypassRequest(device, [
-                data: [:],
-                "method": "resetFilter",
-                "source": "APP"
-            ]) { resp ->
-        if (checkHttpResponse("resetFilter", resp)) {
-            logInfo "Filter life reset"
-            result = true
-        }
-    }
-    return result
-}
-
-def handleDisplayOn(displayOn)
-{
-    logDebug "handleDisplayOn()"
-
-    def result = false
-
-    parent.sendBypassRequest(device, [
-                data: [ "state": (displayOn == "on")],
-                "method": "setDisplay",
-                "source": "APP"
-            ]) { resp ->
-			if (checkHttpResponse("handleDisplayOn", resp))
-			{
-                logDebug "Set display"
-				result = true
-			}
-		}
-    return result
-}
-
-
-def checkHttpResponse(action, resp) {
-	if (resp.status == 200 || resp.status == 201 || resp.status == 204)
-		return true
-	else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500)
-	{
-		logError "${action}: ${resp.status} - ${resp.getData()}"
-		recordError("${action}: ${resp.status}", [site:"checkHttpResponse"])
-		return false
-	}
-	else
-	{
-		logError "${action}: unexpected HTTP response: ${resp.status}"
-		recordError("${action}: unexpected HTTP response: ${resp.status}", [site:"checkHttpResponse"])
-		return false
-	}
 }
