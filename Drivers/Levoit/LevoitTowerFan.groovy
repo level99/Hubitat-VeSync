@@ -62,8 +62,10 @@
  *                      Removed 12 infra methods + 8 shared V2-fan body methods
  *                      (now provided by LevoitFanLib). Added 1-line delegators
  *                      for setMute and setDisplay.
- *                      BP24-B fix: cycleSpeed() now auto-turns-on device when
- *                      off (ensureSwitchOn() in LevoitFanLib cycleSpeed body).
+ *                      BP24-B fix: cycleSpeed() + setSpeed() now auto-turn-on
+ *                      device when off (ensureSwitchOn() in LevoitFanLib
+ *                      cycleSpeed body; ensureSwitchOn() at top of per-driver
+ *                      setSpeed body).
  *                      BP18 normalization: setTimer() seconds and action args
  *                      now use explicit requireNotNull guards matching codebase
  *                      convention (previously implicit ?: coercions).
@@ -153,6 +155,18 @@ metadata {
 def setSpeed(spd){
     logDebug "setSpeed(${spd})"
     if (spd == null) { logWarn "setSpeed called with null spd (likely empty Rule Machine action parameter); ignoring"; return }
+    // Short-circuit power commands before the auto-on guard.
+    // setSpeed("off") must NOT trigger ensureSwitchOn() — the intent is explicitly to turn off.
+    // setSpeed("on") short-circuits here too for symmetry (on() does everything needed).
+    if (!(spd instanceof Number) && !(spd instanceof String && spd.isInteger())) {
+        String early = (spd as String).toLowerCase()
+        if (early == "off") { off(); return }
+        if (early == "on")  { on(); return }
+    }
+    // BP24-B: auto-on when switch is off (SwitchLevel/FanControl capability convention).
+    // Placed after the off/on short-circuits so setSpeed("off") never triggers auto-on.
+    // ensureSwitchOn() is provided by #include level99.LevoitChildBase.
+    ensureSwitchOn()
     // If numeric string or integer, treat as raw fan level (1-12 raw setSpeed command)
     if (spd instanceof Number || (spd instanceof String && spd.isInteger())) {
         Integer rawLevel = (spd as Integer)
@@ -166,8 +180,6 @@ def setSpeed(spd){
     }
     // Enum string (FanControl capability path)
     String s = (spd as String).toLowerCase()
-    if (s == "off")  { off(); return }
-    if (s == "on")   { on(); return }   // Hubitat FanControl spec: "on" resumes at prior/default speed
     if (s == "auto") { setMode("auto"); return }
     Integer lvl = fanControlEnumToLevel(s)
     if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; recordError("setSpeed: unknown enum '${s}'", [method:"setLevel"]); return }

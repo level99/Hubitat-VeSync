@@ -1260,6 +1260,60 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         lastEventValue("switch") == "on"
     }
 
+    // -------------------------------------------------------------------------
+    // Bug Pattern #24-B: setSpeed() auto-turns-on when device is off
+    // -------------------------------------------------------------------------
+
+    def "BP24-B: setSpeed(numeric) when switch is off calls on() before sending level command"() {
+        // setSpeed(N) calls sendLevel(N) which goes to hubBypass — BP24-B violation pre-fix.
+        // After fix: ensureSwitchOn() at top of setSpeed body turns device on first.
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setSpeed is called with a numeric level on an off device"
+        driver.setSpeed(5)
+
+        then: "on() was called — setSwitch with powerSwitch=1 was sent"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
+        onReq != null
+
+        and: "setLevel was sent at level 5"
+        def levelReq = testParent.allRequests.find { it.method == "setLevel" }
+        levelReq != null
+        levelReq.data.manualSpeedLevel == 5
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP24-B: setSpeed(enum) when switch is off calls on() before sending level command"() {
+        // setSpeed("medium-high") resolves to level 8 via fanControlEnumToLevel then calls
+        // sendLevel(8) — same BP24-B entry point as the numeric path. Regression guard.
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setSpeed is called with an enum value on an off device"
+        driver.setSpeed("medium-high")
+
+        then: "on() was called — setSwitch with powerSwitch=1 was sent"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
+        onReq != null
+
+        and: "setLevel was sent at level 8 (medium-high maps to 8 via fanControlEnumToLevel)"
+        def levelReq = testParent.allRequests.find { it.method == "setLevel" }
+        levelReq != null
+        levelReq.data.manualSpeedLevel == 8
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #24-B: cycleSpeed() auto-turns-on when device is off
+    // -------------------------------------------------------------------------
+
     def "BP24-B: cycleSpeed() when switch is off calls on() before sending level command"() {
         // cycleSpeed() must call ensureSwitchOn() (which calls on() when device is off) before
         // advancing the fan level — same auto-on-from-off requirement as setLevel(val) (BP23).

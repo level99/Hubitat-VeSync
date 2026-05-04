@@ -197,35 +197,30 @@ exemptions:
   # TODO: remove each entry when the corresponding BP24 fix sweep lands.
   # ---------------------------------------------------------------------------
 
-  # -- Tier-1: Fan line (TowerFan, PedestalFan) — setSpeed, setMode --
-  # Phase 5 (v2.5): cycleSpeed() BP24-B fix shipped in LevoitFanLib.groovy
-  # (ensureSwitchOn() guard added). cycleSpeed no longer lives in these driver
-  # files — the lib handles it. Remaining violations: setSpeed (calls sendLevel
-  # directly; SHOULD-ON classification clear) and setMode (pending live-capture
-  # of API off-state behavior — potentially SKIP-OK like Vital line setMode).
+  # -- Tier-1: Fan line (TowerFan, PedestalFan) — setMode only --
+  # Phase 5 (v2.5): cycleSpeed() BP24-B fixed in LevoitFanLib; setSpeed() BP24-B
+  # fixed in each driver's per-driver setSpeed body (ensureSwitchOn() added).
+  # Only remaining BP24-B violation per fan: setMode (pending live-capture of
+  # V2 fan API off-state behavior — potentially SKIP-OK like Vital line setMode).
 
   - rule_id: "RULE32_auto_on_guard_missing"
     file: "Drivers/Levoit/LevoitTowerFan.groovy"
     reason: >
-      Partial scaffold exemption (post-Phase-5): cycleSpeed() BP24-B fix landed
-      in LevoitFanLib (Phase 5, v2.5). Remaining BP24-B violations in this file:
-      setSpeed() line 153 (calls sendLevel; SHOULD-ON — pending Phase 6 fix) and
-      setMode() line 199 (calls hubBypass; setMode classification pending
-      live-capture of API behavior while off — potentially SKIP-OK if V2 fan API
-      rejects mode changes while off, same concern as Vital line setMode).
-      Remove setSpeed entry when auto-on guard is added; remove setMode entry
-      when mode classification is confirmed and either the fix lands or it is
-      promoted to bp24_auto_on_exemptions.
+      SKIP-OK-pending exemption (post-Phase-5 setSpeed fix, v2.5): only remaining
+      BP24-B violation is setMode() (calls hubBypass via setTowerFanMode). setMode
+      classification is pending live-capture of V2 fan API behavior while device is
+      off — potentially SKIP-OK if the V2 fan firmware rejects mode changes while
+      off (same concern as Vital line setMode). Remove this entry when live-capture
+      confirms mode classification and either the fix lands or setMode is promoted
+      to bp24_auto_on_exemptions.
 
   - rule_id: "RULE32_auto_on_guard_missing"
     file: "Drivers/Levoit/LevoitPedestalFan.groovy"
     reason: >
-      Partial scaffold exemption (post-Phase-5): cycleSpeed() BP24-B fix landed
-      in LevoitFanLib (Phase 5, v2.5). Remaining BP24-B violations in this file:
-      setSpeed() line 239 (calls sendLevel; SHOULD-ON — pending Phase 6 fix) and
-      setMode() line 283 (calls hubBypass; setMode classification pending
-      live-capture — same concern as TowerFan setMode above). Remove entries
-      when fixed or mode classification is promoted to bp24_auto_on_exemptions.
+      SKIP-OK-pending exemption (post-Phase-5 setSpeed fix, v2.5): only remaining
+      BP24-B violation is setMode() (calls hubBypass via setFanMode). Same
+      classification concern as TowerFan setMode — pending live-capture of V2 fan
+      API behavior while off. Remove when live-capture resolves the classification.
 
   # -- Tier-2: Humidifier line — setMistLevel, setWarmMistLevel, setMode --
   # Fix expected in separate humidifier sweep batch (after Tier-1).
