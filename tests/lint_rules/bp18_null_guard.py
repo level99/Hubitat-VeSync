@@ -22,17 +22,22 @@ Detection algorithm:
     2. Read the method body (brace-balanced, from opening `{` to matching `}`).
     3. Scan the body for vulnerable patterns where the arg is used in a normalization
        call: ``(arg as String).<method>``, ``arg.<normalizing-method>()``.
-    4. For each vulnerable hit, check whether there is an EARLIER line in the same
-       method body that contains an explicit null-guard: ``if (arg == null)`` or
-       ``if (null == arg)``.
-    5. If no preceding guard exists → FAIL.
+    4. For each vulnerable hit, check whether there is an EARLIER position in the same
+       method body that contains EITHER accepted guard form (see below).
+    5. If neither guard form is present before the vulnerable call → FAIL.
 
-Accepted guard form:
-  ``if (arg == null)`` or ``if (null == arg)`` (Yoda style).
+Accepted guard forms (both are functionally equivalent):
+  Form 1 — inline equality check:
+    ``if (arg == null)`` or ``if (null == arg)`` (Yoda style).
+  Form 2 — helper call (canonical since Phase 3+ drivers, v2.5):
+    ``requireNotNull(arg, ...)`` — provided by LevoitChildBaseLib.  The helper
+    checks for null, logs a WARN, and returns false; the driver exits via
+    ``if (!requireNotNull(arg, "setX")) return false``.
+
   Elvis operator (``arg ?: default``) is NOT accepted: it silently substitutes a
   default value and proceeds, which produces a wrong API call without any user
-  notification. The BP18 canonical fix requires warn-and-return, which requires the
-  explicit ``null`` equality check.
+  notification. The BP18 canonical fix requires warn-and-return, which requires an
+  explicit null check.
 
 Vulnerable normalization patterns detected (on the param name `arg`):
   - ``(arg as String).toLowerCase()`` / ``.toUpperCase()`` / ``.trim()``
@@ -44,12 +49,6 @@ Library-aware (inherent): this rule does not call ``is_library_file()`` and
 therefore already scans library files directly when lint.py invokes it with a
 lib file path.  Findings in lib code are attributed to the lib file.  No
 additional driver-level lib-content expansion is needed.
-
-The canonical guard form in Phase 3+ libs is ``requireNotNull(arg, "methodName")``
-(provided by LevoitChildBaseLib).  Methods that use this guard and have no
-vulnerable ``(arg as String).toLowerCase()`` / ``arg.toLowerCase()`` calls are
-correctly found clean by this rule — ``requireNotNull`` replaces the normalization
-pattern itself, so there is nothing to flag.
 
 Exemptions: use the standard lint_config.yaml exemptions mechanism.
 """
@@ -107,6 +106,25 @@ def _make_guard_re(arg: str) -> re.Pattern:
     a = re.escape(arg)
     return re.compile(
         rf'if\s*\(\s*(?:{a}\s*==\s*null|null\s*==\s*{a})\s*\)'
+    )
+
+
+def _make_require_not_null_re(arg: str) -> re.Pattern:
+    """
+    Build a regex that matches a ``requireNotNull(arg, ...)`` helper call on ``arg``.
+
+    Matches:
+      requireNotNull(arg, "setDisplay")
+      if (!requireNotNull(arg, "setDisplay")) return false
+      requireNotNull( arg , "methodName")
+
+    The helper (from LevoitChildBaseLib) checks for null, logs a WARN, and returns
+    false.  Its presence before a normalization call satisfies the BP18 guard
+    requirement (Form 2 — see module docstring).
+    """
+    a = re.escape(arg)
+    return re.compile(
+        rf'requireNotNull\s*\(\s*{a}\s*,'
     )
 
 
@@ -180,17 +198,21 @@ def check_rule27_bp18_null_guard(path, raw_lines, cleaned_lines, raw_text, confi
 
         vuln_re = _make_vuln_re(arg_name)
         guard_re = _make_guard_re(arg_name)
+        require_not_null_re = _make_require_not_null_re(arg_name)
 
         for vuln_match in vuln_re.finditer(body_for_scan):
             vuln_pos_in_body = vuln_match.start()
 
-            # Is there an explicit null-guard earlier in the same body?
+            # Is there either accepted guard form earlier in the same body?
+            # Form 1: inline null-equality check  if (arg == null) / if (null == arg)
+            # Form 2: requireNotNull(arg, ...) helper call (LevoitChildBaseLib, canonical since v2.5)
             guard_match = guard_re.search(body_for_scan, 0, vuln_pos_in_body)
-            if guard_match:
-                # Guard precedes the vulnerable call — OK
+            require_not_null_match = require_not_null_re.search(body_for_scan, 0, vuln_pos_in_body)
+            if guard_match or require_not_null_match:
+                # At least one accepted guard precedes the vulnerable call — OK
                 continue
 
-            # No preceding guard — FAIL
+            # Neither guard form present — FAIL
             # Compute the absolute line number for the vulnerable expression.
             abs_vuln_pos = brace_start + vuln_pos_in_body
             vuln_line = _line_of(raw_text, abs_vuln_pos)
@@ -203,7 +225,7 @@ def check_rule27_bp18_null_guard(path, raw_lines, cleaned_lines, raw_text, confi
                 "rule_id": "RULE27_bp18_null_guard",
                 "title": (
                     f"{method_name}({arg_name}) uses normalization on parameter "
-                    f"without a preceding `if ({arg_name} == null)` guard (Bug Pattern #18)"
+                    f"without a preceding null-guard (Bug Pattern #18)"
                 ),
                 "file": file_rel,
                 "line": vuln_line,
@@ -217,11 +239,17 @@ def check_rule27_bp18_null_guard(path, raw_lines, cleaned_lines, raw_text, confi
                     f"error. See Bug Pattern #18 in vesync-driver-qa.md for full context."
                 ),
                 "fix": (
-                    f"Add an explicit null-guard at the top of {method_name}(), immediately "
-                    f"before the normalization line: "
+                    f"Add a null-guard at the top of {method_name}(), immediately before the "
+                    f"normalization line. Two accepted forms: "
+                    f"(1) helper (canonical): "
+                    f"`if (!requireNotNull({arg_name}, \"{method_name}\")) return false` "
+                    f"(requires LevoitChildBaseLib #include); "
+                    f"(2) inline: "
                     f"`if ({arg_name} == null) {{ logWarn \"{method_name} called with null "
                     f"{arg_name} (likely empty Rule Machine action parameter); ignoring\"; return }}`"
-                    f". Also ensure `def logWarn(msg){{ log.warn msg }}` is defined in the driver."
+                    f". Elvis (`{arg_name} ?: default`) is NOT accepted — it proceeds silently "
+                    f"with a wrong value. Also ensure `def logWarn(msg){{ log.warn msg }}` is "
+                    f"defined in the driver (or included via LevoitChildBaseLib)."
                 ),
             })
 
