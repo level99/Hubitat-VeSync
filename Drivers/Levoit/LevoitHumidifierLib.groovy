@@ -22,7 +22,7 @@ library(
     author: "Dan Cox (level99)",
     description: "Shared infrastructure methods for Levoit humidifier drivers (Classic 200S/300S, Dual 200S, LV600S, LV600S HubConnect, OasisMist 450S/1000S, Sprout, Superior 6000S — 9 drivers across 5 pyvesync classes).",
     documentationLink: "https://github.com/level99/Hubitat-VeSync",
-    importUrl: "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitHumidifierBaseLib.groovy"
+    importUrl: "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitHumidifierLib.groovy"
 )
 
 // REQUIRES: #include level99.LevoitDiagnostics  (provides recordError used in update() + httpOk())

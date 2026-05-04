@@ -143,7 +143,7 @@ metadata {
 }
 
 // ---------- Lifecycle, refresh, toggle, update (0/1/2-arg), hubBypass, httpOk ----------
-// Provided by #include level99.LevoitHumidifier (LevoitHumidifierBaseLib.groovy).
+// Provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 // NOTE: updated() (from lib) calls state.clear(), so firmwareVariant is cleared on
 // settings save -- firmware updates are re-detected on next setMode("auto") call.
 
@@ -491,6 +491,6 @@ def applyStatus(status){
 // provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 // installed, updated, uninstalled, initialize, refresh, toggle,
 // update (0/1/2-arg), hubBypass, httpOk
-// provided by #include level99.LevoitHumidifier (LevoitHumidifierBaseLib.groovy).
+// provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ------------- END -------------

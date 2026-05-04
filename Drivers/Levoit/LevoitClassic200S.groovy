@@ -138,7 +138,7 @@ metadata {
 }
 
 // ---------- Lifecycle, refresh, toggle, update (0/1/2-arg), hubBypass, httpOk ----------
-// Provided by #include level99.LevoitHumidifier (LevoitHumidifierBaseLib.groovy).
+// Provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ---------- Power ----------
 // Humidifier switch payload: {enabled: bool, id: 0}
@@ -410,6 +410,6 @@ def applyStatus(status){
 // provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 // installed, updated, uninstalled, initialize, refresh, toggle,
 // update (0/1/2-arg), hubBypass, httpOk
-// provided by #include level99.LevoitHumidifier (LevoitHumidifierBaseLib.groovy).
+// provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ------------- END -------------

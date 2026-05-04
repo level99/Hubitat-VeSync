@@ -473,4 +473,39 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         req != null
         req.data.containsKey("virtualLevel")
     }
+
+    // -------------------------------------------------------------------------
+    // BP24-B regression guard: setMistLevel from off-state triggers auto-on
+    // Upgrades previous BP24-C partial guard to full ensureSwitchOn() pattern.
+    // Superior 6000S V2-family payload: {powerSwitch:1, switchIdx:0}
+    // This test MUST FAIL on pre-fix code and PASS on post-fix code.
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
+        given: "device is off, turningOn flag not set"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        def offData = [
+            powerSwitch: 0, humidity: 45, targetHumidity: 55,
+            mistLevel: 0, virtualLevel: 3,
+            workMode: "manual",
+            waterLacksState: 0, waterTankLifted: 0,
+            autoStopSwitch: 0, autoStopState: 0,
+            screenState: 0, screenSwitch: 0,
+            filterLifePercent: 80, childLockSwitch: 0,
+            temperature: 700, timerRemain: 0,
+            dryingMode: [dryingState: 0, autoDryingSwitch: 0, dryingLevel: 1, dryingRemain: 0],
+            waterPump: [cleanStatus: 0, remainTime: 0, totalTime: 3600]
+        ]
+        driver.applyStatus(humidifierStatusEnvelope(offData))
+        testParent.allRequests.clear()
+
+        when: "setMistLevel called while device is off"
+        driver.setMistLevel(5)
+
+        then: "setSwitch(powerSwitch:1) was sent — V2-family payload (auto-on via ensureSwitchOn)"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
+        onReq != null
+        onReq.data.switchIdx == 0
+    }
 }

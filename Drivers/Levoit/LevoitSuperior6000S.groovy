@@ -27,6 +27,11 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-05-03: v2.4.2  Phase 4 Round 5 — migrated to LevoitHumidifierLib (11 shared
+ *                        methods removed). BP24-C partial guard on setMistLevel upgraded to full
+ *                        BP24-B ensureSwitchOn(). BP18 requireNotNull on setDisplay + setChildLock
+ *                        + setAutoStop + setDryingMode. C3 state-change gate on setDisplay +
+ *                        setChildLock. logInfo added to setDisplay + setChildLock (NIT fold-in).
  *    2026-04-29: v2.4  Added captureDiagnostics command + diagnostics attribute via
  *                      LevoitDiagnostics library. Added recordError() ring-buffer calls at
  *                      all logError sites.
@@ -44,6 +49,7 @@
 
 #include level99.LevoitDiagnostics
 #include level99.LevoitChildBase
+#include level99.LevoitHumidifier
 
 metadata {
     definition(
@@ -98,21 +104,8 @@ metadata {
     }
 }
 
-def installed(){ logDebug "Installed ${settings}"; updated() }
-def updated(){
-    logDebug "Updated ${settings}"
-    state.clear(); unschedule(); initialize()
-    runIn(3, "refresh")
-    // Turn off debug log in 30 minutes (happy path — no hub reboot)
-    if (settings?.debugOutput) {
-        runIn(1800, "logDebugOff")
-        state.debugEnabledAt = now()
-    } else {
-        state.remove("debugEnabledAt")
-    }
-}
-def uninstalled(){ logDebug "Uninstalled" }
-def initialize(){ logDebug "Initializing" }
+// Lifecycle, refresh, toggle, update (0/1/2-arg), hubBypass, httpOk
+// are provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ---------- Power ----------
 def on(){
@@ -129,14 +122,7 @@ def off(){
     else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
-// state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write
-// race (the new event from on()/off() may not be queryable yet on a same-tick toggle()).
-// Falls back to device.currentValue("switch") when state isn't seeded yet (first-call case).
-def toggle(){
-    logDebug "toggle()"
-    String current = state.lastSwitchSet ?: device.currentValue("switch")
-    current == "on" ? off() : on()
-}
+// toggle: provided by #include level99.LevoitHumidifier (state.lastSwitchSet preferred pattern)
 
 // ---------- Mode ----------
 def setMode(mode){
@@ -160,8 +146,8 @@ def setMode(mode){
 // ---------- Mist level ----------
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
+    ensureSwitchOn()
     Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
-    if (device.currentValue("switch") != "on") on()
     def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "setVirtualLevel(${lvl})")
     if (httpOk(resp)) {
         state.virtualLevel = lvl
@@ -212,23 +198,34 @@ def setTargetHumidity(percent){
 // ---------- Feature setters ----------
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
-    if (httpOk(resp)) device.sendEvent(name:"display", value: onOff)
-    else { logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"]) }
+    if (!requireNotNull(onOff, "setDisplay")) return false
+    String val = (onOff as String).toLowerCase()
+    if (device.currentValue("display") == val) return true
+    Integer v = (val == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${val})")
+    if (httpOk(resp)) {
+        device.sendEvent(name:"display", value: val)
+        logInfo "Display: ${val}"
+    } else { logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"]) }
 }
 
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${onOff})")
-    if (httpOk(resp)) device.sendEvent(name:"childLock", value: onOff)
-    else { logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"]) }
+    if (!requireNotNull(onOff, "setChildLock")) return false
+    String val = (onOff as String).toLowerCase()
+    if (device.currentValue("childLock") == val) return true
+    Integer v = (val == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${val})")
+    if (httpOk(resp)) {
+        device.sendEvent(name:"childLock", value: val)
+        logInfo "Child lock: ${val}"
+    } else { logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"]) }
 }
 
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
+    if (!requireNotNull(onOff, "setAutoStop")) return false
+    Integer v = ((onOff as String).toLowerCase() == "on") ? 1 : 0
     def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${onOff})")
     if (httpOk(resp)) { device.sendEvent(name:"autoStopConfig", value: onOff); logInfo "Auto-stop: ${onOff}" }
     else { logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"]) }
@@ -236,40 +233,14 @@ def setAutoStop(onOff){
 
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
+    if (!requireNotNull(onOff, "setDryingMode")) return false
+    Integer v = ((onOff as String).toLowerCase() == "on") ? 1 : 0
     def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
     if (httpOk(resp)) logInfo "Drying mode auto-switch set: ${onOff}"
     else { logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"]) }
 }
 
-// ---------- Refresh ----------
-def refresh(){ update() }
-
-// ---------- Update / status ----------
-// Self-fetch when called directly
-def update(){
-    logDebug "update() self-fetch"
-    def resp = hubBypass("getHumidifierStatus", [:], "update")
-    if (httpOk(resp)) {
-        def status = resp?.data
-        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"getHumidifierStatus"]) }
-        else applyStatus(status)
-    }
-}
-
-// Parent-poll, 1-arg signature (some humidifier parent paths use this)
-def update(status){
-    logDebug "update() from parent (1-arg)"
-    applyStatus(status)
-    return true
-}
-
-// 2-arg variant — parent driver calls update(status, nightLight); nightLight not applicable to humidifiers
-def update(status, nightLight){
-    logDebug "update() from parent (2-arg, nightLight ignored)"
-    applyStatus(status)
-    return true
-}
+// refresh, update (0/1/2-arg): provided by #include level99.LevoitHumidifier
 
 // ---------- applyStatus ----------
 def applyStatus(status){
@@ -425,31 +396,6 @@ private int levelFromPercent(Integer pct){
 
 // logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
-
-// Hub/parent call wrapper
-private hubBypass(method, Map data=[:], tag=null, cb=null){
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp){
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]){
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200 innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"
-    recordError("HTTP ${st}", [method:"httpOk"])
-    return false
-}
+// hubBypass, httpOk provided by #include level99.LevoitHumidifier.
 
 // ------------- END -------------

@@ -80,6 +80,10 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-05-03: v2.4.2  Phase 4 Round 5 — migrated to LevoitHumidifierLib (11 shared methods
+ *                        removed from driver). BP24-B ensureSwitchOn() on setMistLevel. BP18
+ *                        requireNotNull on setDisplay + setChildLock + setAutoStop + setDryingMode.
+ *                        C3 state-change gate on setDisplay + setChildLock.
  *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.2.1  Initial release. US + EU Sprout Humidifier in a single driver.
  *                        pyvesync VeSyncSproutHumid class. V2-style payload conventions.
@@ -90,6 +94,7 @@
 
 #include level99.LevoitDiagnostics
 #include level99.LevoitChildBase
+#include level99.LevoitHumidifier
 
 metadata {
     definition(
@@ -147,21 +152,8 @@ metadata {
     }
 }
 
-// ---------- Lifecycle ----------
-def installed(){ logDebug "Installed ${settings}"; updated() }
-def updated(){
-    logDebug "Updated ${settings}"
-    state.clear(); unschedule(); initialize()
-    runIn(3, "refresh")
-    if (settings?.debugOutput) {
-        runIn(1800, "logDebugOff")
-        state.debugEnabledAt = now()
-    } else {
-        state.remove("debugEnabledAt")
-    }
-}
-def uninstalled(){ logDebug "Uninstalled" }
-def initialize(){ logDebug "Initializing" }
+// Lifecycle, refresh, toggle, update (0/1/2-arg), hubBypass, httpOk
+// are provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ---------- Power ----------
 // VeSyncSproutHumid toggle_switch: {powerSwitch: int, switchIdx: 0}
@@ -179,11 +171,7 @@ def off(){
     else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
-def toggle(){
-    logDebug "toggle()"
-    String current = state.lastSwitchSet ?: device.currentValue("switch")
-    current == "on" ? off() : on()
-}
+// toggle: provided by #include level99.LevoitHumidifier
 
 // ---------- Mode ----------
 // VeSyncSproutHumid set_mode: {workMode: mist_modes[mode]}
@@ -213,6 +201,7 @@ def setMode(mode){
 // Range: 1-2 only (mist_levels=[1,2] per device_map.py — Sprout is a 2-level device).
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
+    ensureSwitchOn()
     Integer lvl = Math.max(1, Math.min(2, (level as Integer) ?: 1))
     def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "setVirtualLevel(mist,${lvl})")
     if (httpOk(resp)) {
@@ -244,11 +233,14 @@ def setHumidity(percent){
 // VeSyncSproutHumid toggle_display: {screenSwitch: int}
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
+    if (!requireNotNull(onOff, "setDisplay")) return false
+    String val = (onOff as String).toLowerCase()
+    if (device.currentValue("displayOn") == val) return true
+    Integer v = (val == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${val})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
+        device.sendEvent(name:"displayOn", value: val)
+        logInfo "Display: ${val}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
@@ -258,11 +250,14 @@ def setDisplay(onOff){
 // VeSyncSproutHumid toggle_child_lock: {childLockSwitch: int}
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${onOff})")
+    if (!requireNotNull(onOff, "setChildLock")) return false
+    String val = (onOff as String).toLowerCase()
+    if (device.currentValue("childLock") == val) return true
+    Integer v = (val == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${val})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: onOff)
-        logInfo "Child lock: ${onOff}"
+        device.sendEvent(name:"childLock", value: val)
+        logInfo "Child lock: ${val}"
     } else {
         logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }
@@ -272,7 +267,8 @@ def setChildLock(onOff){
 // VeSyncSproutHumid toggle_automatic_stop: {autoStopSwitch: int}
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
+    if (!requireNotNull(onOff, "setAutoStop")) return false
+    Integer v = ((onOff as String).toLowerCase() == "on") ? 1 : 0
     def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${onOff})")
     if (httpOk(resp)) {
         device.sendEvent(name:"autoStopEnabled", value: onOff)
@@ -287,7 +283,8 @@ def setAutoStop(onOff){
 // Drying mode runs the fan without mist after humidification to dry out the internals.
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
+    if (!requireNotNull(onOff, "setDryingMode")) return false
+    Integer v = ((onOff as String).toLowerCase() == "on") ? 1 : 0
     def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
     if (httpOk(resp)) {
         device.sendEvent(name:"dryingEnabled", value: onOff)
@@ -329,33 +326,7 @@ def setNightlight(onOff, brightness = null, colorTemp = null){
     }
 }
 
-// ---------- Refresh ----------
-def refresh(){ update() }
-
-// ---------- Update / status ----------
-def update(){
-    logDebug "update() self-fetch"
-    def resp = hubBypass("getHumidifierStatus", [:], "update")
-    if (httpOk(resp)) {
-        def status = resp?.data
-        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"getHumidifierStatus"]) }
-        else applyStatus(status)
-    }
-}
-
-// 1-arg parent callback
-def update(status){
-    logDebug "update() from parent (1-arg)"
-    applyStatus(status)
-    return true
-}
-
-// 2-arg parent callback -- REQUIRED (BP#1); parent always calls with two args
-def update(status, nightLight){
-    logDebug "update() from parent (2-arg, nightLight ignored -- Sprout has no external night-light child)"
-    applyStatus(status)
-    return true
-}
+// refresh, update (0/1/2-arg): provided by #include level99.LevoitHumidifier
 
 // ---------- applyStatus ----------
 def applyStatus(status){
@@ -506,30 +477,6 @@ def applyStatus(status){
 
 // logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
-
-// Hub/parent call wrapper — matches sibling driver pattern
-private hubBypass(method, Map data=[:], tag=null, cb=null){
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp){
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]){
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// hubBypass, httpOk provided by #include level99.LevoitHumidifier.
 
 // ------------- END -------------

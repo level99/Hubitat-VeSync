@@ -152,7 +152,7 @@ metadata {
 }
 
 // Lifecycle, refresh, toggle, update (0/1/2-arg), hubBypass, httpOk
-// are provided by #include level99.LevoitHumidifier (LevoitHumidifierBaseLib.groovy).
+// are provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ---------- Power ----------
 // CROSS-CHECK [pyvesync LUH-A603S-WUS.yaml / VeSyncLV600S class]:

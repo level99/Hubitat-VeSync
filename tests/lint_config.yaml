@@ -241,29 +241,39 @@ exemptions:
 
   # OasisMist 450S: all three methods (setMode, setMistLevel, setWarmMistLevel) fixed in Phase 4 Round 4.
 
+  # OasisMist 1000S, Sprout Humidifier, Superior 6000S:
+  # setMistLevel BP24-B exemptions removed — ensureSwitchOn() added in Phase 4 Round 5.
+  # setMode SKIP-OK exemptions added below for each (V2-family; same API off-state behavior).
+
   - rule_id: "RULE32_auto_on_guard_missing"
     file: "Drivers/Levoit/LevoitOasisMist1000S.groovy"
     reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 181 and
-      setMistLevel() line 200. Both are SHOULD-ON. Remove this entry when the
-      Tier-2 humidifier BP24-B fix sweep lands on OasisMist 1000S.
+      SKIP-OK exemption: BP24-B on setMode() only. OasisMist 1000S uses VeSyncHumid1000S
+      class (V2-family API: powerSwitch/switchIdx, workMode). V2 API rejects mode changes
+      while device is off (same behaviour as Vital line setMode). setMistLevel has been fixed
+      with ensureSwitchOn() in Phase 4 Round 5. setMode is intentionally left without auto-on
+      guard pending live-capture confirmation of V2 API off-state mode rejection. Remove this
+      entry when live-capture confirms mode classification (either fixed as SHOULD-ON or
+      promoted to bp24_auto_on_exemptions).
 
   - rule_id: "RULE32_auto_on_guard_missing"
     file: "Drivers/Levoit/LevoitSproutHumidifier.groovy"
     reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 194 and
-      setMistLevel() line 215. Both are SHOULD-ON. Remove this entry when the
-      Tier-2 humidifier BP24-B fix sweep lands on Sprout Humidifier.
+      SKIP-OK exemption: BP24-B on setMode() only. Sprout Humidifier uses VeSyncSproutHumid
+      class (V2-family API: powerSwitch/switchIdx, workMode:'autoPro' for auto). V2 API rejects
+      mode changes while device is off. setMistLevel has been fixed with ensureSwitchOn() in
+      Phase 4 Round 5. setMode is intentionally left without auto-on guard pending live-capture
+      confirmation. Remove this entry when live-capture confirms mode classification.
 
   - rule_id: "RULE32_auto_on_guard_missing"
     file: "Drivers/Levoit/LevoitSuperior6000S.groovy"
     reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 143 (no guard) and
-      BP24-C on setMistLevel() line 162 (partial guard — has
-      device.currentValue("switch") check but missing !state.turningOn
-      re-entrance flag). setMode is SHOULD-ON; setMistLevel is SHOULD-ON.
-      Remove this entry when the Tier-2 humidifier BP24-B/C fix sweep lands
-      on Superior 6000S.
+      SKIP-OK exemption: BP24-B on setMode() only. Superior 6000S uses VeSyncSuperior6000S
+      class (V2-family API: powerSwitch/switchIdx, workMode:'autoPro' for auto). V2 API rejects
+      mode changes while device is off. setMistLevel BP24-C partial guard was upgraded to full
+      ensureSwitchOn() in Phase 4 Round 5. setMode is intentionally left without auto-on guard
+      pending live-capture confirmation. Remove this entry when live-capture confirms mode
+      classification (either fixed as SHOULD-ON or promoted to bp24_auto_on_exemptions).
 
   # -- Tier-3: EverestAir / SproutAir setMode + setFanSpeed --
   # Deferred: API behavior while device is off is unconfirmed (live-capture
