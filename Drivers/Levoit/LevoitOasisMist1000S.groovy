@@ -71,6 +71,8 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-05-03: v2.5  setDisplay + setAutoStop methods extracted to LevoitHumidifierLib
+ *                       (now shared with OM1000S/Sprout/Sup6000S).
  *    2026-05-03: v2.4.2  Phase 4 Round 5 — migrated to LevoitHumidifierLib (11 shared methods
  *                        removed from driver). BP24-B ensureSwitchOn() on setMistLevel. BP18
  *                        requireNotNull on setDisplay + setAutoStop. C3 state-change gate on setDisplay.
@@ -221,41 +223,9 @@ def setHumidity(percent){
     }
 }
 
-// ---------- Display ----------
-// VeSyncHumid1000S set_display: {screenSwitch: int} -- integer 0/1.
-// Different from VeSyncHumid200300S which uses {state: bool}.
-def setDisplay(onOff){
-    logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return false
-    String val = (onOff as String).toLowerCase()
-    if (device.currentValue("displayOn") == val) return true
-    Integer v = (val == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${val})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: val)
-        logInfo "Display: ${val}"
-    } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
-    }
-}
-
-// ---------- Auto-stop ----------
-// VeSyncHumid1000S toggle_automatic_stop: {autoStopSwitch: int(toggle)}.
-// Different from VeSyncHumid200300S which uses method setAutomaticStop + {enabled: bool}.
-def setAutoStop(onOff){
-    logDebug "setAutoStop(${onOff})"
-    if (!requireNotNull(onOff, "setAutoStop")) return false
-    String val = (onOff as String).toLowerCase()
-    if (device.currentValue("autoStopEnabled") == val) return  // C3 state-change gate
-    Integer v = (val == "on") ? 1 : 0
-    def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${val})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: onOff)
-        logInfo "Auto-stop: ${onOff}"
-    } else {
-        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"])
-    }
-}
+// V2-line shared body via lib; delegators preserve method-presence semantics.
+def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
+def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 
 // ---------- Nightlight (WEUR only -- runtime-gated) ----------
 // CROSS-CHECK [pyvesync device_map.py VeSyncHumid1000S WEUR entry]:

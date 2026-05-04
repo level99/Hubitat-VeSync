@@ -70,6 +70,7 @@
  *    If community users confirm setAutoStop works on LUH-A603S-WUS, promote to command.
  *
  *  History:
+ *    2026-05-03: v2.5  setDisplay method extracted to LevoitHumidifierLib (V2-line shared).
  *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.3  Community fork [PREVIEW v2.3]. Built from pyvesync device_map.py
  *                      LUH-A603S-WUS entry + VeSyncLV600S class + LUH-A603S-WUS.yaml fixture
@@ -280,26 +281,11 @@ def setHumidity(percent){
     }
 }
 
-// ---------- Display ----------
-// CROSS-CHECK [pyvesync LUH-A603S-WUS.yaml turn_on_display / VeSyncLV600S.toggle_display()]:
-//   setDisplay payload: {screenSwitch: 0|1}  integer, NOT bool
-//   NOT {state: bool} (VeSyncHumid200300S class) or {enabled, id} (Classic 200S).
-//   Source: pyvesync LUH-A603S-WUS.yaml turn_on_display: {screenSwitch: 1}
-def setDisplay(onOff){
-    logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return false
-    String val = (onOff as String).toLowerCase()
-    if (device.currentValue("displayOn") == val) return true
-    Integer v = (val == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${val})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: val)
-        logInfo "Display: ${val}"
-    } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
-    }
-}
-
+// V2-line shared setDisplay body via lib (screenSwitch payload). NO setAutoStop —
+// AUTO_STOP capability not present on LV600SHC per pyvesync feature flags;
+// LevoitLV600SHubConnectSpec.groovy:683 regression-guards method absence.
+// CROSS-CHECK [pyvesync LUH-A603S-WUS.yaml turn_on_display]: {screenSwitch: 0|1} integer.
+def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
 
 // ---------- applyStatus ----------
 def applyStatus(status){

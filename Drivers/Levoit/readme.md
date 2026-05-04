@@ -236,10 +236,10 @@ Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize
 | virtualLevel | 1-9 | Set/requested mist level |
 | level | 0-100 | SwitchLevel mapping (mistLevel mapped to %) |
 | water | ok, empty, removed | Water-tank state |
-| display | on, off | Front-panel display |
+| displayOn | on, off | Front-panel display |
 | childLock | on, off | Child-lock state |
-| autoStopConfig | on, off | Auto-stop-when-target-reached config |
-| autoStopActive | yes, no | Whether auto-stop is currently active |
+| autoStopEnabled | on, off | Auto-stop-when-target-reached config |
+| autoStopReached | yes, no | Whether auto-stop is currently active |
 | dryingMode | active, complete, idle, off | Wick auto-drying state |
 | dryingTimeRemain | seconds | Time remaining in drying cycle |
 | pumpCleanStatus | cleaning, idle | Water pump self-clean cycle |

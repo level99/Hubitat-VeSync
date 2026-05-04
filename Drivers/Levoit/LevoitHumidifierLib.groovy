@@ -27,23 +27,34 @@ library(
 
 // REQUIRES: #include level99.LevoitDiagnostics  (provides recordError used in update() + httpOk())
 // REQUIRES: #include level99.LevoitChildBase    (provides logInfo/logDebug/logError, ensureDebugWatchdog)
-// PROVIDES: 11 cross-family infrastructure methods byte-identical across all 9 humidifier drivers:
+// PROVIDES: 13 cross-family infrastructure + V2-line shared helpers:
 //   Lifecycle: installed, updated, uninstalled, initialize, refresh
 //   Polling: update() (no-arg), update(status) (1-arg), update(status, nightLight) (2-arg)
 //   Power: toggle (lastSwitchSet preferred-state pattern)
 //   HTTP plumbing: hubBypass, httpOk
+//   V2-line shared bodies (OM1000S + Sprout + Sup6000S + LV600SHC for setDisplay):
+//     doSetDisplayScreenSwitch — {screenSwitch: int} payload, emits displayOn
+//     doSetAutoStopSwitch      — {autoStopSwitch: int} payload, emits autoStopEnabled
+//   Each V2-line driver declares a 1-line delegator (def setDisplay(o){doSetDisplayScreenSwitch(o)})
+//   so the public method name is stable while the body is shared. The helpers use unique
+//   names to avoid Groovy "duplicate method signature" compile errors on the 5 Classic-family
+//   drivers that also #include this lib and keep their own per-driver setDisplay/setAutoStop.
 //
 // Per-driver methods retained (intentional family divergence):
 //   on/off (Classic vs V2 payload), setMode (5 wire-value variants),
 //   setMistLevel (range + payload varies), setWarmMistLevel (3 drivers, 2 shapes),
 //   setHumidity/setTargetHumidity (snake_case vs camelCase, floor varies),
-//   setDisplay (3 shapes), setAutoStop (2 shapes), setChildLock/setDryingMode (Sprout+Sup6000S only),
+//   setDisplay/setAutoStop for Classic-family ({state: bool}, {enabled: bool}, etc.): per-driver
+//   setChildLock/setDryingMode (Sprout+Sup6000S only),
 //   nightlight methods (per-driver), applyStatus (structurally family-divergent).
 //
 // Behavior notes:
 //   - update() (0-arg) recordError tag normalized to [site:"update"] across all 9 drivers
-//     (audit found mixed [site:]/[method:] usage; lib uses [site:] uniformly).
-//   - httpOk() recordError tag normalized to [site:"httpOk"] (Sup6000S used [method:]; lib uses [site:]).
+//     (audit found mixed [site:]/[method:] usage).
+//   - httpOk() recordError tag normalized to [site:"httpOk"] (Sup6000S used [method:]).
+//   - Infrastructure methods (update, httpOk) use [site:] tags; V2-line feature helpers
+//     (doSetDisplayScreenSwitch, doSetAutoStopSwitch) use [method:] tags matching the
+//     per-driver convention they replace.
 
 // ---- Lifecycle ----
 
@@ -144,4 +155,42 @@ private boolean httpOk(resp) {
     }
     logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
+}
+
+// ---- V2-line shared feature setters ----
+// Used by OM1000S, Sprout, Sup6000S, LV600SHC (setDisplay only).
+// All 4 drivers use identical payload shape for setDisplay: {screenSwitch: Integer}
+// OM1000S, Sprout, Sup6000S use identical payload for setAutoStop: {autoStopSwitch: Integer}
+// Classic-family drivers (Classic 200S/300S, Dual 200S, LV600S, OM450S) keep per-driver
+// implementations: different API methods (setAutomaticStop, setIndicatorLightSwitch) and
+// different payload shapes ({enabled: bool}, {state: bool}).
+
+def doSetDisplayScreenSwitch(onOff) {
+    logDebug "setDisplay(${onOff})"
+    if (!requireNotNull(onOff, "setDisplay")) return false
+    String val = (onOff as String).toLowerCase()
+    if (device.currentValue("displayOn") == val) return true
+    Integer v = (val == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${val})")
+    if (httpOk(resp)) {
+        device.sendEvent(name:"displayOn", value: val)
+        logInfo "Display: ${val}"
+    } else {
+        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
+    }
+}
+
+def doSetAutoStopSwitch(onOff) {
+    logDebug "setAutoStop(${onOff})"
+    if (!requireNotNull(onOff, "setAutoStop")) return false
+    String val = (onOff as String).toLowerCase()
+    if (device.currentValue("autoStopEnabled") == val) return true
+    Integer v = (val == "on") ? 1 : 0
+    def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${val})")
+    if (httpOk(resp)) {
+        device.sendEvent(name:"autoStopEnabled", value: val)
+        logInfo "Auto-stop: ${val}"
+    } else {
+        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"])
+    }
 }

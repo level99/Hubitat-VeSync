@@ -251,14 +251,14 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         and: "water is 'ok' (no lack, not lifted)"
         lastEventValue("water") == "ok"
 
-        and: "display is 'on' (screenState=1)"
-        lastEventValue("display") == "on"
+        and: "displayOn is 'on' (screenState=1)"
+        lastEventValue("displayOn") == "on"
 
         and: "childLock is 'off'"
         lastEventValue("childLock") == "off"
 
-        and: "autoStopConfig is 'on' (autoStopSwitch=1)"
-        lastEventValue("autoStopConfig") == "on"
+        and: "autoStopEnabled is 'on' (autoStopSwitch=1)"
+        lastEventValue("autoStopEnabled") == "on"
 
         and: "temperature is populated"
         lastEventValue("temperature") != null
@@ -552,14 +552,13 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
 
     // -------------------------------------------------------------------------
     // CONCERN 3 regression guard: setAutoStop C3 state-change gate
-    // setAutoStop("on") when autoStopConfig is already "on" → no API call (no-op).
-    // Note: this driver uses attribute "autoStopConfig" (not "autoStopEnabled" — BP9).
+    // setAutoStop("on") when autoStopEnabled is already "on" → no API call (no-op).
     // -------------------------------------------------------------------------
 
     def "setAutoStop('on') when already 'on' is a no-op (CONCERN 3 C3 gate)"() {
-        given: "autoStopConfig is already 'on'"
+        given: "autoStopEnabled is already 'on'"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "autoStopConfig", value: "on"])
+        testDevice.events.add([name: "autoStopEnabled", value: "on"])
         testParent.allRequests.clear()
 
         when: "setAutoStop('on') called — same value as current"
@@ -570,9 +569,9 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
     }
 
     def "setAutoStop('off') when 'on' sends API call (CONCERN 3 C3 gate — state change passes through)"() {
-        given: "autoStopConfig is currently 'on'"
+        given: "autoStopEnabled is currently 'on'"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "autoStopConfig", value: "on"])
+        testDevice.events.add([name: "autoStopEnabled", value: "on"])
         testParent.allRequests.clear()
 
         when: "setAutoStop('off') called — value differs"

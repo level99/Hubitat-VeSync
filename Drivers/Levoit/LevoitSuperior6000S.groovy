@@ -27,6 +27,12 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-05-03: v2.5  BREAKING — attribute renames for cross-line consistency:
+ *                       display → displayOn, autoStopConfig → autoStopEnabled,
+ *                       autoStopActive → autoStopReached. Existing dashboards/RM
+ *                       rules referencing the old names must be updated. setDisplay
+ *                       and setAutoStop now provided by LevoitHumidifierLib (V2-line
+ *                       shared). One-week-since-v2.4-ship grace period; very few users.
  *    2026-05-03: v2.4.2  Phase 4 Round 5 — migrated to LevoitHumidifierLib (11 shared
  *                        methods removed). BP24-C partial guard on setMistLevel upgraded to full
  *                        BP24-B ensureSwitchOn(). BP18 requireNotNull on setDisplay + setChildLock
@@ -72,13 +78,10 @@ metadata {
         attribute "virtualLevel", "number"       // 1-9, set level
         attribute "targetHumidity", "number"     // %, target
         attribute "water", "string"              // ok | empty | removed
-        // "display" (not "displayOn"): this driver shipped with "display" and is live on user hubs.
-        // Renaming to "displayOn" would orphan existing dashboards and RM rules (BP9 name-change risk
-        // applies to attribute names as much as driver names). Intentional divergence from sibling drivers.
-        attribute "display", "string"            // on | off
+        attribute "displayOn", "string"          // on | off
         attribute "childLock", "string"          // on | off
-        attribute "autoStopConfig", "string"     // on | off
-        attribute "autoStopActive", "string"     // yes | no
+        attribute "autoStopEnabled", "string"    // on | off
+        attribute "autoStopReached", "string"    // yes | no
         attribute "dryingMode", "string"         // active | complete | idle | off (auto-drying state)
         attribute "dryingTimeRemain", "number"   // seconds remaining in drying cycle
         attribute "wickFilterLife", "number"     // 0-100 %
@@ -210,18 +213,9 @@ def setTargetHumidity(percent){
 }
 
 // ---------- Feature setters ----------
-def setDisplay(onOff){
-    logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return false
-    String val = (onOff as String).toLowerCase()
-    if (device.currentValue("display") == val) return true
-    Integer v = (val == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${val})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"display", value: val)
-        logInfo "Display: ${val}"
-    } else { logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"]) }
-}
+// V2-line shared bodies via lib; delegators preserve method-presence semantics.
+def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
+def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
@@ -234,17 +228,6 @@ def setChildLock(onOff){
         device.sendEvent(name:"childLock", value: val)
         logInfo "Child lock: ${val}"
     } else { logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"]) }
-}
-
-def setAutoStop(onOff){
-    logDebug "setAutoStop(${onOff})"
-    if (!requireNotNull(onOff, "setAutoStop")) return false
-    String val = (onOff as String).toLowerCase()
-    if (device.currentValue("autoStopConfig") == val) return true  // C3 state-change gate (attr: autoStopConfig, not autoStopEnabled — BP9)
-    Integer v = (val == "on") ? 1 : 0
-    def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${val})")
-    if (httpOk(resp)) { device.sendEvent(name:"autoStopConfig", value: val); logInfo "Auto-stop: ${val}" }
-    else { logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"]) }
 }
 
 def setDryingMode(onOff){
@@ -331,14 +314,14 @@ def applyStatus(status){
 
     // Display: prefer screenState (actual) over screenSwitch (config) if both present
     Integer screen = (r.screenState != null ? r.screenState : r.screenSwitch) as Integer
-    device.sendEvent(name:"display", value: screen == 1 ? "on" : "off")
+    device.sendEvent(name:"displayOn", value: screen == 1 ? "on" : "off")
 
     // Child lock
     device.sendEvent(name:"childLock", value: (r.childLockSwitch as Integer) == 1 ? "on" : "off")
 
     // Auto-stop: config (switch) vs active state
-    device.sendEvent(name:"autoStopConfig", value: (r.autoStopSwitch as Integer) == 1 ? "on" : "off")
-    device.sendEvent(name:"autoStopActive", value: (r.autoStopState as Integer) == 1 ? "yes" : "no")
+    device.sendEvent(name:"autoStopEnabled", value: (r.autoStopSwitch as Integer) == 1 ? "on" : "off")
+    device.sendEvent(name:"autoStopReached", value: (r.autoStopState as Integer) == 1 ? "yes" : "no")
 
     // Drying mode — nested map. dryingState enum (per pyvesync DryingModes): 0=OFF, 1=DRYING, 2=COMPLETE
     if (r.dryingMode instanceof Map) {
