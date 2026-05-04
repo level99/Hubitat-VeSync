@@ -13,10 +13,20 @@ Hubitat attributes and the real device state.
 
 Sub-shapes covered:
   BP24-B: Method has API call but NO guard at all (``currentValue("switch")``
-          absent AND ``ensureSwitchOn`` absent).
-  BP24-C: Method has a partial guard but the ``!state.turningOn`` re-entrance
-          flag is missing (``device.currentValue("switch") != "on") on()``
-          without the turningOn prefix).
+          absent AND ``ensureSwitchOn()`` absent).
+  BP24-C: Method has an INLINE partial guard (``device.currentValue("switch")``
+          present) but the ``!state.turningOn`` re-entrance flag is missing.
+          This does NOT apply when the guard is ``ensureSwitchOn()`` — that
+          helper encapsulates the re-entrance check internally, so the calling
+          method legitimately never references ``state.turningOn``.
+
+Guard recognition:
+  Two equivalent guard forms are accepted:
+    1. ``ensureSwitchOn()`` — canonical helper (preferred).  Encapsulates both
+       the currentValue check and the !state.turningOn re-entrance flag.
+       A method using this form is fully correct; BP24-C does NOT apply.
+    2. Inline ``device.currentValue("switch")`` check.  Must be accompanied by
+       ``state.turningOn`` somewhere in the method body (BP24-C check enforced).
 
 Note on BP24-C detection: the partial-guard check is conservative.  We only
 flag it if ``state.turningOn`` is nowhere in the method body at all — this
@@ -38,9 +48,13 @@ Detection algorithm:
       2. Check whether the body contains an API call
          (hubBypass / sendBypassRequest / sendLevel).
       3. If API call present:
-         a. Check for ``device.currentValue("switch")`` OR ``ensureSwitchOn`` guard.
-         b. If no guard at all → BP24-B FAIL.
-         c. If guard present but ``state.turningOn`` nowhere in body → BP24-C FAIL.
+         a. Check for ``ensureSwitchOn()`` (canonical helper) OR inline
+            ``device.currentValue("switch")`` guard.
+         b. If neither form present → BP24-B FAIL.
+         c. If only the inline form is present AND ``state.turningOn`` is
+            nowhere in the method body → BP24-C FAIL.
+         d. If ``ensureSwitchOn()`` is present → PASS (re-entrance check is
+            inside the helper; ``state.turningOn`` need not appear in caller).
       4. If no API call (pure delegation method, e.g. setSpeed(numeric) that
          only calls setSpeed(string)) → skip (no direct cloud interaction).
 
@@ -91,13 +105,21 @@ API_CALL_RE = re.compile(
     r'\b(?:hubBypass|sendBypassRequest|sendLevel)\s*\('
 )
 
-# Auto-on guard patterns (canonical BP24-B fix).
-GUARD_RE = re.compile(
+# Inline guard pattern: device.currentValue("switch") check.
+# When present, the caller must also reference state.turningOn (BP24-C check).
+INLINE_GUARD_RE = re.compile(
     r'device\.currentValue\s*\(\s*"switch"\s*\)'
-    r'|ensureSwitchOn\s*\('
 )
 
-# Re-entrance flag pattern.
+# Helper guard pattern: ensureSwitchOn() call.
+# This is the canonical preferred form.  It encapsulates both the currentValue
+# check and the !state.turningOn re-entrance flag internally, so the calling
+# method does NOT need to reference state.turningOn.  A method using only this
+# form is fully correct — BP24-C does not apply.
+ENSURE_SWITCH_ON_RE = re.compile(r'ensureSwitchOn\s*\(')
+
+# Re-entrance flag pattern (required when inline guard is used, not when
+# ensureSwitchOn() is used).
 TURNING_ON_RE = re.compile(r'\bstate\.turningOn\b')
 
 
@@ -207,8 +229,15 @@ def check_rule32_auto_on_guard_missing(
         # API call present — check for auto-on guard.
         method_start_line = _line_of(raw_text, m.start())
 
-        has_guard = bool(GUARD_RE.search(body_clean))
+        has_ensure_switch_on = bool(ENSURE_SWITCH_ON_RE.search(body_clean))
+        has_inline_guard = bool(INLINE_GUARD_RE.search(body_clean))
+        has_guard = has_ensure_switch_on or has_inline_guard
         has_turning_on = bool(TURNING_ON_RE.search(body_clean))
+
+        # BP24-C only applies when the guard is the inline currentValue form.
+        # ensureSwitchOn() encapsulates the re-entrance check internally — the
+        # calling method legitimately does not reference state.turningOn.
+        needs_reentrance_check = has_inline_guard and not has_ensure_switch_on
 
         if not has_guard:
             # BP24-B: no guard at all
@@ -234,11 +263,11 @@ def check_rule32_auto_on_guard_missing(
                     "command convention: SHOULD-ON methods must auto-turn-on before commanding."
                 ),
                 "fix": (
-                    f"Add at the top of ``{method_name}()`` (after parameter validation, "
-                    "before the API call): "
-                    "``if (!state.turningOn && device.currentValue('switch') != 'on') on()`` — "
-                    "The ``!state.turningOn`` re-entrance flag (set by ``on()`` in a try/finally "
-                    "block) prevents recursion if ``on()`` internally re-enters the method. "
+                    f"Add ``ensureSwitchOn()`` at the top of ``{method_name}()`` (after "
+                    "parameter validation, before the API call). ``ensureSwitchOn()`` is "
+                    "provided by LevoitChildBaseLib and handles both the currentValue check "
+                    "and the !state.turningOn re-entrance flag. Alternatively use the inline "
+                    "form: ``if (!state.turningOn && device.currentValue('switch') != 'on') on()`` — "
                     "See Bug Pattern #24 in .claude/agents/vesync-driver-qa.md for the canonical "
                     "fix shape and the SHOULD-ON / SKIP-OK / NO-ON classification taxonomy. "
                     "If this method is intentionally SKIP-OK or NO-ON, add an exemption entry "
@@ -246,13 +275,15 @@ def check_rule32_auto_on_guard_missing(
                     "substantive ``rationale`` explaining why auto-on is undesirable here."
                 ),
             })
-        elif has_guard and not has_turning_on:
-            # BP24-C: partial guard (currentValue check present but no turningOn flag)
+        elif needs_reentrance_check and not has_turning_on:
+            # BP24-C: inline currentValue guard present but no state.turningOn re-entrance flag.
+            # Does NOT fire when ensureSwitchOn() is the guard — that helper encapsulates
+            # the re-entrance check internally.
             findings.append({
                 "severity": "FAIL",
                 "rule_id": "RULE32_auto_on_guard_missing",
                 "title": (
-                    f"{method_name}() auto-on guard is missing the state.turningOn "
+                    f"{method_name}() inline auto-on guard is missing the state.turningOn "
                     "re-entrance flag (Bug Pattern #24-C)"
                 ),
                 "file": file_rel,
@@ -270,15 +301,18 @@ def check_rule32_auto_on_guard_missing(
                     "overflow or double-initialization."
                 ),
                 "fix": (
-                    f"Prefix the guard in ``{method_name}()`` with the re-entrance check: "
-                    "``if (!state.turningOn && device.currentValue('switch') != 'on') on()`` — "
+                    f"Replace the inline guard in ``{method_name}()`` with ``ensureSwitchOn()`` "
+                    "(canonical preferred form, provided by LevoitChildBaseLib — handles "
+                    "re-entrance internally). Or prefix the existing guard with the re-entrance "
+                    "check: ``if (!state.turningOn && device.currentValue('switch') != 'on') on()`` — "
                     "``on()`` must set ``state.turningOn = true`` at entry (in a try/finally "
                     "block with ``state.remove('turningOn')`` in finally). This prevents the "
                     "recursive call when ``on()`` internally triggers a speed or mode command "
                     "during its own initialization sequence."
                 ),
             })
-        # else: guard + turningOn both present — correct, no finding
+        # else: guard is ensureSwitchOn() (complete, re-entrance handled in helper),
+        #       OR inline guard + state.turningOn both present — correct, no finding
 
     return findings
 

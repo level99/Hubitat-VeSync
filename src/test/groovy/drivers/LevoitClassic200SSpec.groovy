@@ -655,4 +655,51 @@ class LevoitClassic200SSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setMode") && it.contains("null") }
         testParent.allRequests.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // BP24-B regression guard: auto-on from off-state (setMistLevel + setMode)
+    // These specs MUST FAIL on pre-fix code (no ensureSwitchOn call) and
+    // PASS on post-fix code (ensureSwitchOn added as first line).
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
+        given: "device is off, turningOn flag not set"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        // Seed current switch state as "off" via a prior applyStatus
+        def offData = [enabled: false, humidity: 40, mist_virtual_level: 0, mist_level: 0,
+                       mode: "manual", water_lacks: false,
+                       indicator_light_switch: false, automatic_stop_reach_target: false,
+                       night_light_brightness: 0,
+                       configuration: [auto_target_humidity: 50, automatic_stop: false]]
+        driver.applyStatus(v2StatusEnvelope(offData))
+        testParent.allRequests.clear()
+
+        when: "setMistLevel called while device is off"
+        driver.setMistLevel(3)
+
+        then: "setSwitch(enabled:true) was sent (auto-on via ensureSwitchOn)"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+    }
+
+    def "setMode('auto') from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
+        given: "device is off, turningOn flag not set"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        def offData = [enabled: false, humidity: 40, mist_virtual_level: 0, mist_level: 0,
+                       mode: "manual", water_lacks: false,
+                       indicator_light_switch: false, automatic_stop_reach_target: false,
+                       night_light_brightness: 0,
+                       configuration: [auto_target_humidity: 50, automatic_stop: false]]
+        driver.applyStatus(v2StatusEnvelope(offData))
+        testParent.allRequests.clear()
+
+        when: "setMode called while device is off"
+        driver.setMode("auto")
+
+        then: "setSwitch(enabled:true) was sent (auto-on via ensureSwitchOn)"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+    }
 }

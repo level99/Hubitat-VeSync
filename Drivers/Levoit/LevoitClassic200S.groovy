@@ -76,6 +76,7 @@
 
 #include level99.LevoitDiagnostics
 #include level99.LevoitChildBase
+#include level99.LevoitHumidifier
 
 metadata {
     definition(
@@ -136,22 +137,8 @@ metadata {
     }
 }
 
-// ---------- Lifecycle ----------
-def installed(){ logDebug "Installed ${settings}"; updated() }
-def updated(){
-    logDebug "Updated ${settings}"
-    state.clear(); unschedule(); initialize()
-    runIn(3, "refresh")
-    // Turn off debug log in 30 minutes (happy path — no hub reboot)
-    if (settings?.debugOutput) {
-        runIn(1800, "logDebugOff")
-        state.debugEnabledAt = now()
-    } else {
-        state.remove("debugEnabledAt")
-    }
-}
-def uninstalled(){ logDebug "Uninstalled" }
-def initialize(){ logDebug "Initializing" }
+// ---------- Lifecycle, refresh, toggle, update (0/1/2-arg), hubBypass, httpOk ----------
+// Provided by #include level99.LevoitHumidifier (LevoitHumidifierBaseLib.groovy).
 
 // ---------- Power ----------
 // Humidifier switch payload: {enabled: bool, id: 0}
@@ -170,13 +157,6 @@ def off(){
     else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
-// state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write race.
-def toggle(){
-    logDebug "toggle()"
-    String current = state.lastSwitchSet ?: device.currentValue("switch")
-    current == "on" ? off() : on()
-}
-
 // ---------- Mode ----------
 // CROSS-CHECK [pyvesync Classic200S.yaml (commit c98729c) / device_map.py Classic200S entry]:
 //   Decision: expose two user-facing modes (auto, manual). Sleep is NOT exposed.
@@ -191,6 +171,7 @@ def toggle(){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
+    ensureSwitchOn()
     String m = (mode as String).toLowerCase()
     // CROSS-CHECK: only auto and manual are valid for Classic 200S (no sleep per device_map.py)
     if (!(m in ["auto","manual"])) {
@@ -217,6 +198,7 @@ def setMode(mode){
 // NOTE: field names id/level/type -- NOT levelIdx/virtualLevel/levelType (Superior 6000S / LV600S Hub Connect)
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
+    ensureSwitchOn()
     Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
     def resp = hubBypass("setVirtualLevel", [id: 0, level: lvl, type: "mist"], "setVirtualLevel(${lvl})")
     if (httpOk(resp)) {
@@ -259,6 +241,8 @@ def setHumidity(percent){
 //     setDisplay with {state: bool} works --> swap to setDisplay; file pyvesync issue.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
+    if (!requireNotNull(onOff, "setDisplay")) return false
+    if (device.currentValue("displayOn") == onOff) return  // C3 state-change gate
     Boolean v = (onOff == "on")
     // Classic 200S: setIndicatorLightSwitch with {enabled, id} -- NOT setDisplay with {state}
     def resp = hubBypass("setIndicatorLightSwitch", [enabled: v, id: 0], "setIndicatorLightSwitch(${onOff})")
@@ -275,6 +259,8 @@ def setDisplay(onOff){
 // setAutomaticStop payload: {enabled: bool} -- same as Classic 300S / Dual 200S (VeSyncHumid200300S base)
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
+    if (!requireNotNull(onOff, "setAutoStop")) return false
+    if (device.currentValue("autoStopEnabled") == onOff) return  // C3 state-change gate
     Boolean v = (onOff == "on")
     def resp = hubBypass("setAutomaticStop", [enabled: v], "setAutomaticStop(${onOff})")
     if (httpOk(resp)) {
@@ -284,35 +270,6 @@ def setAutoStop(onOff){
         logError "Auto-stop write failed"
         recordError("Auto-stop write failed", [method:"setAutomaticStop"])
     }
-}
-
-// ---------- Refresh ----------
-def refresh(){ update() }
-
-// ---------- Update / status ----------
-def update(){
-    logDebug "update() self-fetch"
-    def resp = hubBypass("getHumidifierStatus", [:], "update")
-    if (httpOk(resp)) {
-        def status = resp?.data
-        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [site:"update"]) }
-        else applyStatus(status)
-    }
-}
-
-// 1-arg parent callback
-def update(status){
-    logDebug "update() from parent (1-arg)"
-    applyStatus(status)
-    return true
-}
-
-// 2-arg parent callback -- REQUIRED (BP#1); parent always calls with two args
-// nightLight parameter accepted but ignored -- Classic 200S has no nightlight command
-def update(status, nightLight){
-    logDebug "update() from parent (2-arg, nightLight ignored -- Classic 200S has no nightlight command)"
-    applyStatus(status)
-    return true
 }
 
 // ---------- applyStatus ----------
@@ -450,32 +407,9 @@ def applyStatus(status){
 
 // ---------- Internal helpers ----------
 // logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
-// are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
-
-// Hub/parent call wrapper -- matches sibling driver pattern
-private hubBypass(method, Map data=[:], tag=null, cb=null){
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp){
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]){
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"
-    recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
+// installed, updated, uninstalled, initialize, refresh, toggle,
+// update (0/1/2-arg), hubBypass, httpOk
+// provided by #include level99.LevoitHumidifier (LevoitHumidifierBaseLib.groovy).
 
 // ------------- END -------------

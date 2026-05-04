@@ -226,28 +226,6 @@ exemptions:
   # Fix expected in separate humidifier sweep batch (after Tier-1).
 
   - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitClassic200S.groovy"
-    reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 192 and
-      setMistLevel() line 219. Both are SHOULD-ON (humidifier configure commands
-      should auto-on). Remove this entry when the Tier-2 humidifier BP24-B
-      fix sweep lands on Classic 200S.
-
-  - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitClassic300S.groovy"
-    reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 141 and
-      setMistLevel() line 170. Both are SHOULD-ON. Remove this entry when the
-      Tier-2 humidifier BP24-B fix sweep lands on Classic 300S.
-
-  - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitDual200S.groovy"
-    reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 211 and
-      setMistLevel() line 276. Both are SHOULD-ON. Remove this entry when the
-      Tier-2 humidifier BP24-B fix sweep lands on Dual 200S.
-
-  - rule_id: "RULE32_auto_on_guard_missing"
     file: "Drivers/Levoit/LevoitLV600S.groovy"
     reason: >
       Layer-5 scaffold exemption: BP24-B on setMode() line 194, setMistLevel()
