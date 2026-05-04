@@ -75,6 +75,7 @@
 
 #include level99.LevoitDiagnostics
 #include level99.LevoitChildBase
+#include level99.LevoitHumidifier
 
 // CROSS-CHECK [pyvesync PR #502 / RGB nightlight for LUH-O451S-WEU]:
 //   Status: PR #502 is OPEN/CHANGES_REQUESTED, stalled since 2026-01. Upstream pyvesync
@@ -197,26 +198,11 @@ metadata {
     }
 }
 
-// ---------- Lifecycle ----------
-def installed(){ logDebug "Installed ${settings}"; updated() }
-def updated(){
-    logDebug "Updated ${settings}"
-    // state.clear() also clears state.firmwareVariant -- firmware updates get re-detected on
-    // next setMode("auto") call (see sendModeRequest multi-firmware fallback logic below).
-    // state.clear() also removes rgbNightlightSetTime -- clears the 180s stale-data gate so
-    // the first applyStatus after updated() always reads fresh RGB state from the device.
-    state.clear(); unschedule(); initialize()
-    runIn(3, "refresh")
-    // Turn off debug log in 30 minutes (happy path — no hub reboot)
-    if (settings?.debugOutput) {
-        runIn(1800, "logDebugOff")
-        state.debugEnabledAt = now()
-    } else {
-        state.remove("debugEnabledAt")
-    }
-}
-def uninstalled(){ logDebug "Uninstalled" }
-def initialize(){ logDebug "Initializing" }
+// Lifecycle, refresh, toggle, update (0/1/2-arg), hubBypass, httpOk
+// are provided by #include level99.LevoitHumidifier (LevoitHumidifierBaseLib.groovy).
+// NOTE: lib updated() calls state.clear(), which also clears state.firmwareVariant and
+//   state.rgbNightlightSetTime -- firmware re-detection and 180s stale-data gate reset
+//   both happen automatically on updated().
 
 // ---------- Power ----------
 // Humidifier switch payload: {enabled: bool, id: 0}
@@ -235,14 +221,6 @@ def off(){
     else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
-// state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write
-// race (the new event from on()/off() may not be queryable yet on a same-tick toggle()).
-// Falls back to device.currentValue("switch") when state isn't seeded yet (first-call case).
-def toggle(){
-    logDebug "toggle()"
-    String current = state.lastSwitchSet ?: device.currentValue("switch")
-    current == "on" ? off() : on()
-}
 
 // ---------- Mode ----------
 // CROSS-CHECK [pyvesync issue #295 / HA bonus finding #a (refuted) / pyvesync issue #500 context]:
@@ -267,6 +245,7 @@ def toggle(){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
+    ensureSwitchOn()
     String m = (mode as String).toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     if (m == "auto") {
@@ -321,6 +300,7 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
 // NOTE: field names id/level/type -- NOT levelIdx/virtualLevel/levelType (Superior 6000S)
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
+    ensureSwitchOn()
     Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
     def resp = hubBypass("setVirtualLevel", [id: 0, level: lvl, type: "mist"], "setVirtualLevel(mist,${lvl})")
     if (httpOk(resp)) {
@@ -352,6 +332,7 @@ def setMistLevel(level){
 // Valid range: 0-3 (0 = warm mist off; 1-3 = warm intensity levels)
 def setWarmMistLevel(level){
     logDebug "setWarmMistLevel(${level})"
+    ensureSwitchOn()
     Integer lvl = (level as Integer) ?: 0
     if (lvl < 0 || lvl > 3) {
         logError "Invalid warm mist level ${lvl} -- must be 0-3 (0=off, 1-3=warm intensity)"
@@ -404,11 +385,14 @@ def setHumidity(percent){
 // setDisplay payload: {state: bool} -- NOT {screenSwitch: int} (Superior 6000S)
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    Boolean v = (onOff == "on")
-    def resp = hubBypass("setDisplay", [state: v], "setDisplay(${onOff})")
+    if (!requireNotNull(onOff, "setDisplay")) return false
+    String val = (onOff as String).toLowerCase()
+    if (device.currentValue("displayOn") == val) return true
+    Boolean v = (val == "on")
+    def resp = hubBypass("setDisplay", [state: v], "setDisplay(${val})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
+        device.sendEvent(name:"displayOn", value: val)
+        logInfo "Display: ${val}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
@@ -669,48 +653,19 @@ def probeNightLight(){
 // setAutomaticStop payload: {enabled: bool} -- NOT {autoStopSwitch: int} (Superior 6000S)
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
-    Boolean v = (onOff == "on")
-    def resp = hubBypass("setAutomaticStop", [enabled: v], "setAutomaticStop(${onOff})")
+    if (!requireNotNull(onOff, "setAutoStop")) return false
+    String val = (onOff as String).toLowerCase()
+    if (device.currentValue("autoStopEnabled") == val) return true
+    Boolean v = (val == "on")
+    def resp = hubBypass("setAutomaticStop", [enabled: v], "setAutomaticStop(${val})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: onOff)
-        logInfo "Auto-stop: ${onOff}"
+        device.sendEvent(name:"autoStopEnabled", value: val)
+        logInfo "Auto-stop: ${val}"
     } else {
         logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
     }
 }
 
-// ---------- Refresh ----------
-def refresh(){ update() }
-
-// ---------- Update / status ----------
-// Self-fetch when called directly (no-arg).
-// NOTE: this path passes resp.data into applyStatus; the parent-callback path (1-arg/2-arg
-// below) passes data.result already. The peel-while-loop in applyStatus handles both shapes
-// defensively, but the data-flow asymmetry means applyStatus's first peel iteration is doing
-// different work depending on entry point.
-def update(){
-    logDebug "update() self-fetch"
-    def resp = hubBypass("getHumidifierStatus", [:], "update")
-    if (httpOk(resp)) {
-        def status = resp?.data
-        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"update"]) }
-        else applyStatus(status)
-    }
-}
-
-// 1-arg parent callback
-def update(status){
-    logDebug "update() from parent (1-arg)"
-    applyStatus(status)
-    return true
-}
-
-// 2-arg parent callback -- REQUIRED (BP#1); parent always calls with two args
-def update(status, nightLight){
-    logDebug "update() from parent (2-arg, nightLight ignored -- 450S has no nightlight)"
-    applyStatus(status)
-    return true
-}
 
 // ---------- applyStatus ----------
 def applyStatus(status){
@@ -921,30 +876,6 @@ def applyStatus(status){
 
 // logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
-
-// Hub/parent call wrapper -- matches sibling driver pattern
-private hubBypass(method, Map data=[:], tag=null, cb=null){
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp){
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]){
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// hubBypass, httpOk provided by #include level99.LevoitHumidifier.
 
 // ------------- END -------------

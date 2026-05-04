@@ -426,7 +426,8 @@ class LevoitLV600SSpec extends HubitatSpec {
     }
 
     def "setWarmMistLevel with value out of range logs error and sends no request"() {
-        given:
+        given: "device is on so BP24-B ensureSwitchOn() no-ops; isolates validation scope"
+        testDevice.events.add([name: "switch", value: "on"])
         settings.descriptionTextEnable = false
 
         when:
@@ -504,7 +505,8 @@ class LevoitLV600SSpec extends HubitatSpec {
     // -------------------------------------------------------------------------
 
     def "setMode('auto') canonical-accept: first attempt uses 'auto' payload, cached as 'std'"() {
-        given: "no cached firmware variant (first call)"
+        given: "device is on so BP24-B ensureSwitchOn() no-ops; no cached firmware variant (first call)"
+        testDevice.events.add([name: "switch", value: "on"])
         settings.descriptionTextEnable = true
         assert state.firmwareVariant == null
 
@@ -531,7 +533,8 @@ class LevoitLV600SSpec extends HubitatSpec {
     }
 
     def "setMode('auto') canonical-reject then alt-accept: falls back to 'humidity', cached as 'alt'"() {
-        given: "no cached variant; canonical 'auto' payload rejected (inner code -1)"
+        given: "device is on so BP24-B ensureSwitchOn() no-ops; no cached variant; canonical 'auto' payload rejected (inner code -1)"
+        testDevice.events.add([name: "switch", value: "on"])
         settings.descriptionTextEnable = true
         // First sendBypassRequest call gets inner-error response (rejects "auto")
         // Second call (retry with "humidity") gets success
@@ -553,7 +556,8 @@ class LevoitLV600SSpec extends HubitatSpec {
     }
 
     def "setMode('auto') with cached 'alt': goes direct to 'humidity' payload, no retry"() {
-        given: "firmwareVariant already cached as 'alt' (from prior detection)"
+        given: "device is on so BP24-B ensureSwitchOn() no-ops; firmwareVariant already cached as 'alt' (from prior detection)"
+        testDevice.events.add([name: "switch", value: "on"])
         settings.descriptionTextEnable = true
         state.firmwareVariant = "alt"
 
@@ -585,7 +589,8 @@ class LevoitLV600SSpec extends HubitatSpec {
     }
 
     def "setMode('sleep') sends setHumidityMode with {mode:'sleep'} -- no fallback logic for non-auto modes"() {
-        given:
+        given: "device is on so BP24-B ensureSwitchOn() no-ops; isolates mode write-path scope"
+        testDevice.events.add([name: "switch", value: "on"])
         settings.descriptionTextEnable = false
 
         when:
@@ -612,7 +617,8 @@ class LevoitLV600SSpec extends HubitatSpec {
     }
 
     def "setMode with invalid value logs error and sends no request"() {
-        given:
+        given: "device is on so BP24-B ensureSwitchOn() no-ops; isolates validation scope"
+        testDevice.events.add([name: "switch", value: "on"])
         settings.descriptionTextEnable = false
 
         when:
@@ -955,5 +961,78 @@ class LevoitLV600SSpec extends HubitatSpec {
         noExceptionThrown()
         testLog.warns.any { it.contains("setMode") && it.contains("null") }
         testParent.allRequests.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // BP24-B regression guard: auto-on from off-state
+    // These tests MUST FAIL on pre-fix code (no ensureSwitchOn) and
+    // PASS on post-fix code (ensureSwitchOn added as first line).
+    // LV600S on() uses Classic-family payload: {enabled:true, id:0}
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
+        given: "device is off, turningOn flag not set"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        def offData = [
+            enabled: false, humidity: 50, mist_virtual_level: 0, mist_level: 0,
+            mode: "manual", water_lacks: false, humidity_high: false,
+            warm_enabled: false, warm_level: 0, display: false,
+            automatic_stop_reach_target: false,
+            configuration: [auto_target_humidity: 55, display: false, automatic_stop: false]
+        ]
+        driver.applyStatus(v2StatusEnvelope(offData))
+        testParent.allRequests.clear()
+
+        when: "setMistLevel called while device is off"
+        driver.setMistLevel(5)
+
+        then: "setSwitch(enabled:true) was sent -- Classic-family payload (auto-on via ensureSwitchOn)"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+    }
+
+    def "setWarmMistLevel from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        def offData = [
+            enabled: false, humidity: 50, mist_virtual_level: 0, mist_level: 0,
+            mode: "manual", water_lacks: false, humidity_high: false,
+            warm_enabled: false, warm_level: 0, display: false,
+            automatic_stop_reach_target: false,
+            configuration: [auto_target_humidity: 55, display: false, automatic_stop: false]
+        ]
+        driver.applyStatus(v2StatusEnvelope(offData))
+        testParent.allRequests.clear()
+
+        when: "setWarmMistLevel(2) called while device is off"
+        driver.setWarmMistLevel(2)
+
+        then: "setSwitch(enabled:true) was sent (auto-on via ensureSwitchOn)"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+    }
+
+    def "setMode('auto') from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        def offData = [
+            enabled: false, humidity: 50, mist_virtual_level: 0, mist_level: 0,
+            mode: "manual", water_lacks: false, humidity_high: false,
+            warm_enabled: false, warm_level: 0, display: false,
+            automatic_stop_reach_target: false,
+            configuration: [auto_target_humidity: 55, display: false, automatic_stop: false]
+        ]
+        driver.applyStatus(v2StatusEnvelope(offData))
+        testParent.allRequests.clear()
+
+        when: "setMode('auto') called while device is off"
+        driver.setMode("auto")
+
+        then: "setSwitch(enabled:true) was sent (auto-on via ensureSwitchOn)"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
     }
 }

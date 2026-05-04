@@ -225,29 +225,21 @@ exemptions:
   # -- Tier-2: Humidifier line — setMistLevel, setWarmMistLevel, setMode --
   # Fix expected in separate humidifier sweep batch (after Tier-1).
 
-  - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitLV600S.groovy"
-    reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 194, setMistLevel()
-      line 251, and setWarmMistLevel() line 286. All three are SHOULD-ON.
-      Remove this entry when the Tier-2 humidifier BP24-B fix sweep lands
-      on LV600S.
-
+  # LV600S: all three methods (setMode, setMistLevel, setWarmMistLevel) fixed in Phase 4 Round 4.
+  # LV600SHubConnect: setMistLevel + setWarmMistLevel fixed. setMode is SKIP-OK (V2-family --
+  #   same VeSyncLV600S class as Vital line; V2 API rejects mode changes while device is off).
   - rule_id: "RULE32_auto_on_guard_missing"
     file: "Drivers/Levoit/LevoitLV600SHubConnect.groovy"
     reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 201, setMistLevel()
-      line 229, and setWarmMistLevel() line 249. All three are SHOULD-ON.
-      Remove this entry when the Tier-2 humidifier BP24-B fix sweep lands
-      on LV600S Hub Connect.
+      SKIP-OK exemption: BP24-B on setMode() only. LV600S Hub Connect uses VeSyncLV600S
+      class (V2-family API: powerSwitch/switchIdx, workMode). V2 API rejects mode changes
+      while device is off (same behaviour as Vital line setMode). setMistLevel and
+      setWarmMistLevel have been fixed with ensureSwitchOn() in Phase 4 Round 4.
+      setMode is intentionally left without auto-on guard pending live-capture confirmation
+      of V2 API off-state mode rejection. Remove this entry when live-capture confirms
+      mode classification (either fixed as SHOULD-ON or promoted to bp24_auto_on_exemptions).
 
-  - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitOasisMist450S.groovy"
-    reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 268, setMistLevel()
-      line 323, and setWarmMistLevel() line 354. All three are SHOULD-ON.
-      Remove this entry when the Tier-2 humidifier BP24-B fix sweep lands
-      on OasisMist 450S.
+  # OasisMist 450S: all three methods (setMode, setMistLevel, setWarmMistLevel) fixed in Phase 4 Round 4.
 
   - rule_id: "RULE32_auto_on_guard_missing"
     file: "Drivers/Levoit/LevoitOasisMist1000S.groovy"
