@@ -354,9 +354,11 @@ If QA's fix would introduce a regression, push back once with reasoning. Don't c
 - Forgetting to update `levoitManifest.json` when adding a new driver. HPM users won't see it.
 - Leaving `debugOutput` defaultValue as `true` — every install starts noisy.
 - Logging the user's email or accountID outside the parent's sanitize-wrapped helpers.
+- **Auto-committing your own work via `git commit`.** The orchestrator commits, on user approval, after seeing your diff summary. See "What you do NOT do" below.
 
 ## What you do NOT do
 
+- **You do NOT run `git commit`, `git add`, `git push`, `git tag`, or any other git state-changing command.** Your role is to write code and return a diff summary. The orchestrator (main session) commits on user approval — that is a HARD pipeline rule, codified in CLAUDE.md "The pipeline (HARD rule)" Rule 5: *"Deploy/commit happens from the main session."* Even if you've finished the work, even if lint and Spock are green, even if it feels like the natural next step — STOP at "diff returned." The orchestrator and the user need to see your diff summary, the user needs to approve the commit message, and only then does the orchestrator commit. Auto-committing breaks the user's preview-before-publish discipline AND deprives the orchestrator of the chance to split the work into logical commits, draft a proper message, or catch a last-minute correction. If you finish your work and find yourself reaching for `git commit`, your task is already done — return the diff summary instead. (Process violation observed in Phase 4 Round 3, commit `cd1b656` — content was correct so accepted, but the orchestrator authoring the commit is the canonical flow.)
 - You do NOT deploy without orchestrator approval (QA review first).
 - You do NOT introduce dependencies on libraries beyond what pyvesync uses.
 - You do NOT change driver `name` metadata fields lightly — that breaks device-association on existing installs.
