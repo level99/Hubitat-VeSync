@@ -72,6 +72,9 @@ metadata {
         attribute "virtualLevel", "number"       // 1-9, set level
         attribute "targetHumidity", "number"     // %, target
         attribute "water", "string"              // ok | empty | removed
+        // "display" (not "displayOn"): this driver shipped with "display" and is live on user hubs.
+        // Renaming to "displayOn" would orphan existing dashboards and RM rules (BP9 name-change risk
+        // applies to attribute names as much as driver names). Intentional divergence from sibling drivers.
         attribute "display", "string"            // on | off
         attribute "childLock", "string"          // on | off
         attribute "autoStopConfig", "string"     // on | off
@@ -110,9 +113,16 @@ metadata {
 // ---------- Power ----------
 def on(){
     logDebug "on()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(power=1)")
-    if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(power=1)")
+        if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
 }
 
 def off(){
@@ -146,8 +156,8 @@ def setMode(mode){
 // ---------- Mist level ----------
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    ensureSwitchOn()
     Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    ensureSwitchOn()
     def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "setVirtualLevel(${lvl})")
     if (httpOk(resp)) {
         state.virtualLevel = lvl
@@ -172,9 +182,13 @@ def setLevel(val, duration) {
 }
 
 // SwitchLevel capability path: map 0-100 to 1-9
+// SwitchLevel convention: setLevel(0) means "turn off" (Hubitat capability contract).
+// Without this guard, pct=0 → levelFromPercent(0) → 1 → setMistLevel(1) → ensureSwitchOn()
+// turns an off device ON at level 1 — inverted behaviour.
 def setLevel(val){
     logDebug "setLevel(${val})"
     Integer pct = Math.max(0, Math.min(100, (val as Integer) ?: 0))
+    if (pct == 0) { off(); return }
     Integer lvl = levelFromPercent(pct)
     sendEvent(name:"level", value: pct)
     setMistLevel(lvl)
@@ -225,9 +239,11 @@ def setChildLock(onOff){
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
     if (!requireNotNull(onOff, "setAutoStop")) return false
-    Integer v = ((onOff as String).toLowerCase() == "on") ? 1 : 0
-    def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${onOff})")
-    if (httpOk(resp)) { device.sendEvent(name:"autoStopConfig", value: onOff); logInfo "Auto-stop: ${onOff}" }
+    String val = (onOff as String).toLowerCase()
+    if (device.currentValue("autoStopConfig") == val) return true  // C3 state-change gate (attr: autoStopConfig, not autoStopEnabled — BP9)
+    Integer v = (val == "on") ? 1 : 0
+    def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${val})")
+    if (httpOk(resp)) { device.sendEvent(name:"autoStopConfig", value: val); logInfo "Auto-stop: ${val}" }
     else { logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"]) }
 }
 

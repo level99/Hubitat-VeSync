@@ -160,9 +160,16 @@ metadata {
 //   Source: pyvesync LUH-A603S-WUS.yaml turn_on: {powerSwitch:1, switchIdx:0}
 def on(){
     logDebug "on()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
-    if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
+        if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
 }
 
 def off(){
@@ -210,8 +217,8 @@ def setMode(mode){
 //   Source: pyvesync LUH-A603S-WUS.yaml set_mist_level: {levelIdx:0, levelType:'mist', virtualLevel:2}
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    ensureSwitchOn()
     Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    ensureSwitchOn()
     def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "setVirtualLevel(mist,${lvl})")
     if (httpOk(resp)) {
         state.mistLevel = lvl
@@ -231,13 +238,15 @@ def setMistLevel(level){
 //   Source: pyvesync LUH-A603S-WUS.yaml set_warm_off: (warmLevel:0 case from set_warm_level)
 def setWarmMistLevel(level){
     logDebug "setWarmMistLevel(${level})"
-    ensureSwitchOn()
     Integer lvl = (level as Integer) ?: 0
     if (lvl < 0 || lvl > 3) {
         logError "Invalid warm mist level ${lvl} -- must be 0-3 (0=off, 1-3=warm intensity)"
         recordError("Invalid warm mist level ${lvl}", [method:"setLevel"])
         return
     }
+    // If user wants warm-mist OFF (lvl=0) and device is already off, no-op — don't auto-on.
+    if (lvl == 0 && device.currentValue("switch") != "on") return
+    ensureSwitchOn()
     def resp = hubBypass("setLevel", [levelIdx: 0, levelType: "warm", mistLevel: 0, warmLevel: lvl], "setLevel(warm,${lvl})")
     if (httpOk(resp)) {
         boolean warmOn = (lvl > 0)

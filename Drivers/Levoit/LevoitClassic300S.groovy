@@ -102,9 +102,16 @@ metadata {
 // NOT purifier shape {powerSwitch: int, switchIdx: 0}
 def on(){
     logDebug "on()"
-    def resp = hubBypass("setSwitch", [enabled: true, id: 0], "setSwitch(enabled=true)")
-    if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        def resp = hubBypass("setSwitch", [enabled: true, id: 0], "setSwitch(enabled=true)")
+        if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
 }
 
 def off(){
@@ -118,9 +125,10 @@ def off(){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    ensureSwitchOn()
     String m = (mode as String).toLowerCase()
+    // Validate BEFORE ensureSwitchOn() so invalid input does not auto-turn on an off device.
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
+    ensureSwitchOn()
     // Classic 300S uses {mode: <value>}, NOT {workMode: <value>} (Superior 6000S difference)
     def resp = hubBypass("setHumidityMode", [mode: m], "setHumidityMode(${m})")
     if (httpOk(resp)) {
@@ -147,8 +155,8 @@ def setMode(mode){
 // NOTE: field names id/level/type -- NOT levelIdx/virtualLevel/levelType (Superior 6000S)
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    ensureSwitchOn()
     Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    ensureSwitchOn()
     def resp = hubBypass("setVirtualLevel", [id: 0, level: lvl, type: "mist"], "setVirtualLevel(${lvl})")
     if (httpOk(resp)) {
         state.mistLevel = lvl
@@ -179,12 +187,13 @@ def setHumidity(percent){
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return false
-    if (device.currentValue("displayOn") == onOff) return  // C3 state-change gate
-    Boolean v = (onOff == "on")
-    def resp = hubBypass("setDisplay", [state: v], "setDisplay(${onOff})")
+    String val = (onOff as String).toLowerCase()
+    if (device.currentValue("displayOn") == val) return  // C3 state-change gate
+    Boolean v = (val == "on")
+    def resp = hubBypass("setDisplay", [state: v], "setDisplay(${val})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
+        device.sendEvent(name:"displayOn", value: val)
+        logInfo "Display: ${val}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }

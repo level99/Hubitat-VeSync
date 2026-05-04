@@ -159,9 +159,16 @@ metadata {
 // VeSyncSproutHumid toggle_switch: {powerSwitch: int, switchIdx: 0}
 def on(){
     logDebug "on()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
-    if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
+        if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
 }
 
 def off(){
@@ -201,8 +208,8 @@ def setMode(mode){
 // Range: 1-2 only (mist_levels=[1,2] per device_map.py — Sprout is a 2-level device).
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    ensureSwitchOn()
     Integer lvl = Math.max(1, Math.min(2, (level as Integer) ?: 1))
+    ensureSwitchOn()
     def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "setVirtualLevel(mist,${lvl})")
     if (httpOk(resp)) {
         state.mistLevel = lvl
@@ -268,11 +275,13 @@ def setChildLock(onOff){
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
     if (!requireNotNull(onOff, "setAutoStop")) return false
-    Integer v = ((onOff as String).toLowerCase() == "on") ? 1 : 0
-    def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${onOff})")
+    String val = (onOff as String).toLowerCase()
+    if (device.currentValue("autoStopEnabled") == val) return true  // C3 state-change gate
+    Integer v = (val == "on") ? 1 : 0
+    def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${val})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: onOff)
-        logInfo "Auto-stop: ${onOff}"
+        device.sendEvent(name:"autoStopEnabled", value: val)
+        logInfo "Auto-stop: ${val}"
     } else {
         logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"])
     }

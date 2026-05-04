@@ -101,18 +101,17 @@ Driver duplication is significant: 22 child drivers carry ~4,500-5,000 lines of 
 
 **Phase plan (each phase is its own dev/QA/tester cycle, its own PR):**
 
-1. **`LevoitChildBaseLib.groovy`** — general/cross-cutting helpers (HTTP plumbing, log helpers, lifecycle hooks, `toggle`, BP16 `ensureDebugWatchdog`, BP23 `ensureSwitchOn`, BP18 null-guard, 2-arg `setLevel(val, duration)` overload). Touches 16-24 drivers; ~1,500-2,000 lines collapsed into ~250-line library. Phase 1 also includes a one-time validation experiment to confirm Hubitat library `local-override-precedence` behavior — drivers needing to deviate from a library function need a known mechanism.
-2. **`LevoitCorePurifierLib.groovy`** — Core 200S/300S/400S/600S shared `setLevel`/`setSpeed`/`handleSpeed`/`setMode`/parsers/AQ/PM2.5 logic. Most homogeneous class; ~1,400 lines dedup.
-3. **`LevoitV1HumidifierLib.groovy`** — Classic 200S/300S, Dual 200S, LV600S, OasisMist 450S shared mist-level / mode / parser logic. ~1,000 lines dedup.
-4. **`LevoitV2HumidifierLib.groovy`** — Superior 6000S, LV600S Hub Connect, OasisMist 1000S, Sprout Humidifier shared logic. ~800 lines dedup.
-5. **`LevoitVitalPurifierLib.groovy`** — Vital 100S/200S shared logic. ~700 lines dedup.
-6. **`LevoitFanLib.groovy`** — Tower / Pedestal Fan shared logic. ~500 lines dedup.
+1. ✅ **`LevoitChildBaseLib.groovy`** — general/cross-cutting helpers (HTTP plumbing, log helpers, lifecycle hooks, `toggle`, BP16 `ensureDebugWatchdog`, BP23 `ensureSwitchOn`, BP18 null-guard, 2-arg `setLevel(val, duration)` overload). Shipped v2.5 Phase 1. Validated override-precedence behavior: driver-local method definitions shadow same-named lib method — the expected Groovy/Hubitat behavior.
+2. ✅ **`LevoitCorePurifierLib.groovy`** — Core 200S/300S/400S/600S shared `setLevel`/`setSpeed`/`handleSpeed`/`setMode`/parsers/AQ/PM2.5 logic. Shipped v2.5 Phase 2. ~1,400 lines dedup.
+3. ✅ **`LevoitHumidifierLib.groovy`** — all 9 humidifier drivers (Classic 200S/300S, Dual 200S, LV600S, LV600S Hub Connect, OasisMist 450S/1000S, Sprout, Superior 6000S) sharing lifecycle/HTTP plumbing + `toggle` + `update()` signatures. Shipped v2.5 Phase 4 as a single unified library (Option γ — not the originally-planned two-library split into V1/V2 variants; the drivers' per-family divergence was shallow enough that a single library + per-driver power-payload overrides was cleaner). ~1,600 lines dedup across 9 drivers.
+4. **`LevoitVitalPurifierLib.groovy`** — Vital 100S/200S shared logic. ~700 lines dedup. Planned v2.6+.
+5. **`LevoitFanLib.groovy`** — Tower / Pedestal Fan shared logic. ~500 lines dedup. Planned v2.6+.
 
-**Total dedup:** ~4,500 lines collapsed into ~1,300 lines of library code; net driver-codebase line-count drops from 17,471 → ~13,000 (-26%). Each future BP-N collapses to a 1-fix instead of N. Retroactively dedupes BP1 (10 drivers), BP12 (5 shapes), BP14 (parent + every child command path), BP16 (every child), BP18 (17 method sites × 13 drivers), BP23 (8 drivers).
+**Total dedup (post-Phase 4):** ~3,400 lines collapsed into ~750 lines of library code across 3 shipped libraries. Each future BP-N on the covered class collapses to a 1-fix. Retroactively deduped BP1 (10 drivers), BP12 (5 shapes), BP16 (every child), BP18 (humidifier + purifier paths), BP23/BP24 (`ensureSwitchOn` + `setLevel(0)` shapes).
 
-**Tradeoffs:** Hubitat library files carry BP20 platform-parser exposure (lint RULE29 + ops-agent library-deploy smoke-test mitigate). Library include semantics don't support method override; drivers needing per-instance variation either parameterize the library function or override locally (Phase 1 validates the override-precedence behavior). Each library ships via HPM as `required: true` (precedent: `LevoitDiagnosticsLib.groovy` in v2.4).
+**Tradeoffs:** Hubitat library files carry BP20 platform-parser exposure (lint RULE29 + ops-agent library-deploy smoke-test mitigate). Library include semantics don't support method override; drivers needing per-instance variation either parameterize the library function or override locally (validated in Phase 1). Each library ships via HPM as `required: true` (precedent: `LevoitDiagnosticsLib.groovy` in v2.4).
 
-**Sequencing:** Phase 1 in v2.5 (highest leverage, lowest risk). Phase 2 (Core line) in v2.6. Phases 3-6 staged across v2.7+ based on bandwidth and any new BP-N pressure. ~30-50 hours total work; each phase ~6-10 hr.
+**Sequencing:** Phases 1-4 shipped in v2.5. Phases 4-5 (Vital line, Fan line) in v2.6+ based on bandwidth.
 
 **Don't bundle phases.** Each library is its own architecture decision with its own validation surface. Discrete phases let learnings from Phase 1 inform Phase 2+ design.
 

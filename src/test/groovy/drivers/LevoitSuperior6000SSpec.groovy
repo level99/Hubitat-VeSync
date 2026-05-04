@@ -508,4 +508,79 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         onReq != null
         onReq.data.switchIdx == 0
     }
+
+    // -------------------------------------------------------------------------
+    // CONCERN 4 regression guard: setLevel(0) → off() (SwitchLevel capability convention)
+    // Without the fix: pct=0 → levelFromPercent(0) → 1 → setMistLevel(1) → ensureSwitchOn()
+    // turns device ON. With the fix: setLevel(0) calls off() and returns.
+    // This test MUST FAIL on pre-fix code and PASS on post-fix code.
+    // -------------------------------------------------------------------------
+
+    def "setLevel(0) calls off() and does NOT call setVirtualLevel (SwitchLevel convention)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setLevel(0) is called"
+        driver.setLevel(0)
+
+        then: "setSwitch(powerSwitch:0) was sent (off called)"
+        def offReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 }
+        offReq != null
+
+        and: "setVirtualLevel was NOT sent (no mist-level command issued)"
+        testParent.allRequests.every { it.method != "setVirtualLevel" }
+    }
+
+    def "setLevel(0) on already-off device sends off() without setVirtualLevel (SwitchLevel convention)"() {
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        testParent.allRequests.clear()
+
+        when: "setLevel(0) is called on an off device"
+        driver.setLevel(0)
+
+        then: "setSwitch(powerSwitch:0) was sent (off called)"
+        def offReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 }
+        offReq != null
+
+        and: "setVirtualLevel was NOT sent"
+        testParent.allRequests.every { it.method != "setVirtualLevel" }
+    }
+
+    // -------------------------------------------------------------------------
+    // CONCERN 3 regression guard: setAutoStop C3 state-change gate
+    // setAutoStop("on") when autoStopConfig is already "on" → no API call (no-op).
+    // Note: this driver uses attribute "autoStopConfig" (not "autoStopEnabled" — BP9).
+    // -------------------------------------------------------------------------
+
+    def "setAutoStop('on') when already 'on' is a no-op (CONCERN 3 C3 gate)"() {
+        given: "autoStopConfig is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopConfig", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setAutoStop('on') called — same value as current"
+        driver.setAutoStop("on")
+
+        then: "no API request was sent"
+        testParent.allRequests.isEmpty()
+    }
+
+    def "setAutoStop('off') when 'on' sends API call (CONCERN 3 C3 gate — state change passes through)"() {
+        given: "autoStopConfig is currently 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopConfig", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setAutoStop('off') called — value differs"
+        driver.setAutoStop("off")
+
+        then: "setAutoStopSwitch API call was sent with autoStopSwitch=0"
+        def req = testParent.allRequests.find { it.method == "setAutoStopSwitch" }
+        req != null
+        req.data.autoStopSwitch == 0
+    }
 }

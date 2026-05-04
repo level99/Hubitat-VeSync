@@ -133,9 +133,16 @@ metadata {
 // NOT purifier shape {powerSwitch: int, switchIdx: 0}
 def on(){
     logDebug "on()"
-    def resp = hubBypass("setSwitch", [enabled: true, id: 0], "setSwitch(enabled=true)")
-    if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        def resp = hubBypass("setSwitch", [enabled: true, id: 0], "setSwitch(enabled=true)")
+        if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
 }
 
 def off(){
@@ -172,9 +179,10 @@ def off(){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    ensureSwitchOn()
     String m = (mode as String).toLowerCase()
+    // Validate BEFORE ensureSwitchOn() so invalid input does not auto-turn on an off device.
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
+    ensureSwitchOn()
     if (m == "auto") {
         // Multi-firmware try-canonical-then-fallback with cache
         String preferred = (state.firmwareVariant == "alt") ? "humidity" : "auto"
@@ -229,8 +237,8 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
 // setVirtualLevel payload: {id: 0, level: N, type: 'mist'}
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    ensureSwitchOn()
     Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    ensureSwitchOn()
     def resp = hubBypass("setVirtualLevel", [id: 0, level: lvl, type: "mist"], "setVirtualLevel(mist,${lvl})")
     if (httpOk(resp)) {
         state.mistLevel = lvl
@@ -265,13 +273,15 @@ def setMistLevel(level){
 // Valid range: 0-3 (0 = warm mist off; 1-3 = warm intensity levels)
 def setWarmMistLevel(level){
     logDebug "setWarmMistLevel(${level})"
-    ensureSwitchOn()
     Integer lvl = (level as Integer) ?: 0
     if (lvl < 0 || lvl > 3) {
         logError "Invalid warm mist level ${lvl} -- must be 0-3 (0=off, 1-3=warm intensity)"
         recordError("Invalid warm mist level ${lvl}", [method:"setVirtualLevel"])
         return
     }
+    // If user wants warm-mist OFF (lvl=0) and device is already off, no-op — don't auto-on.
+    if (lvl == 0 && device.currentValue("switch") != "on") return
+    ensureSwitchOn()
     def resp = hubBypass("setVirtualLevel", [id: 0, level: lvl, type: "warm"], "setVirtualLevel(warm,${lvl})")
     if (httpOk(resp)) {
         // level=0 means warm mist OFF; level 1-3 means warm mist ON at that intensity

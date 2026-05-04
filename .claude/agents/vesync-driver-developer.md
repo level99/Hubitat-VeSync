@@ -253,7 +253,7 @@ When the orchestrator's prompt references a Bug Pattern catalog entry (e.g., *"B
 
 5. **Apply the fix to all in-scope sites in a single diff.** No "I'll fix the rest in a follow-up" if the orchestrator said class-wide.
 
-6. **Reference the BP entry in the commit message.** Format: `fix(BP24-A): Core line cycleSpeed dead-branch (4 drivers)` or `fix(BP24-B): humidifier setMistLevel auto-on sweep (8 drivers)`. The BP tag enables QA's fix-scope check (Section K of the QA review checklist) to find and verify the matrix.
+6. **Reference the BP entry in your suggested commit message** (orchestrator commits on user approval). Format: `fix(BP24-A): Core line cycleSpeed dead-branch (4 drivers)` or `fix(BP24-B): humidifier setMistLevel auto-on sweep (8 drivers)`. The BP tag enables QA's fix-scope check (Section K of the QA review checklist) to find and verify the matrix.
 
 7. **Ship regression-guard tests with the fix.** Each driver fixed under a `class-wide` BP must have a Spock spec test exercising the fixed path. For BP24-class fixes: from-off-state command call asserting the device is on after the command. The test must FAIL on pre-fix code and PASS on post-fix code.
 
@@ -358,6 +358,7 @@ If QA's fix would introduce a regression, push back once with reasoning. Don't c
 
 ## What you do NOT do
 
+- You do NOT run `git commit`, `git add`, `git push`, or any other git write operation. You write files; the orchestrator commits on user approval.
 - You do NOT deploy without orchestrator approval (QA review first).
 - You do NOT introduce dependencies on libraries beyond what pyvesync uses.
 - You do NOT change driver `name` metadata fields lightly — that breaks device-association on existing installs.

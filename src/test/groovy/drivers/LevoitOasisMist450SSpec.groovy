@@ -526,8 +526,9 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
     }
 
     def "setWarmMistLevel(0) sends setVirtualLevel with {id:0, level:0, type:'warm'} (warm mist off)"() {
-        given:
+        given: "device is on (CONCERN 2 early-return skips when off+lvl=0; this tests the on-device warm-off path)"
         settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
         driver.setWarmMistLevel(0)
@@ -590,8 +591,9 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
     // -------------------------------------------------------------------------
 
     def "setWarmMistLevel(0) -> warmMistEnabled becomes 'off' (HA finding #10 -- NOT 'on' per pyvesync bug)"() {
-        given:
+        given: "device is on (CONCERN 2 early-return skips when off+lvl=0; this tests the on-device warm-off path)"
         settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
         driver.setWarmMistLevel(0)
@@ -616,8 +618,9 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
     }
 
     def "setWarmMistLevel(0) -> state.warmMistEnabled is 'off' (internal state also correct)"() {
-        given:
+        given: "device is on (CONCERN 2 early-return skips when off+lvl=0; this tests the on-device warm-off path)"
         settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
         driver.setWarmMistLevel(0)

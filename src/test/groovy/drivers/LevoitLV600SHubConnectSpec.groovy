@@ -469,8 +469,9 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
     }
 
     def "setWarmMistLevel(0) sends {warmLevel:0} and emits warmMistEnabled='off'"() {
-        given:
+        given: "device is on (CONCERN 2 early-return skips when off+lvl=0; this tests the on-device warm-off path)"
         settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
         driver.setWarmMistLevel(0)
