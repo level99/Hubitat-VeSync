@@ -55,12 +55,22 @@ Exemptions:
 
   Each entry suppresses RULE32 findings for that (file, method) pair.
   The ``rationale`` field is required (non-empty).
+
+Library-aware (v2.5): library files are no longer excluded.  lint.py
+invokes this rule for every ``.groovy`` file under Drivers/Levoit/,
+including lib files, so SHOULD-ON methods extracted to a shared library
+(e.g. ``cycleSpeed``, ``setSpeed``, ``setMode`` in LevoitVitalPurifierLib)
+are covered.  Findings are attributed to the lib file path.  No driver-level
+lib-content expansion is needed — de-duplication is implicit because lint.py
+scans each file exactly once.
+
+For lib-resident SKIP-OK methods, add a ``bp24_auto_on_exemptions`` entry
+using the lib file's repo-relative path (e.g.
+``Drivers/Levoit/LevoitVitalPurifierLib.groovy``).
 """
 
 import re
 from pathlib import Path
-
-from lint_rules._helpers import is_library_file
 
 
 DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
@@ -151,6 +161,13 @@ def check_rule32_auto_on_guard_missing(
     Operates on raw_text for method-body extraction (to preserve string literals
     and brace structure).  Cleans line comments from the body before scanning
     for API calls and guards (avoids flagging commented-out legacy code).
+
+    Library-aware (v2.5): library files are no longer excluded.  SHOULD-ON
+    methods extracted to shared libraries (e.g. ``cycleSpeed``, ``setSpeed``,
+    ``setMode`` in LevoitVitalPurifierLib) are scanned directly when lint.py
+    invokes this rule with the lib file as ``path``.  Findings are attributed
+    to the lib file.  Exemptions for lib-resident SKIP-OK methods should use
+    the lib's repo-relative path as the ``file`` field.
     """
     findings = []
 
@@ -159,9 +176,6 @@ def check_rule32_auto_on_guard_missing(
 
     path_str = str(path).replace('\\', '/')
     if DRIVER_DIR_FRAGMENT not in path_str:
-        return findings
-
-    if is_library_file(raw_text):
         return findings
 
     file_rel = str(path.relative_to(rel_base)).replace('\\', '/')

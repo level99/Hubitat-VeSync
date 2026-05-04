@@ -36,8 +36,12 @@ be dead).  If a future driver author legitimately writes state.switch, that
 author should add an exemption with an explanation; the default assumption is
 dead-branch.
 
-Scope: all .groovy driver files under Drivers/Levoit/ (library files excluded
-via is_library_file()).
+Scope: all .groovy files under Drivers/Levoit/ — including library files.
+Library files are no longer excluded (v2.5 extension): if a future lib
+refactor accidentally introduces a ``state.switch`` read, the rule catches it
+attributed to the lib file path.  Library files are scanned directly by
+lint.py and findings are attributed to the lib file, not to any driver that
+includes it.
 
 Exemptions: use the standard lint_config.yaml exemptions mechanism with
 rule_id ``RULE31_state_switch_dead_branch``.
@@ -45,8 +49,6 @@ rule_id ``RULE31_state_switch_dead_branch``.
 
 import re
 from pathlib import Path
-
-from lint_rules._helpers import is_library_file
 
 
 DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
@@ -88,6 +90,12 @@ def check_rule31_state_switch_dead_branch(
 
     A line is exempt if it only writes to state.switch (``state.switch = X``).
     Any read of state.switch is a dead branch — emit FAIL.
+
+    Library-aware (v2.5): library files are no longer excluded.  If a future
+    lib refactor introduces a ``state.switch`` read, the finding is attributed
+    to the lib file.  lint.py invokes this rule for every ``.groovy`` file
+    under Drivers/Levoit/, including lib files, so no driver-level expansion
+    is needed — lib files are scanned directly.
     """
     findings = []
 
@@ -96,9 +104,6 @@ def check_rule31_state_switch_dead_branch(
 
     path_str = str(path).replace('\\', '/')
     if DRIVER_DIR_FRAGMENT not in path_str:
-        return findings
-
-    if is_library_file(raw_text):
         return findings
 
     file_rel = str(path.relative_to(rel_base)).replace('\\', '/')

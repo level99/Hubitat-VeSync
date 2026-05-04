@@ -38,7 +38,18 @@ Vulnerable normalization patterns detected (on the param name `arg`):
   - ``(arg as String).toLowerCase()`` / ``.toUpperCase()`` / ``.trim()``
   - ``arg.toLowerCase()`` / ``.toUpperCase()`` / ``.toInteger()`` / ``.toLong()`` / ``.toDouble()``
 
-Scope: all .groovy files under Drivers/Levoit/.
+Scope: all .groovy files under Drivers/Levoit/ — including library files.
+
+Library-aware (inherent): this rule does not call ``is_library_file()`` and
+therefore already scans library files directly when lint.py invokes it with a
+lib file path.  Findings in lib code are attributed to the lib file.  No
+additional driver-level lib-content expansion is needed.
+
+The canonical guard form in Phase 3+ libs is ``requireNotNull(arg, "methodName")``
+(provided by LevoitChildBaseLib).  Methods that use this guard and have no
+vulnerable ``(arg as String).toLowerCase()`` / ``arg.toLowerCase()`` calls are
+correctly found clean by this rule — ``requireNotNull`` replaces the normalization
+pattern itself, so there is nothing to flag.
 
 Exemptions: use the standard lint_config.yaml exemptions mechanism.
 """

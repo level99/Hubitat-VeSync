@@ -31,12 +31,23 @@ are excluded by a pre-filter so only true call invocations satisfy the check. Ve
 placement at the top of the correct entry method requires AST awareness; that is a v2.3
 enhancement. Presence anywhere in the file is the v2.2 guard against regression in
 newly-added drivers.
+
+Library-aware (v2.5): when a driver delegates its poll/command entry methods to a shared
+library via ``#include level99.<LibName>``, the ``ensureDebugWatchdog()`` call may live
+in the library rather than the driver source.  We check the driver source first and fall
+back to included library texts, matching the pattern used by BP1 and RULE15.  This
+prevents false positives when future refactoring moves all watchdog call sites into a
+shared library.
+
+Library files themselves (those using ``library()`` instead of ``definition()``) are
+always skipped via ``is_library_file()`` — libraries have no independent poll cycle and
+no debug-output preference of their own.
 """
 
 import re
 from pathlib import Path
 
-from lint_rules._helpers import is_library_file
+from lint_rules._helpers import is_library_file, included_lib_texts
 
 
 # Pattern that matches an invocation (not a definition) of ensureDebugWatchdog().
@@ -80,6 +91,7 @@ def check_rule25_bp16_watchdog_call_site(path, raw_lines, cleaned_lines, raw_tex
         return findings
 
     # Scan cleaned lines for at least one non-comment, non-definition call site
+    # in the driver source itself.
     for cleaned_line in cleaned_lines:
         stripped = cleaned_line.lstrip()
         if stripped.startswith('//'):
@@ -90,10 +102,28 @@ def check_rule25_bp16_watchdog_call_site(path, raw_lines, cleaned_lines, raw_tex
         if WATCHDOG_DEF_PATTERN.search(cleaned_line):
             continue
         if WATCHDOG_CALL_PATTERN.search(cleaned_line):
-            # Found a live call site — rule passes for this file
+            # Found a live call site in the driver source — rule passes for this file
             return findings
 
-    # No call site found — FAIL
+    # No call site in the driver source — check included library texts as fallback.
+    # This handles the case where a driver delegates its poll/command entry methods
+    # entirely to a shared library (e.g. via #include level99.LevoitCorePurifier)
+    # and the ensureDebugWatchdog() call lives in the library's update() body.
+    # Pattern mirrors BP1 and RULE15 lib-awareness extensions (commit be9515d).
+    from lint_rules.groovy_lite import clean_source as _clean_source
+    for lib_text in included_lib_texts(raw_text, path):
+        _, lib_cleaned = _clean_source(lib_text)
+        for cleaned_line in lib_cleaned:
+            stripped = cleaned_line.lstrip()
+            if stripped.startswith('//'):
+                continue
+            if WATCHDOG_DEF_PATTERN.search(cleaned_line):
+                continue
+            if WATCHDOG_CALL_PATTERN.search(cleaned_line):
+                # Found a live call site in an included library — rule passes
+                return findings
+
+    # No call site found in driver or any included library — FAIL
     findings.append({
         "severity": "FAIL",
         "rule_id": "RULE25_bp16_watchdog_call_site",

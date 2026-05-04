@@ -86,3 +86,35 @@ def included_lib_texts(raw_text: str, driver_path: Path) -> list:
         if text:
             texts.append(text)
     return texts
+
+
+def included_lib_files(raw_text: str, driver_path: Path) -> list:
+    """
+    Return ``(lib_path, lib_text)`` pairs for every library file
+    ``#include``'d by *raw_text*.
+
+    Like ``included_lib_texts()`` but preserves the resolved ``Path`` for
+    each library so callers can attribute findings to the correct source file
+    rather than the driver that includes it.
+
+    Results share the same module-level ``_lib_text_cache`` as
+    ``included_lib_texts()`` — each library file is read at most once per
+    lint invocation regardless of which helper is called first.
+
+    Missing/unresolvable includes are silently skipped.
+    """
+    pairs = []
+    for m in _INCLUDE_PATTERN.finditer(raw_text):
+        ns_and_name = m.group(1)
+        lib_path = resolve_lib_path(ns_and_name, driver_path)
+        if lib_path is None:
+            continue
+        if lib_path not in _lib_text_cache:
+            try:
+                _lib_text_cache[lib_path] = lib_path.read_text(encoding='utf-8')
+            except OSError:
+                _lib_text_cache[lib_path] = ''
+        text = _lib_text_cache[lib_path]
+        if text:
+            pairs.append((lib_path, text))
+    return pairs
