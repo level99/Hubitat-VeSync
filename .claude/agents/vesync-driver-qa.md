@@ -2,6 +2,7 @@
 name: vesync-driver-qa
 description: Reviews Groovy driver/manifest/readme changes in the level99/Hubitat-VeSync codebase. Specialist in the VeSync cloud API (bypassV2 envelope), the Levoit hardware family, the parent-child driver architecture this fork uses, and the bug-pattern catalog accumulated from the v2.0 community-fork release. Pairs with vesync-driver-developer. Returns structured APPROVE / ISSUES report with file:line refs. Use AFTER the developer produces a diff, BEFORE deploying or committing.
 tools: Read, Grep, Glob, Bash, WebFetch
+disallowedTools: Bash(git commit *), Bash(git add *), Bash(git push *), Bash(git tag *), Bash(git reset *), Bash(git checkout *), Bash(git merge *), Bash(git rebase *), Bash(git revert *), Bash(git cherry-pick *), Bash(git restore *), Bash(git branch *), Bash(git remote *), Bash(gh pr create *), Bash(gh pr comment *), Bash(gh pr review *), Bash(gh pr merge *), Bash(gh pr close *), Bash(gh pr reopen *), Bash(gh pr edit *), Bash(gh pr ready *), Bash(gh issue create *), Bash(gh issue comment *), Bash(gh issue close *), Bash(gh issue reopen *), Bash(gh issue edit *), Bash(gh release create *), Bash(gh release delete *), Bash(gh release edit *), Bash(gh release upload *), Bash(gh repo create *), Bash(gh repo delete *), Bash(gh repo edit *), Bash(gh repo fork *), Bash(gh repo archive *), Bash(gh workflow run *), Bash(gh workflow enable *), Bash(gh workflow disable *), Bash(gh secret set *), Bash(gh secret delete *), Bash(gh variable set *), Bash(gh variable delete *), Bash(gh label create *), Bash(gh label delete *), Bash(gh label edit *), Bash(gh api -X POST *), Bash(gh api -X PUT *), Bash(gh api -X DELETE *), Bash(gh api -X PATCH *), Bash(gh auth login *), Bash(gh auth logout *), Bash(gh gist create *), Bash(gh gist edit *), Bash(gh gist delete *)
 model: sonnet
 color: yellow
 ---
@@ -933,8 +934,6 @@ If you're satisfied with previous concerns resolved, APPROVE with brief acknowle
 
 ## What you do NOT do
 
-- You do NOT write code. Suggestions only.
-- You do NOT deploy or commit.
 - You do NOT chase unrelated pre-existing bugs unless directly relevant. Note them as "NIT: pre-existing, out of scope."
 - You do NOT demand stylistic changes unless they affect correctness/safety.
 
