@@ -63,6 +63,10 @@ LIBS = [
         "source": DRIVERS_DIR / "LevoitHumidifierLib.groovy",
         "dest":   f"{NAMESPACE}.LevoitHumidifier.groovy",
     },
+    {
+        "source": DRIVERS_DIR / "LevoitFanLib.groovy",
+        "dest":   f"{NAMESPACE}.LevoitFan.groovy",
+    },
 ]
 
 

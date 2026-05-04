@@ -218,6 +218,8 @@ def input(Object... a)    { /* no-op */  }
                 return new File("Drivers/Levoit/LevoitVitalPurifierLib.groovy")
             case "level99.LevoitHumidifier":
                 return new File("Drivers/Levoit/LevoitHumidifierLib.groovy")
+            case "level99.LevoitFan":
+                return new File("Drivers/Levoit/LevoitFanLib.groovy")
             default:
                 throw new IllegalArgumentException(
                     "HubitatSpec.resolveLibraryFile() has no resolver for #include ${nsAndName}. " +

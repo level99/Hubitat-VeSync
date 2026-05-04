@@ -966,4 +966,56 @@ class LevoitTowerFanSpec extends HubitatSpec {
         and: "switch event was emitted as on"
         lastEventValue("switch") == "on"
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #24-B: cycleSpeed() auto-turns-on when device is off
+    // -------------------------------------------------------------------------
+
+    def "BP24-B: cycleSpeed() when switch is off calls on() before sending level command"() {
+        // SwitchLevel/FanControl capability convention: a speed-advance command on an off
+        // device should turn it on first. Without the BP24-B fix (ensureSwitchOn() at top
+        // of cycleSpeed in LevoitFanLib), the device stayed physically off while the cloud
+        // accepted the setLevel command — silent failure, same shape as BP24-A Core line bug.
+        given: "device is off and has a known prior level"
+        settings.descriptionTextEnable = false
+        state.fanLevel = 5
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "cycleSpeed() is called on an off device"
+        driver.cycleSpeed()
+
+        then: "on() was called — setSwitch with powerSwitch=1 was sent before the level command"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
+        onReq != null
+
+        and: "setLevel was also sent (to level 6, one step up from 5)"
+        def levelReq = testParent.allRequests.find { it.method == "setLevel" }
+        levelReq != null
+        levelReq.data.manualSpeedLevel == 6
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP24-B: cycleSpeed() when switch is already on does NOT call on() again"() {
+        // on() must not be called when the device is already on (redundant cloud call).
+        given: "device is already on"
+        settings.descriptionTextEnable = false
+        state.fanLevel = 3
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "cycleSpeed() is called on an already-on device"
+        driver.cycleSpeed()
+
+        then: "setLevel was sent (level 4)"
+        def levelReq = testParent.allRequests.find { it.method == "setLevel" }
+        levelReq != null
+        levelReq.data.manualSpeedLevel == 4
+
+        and: "setSwitch was NOT sent (device was already on)"
+        testParent.allRequests.findAll { it.method == "setSwitch" }.size() == 0
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
 }
