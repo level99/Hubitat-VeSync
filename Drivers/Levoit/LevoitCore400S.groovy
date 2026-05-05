@@ -28,6 +28,9 @@ SOFTWARE.
 // 2026-05-03: v2.5  Migrated shared methods to LevoitCorePurifier library.
 //                  BP24-A fix: cycleSpeed() auto-on-from-off via ensureSwitchOn().
 //                  Sneak #2 fix: setSpeed() sleep-to-manual branch uses handleEvent() consistently.
+//                  BP24-B fix (Phase 5c): setSpeed() + setMode() now call
+//                  ensureSwitchOn() — auto-turn-on device when off before sending
+//                  cloud command. BP18 null-guards added to both methods.
 // 2026-04-29: v2.4  Added captureDiagnostics command + diagnostics attribute via
 //                  LevoitDiagnostics library. Added recordError() ring-buffer calls at
 //                  all logError / log.error sites.
@@ -231,42 +234,51 @@ def setLevel(value)
 
 def setSpeed(speed) {
     logDebug "setSpeed(${speed})"
-    if (speed == "off") {
-        off()
+    if (!requireNotNull(speed, "setSpeed")) return false                        // BP18 null-guard
+    String s = (speed as String).toLowerCase()
+    // Power short-circuits BEFORE ensureSwitchOn — setSpeed("off") must NOT auto-on first
+    if (s == "off") { off(); return }
+    ensureSwitchOn()                                                             // BP24-B auto-on (after short-circuit)
+    if (s == "auto") {
+        setMode(s)
+        state.speed = s
+        handleEvent("speed", s)
     }
-    else if (speed == "auto") {
-        setMode(speed)
-        state.speed = speed
-        handleEvent("speed", speed)
-    }
-    else if (speed == "sleep") {
-        setMode(speed)
+    else if (s == "sleep") {
+        setMode(s)
         handleEvent("speed", "on")
     }
     else if (state.mode == "manual") {
-        handleSpeed(speed)
-        state.speed = speed
-        handleEvent("speed", speed)
-        logInfo "Speed: ${speed}"
+        handleSpeed(s)
+        state.speed = s
+        handleEvent("speed", s)
+        logInfo "Speed: ${s}"
     }
     else if (state.mode == "sleep") {
         setMode("manual")
-        handleSpeed(speed)
-        state.speed = speed
-        handleEvent("speed", speed)
-        logInfo "Speed: ${speed}"
+        handleSpeed(s)
+        state.speed = s
+        handleEvent("speed", s)
+        logInfo "Speed: ${s}"
     }
 }
 
 def setMode(mode) {
     logDebug "setMode(${mode})"
+    if (!requireNotNull(mode, "setMode")) return false                          // BP18 null-guard
+    String m = (mode as String).toLowerCase()
+    if (!(m in ["manual", "sleep", "auto"])) {                                  // reject invalid BEFORE auto-on
+        logWarn "setMode: invalid mode '${m}' -- must be one of: manual, sleep, auto; ignoring"
+        return false
+    }
+    ensureSwitchOn()                                                             // BP24-B auto-on (after rejection checks)
 
-    handleMode(mode)
-    state.mode = mode
-	handleEvent("mode", mode)
-    logInfo "Mode: ${mode}"
+    handleMode(m)
+    state.mode = m
+	handleEvent("mode", m)
+    logInfo "Mode: ${m}"
 
-    switch(mode)
+    switch(m)
     {
         case "manual":
             handleEvent("speed",  state.speed)

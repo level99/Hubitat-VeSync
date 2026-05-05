@@ -412,4 +412,120 @@ class LevoitCore600SSpec extends HubitatSpec {
         then: "setDisplay API call was made"
         testParent.allRequests.find { it.method == "setDisplay" } != null
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #24-B: setSpeed() + setMode() auto-turn-on when device is off
+    // -------------------------------------------------------------------------
+
+    def "BP24-B: setSpeed when switch is off calls on() before sending speed command (Core 600S)"() {
+        // Core 600S setSpeed: ensureSwitchOn() fires after the off/on short-circuits
+        // and before the mode/speed dispatch path. 600S has 4 speeds (low/medium/high/max).
+        given: "device is off and mode is manual so the speed path fires"
+        settings.descriptionTextEnable = false
+        state.mode = "manual"
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setSpeed is called with a named speed on an off device"
+        driver.setSpeed("max")
+
+        then: "on() was called — setSwitch with enabled=true was sent before the speed command"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "setLevel was sent (handleSpeed sends setLevel with {level, id, type})"
+        def levelReq = testParent.allRequests.find { it.method == "setLevel" }
+        levelReq != null
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP24-B: setMode when switch is off calls on() before sending mode command (Core 600S)"() {
+        // Core 600S setMode: ensureSwitchOn() fires before handleMode delegation.
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setMode is called with 'auto' on an off device"
+        driver.setMode("auto")
+
+        then: "on() was called — setSwitch with enabled=true was sent before the mode command"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "setPurifierMode was sent (handleMode sends setPurifierMode)"
+        def modeReq = testParent.allRequests.find { it.method == "setPurifierMode" }
+        modeReq != null
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP24-B: setSpeed('off') from off-state does NOT auto-on (power short-circuit) (Core 600S)"() {
+        // setSpeed("off") fires the off() short-circuit before ensureSwitchOn().
+        given: "device is already off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setSpeed('off') is called on an already-off device"
+        driver.setSpeed("off")
+
+        then: "setSwitch with enabled=true was NOT sent (no auto-on for off short-circuit)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true } == null
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP18: setSpeed(null) rejected with logWarn, no API call (Core 600S)"() {
+        // requireNotNull rejects null speed args (Rule Machine blank parameter slot).
+        given: "device is on"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setSpeed is called with null"
+        driver.setSpeed(null)
+
+        then: "no API call was made"
+        testParent.allRequests.size() == 0
+
+        and: "a warning was logged"
+        testLog.warns.any { it.contains("setSpeed") }
+    }
+
+    def "BP18: setMode(null) rejected with logWarn, no API call (Core 600S)"() {
+        // requireNotNull rejects null mode args (Rule Machine blank parameter slot).
+        given: "device is on"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setMode is called with null"
+        driver.setMode(null)
+
+        then: "no API call was made"
+        testParent.allRequests.size() == 0
+
+        and: "a warning was logged"
+        testLog.warns.any { it.contains("setMode") }
+    }
+
+    def "BP24-B + invalid mode: setMode('badvalue') from off-state does NOT auto-on (Core 600S)"() {
+        // Invalid mode is rejected BEFORE ensureSwitchOn() fires — typo from Rule Machine
+        // does not accidentally power on the device.
+        given: "device is off"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setMode is called with an invalid mode value on an off device"
+        driver.setMode("badvalue")
+
+        then: "setSwitch with enabled=true was NOT sent (invalid mode rejected before auto-on)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true } == null
+
+        and: "no setPurifierMode call was made"
+        testParent.allRequests.find { it.method == "setPurifierMode" } == null
+
+        and: "a warning was logged mentioning the invalid mode"
+        testLog.warns.any { it.contains("invalid mode") || it.contains("badvalue") }
+    }
 }

@@ -25,6 +25,8 @@ SOFTWARE.
 
 // History:
 //
+// 2026-05-03: v2.5  BP18 null-guard added to setNightLight() — reject null mode
+//                  argument with logWarn + early return (Rule Machine blank slot).
 // 2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
 // 2026-04-25: v2.0 (community fork, level99/Hubitat-VeSync, by Dan Cox)
 //                  - Added descriptionTextEnable preference (default true) and gated logInfo helper
@@ -112,6 +114,7 @@ def off() {
 def setNightLight(mode)
 {
     logDebug "setNightLight(${mode})"
+    if (!requireNotNull(mode, "setNightLight")) return false                    // BP18 null-guard
 
     def result = false
 
