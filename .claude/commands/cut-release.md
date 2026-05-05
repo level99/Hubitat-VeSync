@@ -99,7 +99,11 @@ Skip bullets that are pure churn (CI tweaks, agent-config edits, lint exemption 
 
 ### Artifact C — Driver-version surfaces (if any)
 
-Scan for any `DRIVER_VERSION` constants or top-of-file `// vX.Y` version comments in `Drivers/Levoit/*.groovy`. These are distinct from the `version:` field in `definition()` — they are imperative version strings sometimes used by driver logic at runtime. If found and the value differs from the new package version, propose an update. If none found, note: *"No runtime DRIVER_VERSION constants to update."*
+Scan for any `DRIVER_VERSION` constants or top-of-file `// vX.Y` version comments in `Drivers/Levoit/*.groovy`. These are distinct from the `version:` field in `definition()` — they are imperative version strings sometimes used by driver logic at runtime. If found and the value differs from the new package version, propose an update.
+
+**Always update**: `Drivers/Levoit/LevoitDiagnosticsLib.groovy` `FORK_RELEASE_VERSION` constant (introduced in v2.5; defaults to the prior shipped version). This drives `getDriverVersion()` output in `captureDiagnostics` dumps. Bump to the new package version alongside the per-driver `version:` fields and `levoitManifest.json` top-level `version`.
+
+If no other DRIVER_VERSION constants are found beyond the Diagnostics lib, note: *"FORK_RELEASE_VERSION updated; no other runtime DRIVER_VERSION constants to update."*
 
 ### Artifact C.7 — Per-driver `version` field lockstep
 
@@ -134,18 +138,61 @@ Reconcile `levoitManifest.json`'s `drivers` array against the actual files in `D
 
 Show the proposed additions in the approval round so the user can see what's being added. The user should confirm UUIDs are sensible and the `required: false` default is right (most drivers are optional; only the parent integration is required).
 
-### Artifact C.6 — Manifest `bundles` array reconciliation
+### Artifact C.6 — Manifest `bundles` array reconciliation (BLOCKING — gates the cut)
 
-Reconcile `levoitManifest.json`'s `bundles[]` array (if present) against the actual library files in `Drivers/Levoit/*Lib.groovy`:
+Reconcile `levoitManifest.json`'s `bundles[]` array (if present) against the actual library files in `Drivers/Levoit/*Lib.groovy` AND the `tools/build-bundle.py` `LIBS` array. Findings here are BLOCKING — the cut MUST NOT proceed until each is resolved or explicitly waived by the user with rationale captured in the proposal.
+
+**Why BLOCKING:** v2.4 shipped with `libraries[]` schema entries that HPM silently dropped (every user's drivers compile-failed on update). v2.5 development surfaced a malformed second `bundles[]` entry pointing at a raw `.groovy` URL (would have shipped a non-functional bundle). Both failure modes had near-zero user-facing diagnostic — symptoms surfaced as widespread `MissingMethodException` after HPM update. Cut-release is the last gate before publication; advisory warnings here have already proven insufficient.
 
 1. Glob `Drivers/Levoit/*Lib.groovy` to list current library source files.
 2. Parse `levoitManifest.json` and extract the `bundles[]` array entries.
-3. Each bundle conceptually wraps one or more library files. For v2.4.2's single-bundle setup, the `levoit_libraries` bundle contains all `*Lib.groovy` files in `Drivers/Levoit/` (currently just `LevoitDiagnosticsLib.groovy`). As more libraries land (Phase 2-6 of the library extraction roadmap), they may stay in one bundle or split into per-family bundles — design choice per release.
-4. **Detection — library file with no bundle reference:** if a `*Lib.groovy` file exists in source but `tools/build-bundle.py` doesn't include it in any bundle's build output AND no `bundles[]` entry references that bundle, surface a WARNING: *"Library file `<filename>` exists but is not declared in any bundle's build-script. Will not ship to HPM users."* Do NOT auto-add — bundle composition is a release-architecture decision. Suggest the user either (a) add the file to `tools/build-bundle.py`, or (b) accept that the library is dev-only / not for HPM distribution.
-5. **Detection — bundle entry with no source backing:** if `bundles[]` references a bundle whose corresponding library files no longer exist in source, surface a WARNING in the same shape as Artifact C.5's drivers-removal warning. Removing a library that drivers `#include` would orphan every install (Bug Pattern #9 family). Do NOT auto-remove.
-6. Each `bundles[].location` URL must be non-empty, https://, and (if matching the GitHub Releases pattern `https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/<filename>.zip`) embed the new version per Artifact A's "Bundle URL versioning" rule.
+3. Parse `tools/build-bundle.py` and extract the `LIBS` array entries (each entry has `source` path + `dest` filename).
+4. Each bundle conceptually wraps one or more library files. For v2.4.2's single-bundle setup, the `levoit_libraries` bundle contains all `*Lib.groovy` files in `Drivers/Levoit/`. As more libraries land (Phase 2-6 of the library extraction roadmap), they may stay in one bundle or split into per-family bundles — design choice per release.
+
+**BLOCKING checks (each MUST pass):**
+
+5. **Build-script completeness:** every `*Lib.groovy` file in `Drivers/Levoit/` MUST appear as a `source` path in the `LIBS` array of `tools/build-bundle.py`. If a lib is missing, every driver `#include`-ing that lib will compile-fail on HPM update. Surface as BLOCKING with the missing filename + suggested fix (add to `LIBS`). Do NOT auto-add — bundle composition is a release-architecture decision; the user confirms.
+
+6. **Bundle entry shape:** every `bundles[]` entry's `location` URL MUST end in `.zip` (case-insensitive). The Hubitat HPM `bundles[]` schema expects ZIP archives, NOT raw `.groovy` files. A `bundles[]` entry pointing at `https://raw.githubusercontent.com/.../*.groovy` is malformed — it will fail HPM install with no clear error. Surface as BLOCKING with the offending entry + suggested fix (either move to a real ZIP bundle, or remove the entry entirely if it was an attempted workaround for a missing-from-build-script lib).
+
+7. **Bundle entry has source backing:** if `bundles[]` references a bundle whose corresponding library files no longer exist in source, surface as BLOCKING in the same shape as Artifact C.5's drivers-removal warning. Removing a library that drivers `#include` would orphan every install (Bug Pattern #9 family). Do NOT auto-remove.
+
+8. **Built-ZIP integrity (post-build, before `gh release create`):** after running `uv run --python 3.12 tools/build-bundle.py` (in the "Next steps for you" sequence at step 4), the produced ZIP MUST contain:
+   - One file per entry in `LIBS` (named per the `dest` field — typically `<namespace>.<libName>.groovy`)
+   - An `install.txt` AND `update.txt` whose `library X` lines exactly match the `dest` filenames in the ZIP
+   
+   Verify by `unzip -p bundles/levoit_libraries.zip install.txt | grep "^library "` and cross-checking against `unzip -l bundles/levoit_libraries.zip | grep ".groovy"`. If counts or names don't match, the build script silently produced an incomplete bundle. BLOCKING — fix the build script before continuing to `gh release create`.
+
+9. **Post-`gh release create` asset content verification (in step 6 of the "Next steps for you" sequence):** after the asset URL is verified to serve (HTTP 302), download the actual ZIP and re-verify it contains every expected library:
+   ```bash
+   curl -L -o /tmp/v<version>_levoit_libraries.zip \
+     https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/levoit_libraries.zip
+   unzip -l /tmp/v<version>_levoit_libraries.zip
+   ```
+   Confirm visually that every `*Lib.groovy` file is in the ZIP. BLOCKING — if any lib is missing, the asset upload was incomplete; delete the release with `gh release delete v<version>` and retry step 5.
+
+10. **URL versioning:** each `bundles[].location` URL must be non-empty, `https://`, and (if matching the GitHub Releases pattern `https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/<filename>.zip`) embed the new version per Artifact A's "Bundle URL versioning" rule.
 
 If `bundles[]` is absent or empty AND no `*Lib.groovy` files exist in source, skip silently — this is a pre-library-era release.
+
+### Artifact C.6.1 — `HubitatSpec.groovy` resolver coverage (BLOCKING)
+
+For every `#include level99.<LibraryName>` directive across `Drivers/Levoit/*.groovy`, verify a matching `case "level99.<LibraryName>":` exists in `src/test/groovy/support/HubitatSpec.groovy:resolveLibraryFile()`. Without the case:
+
+- The Spock test harness silently drops the `#include` during driver compile — the lib's methods aren't visible to the driver under test.
+- Spock specs that exercise lib-provided methods fail with `MissingMethodException` cascades (Round 4 surfaced this when the post-Round-3 `LevoitCorePurifier` resolver case was missing — 17 specs failed with cryptic errors before the gap was diagnosed).
+
+Procedure:
+
+1. Grep all driver source files for `#include level99\.\S+`:
+   ```bash
+   grep -rho '^#include level99\.\S\+' Drivers/Levoit/*.groovy | sort -u
+   ```
+2. Read `src/test/groovy/support/HubitatSpec.groovy` and extract every `case "level99.<X>":` from the `resolveLibraryFile` switch.
+3. Compare: every `#include` reference MUST have a matching `case`. Surface as BLOCKING any `#include` reference without a case, naming the gap and the file path expected.
+4. The reverse direction (case in resolver but no driver `#include`s it) is NOT a BLOCKING — could be a dev-only lib for future use. Surface as INFO only.
+
+This artifact protects against the silent-failure mode the post-Round-4 throw (`IllegalArgumentException` instead of `return null`) catches at runtime — but cut-release validates statically before any test runs, gating the cut.
 
 ### Artifact D — `ROADMAP.md` update
 
@@ -251,6 +298,85 @@ Run `[ -f Drivers/Levoit/readme.md ] && echo "present" || echo "absent"` to chec
 
   If no drift detected: report *"No Drivers/Levoit/readme.md top-blurb drift detected this release."*
 
+### Artifact J — Hubitat community-thread announcement draft
+
+Always draft a community-thread announcement post for every release, regardless of severity (major / minor / patch). The user posts manually on the [Hubitat thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) — DO NOT auto-apply / write to disk / post anything. This artifact's output is just the draft for the user to copy.
+
+**Strict format (match existing announcements verbatim — v2.4 / v2.3 / v2.2.1 are the references):**
+
+```
+**v<X.Y[.Z]> is live — <em-dash subtitle, single-line summary, ~6-12 words>**
+
+Released: [Release v<X.Y[.Z]>](https://github.com/level99/Hubitat-VeSync/releases/tag/v<X.Y[.Z]>)
+
+**To update:** HPM → Update → "Levoit Air Purifiers, Humidifiers, and Fans". Existing devices upgrade in place; no re-pairing.
+
+### <Section header — H3, see "Section conventions" below>
+
+- **<Bullet subject in bold, ending with period.>** <Description: user-visible scenario where the bug bit OR what the new feature does. Include device family list if narrow.>
+- **<Next bullet.>** ...
+
+### <Optional second section>
+
+...
+
+### If you own <relevant device for community testing call>
+
+<Paragraph requesting community help on devices the maintainer can't test.>
+
+[Release notes](https://github.com/level99/Hubitat-VeSync/releases/tag/v<X.Y[.Z]>) · [CHANGELOG](https://github.com/level99/Hubitat-VeSync/blob/main/CHANGELOG.md) · [ROADMAP for v<NEXT>](https://github.com/level99/Hubitat-VeSync/blob/main/ROADMAP.md)
+```
+
+**Section conventions** (use H3 `###`, NOT H2 — convention shifted from v2.2.1's `##` to v2.3+ `###`):
+
+| Section header | When to include |
+|---|---|
+| `### Bug fixes` | Always for patch releases. Common in major/minor too. |
+| `### New features` | Major/minor when adding capabilities to existing drivers (e.g., `online` attribute, `captureDiagnostics`) |
+| `### New drivers (preview — community feedback welcome if you own one)` | Major/minor when adding new device drivers as preview |
+| `### <Driver> line back-fill (<scope>)` | Major/minor when filling in capability gaps on existing driver line (e.g., "Core line back-fill (Core 200S/300S/400S/600S)") |
+| `### <Device> moves out of preview (\`<MODEL-CODE>\`)` | When promoting a preview driver to released after live verification |
+| `### Other devices` | Small additions like new regional model code variants |
+| `### If you own <X>` | When asking for community testing help on a specific device the maintainer can't verify |
+
+**Bullet style:**
+
+- **Bug-fix bullets:** lead with the user-visible symptom (what they noticed in their hub), bolded as the subject, then explain what's fixed. Pattern: `- **<Symptom>.** <Where it bit users>. <What the fix does>.`
+  - Example: `- **ERROR: No status returned from getPurifierStatus after a VeSync firmware update or device re-pair** — closes the v2.3 self-heal regression. Polling now recovers without user action; no manual Resync needed.`
+- **Feature bullets:** lead with the feature name, bolded as the subject, then explain what users can do with it. Pattern: `- **<Feature name>.** <What users can do with it>.`
+  - Example: `- **Per-device offline detection.** Every Levoit child device exposes a new \`online\` attribute (\`true\` / \`false\`)...`
+
+**Patch-release variant** (e.g., v2.2.1 / v2.4.1):
+
+- Often a single bullet under `### Bug fixes`
+- No `### If you own...` section (no new device support to test)
+- Total length: ~120-150 words
+- Title subtitle: short and specific (e.g., "setLevel auto-on hotfix" / "Resync crash fix")
+
+**Major/minor-release variant** (e.g., v2.2 / v2.3 / v2.4):
+
+- Multiple sections (Bug fixes + New features + New drivers + ...)
+- Usually includes `### If you own <preview device>` community-feedback section
+- Total length: ~200-380 words
+- Title subtitle: comma-separated headline summary (e.g., "per-device offline detection, captureDiagnostics, Pedestal Fan write-path")
+
+**TMI rules (HARD — match the rest of the cut-release procedure):**
+
+- **No maintainer-environment references** — never write "the maintainer's hub", "post-deploy on dev1064", "verified on Master Air Purifier 1070", etc. Generalize to "live-verified on hub" or drop.
+- **No personal/family detail** — never write "the kid's nap routine", "the noise machine", or anything specific to the maintainer's domestic setup.
+- **No implementation jargon end-users won't recognize** — skip `MissingMethodException`, `state.turningOn`, "sandbox-swallowed", "re-entrance flag", lint rule numbers, exception class FQNs. Reword in plain language symptom + outcome.
+- **No pipeline-process detail** — never mention dev/QA/tester rounds, agent dispatches, model choices, "QA APPROVE'd through 3 rounds".
+- **No CI infrastructure changes** — uv-pin / setup-action chores / dependabot bumps / etc. don't belong in the user-facing announce. They live in CHANGELOG / commit / GitHub Release for archaeology.
+- **Skip latent bug fixes that were sandbox-swallowed in production** — if a bug never produced user-visible behavior pre-fix, don't list it (users won't recognize the change). Same logic as the manifest releaseNotes guidance.
+
+**Sources for content:**
+
+- Title subtitle: derived from the CHANGELOG `[<version>]` headline + commit messages. Match `levoitManifest.json` releaseNotes line tone.
+- Bullets: parsed from the CHANGELOG entry, but rewritten user-facing (CHANGELOG is more technical; community announce is plain-language).
+- "If you own X" section: only when ROADMAP.md or recent CHANGELOG flags a community-tester ask for a specific device.
+
+**Output:** show the draft verbatim (in a code block) so the user can copy-paste. NEVER post it; the user posts manually.
+
 ## Step 5 — Present for approval
 
 Output a single message structured as:
@@ -292,7 +418,11 @@ Output a single message structured as:
 
 ### Artifact C.6 — manifest bundles-array reconciliation
 
-<list of additions / WARNINGs / "bundles[] absent — skipping" / "No drift detected; bundle URL bumped to v<version>">
+<list of BLOCKING failures (build-script gap, malformed location URLs, missing source backing) OR "No issues detected; bundle URL bumped to v<version>">
+
+### Artifact C.6.1 — HubitatSpec resolver coverage
+
+<list of BLOCKING gaps (driver `#include`s a lib with no resolver case) OR "All N driver `#include` directives have matching resolver cases">
 
 ### Artifact D — ROADMAP.md updates
 
@@ -318,6 +448,14 @@ Output a single message structured as:
 
 <unified diff or proposed-row snippet, or "No Drivers/Levoit/readme.md top-blurb drift detected this release" or "Drivers/Levoit/readme.md not present — skipping">
 
+### Artifact J — Hubitat community-thread announcement draft
+
+\`\`\`
+<full announcement draft, verbatim, in the format documented in Step 4 Artifact J — title + Released-link + To update + sections + footer>
+\`\`\`
+
+(Draft only. The user posts manually on the Hubitat community thread; this artifact never auto-applies.)
+
 ---
 
 Approve to apply, or tell me what to change.
@@ -331,7 +469,7 @@ After explicit approval (e.g., "approved", "go", "ship it"):
 
 - Edit `levoitManifest.json`: update `version`, `dateReleased`, `releaseNotes`. Apply any Artifact C.5 drivers-array additions (do NOT remove entries on `WARNING:` cases — those need human-only review per the spec). Apply Artifact C.6 bundles-array URL version bumps (location URLs of the form `releases/download/v<old>/...` → `releases/download/v<new>/...`). Leave `packageName`, `author`, `documentationLink`, `communityLink`, `licenseFile` untouched (those are stable fields changed manually outside of release cuts).
 - Edit (or create) `CHANGELOG.md`: prepend the new entry per Step 4 Artifact B.
-- Apply any Artifact C edits if applicable (runtime DRIVER_VERSION constants).
+- Apply Artifact C edits: update `FORK_RELEASE_VERSION` constant in `Drivers/Levoit/LevoitDiagnosticsLib.groovy` to the new package version. Apply any other DRIVER_VERSION-style runtime constants found.
 - Apply Artifact C.7 edits: for each `.groovy` file in `Drivers/Levoit/`, update or add the `version:` field inside `definition()` to match the new package version.
 - Apply Artifact D `ROADMAP.md` edits if any were proposed.
 - Apply Artifact E `TODO.md` edits if `TODO.md` exists locally and edits were proposed.
@@ -339,6 +477,7 @@ After explicit approval (e.g., "approved", "go", "ship it"):
 - Apply any Artifact G `README.md` edits if proposed and approved.
 - Apply any Artifact H `repository.json` edits if proposed and approved.
 - Apply any Artifact I `Drivers/Levoit/readme.md` edits if proposed and approved.
+- **Artifact J community announcement draft is NEVER auto-applied** — it lives in the Step 5 proposal output for the user to copy-paste manually onto the Hubitat thread. Do not write to disk. Do not post anywhere. Do not commit.
 
 Do NOT commit. Do NOT tag. Do NOT push.
 
@@ -366,6 +505,15 @@ Next steps for you:
      has a bundles[] array — otherwise skip to step 7):
        uv run --python 3.12 tools/build-bundle.py
      Verify output at bundles/levoit_libraries.zip (gitignored, never committed).
+
+     POST-BUILD INTEGRITY CHECK (BLOCKING per Artifact C.6 step 8):
+       unzip -l bundles/levoit_libraries.zip
+       unzip -p bundles/levoit_libraries.zip install.txt
+     The ZIP MUST contain one .groovy file per LIBS entry in tools/build-bundle.py
+     PLUS install.txt + update.txt. Every `library X` line in install.txt MUST
+     match a corresponding .groovy file inside the ZIP. If counts/names mismatch,
+     the build script silently produced an incomplete bundle — STOP, fix the
+     build script, rebuild before continuing to step 5.
   5. Create the GitHub Release WITH the bundle asset attached. This creates the
      tag, publishes the release, and uploads the asset URL the manifest references:
        gh release create v<version> \
@@ -373,10 +521,19 @@ Next steps for you:
          --title "v<version> — <release subject>" \
          --notes-file <release notes file> \
          ./bundles/levoit_libraries.zip
-  6. Verify the asset URL serves BEFORE merging to main:
+  6. Verify the asset URL serves AND content is complete BEFORE merging to main:
        curl -I https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/levoit_libraries.zip
      Expect HTTP 302 (redirect chain to GitHub's S3 storage). If 404, the asset
      upload failed — re-check step 5 and re-verify before proceeding.
+
+     POST-UPLOAD CONTENT VERIFICATION (BLOCKING per Artifact C.6 step 9):
+       curl -L -o /tmp/v<version>_levoit_libraries.zip \
+         https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/levoit_libraries.zip
+       unzip -l /tmp/v<version>_levoit_libraries.zip
+     Confirm visually that every *Lib.groovy referenced by any driver `#include`
+     is present in the ZIP. If any lib is missing, the asset upload was
+     incomplete — delete the release with `gh release delete v<version>` and
+     retry step 5. Do NOT proceed to step 7 with an incomplete asset live.
   7. Open PR <branch> -> main via `gh pr create` (preview-before-publish: ask
      for a body draft). PR path is REQUIRED — every release goes through PR
      review even for one-line hotfixes. Do NOT propose direct/fast-forward
@@ -388,8 +545,11 @@ Next steps for you:
      (configured via .gemini/config.yaml); maintainer reviews + addresses
      Gemini feedback. Both must be addressed (or explicitly waived with
      rationale) before merge.
-  9. Squash-merge to main once review is clean
- 10. Community-thread announce (Hubitat forum) with migration notes if applicable
+  9. Squash-merge to main once review is clean.
+ 10. Hubitat community-thread announce — copy-paste the Artifact J draft from
+     the Step 5 proposal output (no edits needed; format matches v2.4 / v2.3 /
+     v2.2.1 conventions). Post on:
+     https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499
 
 Note: TODO.md is gitignored, so even if it was updated it stays local-only.
 Don't try to git-add it.

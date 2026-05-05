@@ -45,13 +45,15 @@
  *                      first; falls back to setPower for older V1 API devices.
  */
 
+#include level99.LevoitChildBase
+
 metadata {
     definition(
         name: "Levoit Generic Device",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Fall-through diagnostic driver for unsupported Levoit models. Provides best-effort power control and diagnostic capture for new-device-support issue filing.",
-        version: "2.4.2",
+        version: "2.5",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -82,7 +84,6 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4.1"
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -237,7 +238,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic raw dump — gated by debugOutput
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // Detect device shape by field presence
     String detectedCompat = detectShape(r)
@@ -469,10 +470,9 @@ private boolean hasDeviceFields(data){
     return r instanceof Map && (r.containsKey('powerSwitch') || r.containsKey('humidity') || r.containsKey('PM25'))
 }
 
-def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
-def logError(msg){ log.error msg }
-def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
-void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
+// logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
+// are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
+// Note: logWarn was not previously defined locally in this driver; the lib adds it.
 
 // Local no-op stub for recordError() — Generic does not #include level99.LevoitDiagnostics
 // (it has its own native captureDiagnostics() to avoid the method-name conflict). The
@@ -480,18 +480,6 @@ void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput
 // logError() sites; without this stub, every Generic error path would throw
 // MissingMethodException on top of the original error.
 private void recordError(String msg, Map ctx = [:], String overrideDni = null) { /* no-op */ }
-
-// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
-private void ensureDebugWatchdog() {
-    if (settings?.debugOutput && state.debugEnabledAt) {
-        Long elapsed = now() - (state.debugEnabledAt as Long)
-        if (elapsed > 30 * 60 * 1000) {
-            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
-            device.updateSetting("debugOutput", [type:"bool", value:false])
-            state.remove("debugEnabledAt")
-        }
-    }
-}
 
 // Hub/parent call wrapper
 private hubBypass(method, Map data=[:], tag=null, cb=null){

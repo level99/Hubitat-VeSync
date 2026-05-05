@@ -23,6 +23,7 @@ V2-line drivers: LevoitVital200S.groovy, LevoitSuperior6000S.groovy
 import re
 from pathlib import Path
 from .groovy_lite import clean_source, find_method_bodies, get_definition_block
+from ._helpers import included_lib_texts
 
 
 # ---------------------------------------------------------------------------
@@ -32,13 +33,16 @@ from .groovy_lite import clean_source, find_method_bodies, get_definition_block
 PARENT_DRIVER = "VeSyncIntegration.groovy"
 NOTIFICATION_TILE = "Notification Tile.groovy"
 
-# Drivers that are polled children and must declare all three update() signatures
+# Drivers that are polled children and must declare all three update() signatures.
+# When a driver delegates its method bodies to a shared library via #include, the
+# regex search is expanded to include the library text (see check_bp1_missing_2arg_update).
 POLLED_CHILD_DRIVERS = {
     "LevoitCore200S.groovy",
     "LevoitCore200S Light.groovy",
     "LevoitCore300S.groovy",
     "LevoitCore400S.groovy",
     "LevoitCore600S.groovy",
+    "LevoitVital100S.groovy",
     "LevoitVital200S.groovy",
     "LevoitSuperior6000S.groovy",
     "LevoitGeneric.groovy",
@@ -89,16 +93,26 @@ def check_bp1_missing_2arg_update(path, raw_lines, cleaned_lines, raw_text, conf
       def update()
       def update(status)
       def update(status, nightLight)
+
+    Library-aware: when a driver delegates its update() overloads to a shared library
+    via ``#include level99.<LibName>``, the overloads live in the library file rather
+    than the driver source.  We concatenate the texts of all resolved #include'd
+    libraries before searching, so that method signatures in libs satisfy the check.
     """
     findings = []
     fname = path.name
     if fname not in POLLED_CHILD_DRIVERS:
         return findings
 
+    # Expand raw_text with the body of any #include'd library files so that
+    # update() overloads extracted to a shared lib still satisfy the check.
+    lib_texts = included_lib_texts(raw_text, path)
+    search_text = raw_text + '\n'.join(lib_texts)
+
     # Detect each overload via regex (allow any whitespace)
-    has_0arg = bool(re.search(r'\bdef\s+update\s*\(\s*\)', raw_text))
-    has_1arg = bool(re.search(r'\bdef\s+update\s*\(\s*\w+\s*\)', raw_text))
-    has_2arg = bool(re.search(r'\bdef\s+update\s*\(\s*\w+\s*,\s*\w+\s*\)', raw_text))
+    has_0arg = bool(re.search(r'\bdef\s+update\s*\(\s*\)', search_text))
+    has_1arg = bool(re.search(r'\bdef\s+update\s*\(\s*\w+\s*\)', search_text))
+    has_2arg = bool(re.search(r'\bdef\s+update\s*\(\s*\w+\s*,\s*\w+\s*\)', search_text))
 
     if not has_2arg:
         # Find a representative line — the def update( with 1 arg if present, else first def update

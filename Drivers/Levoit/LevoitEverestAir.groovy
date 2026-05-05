@@ -85,6 +85,9 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-05-03: v2.5  Added setTimer/cancelTimer commands. Cookie-cutter port from Tower Fan
+ *                      timer pattern (Phase 5b-hardened with requireNotNull + dead-?:0 removed).
+ *                      pyvesync VeSyncAirBaseV2 set_timer/clear_timer parity.
  *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.2.1  Initial release. All 4 LAP-EL551S model codes in a single driver.
  *                        pyvesync VeSyncAirBaseV2 class (same as Vital 200S/Sprout Air).
@@ -97,6 +100,7 @@
  */
 
 #include level99.LevoitDiagnostics
+#include level99.LevoitChildBase
 
 metadata {
     definition(
@@ -104,7 +108,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) — fan 1-3, auto/sleep/manual/turbo modes, AQ sensors (AQLevel/PM2.5), light detection, display, child lock, vent angle (passive read). pyvesync VeSyncAirBaseV2 class. V2-style payloads. First driver in codebase with TURBO mode and VENT_ANGLE attribute.",
-        version: "2.4.2",
+        version: "2.5",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -138,6 +142,11 @@ metadata {
         // LIGHT_DETECT: same endpoint as Vital 200S — setLightDetection {lightDetectionSwitch: int}
         command "setLightDetection",   [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         command "resetFilter"
+        command "setTimer", [
+            [name:"Seconds*", type:"NUMBER", description:"Seconds until timer fires (0 to cancel)"],
+            [name:"Action",   type:"ENUM",   constraints:["off","on"], description:"Action when timer fires (default: off)"]
+        ]
+        command "cancelTimer"
         command "toggle"
 
         attribute "diagnostics", "string"
@@ -157,7 +166,6 @@ def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
     state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4.1"
     runIn(3, "refresh")
     if (settings?.debugOutput) {
         runIn(1800, "logDebugOff")
@@ -303,6 +311,49 @@ def resetFilter(){
     }
 }
 
+// ---------- Timer ----------
+// VeSyncAirBaseV2 set_timer/clear_timer parity.
+// Timer shape: {action: 'on'|'off', total: <seconds>}
+// action: what the device does when the timer fires (default "off").
+// Cookie-cutter port from Tower Fan timer pattern (Phase 5b-hardened).
+def setTimer(seconds, action="off"){
+    if (!requireNotNull(seconds, "setTimer")) return
+    int secs = seconds as Integer
+    if (secs <= 0) { cancelTimer(); return }
+    // action defaults to "off" in the Groovy signature; only null-guard when explicitly null
+    String act = (action != null) ? (action as String).toLowerCase() : "off"
+    if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"setTimer"]); return }
+    logDebug "setTimer(${secs}s, action=${act})"
+    def resp = hubBypass("setTimer", [action: act, total: secs], "setTimer(${secs}s,${act})")
+    if (httpOk(resp)) {
+        // Capture timer ID from response so cancelTimer can reference it
+        def tid = resp?.data?.result?.result?.id ?: resp?.data?.result?.id
+        if (tid != null) {
+            state.timerId = tid
+        } else {
+            logDebug "setTimer: response did not include timer id -- cancelTimer will use state.timerId if known"
+        }
+        logInfo "Timer set: ${act} in ${secs}s (id=${state.timerId})"
+    } else {
+        logError "Timer set failed"; recordError("Timer set failed", [method:"setTimer"])
+    }
+}
+
+def cancelTimer(){
+    logDebug "cancelTimer()"
+    if (!state.timerId) {
+        logDebug "cancelTimer: no active timer id in state -- no-op"
+        return
+    }
+    def resp = hubBypass("clearTimer", [id: state.timerId], "clearTimer(id=${state.timerId})")
+    if (httpOk(resp)) {
+        state.remove("timerId")
+        logInfo "Timer cancelled"
+    } else {
+        logError "Timer cancel failed"; recordError("Timer cancel failed", [method:"clearTimer"])
+    }
+}
+
 // ---------- Refresh ----------
 def refresh(){ update() }
 
@@ -355,7 +406,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic raw dump (debugOutput-gated).
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     def powerRaw = r.powerSwitch
@@ -447,24 +498,8 @@ def applyStatus(status){
     device.sendEvent(name:"info", value: parts.join("<br>"))
 }
 
-// ---------- Internal helpers ----------
-def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
-def logError(msg){ log.error msg }
-def logWarn(msg){ log.warn msg }
-def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
-void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
-
-// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
-private void ensureDebugWatchdog() {
-    if (settings?.debugOutput && state.debugEnabledAt) {
-        Long elapsed = now() - (state.debugEnabledAt as Long)
-        if (elapsed > 30 * 60 * 1000) {
-            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
-            device.updateSetting("debugOutput", [type:"bool", value:false])
-            state.remove("debugEnabledAt")
-        }
-    }
-}
+// logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
+// are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 
 // Hub/parent call wrapper — matches sibling driver pattern
 private hubBypass(method, Map data=[:], tag=null, cb=null){

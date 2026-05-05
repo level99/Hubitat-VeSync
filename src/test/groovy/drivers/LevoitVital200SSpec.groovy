@@ -559,4 +559,168 @@ class LevoitVital200SSpec extends HubitatSpec {
         and: "no error was logged"
         testLog.errors.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // BP24-C: cycleSpeed() from off-state turns the device on
+    // -------------------------------------------------------------------------
+
+    def "BP24-C: cycleSpeed() from off-state turns the device on before sending speed command"() {
+        // BP24-C fix: cycleSpeed() previously had `if (device.currentValue("switch") != "on") on()`
+        // which lacked the `!state.turningOn` re-entrance flag — risk of recursive on() chain
+        // under concurrent calls. Now uses ensureSwitchOn() (from LevoitChildBase) which has
+        // the correct guard: `!state.turningOn && device.currentValue("switch") != "on" → on()`.
+        // (Distinct from BP24-A's `state.switch` dead-branch shape on the Core line.)
+        given: "device is off and turningOn flag is clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove('turningOn')
+
+        when: "cycleSpeed is invoked on an off device"
+        driver.cycleSpeed()
+
+        then: "setSwitch with powerSwitch=1 was sent (the on() call fired)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+
+        and: "no errors were logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // C3: state-change gate — setChildLock and setDisplay
+    // -------------------------------------------------------------------------
+
+    def "C3: setChildLock('on') when childLock is already 'on' is a no-op (no API call)"() {
+        given: "childLock is already on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when:
+        driver.setChildLock("on")
+
+        then: "no setChildLock API call was made"
+        testParent.allRequests.find { it.method == "setChildLock" } == null
+
+        and: "no errors logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "C3: setChildLock('on') when childLock is 'off' does send the API call"() {
+        given: "childLock is currently off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when:
+        driver.setChildLock("on")
+
+        then: "setChildLock API call was made"
+        testParent.allRequests.find { it.method == "setChildLock" } != null
+    }
+
+    def "C3: setDisplay('on') when display is already 'on' is a no-op (no API call)"() {
+        given: "display is already on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "on"])
+
+        when:
+        driver.setDisplay("on")
+
+        then: "no setDisplay API call was made"
+        testParent.allRequests.find { it.method == "setDisplay" } == null
+
+        and: "no errors logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "C3: setDisplay('on') when display is 'off' does send the API call"() {
+        given: "display is currently off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "off"])
+
+        when:
+        driver.setDisplay("on")
+
+        then: "setDisplay API call was made"
+        testParent.allRequests.find { it.method == "setDisplay" } != null
+    }
+
+    // -------------------------------------------------------------------------
+    // BP18: null-guard on Vital lib setters
+    // -------------------------------------------------------------------------
+
+    def "BP18: setMode(null) returns silently with logWarn (no API call)"() {
+        when:
+        driver.setMode(null)
+
+        then: "no setPurifierMode API call was made"
+        testParent.allRequests.find { it.method == "setPurifierMode" } == null
+
+        and: "logWarn fired with the method name"
+        testLog.warns.any { it.contains("setMode") }
+    }
+
+    def "BP18: setSpeed(null) returns silently with logWarn (no API call)"() {
+        when:
+        driver.setSpeed(null)
+
+        then: "no setLevel API call was made"
+        testParent.allRequests.find { it.method == "setLevel" } == null
+
+        and: "logWarn fired with the method name"
+        testLog.warns.any { it.contains("setSpeed") }
+    }
+
+    def "BP18: setDisplay(null) returns silently with logWarn (no API call)"() {
+        when:
+        driver.setDisplay(null)
+
+        then: "no setDisplay API call was made"
+        testParent.allRequests.find { it.method == "setDisplay" } == null
+
+        and: "logWarn fired with the method name"
+        testLog.warns.any { it.contains("setDisplay") }
+    }
+
+    def "BP18: setChildLock(null) returns silently with logWarn (no API call)"() {
+        when:
+        driver.setChildLock(null)
+
+        then: "no setChildLock API call was made"
+        testParent.allRequests.find { it.method == "setChildLock" } == null
+
+        and: "logWarn fired with the method name"
+        testLog.warns.any { it.contains("setChildLock") }
+    }
+
+    def "BP18: setAutoPreference(null) returns silently with logWarn (no API call)"() {
+        when:
+        driver.setAutoPreference(null)
+
+        then: "no setAutoPreference API call was made"
+        testParent.allRequests.find { it.method == "setAutoPreference" } == null
+
+        and: "logWarn fired with the method name"
+        testLog.warns.any { it.contains("setAutoPreference") }
+    }
+
+    def "BP18: setPetMode(null) returns silently with logWarn (no API call)"() {
+        when:
+        driver.setPetMode(null)
+
+        then: "no setPurifierMode API call was made"
+        testParent.allRequests.find { it.method == "setPurifierMode" } == null
+
+        and: "logWarn fired with the method name"
+        testLog.warns.any { it.contains("setPetMode") }
+    }
+
+    def "BP18: setRoomSize(null) returns silently with logWarn (no API call)"() {
+        when:
+        driver.setRoomSize(null)
+
+        then: "no setAutoPreference API call was made"
+        testParent.allRequests.find { it.method == "setAutoPreference" } == null
+
+        and: "logWarn fired with the method name"
+        testLog.warns.any { it.contains("setRoomSize") }
+    }
 }

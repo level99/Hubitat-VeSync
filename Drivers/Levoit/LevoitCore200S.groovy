@@ -1,4 +1,4 @@
-/* 
+/*
 
 MIT License
 
@@ -25,6 +25,15 @@ SOFTWARE.
 
 // History:
 //
+// 2026-05-03: v2.5  Migrated to LevoitCorePurifier shared library (Phase 2, Round 6).
+//                  Removed 14 shared methods now provided by LevoitCorePurifierLib.
+//                  BP24-A fix: cycleSpeed() dead state.switch branch replaced with
+//                  ensureSwitchOn() from LevoitChildBase.
+//                  D2 fix: off() now emits speed:off for capability parity with
+//                  other Core line drivers.
+//                  BP24-B fix (Phase 5c): setSpeed() + setMode() now call
+//                  ensureSwitchOn() — auto-turn-on device when off before sending
+//                  cloud command. BP18 null-guards added to both methods.
 // 2026-04-29: v2.4  Added captureDiagnostics command + diagnostics attribute via
 //                  LevoitDiagnostics library. Added recordError() ring-buffer calls at
 //                  all logError / log.error sites.
@@ -50,6 +59,8 @@ SOFTWARE.
 // 2021-10-22: v1.0 Support for Levoit Air Purifier Core 200S / 400S
 
 #include level99.LevoitDiagnostics
+#include level99.LevoitChildBase
+#include level99.LevoitCorePurifier
 
 metadata {
     definition(
@@ -57,7 +68,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S / 300S air purifiers",
-        version: "2.4.2",
+        version: "2.5",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -93,16 +104,10 @@ metadata {
     }
 }
 
-def installed() {
-	logDebug "Installed with settings: ${settings}"
-    updated();
-}
-
 def updated() {
 	logDebug "Updated with settings: ${settings}"
 
     state.clear()
-    state.driverVersion = "2.4.1"
     unschedule()
 	initialize()
 
@@ -117,14 +122,6 @@ def updated() {
     }
 }
 
-def uninstalled() {
-	logDebug "Uninstalled app"
-}
-
-def initialize() {
-	logDebug "initializing"
-}
-
 def on() {
     logDebug "on()"
 
@@ -133,7 +130,7 @@ def on() {
     try {
         handlePower(true)
         logInfo "Power on"
-        device.sendEvent(name: "switch", value: "on")
+        handleEvent("switch", "on")
 
         if (state.speed != null) {
             setSpeed(state.speed)
@@ -161,29 +158,18 @@ def off() {
     try {
         handlePower(false)
         logInfo "Power off"
-        device.sendEvent(name: "switch", value: "off")
+        handleEvent("switch", "off")
+        handleEvent("speed", "off")
     } finally {
         state.remove('turningOff')
     }
 }
 
-def toggle() {
-    logDebug "toggle()"
-	if (device.currentValue("switch") == "on")
-		off()
-	else
-		on()
-}
-
 def cycleSpeed() {
     logDebug "cycleSpeed()"
+    ensureSwitchOn()    // BP24-A fix — replaces dead state.switch == "off" branch
 
     def speed = (state.speed == "low") ? "medium" : ( (state.speed == "medium") ? "high" : "low")
-    
-    if (state.switch == "off")
-    {
-        on()
-    }
     setSpeed(speed)
 }
 
@@ -214,54 +200,58 @@ def setLevel(value)
     if(value >= 33 && value < 66) speed = 2
     if(value >= 66) speed = 3
 
-    sendEvent(name: "level", value: value)
+    device.sendEvent(name: "level", value: value)
     setSpeed(speed)
 }
 
 def setSpeed(speed) {
     logDebug "setSpeed(${speed})"
-    if (speed == "off") {
-        off()
-    }
-    else if (speed == "sleep") {
-        setMode(speed)
-        device.sendEvent(name: "speed", value: "on")
+    if (!requireNotNull(speed, "setSpeed")) return false                        // BP18 null-guard
+    String s = (speed as String).toLowerCase()
+    // Power short-circuits BEFORE ensureSwitchOn — setSpeed("off") must NOT auto-on first
+    if (s == "off") { off(); return }
+    ensureSwitchOn()                                                             // BP24-B auto-on (after short-circuit)
+    if (s == "sleep") {
+        setMode(s)
+        handleEvent("speed", "on")
     }
     else if (state.mode == "manual") {
-        handleSpeed(speed)
-        state.speed = speed
-        device.sendEvent(name: "speed", value: speed)
-        logInfo "Speed: ${speed}"
+        handleSpeed(s)
+        state.speed = s
+        handleEvent("speed", s)
+        logInfo "Speed: ${s}"
     }
     else if (state.mode == "sleep") {
         setMode("manual")
-        handleSpeed(speed)
-        state.speed = speed
-        device.sendEvent(name: "speed", value: speed)
-        logInfo "Speed: ${speed}"
+        handleSpeed(s)
+        state.speed = s
+        handleEvent("speed", s)
+        logInfo "Speed: ${s}"
     }
 }
 
 def setMode(mode) {
     logDebug "setMode(${mode})"
-    handleMode(mode)
-    state.mode = mode
-	device.sendEvent(name: "mode", value: mode)
-    logInfo "Mode: ${mode}"
-    switch(mode)
+    if (!requireNotNull(mode, "setMode")) return false                          // BP18 null-guard
+    String m = (mode as String).toLowerCase()
+    if (!(m in ["manual", "sleep"])) {                                          // reject invalid BEFORE auto-on
+        logWarn "setMode: invalid mode '${m}' -- must be one of: manual, sleep; ignoring"
+        return false
+    }
+    ensureSwitchOn()                                                             // BP24-B auto-on (after rejection checks)
+    handleMode(m)
+    state.mode = m
+    handleEvent("mode", m)
+    logInfo "Mode: ${m}"
+    switch(m)
     {
         case "manual":
-            device.sendEvent(name: "speed", value: state.speed)
+            handleEvent("speed", state.speed)
             break;
         case "sleep":
-            device.sendEvent(name: "speed", value: "on")
+            handleEvent("speed", "on")
             break;
     }
-}
-
-def setDisplay(displayOn) {
-    logDebug "setDisplay(${displayOn})"
-    handleDisplayOn(displayOn)
 }
 
 def mapSpeedToInteger(speed) {
@@ -276,94 +266,11 @@ def mapIntegerToSpeed(speed) {
     return (speed == 1) ? "low" : ( (speed == 2) ? "medium" : "high")
 }
 
-def logDebug(msg) {
-    if (settings?.debugOutput) {
-		log.debug msg
-	}
-}
-
-def logInfo(msg) {
-    if (settings?.descriptionTextEnable) log.info msg
-}
-
-def logError(msg) {
-    log.error msg
-}
-
-void logDebugOff() {
-  //
-  // runIn() callback to disable "Debug" logging after 30 minutes
-  // Cannot be private
-  //
-  if (settings?.debugOutput) device.updateSetting("debugOutput", [type: "bool", value: false]);
-}
-
-// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
-// Call from top of update(status, nightLight) so self-heal fires within one poll cycle.
-private void ensureDebugWatchdog() {
-    if (settings?.debugOutput && state.debugEnabledAt) {
-        Long elapsed = now() - (state.debugEnabledAt as Long)
-        if (elapsed > 30 * 60 * 1000) {
-            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
-            device.updateSetting("debugOutput", [type:"bool", value:false])
-            state.remove("debugEnabledAt")
-        }
-    }
-}
-
-def handlePower(on) {
-
-    def result = false
-
-    parent.sendBypassRequest(device, [
-                data: [ enabled: on, id: 0 ],
-                "method": "setSwitch",
-                "source": "APP" ]) { resp ->
-			if (checkHttpResponse("handleOn", resp))
-			{
-                def operation = on ? "ON" : "OFF"
-                logDebug "turned ${operation}()"
-				result = true
-			}
-		}
-    return result
-}
-
-def handleSpeed(speed) {
-
-    def result = false
-
-    parent.sendBypassRequest(device, [
-                data: [ level: mapSpeedToInteger(speed), id: 0, type: "wind" ],
-                "method": "setLevel",
-                "source": "APP"
-            ]) { resp ->
-			if (checkHttpResponse("handleSpeed", resp))
-			{
-                logDebug "Set speed"
-				result = true
-			}
-		}
-    return result
-}
-
-def handleMode(mode) {
-
-    def result = false
-
-    parent.sendBypassRequest(device, [
-                data: [ "mode": mode ],
-                "method": "setPurifierMode",
-                "source": "APP"
-            ]) { resp ->
-			if (checkHttpResponse("handleMode", resp))
-			{
-                logDebug "Set mode"
-				result = true
-			}
-		}
-    return result
-}
+// logDebug, logError, logInfo, logDebugOff, ensureDebugWatchdog, ensureSwitchOn
+// are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
+// installed, uninstalled, initialize, toggle, setDisplay, handlePower, handleSpeed,
+// handleMode, handleDisplayOn, setChildLock, setTimer, cancelTimer, resetFilter,
+// checkHttpResponse are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
 
 def update() {
 
@@ -451,114 +358,4 @@ def update(status, nightLight)
     }
 
     return status
-}
-
-def setChildLock(value) {
-    // Core-line API uses child_lock (boolean); Vital-line API uses childLockSwitch (integer). Intentional divergence per pyvesync class hierarchy.
-    logDebug "setChildLock(${value})"
-    def result = false
-    parent.sendBypassRequest(device, [
-                data: [ child_lock: (value == "on") ],
-                "method": "setChildLock",
-                "source": "APP"
-            ]) { resp ->
-        if (checkHttpResponse("setChildLock", resp)) {
-            device.sendEvent(name: "childLock", value: value)
-            logInfo "Child lock (Display Lock): ${value}"
-            result = true
-        }
-    }
-    return result
-}
-
-def setTimer(seconds) {
-    int secs = (seconds as Integer) ?: 0
-    logDebug "setTimer(${secs}s)"
-    if (secs <= 0) { cancelTimer(); return }
-    def result = false
-    parent.sendBypassRequest(device, [
-                data: [ action: "off", total: secs ],
-                "method": "addTimer",
-                "source": "APP"
-            ]) { resp ->
-        if (checkHttpResponse("setTimer", resp)) {
-            def tid = resp?.data?.result?.id
-            if (tid != null) state.timerId = tid
-            logInfo "Timer set: power off in ${secs}s (id=${tid})"
-            result = true
-        }
-    }
-    return result
-}
-
-def cancelTimer() {
-    logDebug "cancelTimer()"
-    if (!state.timerId) { logDebug "No active timer to cancel"; return }
-    def result = false
-    parent.sendBypassRequest(device, [
-                data: [ id: state.timerId ],
-                "method": "delTimer",
-                "source": "APP"
-            ]) { resp ->
-        if (checkHttpResponse("cancelTimer", resp)) {
-            state.remove("timerId")
-            logInfo "Timer cancelled"
-            result = true
-        }
-    }
-    return result
-}
-
-def resetFilter() {
-    logDebug "resetFilter()"
-    def result = false
-    parent.sendBypassRequest(device, [
-                data: [:],
-                "method": "resetFilter",
-                "source": "APP"
-            ]) { resp ->
-        if (checkHttpResponse("resetFilter", resp)) {
-            logInfo "Filter life reset"
-            result = true
-        }
-    }
-    return result
-}
-
-def handleDisplayOn(displayOn)
-{
-    logDebug "handleDisplayOn()"
-
-    def result = false
-
-    parent.sendBypassRequest(device, [
-                data: [ "state": (displayOn == "on")],
-                "method": "setDisplay",
-                "source": "APP"
-            ]) { resp ->
-			if (checkHttpResponse("handleDisplayOn", resp))
-			{
-                logDebug "Set display"
-				result = true
-			}
-		}
-    return result
-}
-
-
-def checkHttpResponse(action, resp) {
-	if (resp.status == 200 || resp.status == 201 || resp.status == 204)
-		return true
-	else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500)
-	{
-		log.error "${action}: ${resp.status} - ${resp.getData()}"
-		recordError("${action}: ${resp.status}", [site:"checkHttpResponse"])
-		return false
-	}
-	else
-	{
-		log.error "${action}: unexpected HTTP response: ${resp.status}"
-		recordError("${action}: unexpected HTTP response: ${resp.status}", [site:"checkHttpResponse"])
-		return false
-	}
 }

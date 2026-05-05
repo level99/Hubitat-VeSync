@@ -6,79 +6,92 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 ---
 
-## v2.5 — next release candidates
+## v2.6 — next release candidates
 
-### Upstream-pending items
+Items locked to the next release because they're internally actionable (no external blockers).
 
-- **Pyvesync PR #502 fold-in** once upstream merges — reconcile RGB nightlight `colorSliderLocation` anchor table + re-verify HSV-brightness adjustment against pyvesync's `_apply_brightness_to_rgb`.
-- **Upstream pyvesync PR — regional code roll-up.** Single PR contributing model codes back upstream that we cover but pyvesync's `device_map.py` doesn't enumerate: `LAP-V201S-WUSR`, `LAP-V201S-WEUR` (Vital 200S), `LAP-C201S-WUSR` (Core 200S), `LAP-C401S-KUSR` (PlasmaPro 400S-P black), `LPF-R432S-AUK` (UK Pedestal Fan), `LTF-F362S-WUSR` (36-inch Tower Fan, with note that hardware is sibling of F422S). Low-controversy patch; eliminates 6 of our enumeration gaps in one upstream merge.
-- **BP16 live-verified footer** — analogous to BP14's footer in `qa-agent.md`; add after first community report confirms post-reboot self-heal.
-- **Plain (non-RGB) brightness nightlight for `LUH-O451S-WUSR`** — per pyvesync issue #500 refutation of the v2.1 "no nightlight (hardware lacks it)" CROSS-CHECK decision. WUSR variant DOES have a nightlight per the user report; investigate, capture/validate, re-add nightlight conditionally for that specific variant.
-- **Hubitat platform bug BP20 — library `/* */` doc-header parser fails save.** Filed at [community thread 163611](https://community.hubitat.com/t/bug-report-library-save-returns-internal-error-on-doc-header-block-fw-2-4-4-156-2-5-0-126/163611). Workaround in place: lint RULE29 + `// line comments` in library source. **When Hubitat fixes the parser:** revert the in-source NOTE block + `// → /* */` conversion in `LevoitDiagnosticsLib.groovy`, drop RULE29 from lint, scrub BP20 mentions from CONTRIBUTING.md / CLAUDE.md / dev+QA agents.
+### Refactor / lint coverage
 
-### Conditional items (act on community signal)
-
-- **OasisMist 1000S WEUR nightlight payload fallback** — only if community reports failure with the current pyvesync-class pattern. Pyvesync's WEUR fixture doesn't actually exercise nightlight, leaving the payload underspecified upstream. Fallback: switch to spkesDE's single-method `setNightLightBrightness {nightLightBrightness: N}` pattern (1-line change in `LevoitOasisMist1000S.groovy:setNightlight`).
-- **Sprout Air VOC/CO2 attribute population verification** — driver declares `voc` + `co2` attributes (Sprout Air is Levoit's air-quality flagship per marketing) but pyvesync's device_map.py doesn't list explicit VOC/CO2 features. Driver is null-safe — attributes stay null if API doesn't return them. Action if community reports null values: confirm pyvesync feature gap + drop attributes (or document as marketing-aspirational).
-- **EverestAir `setTimer`/`clearTimer` commands** — pyvesync `VeSyncAirBaseV2` exposes `set_timer`/`clear_timer`; v2.3 driver doesn't surface them. Cookie-cutter port from Tower Fan timer pattern.
+- **Fan `applyStatus` cross-cutting block extraction** (~65 duplicated lines between `LevoitTowerFan.groovy` + `LevoitPedestalFan.groovy`). Multi-return-value helper would collapse pref-seed/peel/power/speed-emit/mode-reverse-map/temp/sleepPref/errorCode blocks into a lib helper. Mid-method extraction is brittle; only pursue if a future bug surfaces in this shared structure.
+- **Fan spec edge-case hardening** — `cycleSpeed` from-off with `state.fanLevel = null` (default-fallback path) and `state.fanLevel = 12` (max-wraparound to 1). Optional regression-guard hardening on the existing Phase 5 BP24-B specs.
+- **RULE32 regex broadening for delegation chains.** Surfaced by Phase 5c senior audit: the rule's algorithm skipped delegation methods (e.g., Core line `setSpeed` → `LevoitCorePurifierLib.handleSpeed`), missing the Core BP24-B gap. Fix needs simple call-graph analysis, not just regex extension.
 
 ---
 
-## Beyond v2.5 — unscheduled
+## Awaiting external input — release-agnostic
+
+Items here can ship in any future release once the external signal arrives. Listed without a release-version label because we can't anticipate when the signal lands. Each item names the specific signal that unblocks it.
+
+### Upstream pyvesync (merge / patch pending)
+
+- **Pyvesync PR #502 fold-in.** Reconciles RGB nightlight `colorSliderLocation` anchor table + re-verifies HSV-brightness adjustment against pyvesync's `_apply_brightness_to_rgb`. **Status:** PR remains OPEN upstream as of last check; head ref `dev`. Wait for merge.
+- **Upstream pyvesync PR — regional code roll-up.** Single PR contributing model codes back upstream that we cover but pyvesync's `device_map.py` doesn't enumerate: `LAP-V201S-WUSR`, `LAP-V201S-WEUR` (Vital 200S), `LAP-C201S-WUSR` (Core 200S), `LAP-C401S-KUSR` (PlasmaPro 400S-P black), `LPF-R432S-AUK` (UK Pedestal Fan), `LTF-F362S-WUSR` (36-inch Tower Fan, with note that hardware is sibling of F422S). Low-controversy patch; eliminates 6 of our enumeration gaps in one upstream merge. **Action:** we can write the patch ourselves and file the PR; benefit unlocks once pyvesync maintainer merges.
+
+### Hubitat platform (parser fix pending)
+
+- **Hubitat platform bug BP20 — library `/* */` doc-header parser fails save.** Filed at [community thread 163611](https://community.hubitat.com/t/bug-report-library-save-returns-internal-error-on-doc-header-block-fw-2-4-4-156-2-5-0-126/163611). Workaround in place: lint RULE29 + `// line comments` in library source. **When Hubitat fixes the parser:** revert the in-source NOTE block + `// → /* */` conversion in `LevoitDiagnosticsLib.groovy`, drop RULE29 from lint, scrub BP20 mentions from CONTRIBUTING.md / CLAUDE.md / dev+QA agents.
+
+### Community signal (user report needed)
+
+- **OasisMist 1000S WEUR nightlight payload fallback** — only if community reports failure with the current pyvesync-class pattern. Pyvesync's WEUR fixture doesn't actually exercise nightlight, leaving the payload underspecified upstream. Fallback: switch to spkesDE's single-method `setNightLightBrightness {nightLightBrightness: N}` pattern (1-line change in `LevoitOasisMist1000S.groovy:setNightlight`).
+- **Sprout Air VOC/CO2 attribute population verification** — driver declares `voc` + `co2` attributes (Sprout Air is Levoit's air-quality flagship per marketing) but pyvesync's device_map.py doesn't list explicit VOC/CO2 features. Driver is null-safe — attributes stay null if API doesn't return them. Action if community reports null values: confirm pyvesync feature gap + drop attributes (or document as marketing-aspirational).
+
+### Hardware / API capture availability
+
+- **Plain (non-RGB) brightness nightlight for `LUH-O451S-WUSR`** — per pyvesync issue #500 refutation of the v2.1 "no nightlight (hardware lacks it)" CROSS-CHECK decision. WUSR variant DOES have a nightlight per the user report; investigate, capture/validate, re-add nightlight conditionally for that specific variant.
+- **Fan oscillation setters BP24 classification (5 methods).** Pedestal Fan `setHorizontalOscillation`/`setVerticalOscillation`/`setHorizontalRange`/`setVerticalRange` and Tower Fan `setOscillation` need live-capture to classify SHOULD-ON / SKIP-OK / NO-ON. Currently scaffold-exempted in lint. Possibly RULE32 method-name regex needs extension to cover oscillation setters once classified.
+- **V2-line humidifier `setMode` BP24 classification (4 drivers).** LV600SHC, OasisMist 1000S, Sprout, Sup6000S — currently SKIP-OK pending live-capture. V2 firmware is suspected to reject mode changes while off (same as Vital line); needs confirmation via mitmproxy.
+- **Tower Fan write-path parity with Pedestal Fan.** Port the confirmed Pedestal Fan write paths (`setChildLock`, `setSmartCleaningReminder`, plus already-shipped `setMute` / `setDisplay`) to Tower Fan once a Tower Fan tester is available. Maintainer doesn't own LTF-F422S / LTF-F362S; speculative additions deliberately avoided to prevent silent-failure scenarios for community Tower Fan owners.
+
+  **Unblocks on:** community Tower Fan owner volunteering for live-verification ([Levoit community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499)) OR maintainer hardware purchase.
+
+  **Plan once a tester is available:**
+  1. Run hardware-capture protocol: enable parent verboseDebug, send each candidate command, watch response codes.
+  2. Cross-reference pyvesync `VeSyncTowerFan` — features pyvesync already supports indicate the API method is confirmed; features pyvesync doesn't have are higher-risk speculative.
+  3. Port confirmed features to `LevoitTowerFan.groovy` with the verified payloads (likely identical to Pedestal Fan; may need minor field-name adjustments).
+  4. Update `LevoitTowerFanSpec.groovy` with parallel test coverage.
+  5. Resolve `displayingType` semantics in the same pass — currently a 0/1 toggle of unknown function. Toggle in mobile app, observe device behavior + status field, document, decide whether to expose.
+
+  **Tower Fan-only caveats (not on Pedestal Fan):**
+  - 1-axis oscillation only (no vertical) — `runOscillationCalibration` may not apply, or may apply differently
+  - workMode list differs slightly: `normal | turbo | auto | sleep` (no `eco`); `setLevelMemory` mode constraints need updating
+
+  **Upstream:** the pyvesync PR for Pedestal Fan write-path methods (in TODO.md) expands to cover Tower Fan once verified.
+
+- **Pedestal Fan write-path commands — refuted, awaiting API capture.** Seven Pedestal Fan setter commands and the Tower Fan `setSleepPreference` are blocked on API-shape discovery. Each was attempted with educated-guess payloads against real hardware; all refuted by VeSync API inner code (method-doesn't-exist or payload-format-wrong). Read-side fields populate correctly on poll, so the device hardware tracks this state — the cloud write paths via guessed method names are simply wrong.
+
+  **Refuted attempts (don't repeat):**
+
+  | Command | Payloads tried | Inner code | Notes |
+  |---|---|---|---|
+  | `setTimer` | `{action:"on"\|"off", total:N}` | -1 | pyvesync has no timer methods; HA PR #163353 still open |
+  | `cancelTimer` | `clearTimer + {}` | -1 | Paired with setTimer failure |
+  | `setSleepPreference` | flat `{sleepPreferenceType}` AND nested `{sleepPreference:{...}}` | 11000000 | Both "advanced" and "default" values tried; same shape on Tower Fan |
+  | `setHighTemperatureThreshold` | `setHighTemperature + {highTemperature: degF×10}` | -1 | |
+  | `setHighTemperatureReminder` | `{highTemperatureReminderState: 1\|0}` | -1 | |
+  | `setLevelMemory` | `{workMode, level, enable}` | -1 | |
+  | `runOscillationCalibration` | `oscillationCalibration + {}` | -1 | May be local-network only |
+
+  **Hypothesis:** VeSync mobile app likely uses a different API namespace for several of these — possibly "schedule"-style for timer-related operations, possibly local-network (not cloud) for oscillation calibration.
+
+  **Resolution path:** mitmproxy capture of the VeSync mobile app's actual request for each feature. iOS/Android with the app installed; trigger each feature once; capture the corresponding `/cloud/v2/deviceManaged/bypassV2` request body. Read-only attributes for these fields remain declared in the driver so users can see device state.
+
+- **Coverage gaps — 4 Levoit devices unsupported.** Each blocked on external work: pyvesync upstream enumeration, community `state.deviceType` capture from real device, or product not yet shipping publicly.
+
+  | Device | Model code(s) | Likely pyvesync class | Blocker |
+  |---|---|---|---|
+  | Classic 36-Inch Smart Tower Fan | `LTF-F362S-WUSR` (+ likely region siblings) | Likely `VeSyncTowerFan` (same as 42-inch `LTF-F422S`) | pyvesync has not yet enumerated the dev_type. Either wait for upstream, or one community owner can share their device's `state.deviceType` from a Hubitat Generic-driver install + a debug-log payload sample to confirm the class is identical. May need fan-level cap adjustment if the smaller fan has fewer than 12 speeds. |
+  | Core Mini / Core Mini-P | `LAP-C161-WUS`, `LAP-C161-KUS` | Unknown — could be `VeSyncAirBypass` (Tier 2 sibling of Core 200S) OR could be BLE-only | pyvesync has zero entries for `LAP-C161`. First action: open a pyvesync issue with a deviceType capture from a real Mini, or wait for a community report. |
+  | CirculAir Oscillating Fan (2-in-1 pedestal/tabletop) | Model code unknown publicly (likely `LSF-*` or `LCF-*` per naming pattern) | Unknown | Model code itself isn't surfaced in any retailer listing reviewed. Need a community owner to share `state.deviceType` from a Hubitat install via existing parent's Generic-driver fall-through. Pyvesync class TBD. |
+  | Pet Odor & Hair Air Purifier (CES 2025 announce, Q2 2026 launch) | TBD — not yet shipping | Likely `VeSyncAirBaseV2` sibling but unverified | Product hasn't shipped publicly yet (per Levoit's CES 2025 press release). Watch upstream pyvesync `device_map.py` for the new dev_type entry once retail availability begins. |
+
+  If you own one of these and your Hubitat hub is connected to the VeSync cloud via this fork's parent driver, please share the `state.deviceType` value (visible on the Generic child device's State Variables) on the [Hubitat community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) — that's what unblocks adding support.
+
+---
+
+## Beyond next release — unscheduled
 
 Items below are not yet locked to a release. They're available for community pickup or maintainer prioritization as time permits.
-
-### Tower Fan write-path parity with Pedestal Fan
-
-Port the confirmed Pedestal Fan write paths (`setChildLock`, `setSmartCleaningReminder`, plus already-shipped `setMute` / `setDisplay`) to Tower Fan once a Tower Fan tester is available. Maintainer doesn't own LTF-F422S / LTF-F362S; speculative additions deliberately avoided to prevent silent-failure scenarios for community Tower Fan owners.
-
-**Unblocks on:** community Tower Fan owner volunteering for live-verification ([Levoit community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499)) OR maintainer hardware purchase.
-
-**Plan once a tester is available:**
-1. Run hardware-capture protocol: enable parent verboseDebug, send each candidate command, watch response codes.
-2. Cross-reference pyvesync `VeSyncTowerFan` — features pyvesync already supports indicate the API method is confirmed; features pyvesync doesn't have are higher-risk speculative.
-3. Port confirmed features to `LevoitTowerFan.groovy` with the verified payloads (likely identical to Pedestal Fan; may need minor field-name adjustments).
-4. Update `LevoitTowerFanSpec.groovy` with parallel test coverage.
-5. Resolve `displayingType` semantics in the same pass — currently a 0/1 toggle of unknown function. Toggle in mobile app, observe device behavior + status field, document, decide whether to expose.
-
-**Tower Fan-only caveats (not on Pedestal Fan):**
-- 1-axis oscillation only (no vertical) — `runOscillationCalibration` may not apply, or may apply differently
-- workMode list differs slightly: `normal | turbo | auto | sleep` (no `eco`); `setLevelMemory` mode constraints need updating
-
-**Upstream:** the pyvesync PR for Pedestal Fan write-path methods (in TODO.md) expands to cover Tower Fan once verified.
-
-### Pedestal Fan write-path commands — refuted, awaiting API capture
-
-Seven Pedestal Fan setter commands and the Tower Fan `setSleepPreference` are blocked on API-shape discovery. Each was attempted with educated-guess payloads against real hardware; all refuted by VeSync API inner code (method-doesn't-exist or payload-format-wrong). Read-side fields populate correctly on poll, so the device hardware tracks this state — the cloud write paths via guessed method names are simply wrong.
-
-**Refuted attempts (don't repeat):**
-
-| Command | Payloads tried | Inner code | Notes |
-|---|---|---|---|
-| `setTimer` | `{action:"on"\|"off", total:N}` | -1 | pyvesync has no timer methods; HA PR #163353 still open |
-| `cancelTimer` | `clearTimer + {}` | -1 | Paired with setTimer failure |
-| `setSleepPreference` | flat `{sleepPreferenceType}` AND nested `{sleepPreference:{...}}` | 11000000 | Both "advanced" and "default" values tried; same shape on Tower Fan |
-| `setHighTemperatureThreshold` | `setHighTemperature + {highTemperature: degF×10}` | -1 | |
-| `setHighTemperatureReminder` | `{highTemperatureReminderState: 1\|0}` | -1 | |
-| `setLevelMemory` | `{workMode, level, enable}` | -1 | |
-| `runOscillationCalibration` | `oscillationCalibration + {}` | -1 | May be local-network only |
-
-**Hypothesis:** VeSync mobile app likely uses a different API namespace for several of these — possibly "schedule"-style for timer-related operations, possibly local-network (not cloud) for oscillation calibration.
-
-**Resolution path:** mitmproxy capture of the VeSync mobile app's actual request for each feature. iOS/Android with the app installed; trigger each feature once; capture the corresponding `/cloud/v2/deviceManaged/bypassV2` request body. Read-only attributes for these fields remain declared in the driver so users can see device state.
-
-### Coverage gaps awaiting external resolution
-
-Four Levoit devices we don't cover, all blocked on external work — pyvesync upstream needs to enumerate the model code, OR a community member needs to share a `state.deviceType` capture from a real device, OR the product hasn't shipped publicly yet.
-
-| Device | Model code(s) | Likely pyvesync class | Blocker |
-|---|---|---|---|
-| Classic 36-Inch Smart Tower Fan | `LTF-F362S-WUSR` (+ likely region siblings) | Likely `VeSyncTowerFan` (same as 42-inch `LTF-F422S`) | pyvesync has not yet enumerated the dev_type. Either wait for upstream, or one community owner can share their device's `state.deviceType` from a Hubitat Generic-driver install + a debug-log payload sample to confirm the class is identical. May need fan-level cap adjustment if the smaller fan has fewer than 12 speeds. |
-| Core Mini / Core Mini-P | `LAP-C161-WUS`, `LAP-C161-KUS` | Unknown — could be `VeSyncAirBypass` (Tier 2 sibling of Core 200S) OR could be BLE-only | pyvesync has zero entries for `LAP-C161`. First action: open a pyvesync issue with a deviceType capture from a real Mini, or wait for a community report. |
-| CirculAir Oscillating Fan (2-in-1 pedestal/tabletop) | Model code unknown publicly (likely `LSF-*` or `LCF-*` per naming pattern) | Unknown | Model code itself isn't surfaced in any retailer listing reviewed. Need a community owner to share `state.deviceType` from a Hubitat install via existing parent's Generic-driver fall-through. Pyvesync class TBD. |
-| Pet Odor & Hair Air Purifier (CES 2025 announce, Q2 2026 launch) | TBD — not yet shipping | Likely `VeSyncAirBaseV2` sibling but unverified | Product hasn't shipped publicly yet (per Levoit's CES 2025 press release). Watch upstream pyvesync `device_map.py` for the new dev_type entry once retail availability begins. |
-
-If you own one of these and your Hubitat hub is connected to the VeSync cloud via this fork's parent driver, please share the `state.deviceType` value (visible on the Generic child device's State Variables) on the [Hubitat community thread](https://community.hubitat.com/t/release-levoit-air-purifiers-humidifiers-and-fans/163499) — that's what unblocks adding support.
 
 ### Tier 4 — out-of-scope unless demand surfaces
 
@@ -95,21 +108,32 @@ Two additional model codes present in pyvesync `device_map.py` that fall through
 
 Community hardware reports (a debug log showing the model code + `captureDiagnostics` output) will confirm routing and unblock adding these in the next polish round.
 
-### Architectural — class-library extraction
+### Architectural — library extraction refactor (6-phase, headline architectural item)
 
-Per-class shared libraries to collapse duplicated logic across driver families. Surfaced 2026-05-02 during the BP23 audit: Core line (200S/300S/400S/600S) has roughly 1,500-2,800 lines of near-byte-identical code across the 4 drivers; Vital line (100S/200S) ~600-1,000 lines; Fan line (Tower/Pedestal) ~400-600 lines.
+Driver duplication is significant: 22 child drivers carry ~4,500-5,000 lines of duplicated logic — cross-cutting boilerplate (HTTP plumbing, log helpers, lifecycle hooks, BP16 watchdogs, BP18 null-guards) plus per-class parallel implementations (Core / Vital / Fan / V1-humidifier / V2-humidifier line `setLevel` / `setSpeed` / parsers / mode handling). Extracting into a general library + 5 class libraries collapses the duplication, eliminates the recurring "BP-N applies to N drivers, fix in N places" bug shape, and meaningfully reduces LLM-token cost when working on the repo.
 
-Three new libraries proposed:
+**Phase plan (each phase is its own dev/QA/tester cycle, its own PR):**
 
-- **`LevoitCorePurifierLib.groovy`** — shared `setLevel`/`setSpeed`/`handleSpeed`/`setMode`/parsers/AQ logic for Core 200S/300S/400S/600S
-- **`LevoitVitalPurifierLib.groovy`** — shared paths for Vital 100S/200S
-- **`LevoitFanLib.groovy`** — shared paths for Tower Fan / Pedestal Fan
+1. ✅ **`LevoitChildBaseLib.groovy`** — general/cross-cutting helpers (HTTP plumbing, log helpers, lifecycle hooks, `toggle`, BP16 `ensureDebugWatchdog`, BP23 `ensureSwitchOn`, BP18 null-guard, 2-arg `setLevel(val, duration)` overload). Shipped v2.5 Phase 1. Validated override-precedence behavior: driver-local method definitions shadow same-named lib method — the expected Groovy/Hubitat behavior.
+2. ✅ **`LevoitCorePurifierLib.groovy`** — Core 200S/300S/400S/600S shared `setLevel`/`setSpeed`/`handleSpeed`/`setMode`/parsers/AQ/PM2.5 logic. Shipped v2.5 Phase 2. ~1,400 lines dedup.
+3. ✅ **`LevoitHumidifierLib.groovy`** — all 9 humidifier drivers (Classic 200S/300S, Dual 200S, LV600S, LV600S Hub Connect, OasisMist 450S/1000S, Sprout, Superior 6000S) sharing lifecycle/HTTP plumbing + `toggle` + `update()` signatures. Shipped v2.5 Phase 4 as a single unified library (Option γ — not the originally-planned two-library split into V1/V2 variants; the drivers' per-family divergence was shallow enough that a single library + per-driver power-payload overrides was cleaner). ~1,600 lines dedup across 9 drivers.
+4. ✅ **`LevoitVitalPurifierLib.groovy`** — Vital 100S/200S shared logic. Shipped v2.5 Phase 3. ~700 lines dedup. 31 method bodies extracted; per-driver `applyStatus` retained for Vital 200S light-detection asymmetry.
+5. ✅ **`LevoitFanLib.groovy`** — Tower / Pedestal Fan shared logic. Shipped v2.5 Phase 5. ~500 lines dedup. 12 cross-family infra + 8 V2-fan body methods + `doSetMuteSwitch`/`doSetDisplayScreenSwitch` rename-pattern helpers (per-driver 1-line delegators preserve method-presence semantics).
 
-**Long-term payoff:** every future bug affecting a class collapses to a 1-fix instead of 2-4. Retroactively dedupes BP1 (10 drivers), BP12 (5 driver shapes), BP14 (parent + every child command path), BP16 (every child), BP18 (17 method sites × 13 drivers), BP23 (8 drivers), and the next BP-N of the same shape.
+**Total dedup (post-Phase 5):** ~5,000 lines collapsed into ~1,250 lines of library code across 6 shipped libraries (`LevoitChildBase`, `LevoitDiagnostics`, `LevoitCorePurifier`, `LevoitVitalPurifier`, `LevoitHumidifier`, `LevoitFan`). Each future BP-N on the covered class collapses to a 1-fix. Retroactively deduped BP1 (10 drivers), BP12 (5 shapes), BP16 (every child), BP18 (humidifier + purifier + fan paths), BP23/BP24 (`ensureSwitchOn` + `setLevel(0)` + `setSpeed`/`setMode` shapes class-wide).
 
-**Tradeoffs:** Hubitat library files have a known parser bug (BP20) — each new library file is fresh exposure surface; file-scope must stay zero-commentary. Library include semantics don't support method override; drivers needing per-instance variation either parameterize the library function or override locally (Hubitat sandbox precedence on local-vs-lib needs verification before relying on it). Each library ships via HPM as another `required: true` dependency users pick up via Update flow (precedent set by `LevoitDiagnosticsLib.groovy` in v2.4).
+**Tradeoffs:** Hubitat library files carry BP20 platform-parser exposure (lint RULE29 + ops-agent library-deploy smoke-test mitigate). Library include semantics don't support method override; drivers needing per-instance variation either parameterize the library function or override locally (validated in Phase 1). Each library ships via HPM as `required: true` (precedent: `LevoitDiagnosticsLib.groovy` in v2.4).
 
-**Sequencing:** Core line first (biggest payoff, most homogeneous), then Vital, then Fan. Each is its own dev/QA/tester cycle, ~6-10 hours per class lib.
+**Sequencing:** All five phases shipped in v2.5. CHANGELOG.md is system-of-record for what shipped per-phase.
+
+**Don't bundle phases.** Each library is its own architecture decision with its own validation surface. Discrete phases let learnings from Phase 1 inform Phase 2+ design.
+
+### User-visible polish
+
+- **Hide `duration` parameter from `setLevel` UI on Levoit drivers (UX polish).** Hubitat's `SwitchLevel` capability advertises `setLevel(level, duration)` in the device-page command card and Rule Machine "Set Level" action. For VeSync devices the duration parameter is a no-op (no hardware fade exists; we ignore it). Showing the input field anyway is bad UX — users may enter a value expecting it to take effect. Fix pattern: declare a custom command override alongside the capability declaration: `command "setLevel", [[name: "Level*", type: "NUMBER", description: "0-100"]]`. This narrows the device-page UI to a single Level field while leaving the capability contract (and the 2-arg implementation that v2.4 added) intact. Caveats: the override may not affect Rule Machine's "Set Level" action editor (RM uses its own action-template system); per-Hubitat-version variance — older platform versions ignore command overrides on capability-provided methods. Pre-flight verification on FW 2.5.0.126+ before applying across all 11 affected drivers.
+- **Child-side error log dedup during parent-level network outages.** When parent's `sendBypassRequest` returns false during an outage (BP22 catches and dedupes parent-side), the calling child driver still logs its own ERROR ("Speed write failed for level X" + "HTTP -1"). For a Pedestal Fan being re-driven by a Room Lighting rule with motion retrigger, every motion event during the outage produces 2 ERROR lines on the child even though parent had already logged the BP22 first-fire WARN. Fix: child drivers check parent's outage state (e.g., `parent.isNetworkUnreachable()` helper) and downgrade their own write-failure ERRORs to DEBUG during a known outage.
+- **BP22 long-outage WARN cadence + probe-interval residual stalls.** At the 1-hour mark of a prolonged outage, the hourly-WARN re-surface fires several times in quick succession (1-min intervals) instead of once — concurrent `updateDevices()` cycles read stale `state.lastNetworkWarnAt`. Same root-cause class as occasional probe-attempt bunching at 1-min intervals (instead of the intended 5-min cadence). Both are state-write-flush timing issues during 120s+ poll cycles. Possible fixes: epoch-hour bucket integer for the cadence timestamp, or `@Field static` (downside: doesn't survive driver redeploy), or `runIn(0, ...)` cycle coalescing. Log volume is dramatically improved over the pre-BP22 baseline; this is residual polish only.
+- **Manual-install path documentation.** For users without HPM (paste-from-GitHub flow). Order matters: install libraries FIRST (drivers will fail to compile if they `#include` a library that isn't installed yet), then drivers, then create the parent app device. Add a section to the README and the Hubitat community thread OP covering: per-library raw-URL list, per-driver raw-URL list, troubleshooting "missing library" symptoms (`#include level99.LevoitXxx not found` → install the library from the Libraries Code section). Caveat for users on this path: manual install means they have to know to install each new library themselves when a release adds one; HPM does this automatically on Update.
 
 ### Tooling & dev experience
 

@@ -52,8 +52,23 @@
  *    - setLevel uses V2-API field names {levelIdx, levelType, manualSpeedLevel}
  *      NOT the legacy Core-line names {id, type, level} (Bug Pattern #4).
  *    - setMode uses method "setTowerFanMode", NOT "setPurifierMode".
+ *    - Infrastructure methods (lifecycle, power, toggle, polling, HTTP plumbing)
+ *      and shared V2-fan body methods (cycleSpeed, setLevel, sendLevel, speed
+ *      enum/percent math, doSetMuteSwitch, doSetDisplayScreenSwitch) are
+ *      provided by #include level99.LevoitFan (LevoitFanLib.groovy).
  *
  *  History:
+ *    2026-05-03: v2.5  Phase 5 — migrated to LevoitFanLib.groovy.
+ *                      Removed 12 infra methods + 8 shared V2-fan body methods
+ *                      (now provided by LevoitFanLib). Added 1-line delegators
+ *                      for setMute and setDisplay.
+ *                      BP24-B fix: cycleSpeed() + setSpeed() now auto-turn-on
+ *                      device when off (ensureSwitchOn() in LevoitFanLib
+ *                      cycleSpeed body; ensureSwitchOn() at top of per-driver
+ *                      setSpeed body).
+ *                      BP18 normalization: setTimer() seconds and action args
+ *                      now use explicit requireNotNull guards matching codebase
+ *                      convention (previously implicit ?: coercions).
  *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-26: v2.0  Community fork initial release (Dan Cox). Preview driver.
  *                      Built from canonical pyvesync VeSyncTowerFan payloads
@@ -68,6 +83,8 @@
  */
 
 #include level99.LevoitDiagnostics
+#include level99.LevoitChildBase
+#include level99.LevoitFan
 
 metadata {
     definition(
@@ -75,7 +92,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Tower Fan (LTF-F422S-WUS/WUSR/KEU/WJP) — power, fan speed 1-12, modes (normal/turbo/auto/sleep), oscillation, mute, display, timer, ambient temperature; canonical pyvesync payloads",
-        version: "2.4.2",
+        version: "2.5",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -131,73 +148,25 @@ metadata {
     }
 }
 
-// ---------- Lifecycle ----------
-def installed(){ logDebug "Installed ${settings}"; updated() }
-def updated(){
-    logDebug "Updated ${settings}"
-    state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4.1"
-    runIn(3, "refresh")
-    // Turn off debug log in 30 minutes (happy path — no hub reboot)
-    if (settings?.debugOutput) {
-        runIn(1800, "logDebugOff")
-        state.debugEnabledAt = now()
-    } else {
-        state.remove("debugEnabledAt")
-    }
-}
-def uninstalled(){ logDebug "Uninstalled" }
-def initialize(){ logDebug "Initializing" }
-
-// ---------- Power ----------
-// Switch payload is purifier-style: {powerSwitch: int, switchIdx: 0}
-// NOT humidifier-style {enabled: bool, id: 0}
-def on(){
-    logDebug "on()"
-    // state.turningOn prevents BP23 re-entrance: setLevel(N) -> on() -> (internal speed call) -> setLevel()
-    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
-    state.turningOn = true
-    try {
-        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(power=1)")
-        if (httpOk(resp)) {
-            logInfo "Power on"
-            state.lastSwitchSet = "on"
-            device.sendEvent(name:"switch", value:"on")
-        } else {
-            logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"])
-        }
-    } finally {
-        state.remove('turningOn')
-    }
-}
-
-def off(){
-    logDebug "off()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(power=0)")
-    if (httpOk(resp)) {
-        logInfo "Power off"
-        state.lastSwitchSet = "off"
-        device.sendEvent(name:"switch", value:"off")
-    } else {
-        logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"])
-    }
-}
-
-// state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write
-// race (the new event from on()/off() may not be queryable yet on a same-tick toggle()).
-// Falls back to device.currentValue("switch") when state isn't seeded yet (first-call case).
-def toggle(){
-    logDebug "toggle()"
-    String current = state.lastSwitchSet ?: device.currentValue("switch")
-    current == "on" ? off() : on()
-}
-
 // ---------- FanControl capability ----------
 // FanControl.setSpeed() accepts Hubitat's speed enum: off/low/medium-low/medium/medium-high/high/auto
 // We also expose a raw setSpeed(NUMBER) command for 1-12 integer levels.
-// Both routes funnel through the same sendLevel() internal helper.
+// Both routes funnel through the same sendLevel() internal helper (provided by LevoitFanLib).
 def setSpeed(spd){
     logDebug "setSpeed(${spd})"
+    if (spd == null) { logWarn "setSpeed called with null spd (likely empty Rule Machine action parameter); ignoring"; return }
+    // Short-circuit power commands before the auto-on guard.
+    // setSpeed("off") must NOT trigger ensureSwitchOn() — the intent is explicitly to turn off.
+    // setSpeed("on") short-circuits here too for symmetry (on() does everything needed).
+    if (!(spd instanceof Number) && !(spd instanceof String && spd.isInteger())) {
+        String early = (spd as String).toLowerCase()
+        if (early == "off") { off(); return }
+        if (early == "on")  { on(); return }
+    }
+    // BP24-B: auto-on when switch is off (SwitchLevel/FanControl capability convention).
+    // Placed after the off/on short-circuits so setSpeed("off") never triggers auto-on.
+    // ensureSwitchOn() is provided by #include level99.LevoitChildBase.
+    ensureSwitchOn()
     // If numeric string or integer, treat as raw fan level (1-12 raw setSpeed command)
     if (spd instanceof Number || (spd instanceof String && spd.isInteger())) {
         Integer rawLevel = (spd as Integer)
@@ -210,48 +179,10 @@ def setSpeed(spd){
         return
     }
     // Enum string (FanControl capability path)
-    if (spd == null) { logWarn "setSpeed called with null spd (likely empty Rule Machine action parameter); ignoring"; return }
     String s = (spd as String).toLowerCase()
-    if (s == "off")  { off(); return }
-    if (s == "on")   { on(); return }   // Hubitat FanControl spec: "on" resumes at prior/default speed
     if (s == "auto") { setMode("auto"); return }
     Integer lvl = fanControlEnumToLevel(s)
     if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; recordError("setSpeed: unknown enum '${s}'", [method:"setLevel"]); return }
-    sendLevel(lvl)
-}
-
-// FanControl.cycleSpeed() -- advance through levels in order
-def cycleSpeed(){
-    logDebug "cycleSpeed()"
-    Integer cur = state.fanLevel as Integer ?: 1
-    Integer next = (cur >= 12) ? 1 : (cur + 1)
-    sendLevel(next)
-}
-
-// 2-arg setLevel overload — Hubitat SwitchLevel capability standard signature.
-// VeSync devices do NOT support hardware-level fade/duration, so the duration
-// parameter is intentionally ignored. Delegates to the 1-arg version.
-// Without this overload, any caller using the standard 2-arg form (Rule Machine
-// with duration, dashboard tiles, MCP setLevel(N, D), third-party apps) throws
-// MissingMethodException — Hubitat sandbox catches it silently and the command
-// fails without user feedback.
-def setLevel(val, duration) {
-    setLevel(val)
-}
-
-// SwitchLevel capability: setLevel(percent 0-100) -> map to 1-12
-// SwitchLevel convention: setLevel(0) turns the device off (matches Z-Wave dimmer platform expectation).
-// BP23: setLevel(N>0) auto-turns-on when switch is off (SwitchLevel capability convention).
-def setLevel(val){
-    logDebug "setLevel(${val})"
-    Integer pct = Math.max(0, Math.min(100, (val as Integer) ?: 0))
-    if (pct == 0) { off(); return }
-    // BP23: auto-on when switch is off.
-    // state.turningOn guard set in on() prevents re-entrance.
-    if (!state.turningOn && device.currentValue("switch") != "on") on()
-    Integer lvl = levelFromPercent(pct)
-    // SwitchLevel spec requires emitting the level event immediately
-    sendEvent(name:"level", value: pct)
     sendLevel(lvl)
 }
 
@@ -299,6 +230,10 @@ def setMode(mode){
 }
 
 // ---------- Feature setters ----------
+// Public delegators for methods whose bodies live in LevoitFanLib.
+def setMute(o)    { doSetMuteSwitch(o) }
+def setDisplay(o) { doSetDisplayScreenSwitch(o) }
+
 def setOscillation(onOff){
     logDebug "setOscillation(${onOff})"
     if (onOff == null) { logWarn "setOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
@@ -314,36 +249,6 @@ def setOscillation(onOff){
     }
 }
 
-def setMute(onOff){
-    logDebug "setMute(${onOff})"
-    if (onOff == null) { logWarn "setMute called with null (likely empty Rule Machine action parameter); ignoring"; return }
-    String s = (onOff as String).toLowerCase()
-    if (!(s in ["on","off"])) { logError "setMute: invalid value '${s}'"; recordError("setMute invalid: ${s}", [method:"setMuteSwitch"]); return }
-    int v = (s == "on") ? 1 : 0
-    def resp = hubBypass("setMuteSwitch", [muteSwitch: v], "setMuteSwitch(${s})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"mute", value: s)
-        logInfo "Mute: ${s}"
-    } else {
-        logError "Mute write failed"; recordError("Mute write failed", [method:"setMuteSwitch"])
-    }
-}
-
-def setDisplay(onOff){
-    logDebug "setDisplay(${onOff})"
-    if (onOff == null) { logWarn "setDisplay called with null (likely empty Rule Machine action parameter); ignoring"; return }
-    String s = (onOff as String).toLowerCase()
-    if (!(s in ["on","off"])) { logError "setDisplay: invalid value '${s}'"; recordError("setDisplay invalid: ${s}", [method:"setDisplay"]); return }
-    int v = (s == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${s})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: s)
-        logInfo "Display: ${s}"
-    } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
-    }
-}
-
 // CROSS-CHECK [pyvesync VeSyncTowerFan._set_fan_state + device_map.py LTF-F422S sleep_preferences]:
 //   setSleepPreference was attempted in v2.4 but deferred to v2.5+ after Pedestal Fan live
 //   verification (device 1132, 2026-05-01) found both flat {sleepPreferenceType} and nested
@@ -356,10 +261,16 @@ def setDisplay(onOff){
 // NOT the V201S addTimerV2 shape {enabled, startAct, tmgEvt}
 // action: what the device does when the timer fires
 // Default action "off" (turn device off after timer expires)
+//
+// BP18 normalization: explicit requireNotNull guards on seconds and action args,
+// replacing the previous implicit ?: coercions. Matches the codebase convention
+// used by all other fan/humidifier command methods.
 def setTimer(seconds, action="off"){
-    int secs = (seconds as Integer) ?: 0
+    if (!requireNotNull(seconds, "setTimer")) return
+    int secs = seconds as Integer
     if (secs <= 0) { cancelTimer(); return }
-    String act = (action ?: "off") as String
+    // action defaults to "off" in the Groovy signature; only null-guard when explicitly null
+    String act = (action != null) ? (action as String).toLowerCase() : "off"
     if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"setTimer"]); return }
     logDebug "setTimer(${secs}s, action=${act})"
     def resp = hubBypass("setTimer", [action: act, total: secs], "setTimer(${secs}s,${act})")
@@ -392,15 +303,14 @@ def cancelTimer(){
     }
 }
 
-// ---------- Refresh ----------
-def refresh(){ update() }
-
 // ---------- Update / status ----------
 // Self-fetch when called directly (no-arg).
 // NOTE: this path passes resp.data into applyStatus; the parent-callback path (1-arg/2-arg
-// below) passes data.result already. The peel-while-loop in applyStatus handles both shapes
-// defensively, but the data-flow asymmetry means applyStatus's first peel iteration is doing
-// different work depending on entry point.
+// in LevoitFanLib) passes data.result already. The peel-while-loop in applyStatus handles
+// both shapes defensively, but the data-flow asymmetry means applyStatus's first peel
+// iteration is doing different work depending on entry point.
+// NOTE: update() 0-arg is NOT extracted to LevoitFanLib — Tower Fan uses getTowerFanStatus
+// while Pedestal Fan uses getFanStatus. Each driver keeps its own 0-arg update().
 def update(){
     logDebug "update() self-fetch"
     def resp = hubBypass("getTowerFanStatus", [:], "update")
@@ -409,21 +319,6 @@ def update(){
         if (!status?.result) { logError "No status returned from getTowerFanStatus"; recordError("No status returned from getTowerFanStatus", [method:"getTowerFanStatus"]) }
         else applyStatus(status)
     }
-}
-
-// Parent-poll, 1-arg signature (defensive; parent always uses 2-arg)
-def update(status){
-    logDebug "update() from parent (1-arg)"
-    applyStatus(status)
-    return true
-}
-
-// 2-arg variant -- REQUIRED (Bug Pattern #1); parent always calls with two args.
-// nightLight parameter is ignored -- Tower Fan has no night-light hardware.
-def update(status, nightLight){
-    logDebug "update() from parent (2-arg, nightLight ignored -- Tower Fan has no nightlight)"
-    applyStatus(status)
-    return true
 }
 
 // ---------- applyStatus ----------
@@ -454,7 +349,7 @@ def applyStatus(status){
     }
     // Diagnostic raw dump -- gated by debugOutput. Keep for ongoing field diagnostics.
     // Use this log line when a community member reports "device discovered but no data".
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     boolean powerOn = (r.powerSwitch as Integer) == 1
@@ -582,115 +477,11 @@ def applyStatus(status){
     device.sendEvent(name:"info", value: parts.join("<br>"))
 }
 
-// ---------- Internal helpers ----------
-
-// Send a raw 1-12 fan speed level to the device.
-// Uses V2-API field names: levelIdx, levelType, manualSpeedLevel (Bug Pattern #4).
-// NOT legacy Core-line names: id, type, level.
-private boolean sendLevel(Integer level){
-    logDebug "sendLevel(${level})"
-    if (level < 1 || level > 12) {
-        logError "sendLevel: invalid level ${level} -- must be 1-12"
-        recordError("sendLevel: invalid level ${level}", [method:"setLevel"])
-        return false
-    }
-    def resp = hubBypass("setLevel", [levelIdx: 0, levelType: "wind", manualSpeedLevel: level], "setLevel{levelIdx,levelType,manualSpeedLevel=${level}}")
-    if (httpOk(resp)) {
-        state.fanLevel = level
-        String enumVal = levelToFanControlEnum(level)
-        device.sendEvent(name:"speed", value: enumVal)
-        device.sendEvent(name:"level", value: percentFromLevel(level))
-        logInfo "Speed: L${level} (${enumVal})"
-        return true
-    } else {
-        logError "Speed write failed for level ${level}"; recordError("Speed write failed for level ${level}", [method:"setLevel"])
-        return false
-    }
-}
-
-// Map raw fan level 1-12 to Hubitat FanControl capability speed enum.
-// Hubitat FanControl enum: off | low | medium-low | medium | medium-high | high | on | auto
-// 12 levels -> 6 non-auto buckets: low(1-2), medium-low(3-4), medium(5-6), medium-high(7-8), high(9-12)
-// (Turbo maps last 4 levels to "high" rather than adding "very-high" which is not in the Hubitat enum.)
-private String levelToFanControlEnum(Integer level){
-    if (level == null || level <= 0) return "off"
-    if (level <= 2)  return "low"
-    if (level <= 4)  return "medium-low"
-    if (level <= 6)  return "medium"
-    if (level <= 8)  return "medium-high"
-    return "high"   // 9-12
-}
-
-// Map Hubitat FanControl speed enum back to a 1-12 representative level for writes.
-private Integer fanControlEnumToLevel(String s){
-    switch (s?.toLowerCase()) {
-        case "low":         return 2
-        case "medium-low":  return 4
-        case "medium":      return 6
-        case "medium-high": return 8
-        case "high":        return 10
-        default:            return null
-    }
-}
-
-// Map raw level 1-12 to SwitchLevel percentage 0-100.
-private Integer percentFromLevel(Integer level){
-    if (level == null || level < 1) return 8   // level 1 = ~8%
-    if (level >= 12) return 100
-    // Map 1-12 linearly: level 1 = 8%, level 12 = 100%
-    return Math.round(((level - 1) / 11.0) * 92 + 8) as Integer
-}
-
-// Map SwitchLevel percentage 0-100 to raw 1-12 level.
-private Integer levelFromPercent(Integer pct){
-    if (pct == null || pct <= 0) return 1
-    if (pct >= 100) return 12
-    return Math.max(1, Math.min(12, Math.round(((pct - 8) / 92.0) * 11 + 1) as Integer))
-}
-
-// ---------- Logging ----------
-def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
-def logError(msg){ log.error msg }
-def logWarn(msg){ log.warn msg }
-def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
-void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
-
-// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
-private void ensureDebugWatchdog() {
-    if (settings?.debugOutput && state.debugEnabledAt) {
-        Long elapsed = now() - (state.debugEnabledAt as Long)
-        if (elapsed > 30 * 60 * 1000) {
-            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
-            device.updateSetting("debugOutput", [type:"bool", value:false])
-            state.remove("debugEnabledAt")
-        }
-    }
-}
-
-// ---------- Hub/parent call wrapper ----------
-// Matches sibling driver pattern (LevoitVital200S, LevoitSuperior6000S, etc.)
-private hubBypass(method, Map data=[:], tag=null, cb=null){
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp){
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]){
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog,
+// ensureSwitchOn, requireNotNull are provided by #include level99.LevoitChildBase.
+//
+// Lifecycle, power, toggle, update(1-arg/2-arg), cycleSpeed, setLevel, sendLevel,
+// speed enum/percent helpers, doSetMuteSwitch, doSetDisplayScreenSwitch,
+// hubBypass, httpOk are provided by #include level99.LevoitFan.
 
 // ------------- END -------------

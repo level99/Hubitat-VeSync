@@ -469,8 +469,9 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
     }
 
     def "setWarmMistLevel(0) sends {warmLevel:0} and emits warmMistEnabled='off'"() {
-        given:
+        given: "device is on (CONCERN 2 early-return skips when off+lvl=0; this tests the on-device warm-off path)"
         settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
         driver.setWarmMistLevel(0)
@@ -501,7 +502,8 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
     }
 
     def "setWarmMistLevel out-of-range (4) logs error and sends no request"() {
-        given:
+        given: "device is on so BP24-B ensureSwitchOn() no-ops; isolates validation scope"
+        testDevice.events.add([name: "switch", value: "on"])
         settings.descriptionTextEnable = false
 
         when:
@@ -801,5 +803,58 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         noExceptionThrown()
         testLog.warns.any { it.contains("setMode") && it.contains("null") }
         testParent.allRequests.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // BP24-B regression guard: auto-on from off-state (setMistLevel + setWarmMistLevel)
+    // NOTE: setMode is SKIP-OK (V2-family; pending live-capture) -- no test here.
+    // LV600S Hub Connect on() uses V2-family payload: {powerSwitch:1, switchIdx:0}
+    // These tests MUST FAIL on pre-fix code and PASS on post-fix code.
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
+        given: "device is off, turningOn flag not set"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        def offData = [
+            powerSwitch: 0, humidity: 55, targetHumidity: 60,
+            virtualLevel: 0, mistLevel: 0, workMode: "manual",
+            waterLacksState: 0, waterTankLifted: 0,
+            autoStopSwitch: 1, autoStopState: 0,
+            screenSwitch: 0, screenState: 0,
+            warmPower: false, warmLevel: 0
+        ]
+        driver.applyStatus(v2StatusEnvelope(offData))
+        testParent.allRequests.clear()
+
+        when: "setMistLevel called while device is off"
+        driver.setMistLevel(5)
+
+        then: "setSwitch(powerSwitch:1) was sent -- V2-family payload (auto-on via ensureSwitchOn)"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
+        onReq != null
+    }
+
+    def "setWarmMistLevel from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        def offData = [
+            powerSwitch: 0, humidity: 55, targetHumidity: 60,
+            virtualLevel: 0, mistLevel: 0, workMode: "manual",
+            waterLacksState: 0, waterTankLifted: 0,
+            autoStopSwitch: 1, autoStopState: 0,
+            screenSwitch: 0, screenState: 0,
+            warmPower: false, warmLevel: 0
+        ]
+        driver.applyStatus(v2StatusEnvelope(offData))
+        testParent.allRequests.clear()
+
+        when: "setWarmMistLevel(2) called while device is off"
+        driver.setWarmMistLevel(2)
+
+        then: "setSwitch(powerSwitch:1) was sent (auto-on via ensureSwitchOn)"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
+        onReq != null
     }
 }

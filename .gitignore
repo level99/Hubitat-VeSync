@@ -58,6 +58,9 @@ TODO.md
 # (CI writes this in cwd as a body-file for `gh issue create`; ephemeral.)
 new-devices.md
 
+# Local lint run artifact (tests/lint.py --out=lint_out.json)
+lint_out.json
+
 # HPM bundle build artifacts. Bundles are uploaded as GitHub Release Assets;
 # the ZIP itself never enters git. tools/build-bundle.py writes here.
 bundles/

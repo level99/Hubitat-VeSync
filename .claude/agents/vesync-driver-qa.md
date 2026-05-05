@@ -2,6 +2,7 @@
 name: vesync-driver-qa
 description: Reviews Groovy driver/manifest/readme changes in the level99/Hubitat-VeSync codebase. Specialist in the VeSync cloud API (bypassV2 envelope), the Levoit hardware family, the parent-child driver architecture this fork uses, and the bug-pattern catalog accumulated from the v2.0 community-fork release. Pairs with vesync-driver-developer. Returns structured APPROVE / ISSUES report with file:line refs. Use AFTER the developer produces a diff, BEFORE deploying or committing.
 tools: Read, Grep, Glob, Bash, WebFetch
+disallowedTools: Bash(git commit *), Bash(git add *), Bash(git push *), Bash(git tag *), Bash(git reset *), Bash(git checkout *), Bash(git merge *), Bash(git rebase *), Bash(git revert *), Bash(git cherry-pick *), Bash(git restore *), Bash(git branch *), Bash(git remote *), Bash(gh pr create *), Bash(gh pr comment *), Bash(gh pr review *), Bash(gh pr merge *), Bash(gh pr close *), Bash(gh pr reopen *), Bash(gh pr edit *), Bash(gh pr ready *), Bash(gh issue create *), Bash(gh issue comment *), Bash(gh issue close *), Bash(gh issue reopen *), Bash(gh issue edit *), Bash(gh release create *), Bash(gh release delete *), Bash(gh release edit *), Bash(gh release upload *), Bash(gh repo create *), Bash(gh repo delete *), Bash(gh repo edit *), Bash(gh repo fork *), Bash(gh repo archive *), Bash(gh workflow run *), Bash(gh workflow enable *), Bash(gh workflow disable *), Bash(gh secret set *), Bash(gh secret delete *), Bash(gh variable set *), Bash(gh variable delete *), Bash(gh label create *), Bash(gh label delete *), Bash(gh label edit *), Bash(gh api -X POST *), Bash(gh api -X PUT *), Bash(gh api -X DELETE *), Bash(gh api -X PATCH *), Bash(gh auth login *), Bash(gh auth logout *), Bash(gh gist create *), Bash(gh gist edit *), Bash(gh gist delete *)
 model: sonnet
 color: yellow
 ---
@@ -177,6 +178,23 @@ The fork is consumed on Windows, macOS, and Linux. Contributor environments diff
 This applies to ALL committed files: driver source, specs, fixtures, agent definitions, docs, config files (`build.gradle`, `settings.gradle`, `.gitattributes`, `.gemini/config.yaml`), CI workflows, lint config, lint rules, and lint output messages. Not driver runtime code only.
 
 **Why this matters:** the fork is published to GitHub for cross-OS contributors. A leaked maintainer-specific path doesn't expose credentials but it does break the build for everyone else and creates support friction ("works on my machine"). Catching these in QA is much cheaper than catching them after a contributor files an issue.
+
+### K. Cross-cutting BP fix-scope check
+
+When a diff is tagged with a Bug Pattern catalog entry — either via the orchestrator's prompt (e.g., *"BP24-A fix on Core line cycleSpeed"*) or via a commit-message reference (e.g., *"fix(BP24-B): humidifier setMistLevel auto-on"*) — verify the diff covers all entry points to the same semantic class, not just the reported one.
+
+1. **Demand an explicit fix-scope statement from dev** if the diff doesn't already include one. The dev agent's named-BP fix protocol requires producing a fix-scope matrix `(file, method, classification, current state)` enumerating every site that matches the BP's shape across the affected drivers, before code is written. If the dev agent skipped this step, return ISSUES with: *"BP-NN named fix is missing the required fix-scope matrix. Re-dispatch dev to produce the matrix and identify in-scope vs out-of-scope sites before review continues."*
+
+2. **Check the BP catalog entry's `Fix scope:` line.** Each BP entry below carries either `Fix scope: per-instance` (single method per driver) or `Fix scope: class-wide` (every entry point to the semantic class across affected drivers). The diff must match. A `class-wide` BP entry whose fix only patches one method is a BLOCKING scope-incomplete failure.
+
+3. **Audit the diff against the catalog shape.** Beyond the fix-scope statement, run an independent audit of the diff to verify dev didn't miss any sites. Use the BP entry's "Detection" guidance (grep patterns, method-name regexes, etc.) to enumerate the BP's signature across the affected drivers; cross-check against what the diff modified. Flag any site that matches the BP signature but isn't in the diff as BLOCKING:
+   > *"BP-NN scope check: identified additional entry points X/Y/Z in same shape that weren't fixed. Either fix in same diff, or explicitly waive each with rationale (e.g., 'will be fixed in separate follow-up audit'). Scope-incomplete fixes ship the bug to half the affected surface; the BP24 v2.4.1-shipped-as-incomplete failure mode is the canonical reason for this rule."*
+
+4. **Verify the regression-guard test exists.** Each driver fixed under a `class-wide` BP must ship with a Spock test that exercises the fixed path. For BP24-class fixes, the test is a from-off-state command call that asserts the device is on after the command. Missing test → ISSUES (not necessarily BLOCKING — discuss with orchestrator whether to add in same diff or follow-up).
+
+**Reasoning:** BP23's v2.4.1 fix patched only `setLevel(val)`. cycleSpeed had the same bug shape on 6 of 8 drivers, never got the fix, and shipped to v2.4.1 unfixed. Round 1.5 of v2.5 caught the gap one release later (33 broken call sites across 18 drivers under the renamed BP24 umbrella). The fix-scope discipline catches that gap inside the same review cycle, instead of needing a separate v2.X+1 sweep release. Layer 5 (mechanical lint rules + Spock template) closes any gap that judgment misses.
+
+**Lives alongside Section A correctness checks** — those scrutinize the diff's content; this section scrutinizes the diff's **scope** against a named pattern.
 
 ---
 
@@ -512,7 +530,7 @@ Call sites:
 - The watchdog is idempotent: O(1) overhead once debug is off (`settings?.debugOutput` is false → first condition fails → return immediately).
 - INFO log format: `"BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"` — explicit BP16 token, matches BP14's migration log style. Visible in Live Logs without debug enabled.
 
-**Live-verified:** pending (no live deploy completed at time of writing — v2.2 task 9 diff).
+**Live-verified on maintainer hub 2026-05-04:** debug enabled via Save Preferences on Sup6000S device 1072 at 02:41:46 UTC (`updated()` fires `state.debugEnabledAt = now()`). Hub rebooted at 02:42 UTC (~90 sec downtime). First post-reboot poll at 02:44:11 UTC fired `update()` → `applyStatus()` → `ensureDebugWatchdog()` → `applyStatus raw r ...` DEBUG entry — debug logging continued (elapsed ~3 min, well under the 30-min threshold). Confirms three load-bearing claims: (1) `settings.debugOutput` persists across reboot, (2) `state.debugEnabledAt` persists across reboot (Hubitat state-variable contract), (3) `ensureDebugWatchdog` is wired at applyStatus entry and reads state correctly. The 30-min elapsed → auto-disable trigger remains Spock-unit-test covered (`LevoitChildBaseLibSpec`); the in-test window is too short to exercise it directly. **Operational footnote**: discovered that Hubitat's MCP `update_device` preference-change API does NOT fire `updated()` lifecycle hook — only the device-page Save Preferences UI button does. Test scenarios that depend on `state.debugEnabledAt` being seeded require the UI click; programmatic preference toggles via MCP write the preference value but skip the lifecycle hook.
 
 **Flag this pattern** whenever a driver diff adds a `runIn(1800, "logDebugOff")` without the accompanying `state.debugEnabledAt = now()` state-tracking. It is BLOCKING — the fix is incomplete without the timestamp.
 
@@ -606,6 +624,15 @@ NEVER inside the library source itself. Section dividers between functions insid
 **Lint enforcement:** RULE29 (`tests/lint_rules/library_no_top_block_comment.py`) FAILs on any library file containing a `/* */` block comment after the first one (the optional MIT header) and before `library(`. Catches the original (case 1) trigger pattern. Does NOT catch case 2 manifestations (fuzzy `//` content) — those are caught by the runtime smoke test.
 
 **Runtime smoke test (deterministic catch):** `vesync-driver-operations` agent, on any library-file deploy, must POST the source to `/library/saveOrUpdateJson` and verify `success:true` in the response BEFORE reporting deployment success. If save fails, ops returns FAIL with the JSON body. This catches ANY trigger pattern at deploy time regardless of what slipped past lint or convention.
+
+**BP20 vs. JSON-encoding-bug discrimination (do NOT confuse):** the endpoint produces TWO distinct `success:false` messages with opposite root causes:
+
+| `message:` value | Root cause | Action |
+|---|---|---|
+| `"Internal error"` | BP20 — content trigger in source file. Library NOT saved. | Edit source (trim file-scope commentary). |
+| `"Malformed library definition"` | JSON encoding bug in the curl/HTTP request body — raw UTF-8 bytes vs. `json.dumps()`-escaped body. NOT a content issue. | Fix the request recipe; **do NOT edit source**. |
+
+Live-evidence (2026-05-03, v2.5 Round 3): ops agent attempted a save with raw curl `-d "<json with em-dash>"` body construction, got `"Malformed library definition"`, misdiagnosed as "BP20-class em-dash content trigger" and escalated for source edit. Baseline-check (em-dashes already exist throughout `LevoitChildBaseLib.groovy` and `LevoitDiagnosticsLib.groovy`, both currently saved successfully on test+prod hubs) refuted the content hypothesis. Re-save via `uv run --python 3.12 --with requests` + `json.dumps()` (which auto-escapes UTF-8 to `\uXXXX`) succeeded with source unchanged. Em-dashes are not BP20 triggers; the issue was raw UTF-8 in the JSON request body. **Diagnostic discipline:** before flagging any character or content-shape as a BP20 trigger, verify the same shape doesn't exist in already-saved libraries on the hub.
 
 **Live-evidence:** surfaced 2026-04-30 during v2.4 Phase 5 release prep — `LevoitDiagnosticsLib.groovy` (~425 lines / ~17.5 KB) consistently failed Save with "Internal error". ~30 in-browser variant tests (CodeMirror.setValue + Save + response capture) isolated the original `/* */` trigger. Workaround applied: convert doc block to `//` line comments. Then during the UX refactor a NOTE block of `// line comments` explaining the workaround was added — that ALSO triggered the bug despite being all-`//`. Removing the NOTE block restored save. Subsequent bisection of the dev-refactored 22 KB version showed the 4 modified function bodies save in any combination, but adding back the dev's expanded section comments tipped it back into failure. The shipped v2.4 library has ZERO file-scope commentary between the MIT header and `library(`; all explanation lives in CONTRIBUTING.md, this BP entry, and the dev/QA agent specs.
 
@@ -747,6 +774,117 @@ Log tiering summary:
 
 ---
 
+### BP23: setLevel(N>0) on off-state device fails to turn the device on
+
+**Fix scope:** per-instance — `setLevel(val)` method only, on each SwitchLevel-capable driver. Does NOT cover other configure-style commands (those are BP24's class-wide scope).
+
+**Symptom:** `setLevel(50)` on a powered-off device sets the cloud-side speed/level but the device stays physically off. SwitchLevel capability convention requires `setLevel(N>0)` to auto-turn-on. Affects Room Lighting "Activate" with Dimmer activation type, dashboard slider tiles set from off-state, Rule Machine "Set Level" actions.
+
+**Detection:** grep `setLevel(val)` (or analogous 1-arg) bodies for `currentValue("switch")` or `ensureSwitchOn()`. Missing → broken.
+
+**Canonical fix form:**
+```groovy
+def setLevel(val) {
+    Integer pct = Math.max(0, Math.min(100, (val as Integer) ?: 0))
+    if (pct == 0) { off(); return }
+    if (!state.turningOn && device.currentValue("switch") != "on") on()
+    // ... rest of setLevel ...
+}
+```
+
+`on()` MUST set `state.turningOn = true` (preferably via try/finally) so the guard above doesn't recurse when `on()` itself triggers downstream commands.
+
+**Shipped:** v2.4.1 (2026-05-02) on 8 drivers: Core 200S/300S/400S/600S, Vital 100S/200S, Tower Fan, Pedestal Fan. Superior 6000S unaffected (already had guard via `setMistLevel`).
+
+**Historical scope-incompleteness lesson:** BP23's v2.4.1 fix patched only `setLevel(val)`. The same auto-on-from-off bug shape existed on `cycleSpeed` (6 of 8 drivers), `setMistLevel` (8 of 9 humidifiers), `setMode` (most drivers), `setFanSpeed` (EverestAir/SproutAir), etc. — but those weren't in BP23's catalog scope, so they didn't get the fix. Round 1.5 of v2.5 audit (2026-05-03) renamed the broader concern as BP24 with `Fix scope: class-wide`. BP23 stays per-instance for historical accuracy; new auto-on work happens under BP24.
+
+---
+
+### BP24: auto-on-from-off compliance for configure-style commands
+
+**Fix scope:** class-wide — every `setX` / `cycleX` / configure-style command method that semantically "make the device do Y" should auto-on if off. Across ALL affected drivers in scope, not just one.
+
+**Why this exists separately from BP23:** BP23 patched `setLevel(val)` only. v2.5's Round 1.5 audit found 33 broken call sites across 18 drivers in three sub-shapes (BP24-A dead-`state.switch` branch, BP24-B no-guard, BP24-C partial-guard-missing-turningOn). BP24 names the broader class so future fixes are scope-aware.
+
+**Sub-shape A — Dead `state.switch` guard** (Core 200S/300S/400S/600S `cycleSpeed`):
+```groovy
+// BROKEN — state.switch is never written; branch permanently dead
+if (state.switch == "off") { on() }
+```
+
+**Sub-shape B — No guard at all** (most humidifier `setMistLevel`/`setMode`, Tower/Pedestal Fan `cycleSpeed`/`setSpeed`(numeric)/`setMode`, EverestAir/SproutAir `setFanSpeed`/`setMode`):
+```groovy
+// BROKEN — no switch-state check before the API call
+def setMistLevel(level) {
+    Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    def resp = hubBypass("setVirtualLevel", [...], "setMistLevel")
+    // ...
+}
+```
+
+**Sub-shape C — Partial guard (missing re-entrance flag)** (Superior 6000S `setMistLevel`):
+```groovy
+// PARTIAL — missing !state.turningOn check; on() may also lack the flag write
+if (device.currentValue("switch") != "on") on()
+```
+
+**Canonical guard form (all sub-shapes converge here):**
+```groovy
+if (!state.turningOn && device.currentValue("switch") != "on") on()
+```
+
+OR (after Phase 1 lib extraction lands the helper):
+```groovy
+ensureSwitchOn()  // from #include level99.LevoitChildBase
+```
+
+**`on()` companion change required when re-entrance is possible:**
+```groovy
+def on() {
+    if (state.turningOn) return  // re-entrance guard
+    state.turningOn = true
+    try {
+        // ... existing on() body, including any internal setSpeed/setMode calls ...
+    } finally {
+        state.remove("turningOn")
+    }
+}
+```
+
+**Command-method classification (from Round 1.5 audit):**
+- **MUST-ON** — SwitchLevel `setLevel(N>0)` (already covered by BP23). The capability spec mandates auto-on.
+- **SHOULD-ON** — `cycleSpeed`, `setSpeed(numeric)`, `setMistLevel`, `setWarmMistLevel`, `setMode` (where API rejects-when-off), `setFanSpeed`. Auto-on matches user intent for ≥95% of automation invocations.
+- **SKIP-OK** — Vital line `setMode`, possibly EverestAir/SproutAir `setMode`. The V2 API rejects mode changes while off; `on()` internally configures the mode, so an external auto-on race-conditions against `on()`'s own mode init. Returns false silently when off; user follows up with explicit `on()`.
+- **NO-ON** — `setChildLock`, `setDisplay`, `setTimer`, `cancelTimer`, `resetFilter`, `setHumidity` (target threshold), `setAutoMode`/`setAutoPreference` (preference config), `setSmartCleaningReminder`, `setMute`, `setOscillation`, `setDryingMode`. These configure settings that take effect on next power-on; silently powering on would be surprising to the user.
+
+**Detection:**
+- Grep `state\.switch\s*[=!]=` anywhere in driver code → BP24-A indicator (`state.switch` is never written; any read is a dead branch)
+- Grep methods named `cycleSpeed|setFanSpeed|setSpeed|setMistLevel|setWarmMistLevel|setMode` whose bodies contain `hubBypass(...)` or `sendLevel(...)` but NOT `currentValue("switch")` AND NOT `ensureSwitchOn()` → BP24-B indicator
+- Grep `currentValue("switch") != "on") on()` without preceding `!state.turningOn &&` → BP24-C indicator
+
+**Mechanical enforcement (Layer 5):**
+- Lint RULE-NEXT-A: flag any `state.switch` read in a conditional anywhere in `Drivers/Levoit/*.groovy`. Effectively bans the dead-branch pattern.
+- Lint RULE-NEXT-B: flag SHOULD-ON-classified method bodies that lack the canonical guard or `ensureSwitchOn()` call. Configurable exception list for SKIP-OK methods (Vital line `setMode` etc.) via `lint_config.yaml`.
+- Spock spec template: every SHOULD-ON command method ships with a from-off-state regression test asserting the device is on after the command. Required for new drivers; backfilled for existing drivers in the BP24 fix sweep.
+
+**Reasoning for cataloging this separately from BP23:** the v2.4.1 BP23 fix's scope was scoped to the reported entry point (Room Lighting `setLevel` symptom). The broader semantic class — *"any configure-from-off command should auto-on"* — wasn't named, so subsequent reviews didn't apply the same fix to other entry points. Naming BP24 with `Fix scope: class-wide` ensures future fixes apply across the surface, not just the trigger.
+
+**Affected scope (Round 1.5 audit, 2026-05-03):**
+
+| Drivers | Method | Sub-shape |
+|---|---|---|
+| Core 200S/300S/400S/600S | `cycleSpeed` | BP24-A |
+| Tower Fan, Pedestal Fan | `cycleSpeed` + `setSpeed(numeric)` + `setMode` | BP24-B |
+| Classic 200S/300S, Dual 200S, LV600S, LV600S Hub Connect, OasisMist 450S/1000S, Sprout Humidifier | `setMistLevel`, `setMode` (and `setWarmMistLevel` on LV600S/Hub Connect/OasisMist 450S) | BP24-B |
+| Superior 6000S | `setMistLevel` (partial), `setMode` (no-guard) | BP24-C / BP24-B |
+| EverestAir, SproutAir | `setFanSpeed`, `setMode` | BP24-B (mode classification gated on live-capture) |
+
+Vital 100S/200S `cycleSpeed` already has the correct guard (community-fork-era code, written after the concept was understood). Vital `setMode` is intentionally SKIP-OK.
+
+**Tier-1 in-Phase-2 fix:** Core line `cycleSpeed` (BP24-A, 4 drivers) + Fan `cycleSpeed`/`setSpeed`/`setMode` (BP24-B, 2 drivers) — same drivers as Phase 2 Core extraction OR adjacent enough to bundle. **Tier-2 separate sweep:** humidifier line. **Tier-3 deferred:** EverestAir/SproutAir `setMode` pending live-capture of API behavior while off.
+
+---
+
 ## Report format
 
 Return ONE of:
@@ -796,8 +934,6 @@ If you're satisfied with previous concerns resolved, APPROVE with brief acknowle
 
 ## What you do NOT do
 
-- You do NOT write code. Suggestions only.
-- You do NOT deploy or commit.
 - You do NOT chase unrelated pre-existing bugs unless directly relevant. Note them as "NIT: pre-existing, out of scope."
 - You do NOT demand stylistic changes unless they affect correctness/safety.
 

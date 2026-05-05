@@ -10,10 +10,13 @@ Rules:
 import re
 from pathlib import Path
 from .groovy_lite import clean_source, find_method_bodies
+from ._helpers import included_lib_texts
 
 PARENT_DRIVER = "VeSyncIntegration.groovy"
 
-# Drivers that should have debugOutput preference + auto-disable
+# Drivers that should have debugOutput preference + auto-disable.
+# When a driver delegates updated() / logDebugOff() to a shared library via
+# #include, the rule checks both the driver source and included lib texts.
 DRIVERS_WITH_DEBUG_PREF = {
     "VeSyncIntegration.groovy",
     "LevoitCore200S.groovy",
@@ -21,6 +24,7 @@ DRIVERS_WITH_DEBUG_PREF = {
     "LevoitCore300S.groovy",
     "LevoitCore400S.groovy",
     "LevoitCore600S.groovy",
+    "LevoitVital100S.groovy",
     "LevoitVital200S.groovy",
     "LevoitSuperior6000S.groovy",
     "Notification Tile.groovy",
@@ -172,19 +176,32 @@ LOG_DEBUG_OFF_DEF_PATTERN = re.compile(r'\bvoid\s+log(?:Debug|s)Off\s*\(')
 DEBUG_PREF_DECL_PATTERN = re.compile(r'\bdebugOutput\b')
 
 
+
 def check_rule15_auto_disable_wiring(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
     """
     Every driver declaring a debugOutput preference must:
     1. Call runIn(1800, ...) in updated() when debugOutput is true
-    2. Define a logDebugOff() (or logsOff()) method that flips the setting
+    2. Define a logDebugOff() (or logsOff()) method — either in the driver
+       source itself OR in a library the driver #includes.
+
+    Library-aware: when a driver delegates updated() / logDebugOff() to a shared
+    library via '#include level99.<LibName>', both the runIn(1800, ...) call and
+    the logDebugOff() definition live in the library rather than the driver source.
+    We check the driver first and fall back to included library file texts for both.
     """
     findings = []
     fname = path.name
     if fname not in DRIVERS_WITH_DEBUG_PREF:
         return findings
 
-    has_runin_1800 = bool(RUNIN_1800_PATTERN.search(raw_text))
-    has_logdebugoff_def = bool(LOG_DEBUG_OFF_DEF_PATTERN.search(raw_text))
+    lib_texts = included_lib_texts(raw_text, path)
+
+    # runIn(1800, ...) may live in updated() in the driver or in an included library.
+    has_runin_1800 = bool(RUNIN_1800_PATTERN.search(raw_text)) or \
+        any(bool(RUNIN_1800_PATTERN.search(t)) for t in lib_texts)
+    # logDebugOff may live in the driver source or in any included library.
+    has_logdebugoff_def = bool(LOG_DEBUG_OFF_DEF_PATTERN.search(raw_text)) or \
+        any(bool(LOG_DEBUG_OFF_DEF_PATTERN.search(t)) for t in lib_texts)
 
     if not has_runin_1800:
         # Find the updated() method location for context
@@ -210,9 +227,11 @@ def check_rule15_auto_disable_wiring(path, raw_lines, cleaned_lines, raw_text, c
             title="Missing logDebugOff() / logsOff() method definition",
             path=path, rel_base=rel_base, lineno=1, lines=raw_lines,
             why="Rule 15: the runIn(1800, 'logDebugOff') callback needs a corresponding method "
-                "that actually flips the debugOutput setting back to false.",
+                "that actually flips the debugOutput setting back to false. Either define it "
+                "locally or include a library that provides it (e.g. #include level99.LevoitChildBase).",
             fix='Add: void logDebugOff() { '
-                'if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }',
+                'if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }'
+                '  -- or add #include level99.LevoitChildBase',
         ))
 
     return findings

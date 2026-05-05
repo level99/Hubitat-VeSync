@@ -71,6 +71,11 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-05-03: v2.5  setDisplay + setAutoStop methods extracted to LevoitHumidifierLib
+ *                       (now shared with OM1000S/Sprout/Sup6000S).
+ *    2026-05-03: v2.4.2  Phase 4 Round 5 — migrated to LevoitHumidifierLib (11 shared methods
+ *                        removed from driver). BP24-B ensureSwitchOn() on setMistLevel. BP18
+ *                        requireNotNull on setDisplay + setAutoStop. C3 state-change gate on setDisplay.
  *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.2.1  Initial release. US + EU OasisMist 1000S in a single driver.
  *                        pyvesync VeSyncHumid1000S class. V2-style payload conventions.
@@ -81,6 +86,8 @@
  */
 
 #include level99.LevoitDiagnostics
+#include level99.LevoitChildBase
+#include level99.LevoitHumidifier
 
 metadata {
     definition(
@@ -88,7 +95,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit OasisMist 1000S (LUH-M101S-WUS/-WUSR/-WEUR) — mist 1-9, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display; WEUR adds nightlight (runtime-gated). pyvesync VeSyncHumid1000S class; V2-style payloads (powerSwitch/workMode/virtualLevel). No warm mist.",
-        version: "2.4.2",
+        version: "2.5",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -133,31 +140,24 @@ metadata {
     }
 }
 
-// ---------- Lifecycle ----------
-def installed(){ logDebug "Installed ${settings}"; updated() }
-def updated(){
-    logDebug "Updated ${settings}"
-    state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4.1"
-    runIn(3, "refresh")
-    if (settings?.debugOutput) {
-        runIn(1800, "logDebugOff")
-        state.debugEnabledAt = now()
-    } else {
-        state.remove("debugEnabledAt")
-    }
-}
-def uninstalled(){ logDebug "Uninstalled" }
-def initialize(){ logDebug "Initializing" }
+// Lifecycle, refresh, toggle, update (0/1/2-arg), hubBypass, httpOk
+// are provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ---------- Power ----------
 // VeSyncHumid1000S toggle_switch: {powerSwitch: int(toggle), switchIdx: 0}
 // Different from VeSyncHumid200300S which uses {enabled: bool, id: 0}
 def on(){
     logDebug "on()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
-    if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
+        if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
 }
 
 def off(){
@@ -167,11 +167,7 @@ def off(){
     else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
-def toggle(){
-    logDebug "toggle()"
-    String current = state.lastSwitchSet ?: device.currentValue("switch")
-    current == "on" ? off() : on()
-}
+// toggle: provided by #include level99.LevoitHumidifier
 
 // ---------- Mode ----------
 // VeSyncHumid1000S set_mode: {workMode: mist_modes[mode]}
@@ -199,6 +195,7 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    ensureSwitchOn()
     def resp = hubBypass("virtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "virtualLevel(mist,${lvl})")
     if (httpOk(resp)) {
         state.mistLevel = lvl
@@ -226,35 +223,9 @@ def setHumidity(percent){
     }
 }
 
-// ---------- Display ----------
-// VeSyncHumid1000S set_display: {screenSwitch: int} -- integer 0/1.
-// Different from VeSyncHumid200300S which uses {state: bool}.
-def setDisplay(onOff){
-    logDebug "setDisplay(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
-    } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
-    }
-}
-
-// ---------- Auto-stop ----------
-// VeSyncHumid1000S toggle_automatic_stop: {autoStopSwitch: int(toggle)}.
-// Different from VeSyncHumid200300S which uses method setAutomaticStop + {enabled: bool}.
-def setAutoStop(onOff){
-    logDebug "setAutoStop(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${onOff})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: onOff)
-        logInfo "Auto-stop: ${onOff}"
-    } else {
-        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"])
-    }
-}
+// V2-line shared body via lib; delegators preserve method-presence semantics.
+def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
+def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 
 // ---------- Nightlight (WEUR only -- runtime-gated) ----------
 // CROSS-CHECK [pyvesync device_map.py VeSyncHumid1000S WEUR entry]:
@@ -314,33 +285,7 @@ def setNightlight(onOff, brightness = null){
     }
 }
 
-// ---------- Refresh ----------
-def refresh(){ update() }
-
-// ---------- Update / status ----------
-def update(){
-    logDebug "update() self-fetch"
-    def resp = hubBypass("getHumidifierStatus", [:], "update")
-    if (httpOk(resp)) {
-        def status = resp?.data
-        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"update"]) }
-        else applyStatus(status)
-    }
-}
-
-// 1-arg parent callback
-def update(status){
-    logDebug "update() from parent (1-arg)"
-    applyStatus(status)
-    return true
-}
-
-// 2-arg parent callback -- REQUIRED (BP#1); parent always calls with two args
-def update(status, nightLight){
-    logDebug "update() from parent (2-arg, nightLight ignored -- 1000S has no external night-light child)"
-    applyStatus(status)
-    return true
-}
+// refresh, update (0/1/2-arg): provided by #include level99.LevoitHumidifier
 
 // ---------- applyStatus ----------
 def applyStatus(status){
@@ -372,7 +317,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic raw dump (debugOutput-gated). Keep for ongoing field diagnostics.
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // 1000S response: powerSwitch (int 0|1) NOT `enabled` (bool).
@@ -480,48 +425,8 @@ def applyStatus(status){
     device.sendEvent(name:"info", value: parts.join("<br>"))
 }
 
-// ---------- Internal helpers ----------
-def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
-def logError(msg){ log.error msg }
-def logWarn(msg){ log.warn msg }
-def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
-void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
-
-// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
-private void ensureDebugWatchdog() {
-    if (settings?.debugOutput && state.debugEnabledAt) {
-        Long elapsed = now() - (state.debugEnabledAt as Long)
-        if (elapsed > 30 * 60 * 1000) {
-            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
-            device.updateSetting("debugOutput", [type:"bool", value:false])
-            state.remove("debugEnabledAt")
-        }
-    }
-}
-
-// Hub/parent call wrapper — matches sibling driver pattern
-private hubBypass(method, Map data=[:], tag=null, cb=null){
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp){
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]){
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
+// are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
+// hubBypass, httpOk provided by #include level99.LevoitHumidifier.
 
 // ------------- END -------------

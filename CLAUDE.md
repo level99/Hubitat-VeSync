@@ -198,6 +198,24 @@ Why: each dev round = SendMessage cost + QA + tester re-runs downstream + ops re
 
 When NOT to batch: critical-path bugs blocking production (ship the fix immediately, batch the polish separately). Or when bug surfaces are fundamentally unrelated.
 
+### Cross-cutting audit when fixing a named bug pattern
+
+When fixing a bug tagged with a Bug Pattern catalog entry (BP1-BPN), the dev agent's diff MUST cover all entry points to the same semantic class — not just the reported one. Before writing code, dev produces an explicit **fix-scope statement**:
+
+- Enumerate every method/site that matches the pattern's shape across affected drivers (e.g., for BP23/BP24-class auto-on-from-off: every `def setX` / `def cycleX` / capability-required command on every SwitchLevel/FanControl driver in scope).
+- Identify which sites fall in the diff vs which are explicitly out-of-scope.
+- Waive any not-fixed-in-scope site with rationale (e.g., *"cycleSpeed entry point on Tower Fan defers to its own audit because the bypass-shape differs from the dead-state shape; tracked as BP24-B sweep"*).
+
+QA then verifies the fix-scope claim covers the real surface (Layer 3 of the BP-prevention defenses).
+
+Why: BP23's v2.4.1 fix patched only `setLevel(val)`. cycleSpeed had the same auto-on-from-off bug shape on 6 of 8 drivers, never got the fix, and shipped to v2.4.1 unfixed. Round 1.5 of v2.5 caught the gap one release later (33 broken call sites across 18 drivers under the renamed BP24 umbrella). The fix-scope discipline catches that gap in the same review cycle, instead of needing a separate v2.X+1 sweep release.
+
+Lives alongside "Batch fix-rounds, audit-first when triaging" above. That rule says *"audit-first when surfacing related bugs."* This rule says *"audit-first when applying a named-BP fix."* Together they cover both directions of the cross-cutting concern.
+
+**BP catalog entries reinforce this** with an explicit `Fix scope:` line per entry — `per-instance` (single method) or `class-wide` (every entry point to the semantic class). New entries (BP24+) include this always; existing entries (BP1-23) get backfilled when next touched.
+
+**Mechanical enforcement** (Layer 5 of the defense stack) closes any gap that judgment misses: lint rules grep for the pattern's signature on every `tests/lint.py --strict` run; new-driver Spock spec template requires a from-off regression test for every "MUST-ON" / "SHOULD-ON" classified command method.
+
 ### Pre-flight before any tester dispatch
 
 Before dispatching tester (or sending SendMessage to resume tester), confirm:
@@ -280,6 +298,42 @@ The QA agent's self-analysis after the v2.1 review cycles attributed token cost 
 - ~5% genuinely fresh content for the current review
 
 Output is only ~3% of total. **Do not reduce verdict verbosity** — output fidelity is the dev agent's signal for what to fix; cutting it sacrifices clarity for negligible cost savings. The leverage is on the input side: model default (Sonnet, applies multiplicatively to all input + output), cache hygiene (the resume-vs-fresh discipline above), and tighter briefs (don't ask for "verify all 13 driver names" if a representative sampling produces the same correctness signal).
+
+---
+
+## Operations dispatch: model selection
+
+The `vesync-driver-operations` agent defaults to **Haiku** because log-dominated work (100KB log fetches → 1KB structured PASS/FAIL summaries) is exactly Haiku's sweet spot. But Round 3+4 of v2.5 surfaced a fragility: when the dispatch involves multi-endpoint diagnostic reasoning, error-classification, or hypothesis-testing, Haiku tends to lock onto its first wrong hypothesis and push forward instead of falling back. Sonnet has noticeably better recovery in that mode. Cost-wise Sonnet is ~5× more expensive per token than Haiku, so reserve elevation for cases where the reasoning shape genuinely matters.
+
+### Default: Haiku
+
+Use Haiku for the typical case (no `model:` override needed; agent definition's `model: haiku` frontmatter handles it):
+
+- Deploy a known-shape driver via `update_driver_code` (driver already exists on hub, just swapping source)
+- Exercise N pre-specified commands via `send_command` and verify attribute round-trip
+- Scan logs for canonical marker phrases listed in the dispatch (matches the bug-pattern catalog directly)
+- Structured PASS/FAIL on a single hub interaction with a clear test plan
+- A2 virtual-parent spawn-and-test cycles (fixture name + child label given; `[DEV TOOL]` markers checked)
+- Pure RPC: backup creation, file uploads, `list_devices` queries
+
+### Elevate to Sonnet
+
+Pass `model: "sonnet"` in the `Agent({...})` dispatch (or `model: "sonnet"` override on `SendMessage` resume — whatever the runtime supports) for:
+
+- **Hub-state investigation across multiple endpoints.** Round 4's "is the lib actually saved on the hub" took 5+ endpoint probes + DOM inspection — Haiku locked onto "library missing from hub entirely" after one failed probe. Sonnet would have triangulated.
+- **Error-classification with discrimination tables.** The BP20 vs JSON-encoding-bug distinction (`"Internal error"` vs `"Malformed library definition"`) is documented in the ops agent's own definition, but Haiku read it and still misclassified twice. The discrimination requires holding two near-identical error messages and applying conditional logic per the response — Sonnet handles that; Haiku doesn't reliably.
+- **Library save / install via `/library/saveOrUpdateJson`.** Multi-step diagnosis if it fails (first save, parse response, classify error, recover). Always Sonnet for these — the failure modes need real reasoning.
+- **First-time integration verification.** Round 4's first triple-include compile, Round 3's first lib smoke test — anything where the hub state is novel and the dispatch can't enumerate every possible failure shape.
+- **Conditional logic in the dispatch brief.** Any time the brief says "if X happened, do Y; if Z, do W" instead of "do these N things in sequence." Sonnet picks branches; Haiku takes the first branch and keeps going even when symptoms diverge.
+- **Anything where the agent needs to second-guess its own first hypothesis.** This is the meta-property: Haiku's failure mode in this codebase is hypothesis-lock-in. If the work involves baseline-checking against existing files (BP20 discrimination rule), comparing observed state to expected, or recovering from a failed first attempt, Sonnet is worth the cost.
+
+### Trip-wire signal
+
+If Haiku flags UNCERTAIN twice in one session for non-environmental reasons (its own reasoning, not VeSync API flakes or transient hub state), elevate to Sonnet for the next round in that session. The trip-wire prevents grinding multiple Haiku rounds on a problem the model can't solve.
+
+### Alternative: orchestrator-direct
+
+For investigative / exploratory hub work where even Sonnet ops would be coaching-heavy, the orchestrator (main session) can do hub investigation directly — `curl` against documented endpoints, MCP tool calls, browser MCP for SPA-data inspection. Direct work bypasses agent dispatch overhead and is often cheaper than the equivalent Sonnet round when the work is genuinely exploratory rather than mechanical. Reserve agent dispatch for repeatable verification patterns (deploy, exercise, scan, report); use orchestrator-direct for "what's actually on this hub right now" probes.
 
 ---
 

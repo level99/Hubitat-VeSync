@@ -80,6 +80,12 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-05-03: v2.5  setDisplay + setAutoStop methods extracted to LevoitHumidifierLib
+ *                       (now shared with OM1000S/Sup6000S/Sprout).
+ *    2026-05-03: v2.4.2  Phase 4 Round 5 — migrated to LevoitHumidifierLib (11 shared methods
+ *                        removed from driver). BP24-B ensureSwitchOn() on setMistLevel. BP18
+ *                        requireNotNull on setDisplay + setChildLock + setAutoStop + setDryingMode.
+ *                        C3 state-change gate on setDisplay + setChildLock.
  *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.2.1  Initial release. US + EU Sprout Humidifier in a single driver.
  *                        pyvesync VeSyncSproutHumid class. V2-style payload conventions.
@@ -89,6 +95,8 @@
  */
 
 #include level99.LevoitDiagnostics
+#include level99.LevoitChildBase
+#include level99.LevoitHumidifier
 
 metadata {
     definition(
@@ -96,7 +104,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Sprout Humidifier (LEH-B381S-WUS/-WEU) — mist 1-2, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display, child lock, drying mode, nightlight (brightness + color temp). pyvesync VeSyncSproutHumid class; V2-style payloads. Auto mode wire value: 'autoPro' (not 'auto' — contrast OasisMist 1000S).",
-        version: "2.4.2",
+        version: "2.5",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -146,30 +154,23 @@ metadata {
     }
 }
 
-// ---------- Lifecycle ----------
-def installed(){ logDebug "Installed ${settings}"; updated() }
-def updated(){
-    logDebug "Updated ${settings}"
-    state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4.1"
-    runIn(3, "refresh")
-    if (settings?.debugOutput) {
-        runIn(1800, "logDebugOff")
-        state.debugEnabledAt = now()
-    } else {
-        state.remove("debugEnabledAt")
-    }
-}
-def uninstalled(){ logDebug "Uninstalled" }
-def initialize(){ logDebug "Initializing" }
+// Lifecycle, refresh, toggle, update (0/1/2-arg), hubBypass, httpOk
+// are provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ---------- Power ----------
 // VeSyncSproutHumid toggle_switch: {powerSwitch: int, switchIdx: 0}
 def on(){
     logDebug "on()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
-    if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
+        if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
 }
 
 def off(){
@@ -179,11 +180,7 @@ def off(){
     else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
-def toggle(){
-    logDebug "toggle()"
-    String current = state.lastSwitchSet ?: device.currentValue("switch")
-    current == "on" ? off() : on()
-}
+// toggle: provided by #include level99.LevoitHumidifier
 
 // ---------- Mode ----------
 // VeSyncSproutHumid set_mode: {workMode: mist_modes[mode]}
@@ -214,6 +211,7 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     Integer lvl = Math.max(1, Math.min(2, (level as Integer) ?: 1))
+    ensureSwitchOn()
     def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "setVirtualLevel(mist,${lvl})")
     if (httpOk(resp)) {
         state.mistLevel = lvl
@@ -240,54 +238,35 @@ def setHumidity(percent){
     }
 }
 
-// ---------- Display ----------
-// VeSyncSproutHumid toggle_display: {screenSwitch: int}
-def setDisplay(onOff){
-    logDebug "setDisplay(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
-    } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
-    }
-}
+// V2-line shared body via lib; delegator preserves method-presence semantics.
+def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
 
 // ---------- Child lock ----------
 // VeSyncSproutHumid toggle_child_lock: {childLockSwitch: int}
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${onOff})")
+    if (!requireNotNull(onOff, "setChildLock")) return false
+    String val = (onOff as String).toLowerCase()
+    if (device.currentValue("childLock") == val) return true
+    Integer v = (val == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${val})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: onOff)
-        logInfo "Child lock: ${onOff}"
+        device.sendEvent(name:"childLock", value: val)
+        logInfo "Child lock: ${val}"
     } else {
         logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }
 }
 
-// ---------- Auto-stop ----------
-// VeSyncSproutHumid toggle_automatic_stop: {autoStopSwitch: int}
-def setAutoStop(onOff){
-    logDebug "setAutoStop(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${onOff})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: onOff)
-        logInfo "Auto-stop: ${onOff}"
-    } else {
-        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"])
-    }
-}
+def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 
 // ---------- Drying mode ----------
 // VeSyncSproutHumid toggle_drying_mode: {autoDryingSwitch: int}
 // Drying mode runs the fan without mist after humidification to dry out the internals.
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
+    if (!requireNotNull(onOff, "setDryingMode")) return false
+    Integer v = ((onOff as String).toLowerCase() == "on") ? 1 : 0
     def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
     if (httpOk(resp)) {
         device.sendEvent(name:"dryingEnabled", value: onOff)
@@ -329,33 +308,7 @@ def setNightlight(onOff, brightness = null, colorTemp = null){
     }
 }
 
-// ---------- Refresh ----------
-def refresh(){ update() }
-
-// ---------- Update / status ----------
-def update(){
-    logDebug "update() self-fetch"
-    def resp = hubBypass("getHumidifierStatus", [:], "update")
-    if (httpOk(resp)) {
-        def status = resp?.data
-        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"getHumidifierStatus"]) }
-        else applyStatus(status)
-    }
-}
-
-// 1-arg parent callback
-def update(status){
-    logDebug "update() from parent (1-arg)"
-    applyStatus(status)
-    return true
-}
-
-// 2-arg parent callback -- REQUIRED (BP#1); parent always calls with two args
-def update(status, nightLight){
-    logDebug "update() from parent (2-arg, nightLight ignored -- Sprout has no external night-light child)"
-    applyStatus(status)
-    return true
-}
+// refresh, update (0/1/2-arg): provided by #include level99.LevoitHumidifier
 
 // ---------- applyStatus ----------
 def applyStatus(status){
@@ -381,7 +334,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic raw dump (debugOutput-gated).
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     def powerRaw = r.powerSwitch
@@ -504,48 +457,8 @@ def applyStatus(status){
     device.sendEvent(name:"info", value: parts.join("<br>"))
 }
 
-// ---------- Internal helpers ----------
-def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
-def logError(msg){ log.error msg }
-def logWarn(msg){ log.warn msg }
-def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
-void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
-
-// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
-private void ensureDebugWatchdog() {
-    if (settings?.debugOutput && state.debugEnabledAt) {
-        Long elapsed = now() - (state.debugEnabledAt as Long)
-        if (elapsed > 30 * 60 * 1000) {
-            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
-            device.updateSetting("debugOutput", [type:"bool", value:false])
-            state.remove("debugEnabledAt")
-        }
-    }
-}
-
-// Hub/parent call wrapper — matches sibling driver pattern
-private hubBypass(method, Map data=[:], tag=null, cb=null){
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp){
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]){
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
+// are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
+// hubBypass, httpOk provided by #include level99.LevoitHumidifier.
 
 // ------------- END -------------

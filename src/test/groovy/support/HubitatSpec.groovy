@@ -210,8 +210,20 @@ def input(Object... a)    { /* no-op */  }
         switch (nsAndName) {
             case "level99.LevoitDiagnostics":
                 return new File("Drivers/Levoit/LevoitDiagnosticsLib.groovy")
+            case "level99.LevoitChildBase":
+                return new File("Drivers/Levoit/LevoitChildBaseLib.groovy")
+            case "level99.LevoitCorePurifier":
+                return new File("Drivers/Levoit/LevoitCorePurifierLib.groovy")
+            case "level99.LevoitVitalPurifier":
+                return new File("Drivers/Levoit/LevoitVitalPurifierLib.groovy")
+            case "level99.LevoitHumidifier":
+                return new File("Drivers/Levoit/LevoitHumidifierLib.groovy")
+            case "level99.LevoitFan":
+                return new File("Drivers/Levoit/LevoitFanLib.groovy")
             default:
-                return null
+                throw new IllegalArgumentException(
+                    "HubitatSpec.resolveLibraryFile() has no resolver for #include ${nsAndName}. " +
+                    "Add a case to resolveLibraryFile() pointing at the on-disk library file.")
         }
     }
 

@@ -386,10 +386,26 @@ private List getErrorHistory(String dni) {
     return slot
 }
 
-// Read the driver version from the device metadata, then from the
-// driver's version field if available.
-// Falls back to "2.4.1" (current codebase default).
+// Driver version — single source of truth for diagnostic output.
+//
+// Hubitat does not expose `definition(version:)` at runtime (platform gap, task #92),
+// so we maintain a constant here that /cut-release flips alongside the per-driver
+// version: fields and the levoitManifest.json top-level version. Since RULE20 enforces
+// lockstep across all drivers, a single shared constant accurately reflects every
+// child driver's version (any partial-update on a user's hub is their responsibility).
+//
+// **Maintainer note:** the /cut-release skill (Artifact C/C.7) writes this constant
+// alongside the other version fields. Keep them in sync.
+@groovy.transform.Field
+private static final String FORK_RELEASE_VERSION = "2.5"
+
+// Read the driver version. Returns the FORK_RELEASE_VERSION constant; falls back to
+// state.driverVersion (legacy v2.4.1- compatibility) or typeName regex parse if the
+// constant is somehow unavailable, then to "unknown".
 private String getDriverVersion() {
+    try {
+        if (FORK_RELEASE_VERSION) return FORK_RELEASE_VERSION
+    } catch (ignored) {}
     try {
         if (state.driverVersion) return state.driverVersion as String
     } catch (ignored) {}
@@ -400,7 +416,7 @@ private String getDriverVersion() {
             if (m) return m[0][1]
         }
     } catch (ignored) {}
-    return "2.4.1"
+    return "unknown"
 }
 
 // Get the model code for this device.

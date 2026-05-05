@@ -606,4 +606,34 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setMode") && it.contains("null") }
         testParent.allRequests.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // BP24-B regression guard: setMistLevel from off-state triggers auto-on
+    // Sprout V2-family payload: {powerSwitch:1, switchIdx:0}
+    // This test MUST FAIL on pre-fix code and PASS on post-fix code.
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
+        given: "device is off, turningOn flag not set"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        def offData = [
+            powerSwitch: 0, humidity: 45, targetHumidity: 55,
+            virtualLevel: 2, mistLevel: 2, workMode: "manual",
+            waterLacksState: 0, waterTankLifted: 0,
+            autoStopSwitch: 1, autoStopState: 0,
+            screenSwitch: 0, screenState: 0,
+            childLockSwitch: 0, filterLifePercent: 85, hepaFilterLifePercent: 78
+        ]
+        driver.applyStatus([code: 0, result: offData])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel called while device is off"
+        driver.setMistLevel(2)
+
+        then: "setSwitch(powerSwitch:1) was sent — V2-family payload (auto-on via ensureSwitchOn)"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
+        onReq != null
+        onReq.data.switchIdx == 0
+    }
 }

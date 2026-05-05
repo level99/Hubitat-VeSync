@@ -393,4 +393,236 @@ class LevoitCore200SSpec extends HubitatSpec {
         and: "no error was logged"
         testLog.errors.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #24-A: cycleSpeed() auto-turns-on when switch is off
+    // -------------------------------------------------------------------------
+
+    def "BP24-A: cycleSpeed() from off-state turns the device on before sending speed command"() {
+        // Pre-fix code had a dead `if (state.switch == "off") { on() }` branch.
+        // state.switch is never set (it's device.currentValue("switch") that matters),
+        // so the guard never fired and the device stayed physically off.
+        // Post-fix: ensureSwitchOn() checks device.currentValue("switch") != "on" correctly.
+        given: "device is off and state.turningOn is not set"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+
+        when: "cycleSpeed() is called on an off device"
+        driver.cycleSpeed()
+
+        then: "on() was called — setSwitch with enabled=true was sent"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "state.turningOn is cleared after the call (no re-entrance leak)"
+        !state.containsKey("turningOn")
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // D2: off() emits speed:off for capability parity
+    // -------------------------------------------------------------------------
+
+    def "D2: off() emits both switch:off and speed:off events for capability parity"() {
+        // Pre-fix off() only emitted switch:off. D2 fix adds speed:off to match the
+        // AQ-group Core drivers (300S/400S/600S) which already emitted both.
+        // Without speed:off, FanControl consumers see a stale speed attribute after
+        // the device is turned off.
+        given: "device is on with a known speed"
+        settings.descriptionTextEnable = false
+        state.speed = "medium"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "off() is called"
+        driver.off()
+
+        then: "switch:off event was emitted"
+        testDevice.events.find { it.name == "switch" && it.value == "off" } != null
+
+        and: "speed:off event was emitted (D2 parity with AQ-group Core drivers)"
+        testDevice.events.find { it.name == "speed" && it.value == "off" } != null
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // C3: state-change gate — setChildLock and setDisplay (retroactive fix via lib)
+    // -------------------------------------------------------------------------
+
+    def "C3: setChildLock('on') when childLock is already 'on' is a no-op (no API call)"() {
+        given: "childLock is already on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when:
+        driver.setChildLock("on")
+
+        then: "no setChildLock API call was made"
+        testParent.allRequests.find { it.method == "setChildLock" } == null
+
+        and: "no errors logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "C3: setChildLock('on') when childLock is 'off' does send the API call"() {
+        given: "childLock is currently off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when:
+        driver.setChildLock("on")
+
+        then: "setChildLock API call was made"
+        testParent.allRequests.find { it.method == "setChildLock" } != null
+    }
+
+    def "C3: setDisplay('on') when display is already 'on' is a no-op (no API call)"() {
+        given: "display is already on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "on"])
+
+        when:
+        driver.setDisplay("on")
+
+        then: "no setDisplay API call was made"
+        testParent.allRequests.find { it.method == "setDisplay" } == null
+
+        and: "no errors logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "C3: setDisplay('on') when display is 'off' does send the API call"() {
+        given: "display is currently off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "off"])
+
+        when:
+        driver.setDisplay("on")
+
+        then: "setDisplay API call was made"
+        testParent.allRequests.find { it.method == "setDisplay" } != null
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #24-B: setSpeed() + setMode() auto-turn-on when device is off
+    // -------------------------------------------------------------------------
+
+    def "BP24-B: setSpeed when switch is off calls on() before sending speed command (Core 200S)"() {
+        // Pre-fix: setSpeed delegated to handleSpeed without checking switch state.
+        // Post-fix: ensureSwitchOn() at top of setSpeed (after off/on short-circuits)
+        // turns device on first, then the mode/speed path fires normally.
+        given: "device is off and mode is manual so the numeric speed path fires"
+        settings.descriptionTextEnable = false
+        state.mode = "manual"
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setSpeed is called with a named speed on an off device"
+        driver.setSpeed("low")
+
+        then: "on() was called — setSwitch with enabled=true was sent before the speed command"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "setLevel was sent (handleSpeed sends setLevel with {level, id, type})"
+        def levelReq = testParent.allRequests.find { it.method == "setLevel" }
+        levelReq != null
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP24-B: setMode when switch is off calls on() before sending mode command (Core 200S)"() {
+        // Pre-fix: setMode delegated to handleMode without checking switch state.
+        // Post-fix: ensureSwitchOn() at top of setMode turns device on first.
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setMode is called with 'manual' on an off device"
+        driver.setMode("manual")
+
+        then: "on() was called — setSwitch with enabled=true was sent before the mode command"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "setPurifierMode was sent (handleMode sends setPurifierMode)"
+        def modeReq = testParent.allRequests.find { it.method == "setPurifierMode" }
+        modeReq != null
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP24-B: setSpeed('off') from off-state does NOT auto-on (power short-circuit) (Core 200S)"() {
+        // setSpeed("off") calls off(), which is a no-op since already off.
+        // It must NOT call ensureSwitchOn() first — power short-circuits fire before the guard.
+        given: "device is already off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setSpeed('off') is called on an already-off device"
+        driver.setSpeed("off")
+
+        then: "setSwitch with enabled=true was NOT sent (no auto-on for off short-circuit)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true } == null
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP18: setSpeed(null) rejected with logWarn, no API call (Core 200S)"() {
+        // requireNotNull rejects null speed args (e.g. from Rule Machine with blank parameter slot).
+        given: "device is on"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setSpeed is called with null"
+        driver.setSpeed(null)
+
+        then: "no API call was made"
+        testParent.allRequests.size() == 0
+
+        and: "a warning was logged"
+        testLog.warns.any { it.contains("setSpeed") }
+    }
+
+    def "BP18: setMode(null) rejected with logWarn, no API call (Core 200S)"() {
+        // requireNotNull rejects null mode args (e.g. from Rule Machine with blank parameter slot).
+        given: "device is on"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setMode is called with null"
+        driver.setMode(null)
+
+        then: "no API call was made"
+        testParent.allRequests.size() == 0
+
+        and: "a warning was logged"
+        testLog.warns.any { it.contains("setMode") }
+    }
+
+    def "BP24-B + invalid mode: setMode('badvalue') from off-state does NOT auto-on (Core 200S)"() {
+        // Invalid mode is rejected BEFORE ensureSwitchOn() fires — so a typo from Rule Machine
+        // does not accidentally power on the device. Regression guard for the Fix-2 ordering.
+        given: "device is off"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setMode is called with an invalid mode value on an off device"
+        driver.setMode("badvalue")
+
+        then: "setSwitch with enabled=true was NOT sent (invalid mode rejected before auto-on)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true } == null
+
+        and: "no setPurifierMode call was made"
+        testParent.allRequests.find { it.method == "setPurifierMode" } == null
+
+        and: "a warning was logged mentioning the invalid mode"
+        testLog.warns.any { it.contains("invalid mode") || it.contains("badvalue") }
+    }
 }

@@ -25,6 +25,8 @@ SOFTWARE.
 
 // History:
 //
+// 2026-05-03: v2.5  BP18 null-guard added to setNightLight() — reject null mode
+//                  argument with logWarn + early return (Rule Machine blank slot).
 // 2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
 // 2026-04-25: v2.0 (community fork, level99/Hubitat-VeSync, by Dan Cox)
 //                  - Added descriptionTextEnable preference (default true) and gated logInfo helper
@@ -42,6 +44,7 @@ SOFTWARE.
 
 
 #include level99.LevoitDiagnostics
+#include level99.LevoitChildBase
 
 metadata {
     definition(
@@ -49,7 +52,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S / 300S air purifiers' night light capability",
-        version: "2.4.2",
+        version: "2.5",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -76,7 +79,6 @@ def updated() {
 	logDebug "Updated with settings: ${settings}"
 
     state.clear()
-    state.driverVersion = "2.4.1"
     unschedule()
 	initialize()
 
@@ -112,6 +114,7 @@ def off() {
 def setNightLight(mode)
 {
     logDebug "setNightLight(${mode})"
+    if (!requireNotNull(mode, "setNightLight")) return false                    // BP18 null-guard
 
     def result = false
 
@@ -193,48 +196,21 @@ def update(status) {
     return result
 }
 
-def logDebug(msg) {
-    if (settings?.debugOutput) {
-		log.debug msg
-	}
-}
-
-def logInfo(msg) {
-    if (settings?.descriptionTextEnable) log.info msg
-}
-
-void logDebugOff() {
-  //
-  // runIn() callback to disable "Debug" logging after 30 minutes
-  // Cannot be private
-  //
-  if (settings?.debugOutput) device.updateSetting("debugOutput", [type: "bool", value: false]);
-}
-
-// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
-// Core200S Light exception: called from update(status) (1-arg only; no 2-arg for this child).
-private void ensureDebugWatchdog() {
-    if (settings?.debugOutput && state.debugEnabledAt) {
-        Long elapsed = now() - (state.debugEnabledAt as Long)
-        if (elapsed > 30 * 60 * 1000) {
-            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
-            device.updateSetting("debugOutput", [type:"bool", value:false])
-            state.remove("debugEnabledAt")
-        }
-    }
-}
+// logDebug, logInfo, logDebugOff, ensureDebugWatchdog
+// are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
+// Note: logError is also provided by the lib (not previously defined locally in this driver).
 
 def checkHttpResponse(action, resp) {
 	if (resp.status == 200 || resp.status == 201 || resp.status == 204)
 		return true
 	else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500)
 	{
-		log.error "${action}: ${resp.status} - ${resp.getData()}"; recordError("${action}: HTTP ${resp.status}", [site:"checkHttpResponse"])
+		logError "${action}: ${resp.status} - ${resp.getData()}"; recordError("${action}: HTTP ${resp.status}", [site:"checkHttpResponse"])
 		return false
 	}
 	else
 	{
-		log.error "${action}: unexpected HTTP response: ${resp.status}"; recordError("${action}: unexpected HTTP ${resp.status}", [site:"checkHttpResponse"])
+		logError "${action}: unexpected HTTP response: ${resp.status}"; recordError("${action}: unexpected HTTP ${resp.status}", [site:"checkHttpResponse"])
 		return false
 	}
 }

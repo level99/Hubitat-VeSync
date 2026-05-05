@@ -70,6 +70,7 @@
  *    If community users confirm setAutoStop works on LUH-A603S-WUS, promote to command.
  *
  *  History:
+ *    2026-05-03: v2.5  setDisplay method extracted to LevoitHumidifierLib (V2-line shared).
  *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.3  Community fork [PREVIEW v2.3]. Built from pyvesync device_map.py
  *                      LUH-A603S-WUS entry + VeSyncLV600S class + LUH-A603S-WUS.yaml fixture
@@ -87,6 +88,8 @@
  */
 
 #include level99.LevoitDiagnostics
+#include level99.LevoitChildBase
+#include level99.LevoitHumidifier
 
 metadata {
     definition(
@@ -94,7 +97,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit LV600S Hub Connect (LUH-A603S-WUS) — DIFFERENT from LevoitLV600S.groovy (A602S). Uses VeSyncLV600S class payloads: powerSwitch/switchIdx, workMode:'humidity' for auto mode, levelIdx/virtualLevel/levelType. Mist 1-9, warm mist 0-3, target humidity top-level camelCase. No setAutoStop command (passive read only). No night-light.",
-        version: "2.4.2",
+        version: "2.5",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -149,22 +152,8 @@ metadata {
     }
 }
 
-// ---------- Lifecycle ----------
-def installed(){ logDebug "Installed ${settings}"; updated() }
-def updated(){
-    logDebug "Updated ${settings}"
-    state.clear(); unschedule(); initialize()
-    state.driverVersion = "2.4.1"
-    runIn(3, "refresh")
-    if (settings?.debugOutput) {
-        runIn(1800, "logDebugOff")
-        state.debugEnabledAt = now()
-    } else {
-        state.remove("debugEnabledAt")
-    }
-}
-def uninstalled(){ logDebug "Uninstalled" }
-def initialize(){ logDebug "Initializing" }
+// Lifecycle, refresh, toggle, update (0/1/2-arg), hubBypass, httpOk
+// are provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ---------- Power ----------
 // CROSS-CHECK [pyvesync LUH-A603S-WUS.yaml / VeSyncLV600S class]:
@@ -172,9 +161,16 @@ def initialize(){ logDebug "Initializing" }
 //   Source: pyvesync LUH-A603S-WUS.yaml turn_on: {powerSwitch:1, switchIdx:0}
 def on(){
     logDebug "on()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
-    if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
+        if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
 }
 
 def off(){
@@ -184,11 +180,6 @@ def off(){
     else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
-def toggle(){
-    logDebug "toggle()"
-    String current = state.lastSwitchSet ?: device.currentValue("switch")
-    current == "on" ? off() : on()
-}
 
 // ---------- Mode ----------
 // CROSS-CHECK [pyvesync device_map.py LUH-A603S-WUS / VeSyncLV600S.set_mode()]:
@@ -228,6 +219,7 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    ensureSwitchOn()
     def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "setVirtualLevel(mist,${lvl})")
     if (httpOk(resp)) {
         state.mistLevel = lvl
@@ -253,6 +245,9 @@ def setWarmMistLevel(level){
         recordError("Invalid warm mist level ${lvl}", [method:"setLevel"])
         return
     }
+    // If user wants warm-mist OFF (lvl=0) and device is already off, no-op — don't auto-on.
+    if (lvl == 0 && device.currentValue("switch") != "on") return
+    ensureSwitchOn()
     def resp = hubBypass("setLevel", [levelIdx: 0, levelType: "warm", mistLevel: 0, warmLevel: lvl], "setLevel(warm,${lvl})")
     if (httpOk(resp)) {
         boolean warmOn = (lvl > 0)
@@ -286,51 +281,11 @@ def setHumidity(percent){
     }
 }
 
-// ---------- Display ----------
-// CROSS-CHECK [pyvesync LUH-A603S-WUS.yaml turn_on_display / VeSyncLV600S.toggle_display()]:
-//   setDisplay payload: {screenSwitch: 0|1}  integer, NOT bool
-//   NOT {state: bool} (VeSyncHumid200300S class) or {enabled, id} (Classic 200S).
-//   Source: pyvesync LUH-A603S-WUS.yaml turn_on_display: {screenSwitch: 1}
-def setDisplay(onOff){
-    logDebug "setDisplay(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
-    } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
-    }
-}
-
-// ---------- Refresh ----------
-def refresh(){ update() }
-
-// ---------- Update / status ----------
-def update(){
-    logDebug "update() self-fetch"
-    def resp = hubBypass("getHumidifierStatus", [:], "update")
-    if (httpOk(resp)) {
-        def status = resp?.data
-        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"update"]) }
-        else applyStatus(status)
-    }
-}
-
-// 1-arg parent callback
-def update(status){
-    logDebug "update() from parent (1-arg)"
-    applyStatus(status)
-    return true
-}
-
-// 2-arg parent callback -- REQUIRED (BP#1); parent always calls with two args
-// nightLight parameter accepted but ignored -- LV600S Hub Connect has no night-light
-def update(status, nightLight){
-    logDebug "update() from parent (2-arg, nightLight ignored -- LV600S Hub Connect has no nightlight)"
-    applyStatus(status)
-    return true
-}
+// V2-line shared setDisplay body via lib (screenSwitch payload). NO setAutoStop —
+// AUTO_STOP capability not present on LV600SHC per pyvesync feature flags;
+// LevoitLV600SHubConnectSpec.groovy:683 regression-guards method absence.
+// CROSS-CHECK [pyvesync LUH-A603S-WUS.yaml turn_on_display]: {screenSwitch: 0|1} integer.
+def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
 
 // ---------- applyStatus ----------
 def applyStatus(status){
@@ -356,7 +311,7 @@ def applyStatus(status){
         peelGuard++
     }
     // Diagnostic raw dump -- gated by debugOutput.
-    if (settings?.debugOutput) log.debug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // CROSS-CHECK: LV600S Hub Connect response uses `powerSwitch` (int 0|1), NOT `enabled` (bool).
@@ -470,48 +425,8 @@ def applyStatus(status){
     device.sendEvent(name:"info", value: parts.join("<br>"))
 }
 
-// ---------- Internal helpers ----------
-def logDebug(msg){ if (settings?.debugOutput) log.debug msg }
-def logError(msg){ log.error msg }
-def logWarn(msg){ log.warn msg }
-def logInfo(msg){ if (settings?.descriptionTextEnable) log.info msg }
-void logDebugOff(){ if (settings?.debugOutput) device.updateSetting("debugOutput", [type:"bool", value:false]) }
-
-// BP16 debug watchdog — auto-disable stuck debugOutput after hub reboot
-private void ensureDebugWatchdog() {
-    if (settings?.debugOutput && state.debugEnabledAt) {
-        Long elapsed = now() - (state.debugEnabledAt as Long)
-        if (elapsed > 30 * 60 * 1000) {
-            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
-            device.updateSetting("debugOutput", [type:"bool", value:false])
-            state.remove("debugEnabledAt")
-        }
-    }
-}
-
-// Hub/parent call wrapper -- matches sibling driver pattern
-private hubBypass(method, Map data=[:], tag=null, cb=null){
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp){
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]){
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
+// are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
+// hubBypass, httpOk provided by #include level99.LevoitHumidifier.
 
 // ------------- END -------------

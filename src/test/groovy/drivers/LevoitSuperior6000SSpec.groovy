@@ -251,14 +251,14 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         and: "water is 'ok' (no lack, not lifted)"
         lastEventValue("water") == "ok"
 
-        and: "display is 'on' (screenState=1)"
-        lastEventValue("display") == "on"
+        and: "displayOn is 'on' (screenState=1)"
+        lastEventValue("displayOn") == "on"
 
         and: "childLock is 'off'"
         lastEventValue("childLock") == "off"
 
-        and: "autoStopConfig is 'on' (autoStopSwitch=1)"
-        lastEventValue("autoStopConfig") == "on"
+        and: "autoStopEnabled is 'on' (autoStopSwitch=1)"
+        lastEventValue("autoStopEnabled") == "on"
 
         and: "temperature is populated"
         lastEventValue("temperature") != null
@@ -472,5 +472,114 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
         req != null
         req.data.containsKey("virtualLevel")
+    }
+
+    // -------------------------------------------------------------------------
+    // BP24-B regression guard: setMistLevel from off-state triggers auto-on
+    // Upgrades previous BP24-C partial guard to full ensureSwitchOn() pattern.
+    // Superior 6000S V2-family payload: {powerSwitch:1, switchIdx:0}
+    // This test MUST FAIL on pre-fix code and PASS on post-fix code.
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
+        given: "device is off, turningOn flag not set"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        def offData = [
+            powerSwitch: 0, humidity: 45, targetHumidity: 55,
+            mistLevel: 0, virtualLevel: 3,
+            workMode: "manual",
+            waterLacksState: 0, waterTankLifted: 0,
+            autoStopSwitch: 0, autoStopState: 0,
+            screenState: 0, screenSwitch: 0,
+            filterLifePercent: 80, childLockSwitch: 0,
+            temperature: 700, timerRemain: 0,
+            dryingMode: [dryingState: 0, autoDryingSwitch: 0, dryingLevel: 1, dryingRemain: 0],
+            waterPump: [cleanStatus: 0, remainTime: 0, totalTime: 3600]
+        ]
+        driver.applyStatus(humidifierStatusEnvelope(offData))
+        testParent.allRequests.clear()
+
+        when: "setMistLevel called while device is off"
+        driver.setMistLevel(5)
+
+        then: "setSwitch(powerSwitch:1) was sent — V2-family payload (auto-on via ensureSwitchOn)"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
+        onReq != null
+        onReq.data.switchIdx == 0
+    }
+
+    // -------------------------------------------------------------------------
+    // CONCERN 4 regression guard: setLevel(0) → off() (SwitchLevel capability convention)
+    // Without the fix: pct=0 → levelFromPercent(0) → 1 → setMistLevel(1) → ensureSwitchOn()
+    // turns device ON. With the fix: setLevel(0) calls off() and returns.
+    // This test MUST FAIL on pre-fix code and PASS on post-fix code.
+    // -------------------------------------------------------------------------
+
+    def "setLevel(0) calls off() and does NOT call setVirtualLevel (SwitchLevel convention)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setLevel(0) is called"
+        driver.setLevel(0)
+
+        then: "setSwitch(powerSwitch:0) was sent (off called)"
+        def offReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 }
+        offReq != null
+
+        and: "setVirtualLevel was NOT sent (no mist-level command issued)"
+        testParent.allRequests.every { it.method != "setVirtualLevel" }
+    }
+
+    def "setLevel(0) on already-off device sends off() without setVirtualLevel (SwitchLevel convention)"() {
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        testParent.allRequests.clear()
+
+        when: "setLevel(0) is called on an off device"
+        driver.setLevel(0)
+
+        then: "setSwitch(powerSwitch:0) was sent (off called)"
+        def offReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 }
+        offReq != null
+
+        and: "setVirtualLevel was NOT sent"
+        testParent.allRequests.every { it.method != "setVirtualLevel" }
+    }
+
+    // -------------------------------------------------------------------------
+    // CONCERN 3 regression guard: setAutoStop C3 state-change gate
+    // setAutoStop("on") when autoStopEnabled is already "on" → no API call (no-op).
+    // -------------------------------------------------------------------------
+
+    def "setAutoStop('on') when already 'on' is a no-op (CONCERN 3 C3 gate)"() {
+        given: "autoStopEnabled is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopEnabled", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setAutoStop('on') called — same value as current"
+        driver.setAutoStop("on")
+
+        then: "no API request was sent"
+        testParent.allRequests.isEmpty()
+    }
+
+    def "setAutoStop('off') when 'on' sends API call (CONCERN 3 C3 gate — state change passes through)"() {
+        given: "autoStopEnabled is currently 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopEnabled", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setAutoStop('off') called — value differs"
+        driver.setAutoStop("off")
+
+        then: "setAutoStopSwitch API call was sent with autoStopSwitch=0"
+        def req = testParent.allRequests.find { it.method == "setAutoStopSwitch" }
+        req != null
+        req.data.autoStopSwitch == 0
     }
 }
