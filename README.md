@@ -40,7 +40,7 @@ A Hubitat Elevation driver pack for **Levoit smart home devices** (air purifiers
 
 For per-device attribute and command details: [`Drivers/Levoit/readme.md`](Drivers/Levoit/readme.md).
 
-For upcoming devices beyond v2.4: [`ROADMAP.md`](ROADMAP.md).
+For upcoming devices beyond v2.5: [`ROADMAP.md`](ROADMAP.md).
 
 ## For contributors
 
