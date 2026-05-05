@@ -462,6 +462,18 @@ The maintainer reviews, may ask follow-ups, and squash-merges on approval. The s
 
 After merge: the maintainer tags releases (`v2.X`) and publishes GitHub Release pages. Contributor PRs don't bump versions — that's a release-cut decision (see `/cut-release` slash-command spec at `.claude/commands/cut-release.md` for the maintainer-side flow).
 
+### HPM stale-state recovery (maintainer-only)
+
+If the maintainer pushes pre-cut code to their hub via MCP `update_driver_code` *before* the cut commit / squash-merge / HPM publish, HPM's internal tracking falls behind reality. The hub's source is post-target-version, but HPM still records the prior released version. Clicking HPM Update later trips a state-mismatch check and fails with: *"Failed to upgrade driver ... Be sure the package is not in use with devices."*
+
+Recovery sequence (order matters):
+
+1. **HPM → Repair** → select "Levoit Air Purifiers, Humidifiers, and Fans". Repair re-fetches the manifest and reconciles HPM's tracking with reality.
+2. After Repair, the parent driver's polling cron may not re-arm cleanly. Run `forceReinitialize` on the parent device to re-establish the BP14 schedule() cron + reset the BP12 pref-seed state. Verify via `get_attribute heartbeat` returning `"synced"`.
+3. If heartbeat doesn't recover within ~60s, click Save Preferences on the parent (re-runs `updated()` → `initialize()` directly).
+
+This is **maintainer-only** scenario; end users never trip this because they only get drivers via HPM. Avoidance: don't deploy uncommitted working-tree code via MCP to a hub that's also where HPM updates are tested. Either keep the maintainer's hub on HPM-published versions only, or accept the post-cut Repair routine as standard.
+
 ## Working on a preview driver
 
 If you own a Levoit/VeSync device whose Hubitat driver is tagged `[PREVIEW vX.Y]` in its description field, your hardware is genuinely the most useful thing you can contribute. The fork's preview drivers were built blind via cross-reference (pyvesync + Home Assistant + SmartThings + Homebridge); every contentious decision is documented inline as a `CROSS-CHECK` comment block waiting for a hardware report to validate or refute it.

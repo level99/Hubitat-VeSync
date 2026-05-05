@@ -536,7 +536,7 @@ pyvesync class: `VeSyncAirBaseV2` — same base class as Vital 200S and Sprout A
 | ventAngle | number | Vent/fan rotation angle from `fanRotateAngle` response field (**passive read only** — no write path in pyvesync; exact unit TBD) |
 | info | HTML | Tile summary |
 
-Commands: `setMode` (auto/sleep/manual/turbo), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setLightDetection` (on/off), `resetFilter`, `toggle`. (No `setVentAngle` — no write path in pyvesync. No `setNightlightMode` — NIGHTLIGHT feature flag absent. No timer commands — not in device_map.py EverestAir entry.)
+Commands: `setMode` (auto/sleep/manual/turbo), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setLightDetection` (on/off), `setTimer` (seconds + on/off action; 0 cancels), `cancelTimer`, `resetFilter`, `toggle`. (No `setVentAngle` — no write path in pyvesync. No `setNightlightMode` — NIGHTLIGHT feature flag absent.)
 
 ### Tower Fan (LTF-F422S) *— v2.1 preview*
 

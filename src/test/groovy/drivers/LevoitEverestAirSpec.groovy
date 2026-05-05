@@ -36,6 +36,9 @@ import support.TestParent
  *   Vent angle        -- fanRotateAngle passive read -> ventAngle attribute
  *                     -- no setVentAngle command (no write path in pyvesync)
  *   Reset filter      -- resetFilter() sends resetFilter {}
+ *   Timer set/cancel  -- setTimer(60,"off") sends {action:'off',total:60}; secs<=0 routes to
+ *                        cancelTimer; null seconds rejected (BP18); cancelTimer sends clearTimer
+ *                        with state.timerId; no-op when no timerId in state
  */
 class LevoitEverestAirSpec extends HubitatSpec {
 
@@ -588,6 +591,67 @@ class LevoitEverestAirSpec extends HubitatSpec {
 
         then:
         lastEventValue("filterLife") == 72
+    }
+
+    // -------------------------------------------------------------------------
+    // Timer set and cancel (pyvesync VeSyncAirBaseV2 set_timer/clear_timer parity)
+    // -------------------------------------------------------------------------
+
+    def "setTimer(60, 'off') sends setTimer with {action:'off', total:60}"() {
+        when:
+        driver.setTimer(60, "off")
+
+        then: "setTimer request has correct payload shape for EverestAir"
+        def req = testParent.allRequests.find { it.method == "setTimer" }
+        req != null
+        req.data.action == "off"
+        req.data.total == 60
+    }
+
+    def "setTimer(0, 'off') routes to cancelTimer (secs <= 0 short-circuit)"() {
+        given: "a timer id is stored in state so cancelTimer can be observed"
+        state.timerId = 99
+
+        when:
+        driver.setTimer(0, "off")
+
+        then: "clearTimer API call was made (not setTimer)"
+        testParent.allRequests.find { it.method == "clearTimer" } != null
+        testParent.allRequests.find { it.method == "setTimer" }   == null
+    }
+
+    def "setTimer(null, 'off') is rejected with logWarn and no API call (BP18)"() {
+        when:
+        driver.setTimer(null, "off")
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setTimer" }.isEmpty()
+    }
+
+    def "cancelTimer with state.timerId set sends clearTimer with {id} and removes state.timerId"() {
+        given: "a timer id is stored in state"
+        state.timerId = 42
+
+        when:
+        driver.cancelTimer()
+
+        then: "clearTimer was called with the stored id"
+        def req = testParent.allRequests.find { it.method == "clearTimer" }
+        req != null
+        req.data.id == 42
+    }
+
+    def "cancelTimer with no state.timerId is a no-op (no API call)"() {
+        given: "no timer id in state"
+        assert state.timerId == null
+
+        when:
+        driver.cancelTimer()
+
+        then: "no clearTimer API call was made"
+        testParent.allRequests.findAll { it.method == "clearTimer" }.isEmpty()
+        noExceptionThrown()
     }
 
     // ---- BP18: null-arg guard ----

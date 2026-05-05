@@ -85,6 +85,9 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-05-03: v2.5  Added setTimer/cancelTimer commands. Cookie-cutter port from Tower Fan
+ *                      timer pattern (Phase 5b-hardened with requireNotNull + dead-?:0 removed).
+ *                      pyvesync VeSyncAirBaseV2 set_timer/clear_timer parity.
  *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.2.1  Initial release. All 4 LAP-EL551S model codes in a single driver.
  *                        pyvesync VeSyncAirBaseV2 class (same as Vital 200S/Sprout Air).
@@ -139,6 +142,11 @@ metadata {
         // LIGHT_DETECT: same endpoint as Vital 200S — setLightDetection {lightDetectionSwitch: int}
         command "setLightDetection",   [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         command "resetFilter"
+        command "setTimer", [
+            [name:"Seconds*", type:"NUMBER", description:"Seconds until timer fires (0 to cancel)"],
+            [name:"Action",   type:"ENUM",   constraints:["off","on"], description:"Action when timer fires (default: off)"]
+        ]
+        command "cancelTimer"
         command "toggle"
 
         attribute "diagnostics", "string"
@@ -300,6 +308,49 @@ def resetFilter(){
         logInfo "Filter reset to 100%"
     } else {
         logError "Filter reset failed"; recordError("Filter reset failed", [method:"resetFilter"])
+    }
+}
+
+// ---------- Timer ----------
+// VeSyncAirBaseV2 set_timer/clear_timer parity.
+// Timer shape: {action: 'on'|'off', total: <seconds>}
+// action: what the device does when the timer fires (default "off").
+// Cookie-cutter port from Tower Fan timer pattern (Phase 5b-hardened).
+def setTimer(seconds, action="off"){
+    if (!requireNotNull(seconds, "setTimer")) return
+    int secs = seconds as Integer
+    if (secs <= 0) { cancelTimer(); return }
+    // action defaults to "off" in the Groovy signature; only null-guard when explicitly null
+    String act = (action != null) ? (action as String).toLowerCase() : "off"
+    if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"setTimer"]); return }
+    logDebug "setTimer(${secs}s, action=${act})"
+    def resp = hubBypass("setTimer", [action: act, total: secs], "setTimer(${secs}s,${act})")
+    if (httpOk(resp)) {
+        // Capture timer ID from response so cancelTimer can reference it
+        def tid = resp?.data?.result?.result?.id ?: resp?.data?.result?.id
+        if (tid != null) {
+            state.timerId = tid
+        } else {
+            logDebug "setTimer: response did not include timer id -- cancelTimer will use state.timerId if known"
+        }
+        logInfo "Timer set: ${act} in ${secs}s (id=${state.timerId})"
+    } else {
+        logError "Timer set failed"; recordError("Timer set failed", [method:"setTimer"])
+    }
+}
+
+def cancelTimer(){
+    logDebug "cancelTimer()"
+    if (!state.timerId) {
+        logDebug "cancelTimer: no active timer id in state -- no-op"
+        return
+    }
+    def resp = hubBypass("clearTimer", [id: state.timerId], "clearTimer(id=${state.timerId})")
+    if (httpOk(resp)) {
+        state.remove("timerId")
+        logInfo "Timer cancelled"
+    } else {
+        logError "Timer cancel failed"; recordError("Timer cancel failed", [method:"clearTimer"])
     }
 }
 

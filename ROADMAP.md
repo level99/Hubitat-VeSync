@@ -20,7 +20,6 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 - **OasisMist 1000S WEUR nightlight payload fallback** — only if community reports failure with the current pyvesync-class pattern. Pyvesync's WEUR fixture doesn't actually exercise nightlight, leaving the payload underspecified upstream. Fallback: switch to spkesDE's single-method `setNightLightBrightness {nightLightBrightness: N}` pattern (1-line change in `LevoitOasisMist1000S.groovy:setNightlight`).
 - **Sprout Air VOC/CO2 attribute population verification** — driver declares `voc` + `co2` attributes (Sprout Air is Levoit's air-quality flagship per marketing) but pyvesync's device_map.py doesn't list explicit VOC/CO2 features. Driver is null-safe — attributes stay null if API doesn't return them. Action if community reports null values: confirm pyvesync feature gap + drop attributes (or document as marketing-aspirational).
-- **EverestAir `setTimer`/`clearTimer` commands** — pyvesync `VeSyncAirBaseV2` exposes `set_timer`/`clear_timer`; v2.3 driver doesn't surface them. Cookie-cutter port from Tower Fan timer pattern.
 
 ---
 
@@ -104,14 +103,14 @@ Driver duplication is significant: 22 child drivers carry ~4,500-5,000 lines of 
 1. ✅ **`LevoitChildBaseLib.groovy`** — general/cross-cutting helpers (HTTP plumbing, log helpers, lifecycle hooks, `toggle`, BP16 `ensureDebugWatchdog`, BP23 `ensureSwitchOn`, BP18 null-guard, 2-arg `setLevel(val, duration)` overload). Shipped v2.5 Phase 1. Validated override-precedence behavior: driver-local method definitions shadow same-named lib method — the expected Groovy/Hubitat behavior.
 2. ✅ **`LevoitCorePurifierLib.groovy`** — Core 200S/300S/400S/600S shared `setLevel`/`setSpeed`/`handleSpeed`/`setMode`/parsers/AQ/PM2.5 logic. Shipped v2.5 Phase 2. ~1,400 lines dedup.
 3. ✅ **`LevoitHumidifierLib.groovy`** — all 9 humidifier drivers (Classic 200S/300S, Dual 200S, LV600S, LV600S Hub Connect, OasisMist 450S/1000S, Sprout, Superior 6000S) sharing lifecycle/HTTP plumbing + `toggle` + `update()` signatures. Shipped v2.5 Phase 4 as a single unified library (Option γ — not the originally-planned two-library split into V1/V2 variants; the drivers' per-family divergence was shallow enough that a single library + per-driver power-payload overrides was cleaner). ~1,600 lines dedup across 9 drivers.
-4. **`LevoitVitalPurifierLib.groovy`** — Vital 100S/200S shared logic. ~700 lines dedup. Planned v2.6+.
-5. **`LevoitFanLib.groovy`** — Tower / Pedestal Fan shared logic. ~500 lines dedup. Planned v2.6+.
+4. ✅ **`LevoitVitalPurifierLib.groovy`** — Vital 100S/200S shared logic. Shipped v2.5 Phase 3. ~700 lines dedup. 31 method bodies extracted; per-driver `applyStatus` retained for Vital 200S light-detection asymmetry.
+5. ✅ **`LevoitFanLib.groovy`** — Tower / Pedestal Fan shared logic. Shipped v2.5 Phase 5. ~500 lines dedup. 12 cross-family infra + 8 V2-fan body methods + `doSetMuteSwitch`/`doSetDisplayScreenSwitch` rename-pattern helpers (per-driver 1-line delegators preserve method-presence semantics).
 
-**Total dedup (post-Phase 4):** ~3,400 lines collapsed into ~750 lines of library code across 3 shipped libraries. Each future BP-N on the covered class collapses to a 1-fix. Retroactively deduped BP1 (10 drivers), BP12 (5 shapes), BP16 (every child), BP18 (humidifier + purifier paths), BP23/BP24 (`ensureSwitchOn` + `setLevel(0)` shapes).
+**Total dedup (post-Phase 5):** ~5,000 lines collapsed into ~1,250 lines of library code across 6 shipped libraries (`LevoitChildBase`, `LevoitDiagnostics`, `LevoitCorePurifier`, `LevoitVitalPurifier`, `LevoitHumidifier`, `LevoitFan`). Each future BP-N on the covered class collapses to a 1-fix. Retroactively deduped BP1 (10 drivers), BP12 (5 shapes), BP16 (every child), BP18 (humidifier + purifier + fan paths), BP23/BP24 (`ensureSwitchOn` + `setLevel(0)` + `setSpeed`/`setMode` shapes class-wide).
 
 **Tradeoffs:** Hubitat library files carry BP20 platform-parser exposure (lint RULE29 + ops-agent library-deploy smoke-test mitigate). Library include semantics don't support method override; drivers needing per-instance variation either parameterize the library function or override locally (validated in Phase 1). Each library ships via HPM as `required: true` (precedent: `LevoitDiagnosticsLib.groovy` in v2.4).
 
-**Sequencing:** Phases 1-4 shipped in v2.5. Phases 4-5 (Vital line, Fan line) in v2.6+ based on bandwidth.
+**Sequencing:** All five phases shipped in v2.5. CHANGELOG.md is system-of-record for what shipped per-phase.
 
 **Don't bundle phases.** Each library is its own architecture decision with its own validation surface. Discrete phases let learnings from Phase 1 inform Phase 2+ design.
 

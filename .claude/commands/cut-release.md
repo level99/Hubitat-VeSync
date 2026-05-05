@@ -99,7 +99,11 @@ Skip bullets that are pure churn (CI tweaks, agent-config edits, lint exemption 
 
 ### Artifact C — Driver-version surfaces (if any)
 
-Scan for any `DRIVER_VERSION` constants or top-of-file `// vX.Y` version comments in `Drivers/Levoit/*.groovy`. These are distinct from the `version:` field in `definition()` — they are imperative version strings sometimes used by driver logic at runtime. If found and the value differs from the new package version, propose an update. If none found, note: *"No runtime DRIVER_VERSION constants to update."*
+Scan for any `DRIVER_VERSION` constants or top-of-file `// vX.Y` version comments in `Drivers/Levoit/*.groovy`. These are distinct from the `version:` field in `definition()` — they are imperative version strings sometimes used by driver logic at runtime. If found and the value differs from the new package version, propose an update.
+
+**Always update**: `Drivers/Levoit/LevoitDiagnosticsLib.groovy` `FORK_RELEASE_VERSION` constant (introduced in v2.5; defaults to the prior shipped version). This drives `getDriverVersion()` output in `captureDiagnostics` dumps. Bump to the new package version alongside the per-driver `version:` fields and `levoitManifest.json` top-level `version`.
+
+If no other DRIVER_VERSION constants are found beyond the Diagnostics lib, note: *"FORK_RELEASE_VERSION updated; no other runtime DRIVER_VERSION constants to update."*
 
 ### Artifact C.7 — Per-driver `version` field lockstep
 
@@ -465,7 +469,7 @@ After explicit approval (e.g., "approved", "go", "ship it"):
 
 - Edit `levoitManifest.json`: update `version`, `dateReleased`, `releaseNotes`. Apply any Artifact C.5 drivers-array additions (do NOT remove entries on `WARNING:` cases — those need human-only review per the spec). Apply Artifact C.6 bundles-array URL version bumps (location URLs of the form `releases/download/v<old>/...` → `releases/download/v<new>/...`). Leave `packageName`, `author`, `documentationLink`, `communityLink`, `licenseFile` untouched (those are stable fields changed manually outside of release cuts).
 - Edit (or create) `CHANGELOG.md`: prepend the new entry per Step 4 Artifact B.
-- Apply any Artifact C edits if applicable (runtime DRIVER_VERSION constants).
+- Apply Artifact C edits: update `FORK_RELEASE_VERSION` constant in `Drivers/Levoit/LevoitDiagnosticsLib.groovy` to the new package version. Apply any other DRIVER_VERSION-style runtime constants found.
 - Apply Artifact C.7 edits: for each `.groovy` file in `Drivers/Levoit/`, update or add the `version:` field inside `definition()` to match the new package version.
 - Apply Artifact D `ROADMAP.md` edits if any were proposed.
 - Apply Artifact E `TODO.md` edits if `TODO.md` exists locally and edits were proposed.
