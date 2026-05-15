@@ -227,11 +227,14 @@ def setFanSpeed(speed){
 // VeSyncAirBaseV2 toggle_display: {screenSwitch: int}
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
+    if (!requireNotNull(onOff, "setDisplay")) return
+    // BP25: normalize to lowercase before payload coercion.
+    String v = (onOff as String).toLowerCase()
+    Integer sw = (v == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${v})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
+        device.sendEvent(name:"displayOn", value: v)
+        logInfo "Display: ${v}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
@@ -241,11 +244,14 @@ def setDisplay(onOff){
 // VeSyncAirBaseV2 toggle_child_lock: {childLockSwitch: int}
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${onOff})")
+    if (!requireNotNull(onOff, "setChildLock")) return
+    // BP25: normalize to lowercase before payload coercion.
+    String v = (onOff as String).toLowerCase()
+    Integer sw = (v == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${v})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: onOff)
-        logInfo "Child lock: ${onOff}"
+        device.sendEvent(name:"childLock", value: v)
+        logInfo "Child lock: ${v}"
     } else {
         logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }

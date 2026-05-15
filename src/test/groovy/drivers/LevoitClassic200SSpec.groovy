@@ -702,4 +702,41 @@ class LevoitClassic200SSpec extends HubitatSpec {
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
         onReq != null
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #25: C3 gate case-sensitivity — uppercase "ON"/"OFF" input
+    // -------------------------------------------------------------------------
+
+    def "BP25: setAutoStop('ON') uppercase makes the API call and sends enabled:true (not false)"() {
+        // Pre-fix: ("ON" == "on") is false → enabled:false sent (disable instead of enable).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → enabled:true (correct).
+        given: "autoStopEnabled is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopEnabled", value: "off"])
+
+        when:
+        driver.setAutoStop("ON")
+
+        then: "API call was made"
+        def req = testParent.allRequests.find { it.method == "setAutomaticStop" }
+        req != null
+
+        and: "payload carries enabled:true (enable), NOT false (disable)"
+        req.data.enabled == true
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("autoStopEnabled") == "on"
+    }
+
+    def "BP25: setAutoStop('ON') when already 'on' is a no-op (C3 gate works with uppercase)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopEnabled", value: "on"])
+
+        when:
+        driver.setAutoStop("ON")
+
+        then: "no API call was made (C3 gate prevented redundant call)"
+        testParent.allRequests.find { it.method == "setAutomaticStop" } == null
+    }
 }

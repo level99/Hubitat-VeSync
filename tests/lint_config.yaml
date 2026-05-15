@@ -84,6 +84,22 @@ blocked_domains: []
 
 
 # ---------------------------------------------------------------------------
+# RULE33 — BP25 case-sensitivity per-method exemptions
+# ---------------------------------------------------------------------------
+# Each entry exempts a specific (file, method) pair from RULE33's C3-gate
+# case-sensitivity check. Use for methods where BP25 is known but deferred
+# to a separate sweep (e.g. preview drivers without live-capture hardware).
+#
+# Required fields:
+#   file     — repo-root-relative path using forward slashes
+#   method   — exact Groovy method name
+#   rationale — REQUIRED non-empty explanation
+
+# All previously-deferred sites fixed in the v2.5 class-wide BP25 sweep; no exemptions needed.
+bp25_case_sensitivity_exemptions: []
+
+
+# ---------------------------------------------------------------------------
 # Rule 16: PII scan — token string allow-list
 # ---------------------------------------------------------------------------
 # Specific 32-64 char alphanumeric strings that are known-safe (e.g., test

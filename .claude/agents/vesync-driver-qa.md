@@ -885,6 +885,48 @@ Vital 100S/200S `cycleSpeed` already has the correct guard (community-fork-era c
 
 ---
 
+### BP25: C3 gate case-sensitivity — uppercase on/off input bypasses gate and inverts payload
+
+**Fix scope:** class-wide — every on/off setter that (1) performs a `== "on"` or `== "off"` comparison and (2) does not already have a `toLowerCase()` normalization before both the C3 gate and the payload coercion.
+
+**Root cause:** VeSync attribute values are stored and compared as lowercase (`"on"` / `"off"`). Rule Machine passes string command arguments as-typed by the user; dashboard tiles may pass `"ON"` / `"OFF"` from capability string normalization. When input arrives in any case other than lowercase, two bugs fire simultaneously: (a) C3 idempotency gate evaluates `"on" == "ON"` as `false` — bypass fires and a redundant cloud call is made even when state matches; (b) payload coercion evaluates `"ON" == "on"` as `false` — the OPPOSITE command value is sent (e.g., `childLockSwitch:0` when user requested lock, `enabled:false` when user requested enable). Both sub-bugs compound on every uppercase invocation; the device silently receives the wrong command.
+
+**Detection:** grep for `onOff == "on"` or `value == "on"` or `(onOff == "off")` patterns in setter methods. Each match that does not have a preceding `String v = (... as String).toLowerCase()` on the raw parameter is a BP25 site. Methods in `LevoitHumidifierLib.groovy` are already correct (canonical pattern); audit any driver or lib NOT in that family.
+
+**Canonical fix pattern** (from `LevoitHumidifierLib.groovy`'s `doSetDisplayScreenSwitch`):
+```groovy
+def setSomething(onOff) {
+    if (!requireNotNull(onOff, "setSomething")) return
+    String v = (onOff as String).toLowerCase()   // BP25 fix: normalize before gate AND coercion
+    if (device.currentValue("attr") == v) return  // C3 gate uses normalized v
+    Integer sw = (v == "on") ? 1 : 0              // payload uses normalized v
+    ...
+    device.sendEvent(name:"attr", value: v)        // event uses normalized v
+}
+```
+
+**Known sites in v2.5 (all fixed in same diff as catalog entry):**
+| Driver / Library | Method | Sub-bug |
+|---|---|---|
+| `LevoitVitalPurifierLib.groovy` | `setChildLock` | C3 bypass + payload inversion |
+| `LevoitVitalPurifierLib.groovy` | `setDisplay` | C3 bypass + payload inversion |
+| `LevoitCorePurifierLib.groovy` | `setChildLock` | C3 bypass + payload inversion |
+| `LevoitCorePurifierLib.groovy` | `setDisplay` (via `handleDisplayOn`) | C3 bypass + payload inversion |
+| `LevoitClassic200S.groovy` | `setAutoStop` | C3 bypass + payload inversion |
+| `LevoitClassic300S.groovy` | `setAutoStop` | C3 bypass + payload inversion |
+| `LevoitDual200S.groovy` | `setAutoStop` | C3 bypass + payload inversion |
+| `LevoitEverestAir.groovy` | `setDisplay` | payload inversion (no C3 gate) + missing requireNotNull |
+| `LevoitEverestAir.groovy` | `setChildLock` | payload inversion (no C3 gate) + missing requireNotNull |
+| `LevoitEverestAir.groovy` | `setLightDetection` | payload inversion (no C3 gate) + missing requireNotNull |
+
+**Out of scope (already correct):** All HumidifierLib-based drivers implement `doSetDisplayScreenSwitch` with the canonical `toLowerCase()` pattern; LevoitSuperior6000S `setAutoStopSwitch`; LevoitOasisMist450S/LV600S/LV600SHubConnect/OasisMist1000S/SproutHumidifier display/childLock methods.
+
+**Regression guard:** Spock spec for each site must include an `"ON"` (uppercase) test case confirming (a) the API call is made when state differs, (b) the payload carries the correct integer value (1 for "ON", 0 for "OFF"), and (c) the emitted event value is lowercase `"on"` / `"off"`.
+
+**Shipped:** v2.5.x (2026-05-14) across 10 sites in 5 files.
+
+---
+
 ## Report format
 
 Return ONE of:

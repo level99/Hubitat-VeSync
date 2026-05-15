@@ -1974,4 +1974,41 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
         onReq != null
     }
+
+    // ---- BP25: setNightlightSwitch (RGB-variant gate-guarded, WEU variant only) ----
+
+    def "BP25: setNightlightSwitch('ON') resolves to action='on', not 'off' (BP25 regression guard)"() {
+        // Pre-fix: (value == "on") where value="ON" evaluates false → action="off" (wrong).
+        // Post-fix: toLowerCase() normalizes "ON"→"on" → action="on".
+        // setNightlightSwitch is gated behind isRgbVariant() — set state.deviceType to WEU variant.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+        state.nightlightBrightness = 80
+
+        when:
+        driver.setNightlightSwitch("ON")
+
+        then: "setLightStatus sent with action='on' (not 'off')"
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.action == "on"
+
+        and: "emitted nightlightSwitch event is 'on'"
+        lastEventValue("nightlightSwitch") == "on"
+    }
+
+    def "BP25: setNightlightSwitch('OFF') resolves to action='off' (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+
+        when:
+        driver.setNightlightSwitch("OFF")
+
+        then: "setLightStatus sent with action='off'"
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.action == "off"
+    }
 }

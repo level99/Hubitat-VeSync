@@ -784,6 +784,45 @@ class LevoitDual200SSpec extends HubitatSpec {
         onReq != null
     }
 
+    // -------------------------------------------------------------------------
+    // Bug Pattern #25: C3 gate case-sensitivity — uppercase "ON"/"OFF" input
+    // -------------------------------------------------------------------------
+
+    def "BP25: setAutoStop('ON') uppercase makes the API call and sends enabled:true (not false)"() {
+        // Pre-fix: ("ON" == "on") is false → enabled:false sent (disable auto-stop instead of enable).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → enabled:true (correct).
+        given: "autoStopEnabled is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopEnabled", value: "off"])
+
+        when: "setAutoStop is called with uppercase 'ON'"
+        driver.setAutoStop("ON")
+
+        then: "setAutomaticStop API call was made"
+        def req = testParent.allRequests.find { it.method == "setAutomaticStop" }
+        req != null
+
+        and: "payload carries enabled:true (enable auto-stop), NOT false (disable)"
+        req.data.enabled == true
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("autoStopEnabled") == "on"
+    }
+
+    def "BP25: setAutoStop('ON') when autoStopEnabled is already 'on' is a no-op (C3 gate works with uppercase)"() {
+        // Pre-fix: ("on" == "ON") is false → gate bypassed, redundant API call made.
+        // Post-fix: toLowerCase() yields "on" == "on" → gate fires, no API call.
+        given: "autoStopEnabled is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopEnabled", value: "on"])
+
+        when: "setAutoStop called with uppercase 'ON' (idempotent)"
+        driver.setAutoStop("ON")
+
+        then: "no API call was made"
+        testParent.allRequests.find { it.method == "setAutomaticStop" } == null
+    }
+
     def "setMode('auto') from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
         given: "device is off, turningOn flag not set"
         settings.descriptionTextEnable = false

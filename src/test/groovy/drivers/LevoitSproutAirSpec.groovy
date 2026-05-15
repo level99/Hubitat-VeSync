@@ -514,4 +514,71 @@ class LevoitSproutAirSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setNightlightMode") && it.contains("null") }
         testParent.allRequests.isEmpty()
     }
+
+    // ---- BP25: setDisplay and setChildLock ----
+
+    def "BP25: setDisplay('ON') sends screenSwitch:1, not 0 (BP25 regression guard)"() {
+        // Pre-fix: (onOff == "on") where onOff="ON" evaluates false → screenSwitch:0 (wrong).
+        // Post-fix: toLowerCase() normalizes "ON"→"on" → screenSwitch:1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("ON")
+
+        then: "setDisplay sent with screenSwitch:1 (display on)"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25: setDisplay('OFF') sends screenSwitch:0 (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("OFF")
+
+        then: "setDisplay sent with screenSwitch:0 (display off)"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 0
+
+        and: "emitted event value is lowercase 'off'"
+        lastEventValue("displayOn") == "off"
+    }
+
+    def "BP25: setChildLock('ON') sends childLockSwitch:1, not 0 (BP25 regression guard)"() {
+        // Pre-fix: (onOff == "on") where onOff="ON" → childLockSwitch:0 (unlocks instead of locks).
+        // Post-fix: toLowerCase() → childLockSwitch:1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("ON")
+
+        then: "setChildLock sent with childLockSwitch:1 (locked)"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25: setChildLock('OFF') sends childLockSwitch:0 (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("OFF")
+
+        then: "setChildLock sent with childLockSwitch:0 (unlocked)"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 0
+    }
 }

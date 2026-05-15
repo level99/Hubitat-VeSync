@@ -238,4 +238,28 @@ class LevoitCore200SLightSpec extends HubitatSpec {
         and: "a warning was logged"
         testLog.warns.any { it.contains("setLevel") }
     }
+
+    // ---- BP25: setNightLight passes raw string to API as 'night_light' field ----
+
+    def "BP25: setNightLight('ON') sends night_light:'on' (lowercase), not 'ON' (BP25 regression guard)"() {
+        // Pre-fix: mode passed raw → API receives "ON" which the VeSync cloud may reject.
+        // Post-fix: m = mode.toLowerCase() → API receives "on".
+        when:
+        driver.setNightLight("ON")
+
+        then: "setNightLight API call made with night_light:'on' (lowercase)"
+        def req = testParent.allRequests.find { it.method == "setNightLight" }
+        req != null
+        req.data.night_light == "on"
+    }
+
+    def "BP25: setNightLight('DIM') sends night_light:'dim' (lowercase) (BP25 regression guard)"() {
+        when:
+        driver.setNightLight("DIM")
+
+        then: "setNightLight API call made with night_light:'dim' (lowercase)"
+        def req = testParent.allRequests.find { it.method == "setNightLight" }
+        req != null
+        req.data.night_light == "dim"
+    }
 }

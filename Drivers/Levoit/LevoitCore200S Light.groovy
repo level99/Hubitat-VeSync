@@ -115,17 +115,20 @@ def setNightLight(mode)
 {
     logDebug "setNightLight(${mode})"
     if (!requireNotNull(mode, "setNightLight")) return false                    // BP18 null-guard
+    // BP25: normalize to lowercase so Rule Machine "ON"/"OFF"/"DIM" routes correctly.
+    // API expects literal "on"/"off"/"dim" string in night_light field.
+    String m = (mode as String).toLowerCase()
 
     def result = false
 
     parent.sendBypassRequest(device, [
-                data: [ "night_light": mode ],
+                data: [ "night_light": m ],
                 "method": "setNightLight",
                 "source": "APP" ]) { resp ->
 			if (checkHttpResponse("setNightLight", resp))
 			{
-                sendLevelEvent(mode)
-                logInfo "Night light: ${mode}"
+                sendLevelEvent(m)
+                logInfo "Night light: ${m}"
 				result = true
 			}
 		}

@@ -256,11 +256,14 @@ private boolean isNightlightVariant(){
 // On non-WEUR variants: no-ops with INFO log.
 def setNightlight(onOff, brightness = null){
     logDebug "setNightlight(${onOff}, ${brightness})"
+    if (!requireNotNull(onOff, "setNightlight")) return
     if (!isNightlightVariant()) return
+    // BP25: normalize to lowercase before all comparisons.
+    String nl = (onOff as String).toLowerCase()
     if (brightness == null) {
         // Pure on/off toggle -- use setNightLightStatus (pyvesync toggle_nightlight path)
-        Integer nlSwitch = (onOff == "on") ? 1 : 0
-        def resp = hubBypass("setNightLightStatus", [nightLightSwitch: nlSwitch], "setNightLightStatus(${onOff})")
+        Integer nlSwitch = (nl == "on") ? 1 : 0
+        def resp = hubBypass("setNightLightStatus", [nightLightSwitch: nlSwitch], "setNightLightStatus(${nl})")
         if (httpOk(resp)) {
             String onOffStr = (nlSwitch == 1) ? "on" : "off"
             device.sendEvent(name:"nightlightOn", value: onOffStr)
@@ -271,7 +274,7 @@ def setNightlight(onOff, brightness = null){
     } else {
         // Brightness control -- use setLightStatus (pyvesync set_nightlight_brightness path)
         Integer br = Math.max(0, Math.min(100, (brightness as Integer) ?: 0))
-        if (onOff == "off") br = 0
+        if (nl == "off") br = 0
         Integer nlSwitch = (br > 0) ? 1 : 0
         def resp = hubBypass("setLightStatus", [brightness: br, nightLightSwitch: nlSwitch], "setLightStatus(brightness=${br})")
         if (httpOk(resp)) {

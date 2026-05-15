@@ -425,8 +425,10 @@ private boolean isRgbVariant(){
 // Sends setLightStatus with action="on"|"off" and brightness from state (default 100).
 def setNightlightSwitch(value){
     logDebug "setNightlightSwitch(${value})"
+    if (!requireNotNull(value, "setNightlightSwitch")) return
     if (!isRgbVariant()) return
-    String action = (value == "on") ? "on" : "off"
+    // BP25: normalize to lowercase so Rule Machine "ON"/"OFF" routes correctly.
+    String action = ((value as String).toLowerCase() == "on") ? "on" : "off"
     // Keep last color + brightness when toggling -- pull from state or use defaults
     Integer brightness = (state.nightlightBrightness as Integer) ?: 100
     Integer hue = (state.nightlightHue as Integer) ?: 0          // degrees 0-360

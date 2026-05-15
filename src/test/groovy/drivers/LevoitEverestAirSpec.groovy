@@ -42,6 +42,10 @@ import support.TestParent
  *                        null seconds rejected (BP18); cancelTimer sends delTimerV2
  *                        with {id, subDeviceNo:0}; no-op when no timerId in state.
  *                        Regression guard: Tower Fan API names (setTimer/clearTimer) must NOT appear.
+ *   BP18              -- setDisplay/setChildLock/setLightDetection(null) rejected with logWarn
+ *                        (requireNotNull added as part of BP25 fix sweep)
+ *   Bug Pattern #25   -- setDisplay/setChildLock/setLightDetection('ON') uppercase sends correct
+ *                        integer payload (1 not 0) and emits lowercase event value
  */
 class LevoitEverestAirSpec extends HubitatSpec {
 
@@ -705,5 +709,105 @@ class LevoitEverestAirSpec extends HubitatSpec {
         noExceptionThrown()
         testLog.warns.any { it.contains("setMode") && it.contains("null") }
         testParent.allRequests.isEmpty()
+    }
+
+    def "setDisplay(null) does not throw and emits a WARN log (BP18 — EverestAir requireNotNull added)"() {
+        // Before the BP25 fix, EverestAir's setDisplay lacked requireNotNull entirely.
+        // The BP25 fix adds requireNotNull as the first guard (before the BP25 toLowerCase fix).
+        when:
+        driver.setDisplay(null)
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+        testLog.warns.any { it.contains("setDisplay") || it.contains("null") }
+    }
+
+    def "setChildLock(null) does not throw and emits a WARN log (BP18 — EverestAir requireNotNull added)"() {
+        when:
+        driver.setChildLock(null)
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
+        testLog.warns.any { it.contains("setChildLock") || it.contains("null") }
+    }
+
+    def "setLightDetection(null) does not throw and emits a WARN log (BP18 — EverestAir requireNotNull added)"() {
+        when:
+        driver.setLightDetection(null)
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setLightDetection" }.isEmpty()
+        testLog.warns.any { it.contains("setLightDetection") || it.contains("null") }
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #25: case-sensitivity — uppercase "ON"/"OFF" input inverts payload
+    // EverestAir has no C3 gate, so the test shape is: payload must carry correct
+    // integer value (1 for "ON", 0 for "OFF") and the event value must be lowercase.
+    // -------------------------------------------------------------------------
+
+    def "BP25: setDisplay('ON') sends screenSwitch:1 (not 0) and emits displayOn='on'"() {
+        // Pre-fix: ("ON" == "on") is false → screenSwitch:0 sent (display off instead of on).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → screenSwitch:1 (correct).
+        when:
+        driver.setDisplay("ON")
+
+        then: "setDisplay API call was made"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+
+        and: "payload carries screenSwitch:1 (on), NOT 0 (off)"
+        req.data.screenSwitch == 1
+
+        and: "emitted displayOn event is lowercase 'on'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25: setDisplay('OFF') sends screenSwitch:0 (not 1) and emits displayOn='off'"() {
+        when:
+        driver.setDisplay("OFF")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 0
+        lastEventValue("displayOn") == "off"
+    }
+
+    def "BP25: setChildLock('ON') sends childLockSwitch:1 (not 0) and emits childLock='on'"() {
+        // Pre-fix: ("ON" == "on") is false → childLockSwitch:0 (unlock instead of lock).
+        // Post-fix: normalize → childLockSwitch:1 (correct).
+        when:
+        driver.setChildLock("ON")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25: setLightDetection('ON') sends lightDetectionSwitch:1 (not 0) and emits lightDetection='on'"() {
+        // Pre-fix: ("ON" == "on") is false → lightDetectionSwitch:0 (off instead of on).
+        // Post-fix: normalize → lightDetectionSwitch:1 (correct).
+        when:
+        driver.setLightDetection("ON")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 1
+        lastEventValue("lightDetection") == "on"
+    }
+
+    def "BP25: setLightDetection('OFF') sends lightDetectionSwitch:0 (not 1) and emits lightDetection='off'"() {
+        when:
+        driver.setLightDetection("OFF")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 0
+        lastEventValue("lightDetection") == "off"
     }
 }

@@ -16,6 +16,8 @@ import support.TestParent
  *   Bug Pattern #7  — info HTML uses local variables, not device.currentValue()
  *   Bug Pattern #12 — pref-seed fires when descriptionTextEnable is null, preserves false
  *   Happy path      — full applyStatus from LAP-V201S.yaml emits expected events (canonical values)
+ *   Bug Pattern #25 — setChildLock/setDisplay('ON') uppercase sends correct payload (1 not 0),
+ *                      C3 gate works correctly with uppercase input, emitted event is lowercase
  */
 class LevoitVital200SSpec extends HubitatSpec {
 
@@ -794,5 +796,127 @@ class LevoitVital200SSpec extends HubitatSpec {
 
         and: "logWarn fired with the method name"
         testLog.warns.any { it.contains("setRoomSize") }
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #25: C3 gate case-sensitivity — uppercase "ON"/"OFF" input
+    // These specs MUST FAIL on pre-fix code (raw param compared) and
+    // PASS on post-fix code (toLowerCase() normalization added).
+    // -------------------------------------------------------------------------
+
+    def "BP25: setChildLock('ON') uppercase makes the API call and sends childLockSwitch:1 (not 0)"() {
+        // Pre-fix: ("ON" == "on") is false → childLockSwitch:0 sent (unlock instead of lock).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → childLockSwitch:1 (correct).
+        given: "childLock is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when: "setChildLock is called with uppercase 'ON'"
+        driver.setChildLock("ON")
+
+        then: "API call was made (gate correctly passed — 'off' != 'on')"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+
+        and: "payload carries childLockSwitch:1 (lock), NOT 0 (unlock)"
+        req.data.childLockSwitch == 1
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25: setChildLock('ON') when childLock is already 'on' is a no-op (C3 gate works with uppercase)"() {
+        // Pre-fix: ("on" == "ON") is false → gate bypassed, redundant API call made.
+        // Post-fix: toLowerCase() yields "on" == "on" → gate fires, no API call.
+        given: "childLock is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when: "setChildLock called with uppercase 'ON' (idempotent call)"
+        driver.setChildLock("ON")
+
+        then: "no API call was made (C3 gate worked correctly)"
+        testParent.allRequests.find { it.method == "setChildLock" } == null
+    }
+
+    def "BP25: setDisplay('ON') uppercase makes the API call and sends screenSwitch:1 (not 0)"() {
+        // Pre-fix: ("ON" == "on") is false → screenSwitch:0 sent (turn off instead of on).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → screenSwitch:1 (correct).
+        given: "display is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "off"])
+
+        when: "setDisplay is called with uppercase 'ON'"
+        driver.setDisplay("ON")
+
+        then: "API call was made"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+
+        and: "payload carries screenSwitch:1 (on), NOT 0 (off)"
+        req.data.screenSwitch == 1
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25: setDisplay('ON') when display is already 'on' is a no-op (C3 gate works with uppercase)"() {
+        // Pre-fix: ("on" == "ON") is false → gate bypassed, redundant API call made.
+        // Post-fix: toLowerCase() yields "on" == "on" → gate fires, no API call.
+        given: "display is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "on"])
+
+        when: "setDisplay called with uppercase 'ON' (idempotent call)"
+        driver.setDisplay("ON")
+
+        then: "no API call was made (C3 gate worked correctly)"
+        testParent.allRequests.find { it.method == "setDisplay" } == null
+    }
+
+    // ---- BP25: setLightDetection (Vital200S-only setter) ----
+
+    def "BP25: setLightDetection('ON') sends lightDetectionSwitch:1, not 0 (BP25 regression guard)"() {
+        // Pre-fix: (onOff=="on") where onOff="ON" evaluates false → lightDetectionSwitch:0 (wrong).
+        // Post-fix: toLowerCase() normalizes "ON"→"on" → lightDetectionSwitch:1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setLightDetection("ON")
+
+        then: "setLightDetection sent with lightDetectionSwitch:1 (enabled)"
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 1
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("lightDetection") == "on"
+    }
+
+    def "BP25: setLightDetection('OFF') sends lightDetectionSwitch:0 (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setLightDetection("OFF")
+
+        then: "setLightDetection sent with lightDetectionSwitch:0 (disabled)"
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 0
+
+        and: "emitted event value is lowercase 'off'"
+        lastEventValue("lightDetection") == "off"
+    }
+
+    def "BP18: setLightDetection(null) returns silently with no API call (BP18 null-guard)"() {
+        when:
+        driver.setLightDetection(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.find { it.method == "setLightDetection" } == null
+        testLog.warns.any { it.contains("setLightDetection") }
     }
 }

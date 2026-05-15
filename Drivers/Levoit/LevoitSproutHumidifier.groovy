@@ -285,15 +285,18 @@ def setDryingMode(onOff){
 // NOTE: colorTemperature is optional — defaults to prior state (or 3500 if unknown).
 def setNightlight(onOff, brightness = null, colorTemp = null){
     logDebug "setNightlight(${onOff}, ${brightness}, ${colorTemp})"
+    if (!requireNotNull(onOff, "setNightlight")) return
+    // BP25: normalize to lowercase before all comparisons.
+    String nl = (onOff as String).toLowerCase()
     Integer br   = (brightness  != null) ? Math.max(0, Math.min(100, (brightness as Integer) ?: 0))    : null
     Integer ct   = (colorTemp   != null) ? Math.max(2000, Math.min(3500, (colorTemp as Integer) ?: 3500)) : null
-    if (onOff == "off") { br = 0; ct = ct ?: 3500 }
+    if (nl == "off") { br = 0; ct = ct ?: 3500 }
     else {
         // on: if no brightness supplied default to 100; clamp floor to 1
         br = (br == null) ? 100 : (br == 0 ? 50 : br)
         ct = ct ?: 3500
     }
-    Integer nlSwitch = (onOff == "on" && br > 0) ? 1 : 0
+    Integer nlSwitch = (nl == "on" && br > 0) ? 1 : 0
     def resp = hubBypass("setLightStatus",
         [brightness: br, colorTemperature: ct, nightLightSwitch: nlSwitch],
         "setLightStatus(br=${br},ct=${ct},nl=${nlSwitch})")

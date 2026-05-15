@@ -142,6 +142,7 @@ def _collect_per_file_rules():
         groovy_javadoc_terminator, bp18_null_guard, captureDiagnostics_presence,
         library_no_top_block_comment, direct_log_calls,
         bp24_state_switch_dead_branch, bp24_auto_on_guard_missing,
+        bp25_case_sensitivity,
     )
     rules = []
     for module in [
@@ -150,6 +151,7 @@ def _collect_per_file_rules():
         groovy_javadoc_terminator, bp18_null_guard, captureDiagnostics_presence,
         library_no_top_block_comment, direct_log_calls,
         bp24_state_switch_dead_branch, bp24_auto_on_guard_missing,
+        bp25_case_sensitivity,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

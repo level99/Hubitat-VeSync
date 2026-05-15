@@ -257,11 +257,15 @@ def setFanSpeed(speed){
 // VeSyncAirBaseV2 toggle_display: setDisplay {screenSwitch: int}
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
+    if (!requireNotNull(onOff, "setDisplay")) return
+    // BP25: normalize to lowercase before payload coercion.
+    // "ON" evaluates ("ON" == "on") as false → sends screenSwitch:0 (off) when intent was on.
+    String v = (onOff as String).toLowerCase()
+    Integer sw = (v == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${v})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
+        device.sendEvent(name:"displayOn", value: v)
+        logInfo "Display: ${v}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
@@ -271,11 +275,15 @@ def setDisplay(onOff){
 // VeSyncAirBaseV2 toggle_child_lock: setChildLock {childLockSwitch: int}
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${onOff})")
+    if (!requireNotNull(onOff, "setChildLock")) return
+    // BP25: normalize to lowercase before payload coercion.
+    // "ON" evaluates ("ON" == "on") as false → sends childLockSwitch:0 (unlocked) when intent was locked.
+    String v = (onOff as String).toLowerCase()
+    Integer sw = (v == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${v})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: onOff)
-        logInfo "Child lock: ${onOff}"
+        device.sendEvent(name:"childLock", value: v)
+        logInfo "Child lock: ${v}"
     } else {
         logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }
@@ -288,11 +296,15 @@ def setChildLock(onOff){
 // lightDetected attribute: whether ambient light is currently detected (passive read from status).
 def setLightDetection(onOff){
     logDebug "setLightDetection(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: v], "setLightDetection(${onOff})")
+    if (!requireNotNull(onOff, "setLightDetection")) return
+    // BP25: normalize to lowercase before payload coercion.
+    // "ON" evaluates ("ON" == "on") as false → sends lightDetectionSwitch:0 (off) when intent was on.
+    String v = (onOff as String).toLowerCase()
+    Integer sw = (v == "on") ? 1 : 0
+    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: sw], "setLightDetection(${v})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"lightDetection", value: onOff)
-        logInfo "Light detection: ${onOff}"
+        device.sendEvent(name:"lightDetection", value: v)
+        logInfo "Light detection: ${v}"
     } else {
         logError "Light detection write failed"; recordError("Light detection write failed", [method:"setLightDetection"])
     }

@@ -745,4 +745,40 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
         onReq != null
         onReq.data.switchIdx == 0
     }
+
+    // ---- BP25: setNightlight toggle path (nightlight-variant gate-guarded) ----
+
+    def "BP25: setNightlight('ON') toggle path sends nightLightSwitch:1, not 0 (BP25 regression guard)"() {
+        // Pre-fix: (onOff == "on") where onOff="ON" evaluates false → nlSwitch=0 (wrong).
+        // Post-fix: toLowerCase() normalizes "ON"→"on" → nlSwitch=1.
+        // setNightlight is gated behind isNightlightVariant(): requires state.deviceType == "LUH-M101S-WEUR".
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-M101S-WEUR"
+
+        when: "toggle-only path (no brightness arg)"
+        driver.setNightlight("ON")
+
+        then: "setNightLightStatus sent with nightLightSwitch:1 (on)"
+        def req = testParent.allRequests.find { it.method == "setNightLightStatus" }
+        req != null
+        req.data.nightLightSwitch == 1
+
+        and: "emitted nightlightOn event is 'on'"
+        lastEventValue("nightlightOn") == "on"
+    }
+
+    def "BP25: setNightlight('OFF') toggle path sends nightLightSwitch:0 (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-M101S-WEUR"
+
+        when:
+        driver.setNightlight("OFF")
+
+        then: "setNightLightStatus sent with nightLightSwitch:0 (off)"
+        def req = testParent.allRequests.find { it.method == "setNightLightStatus" }
+        req != null
+        req.data.nightLightSwitch == 0
+    }
 }

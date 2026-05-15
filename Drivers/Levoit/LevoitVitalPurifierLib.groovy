@@ -223,21 +223,23 @@ def setLevel(val) {
 def setSpeed(spd) {
     logDebug "setSpeed(${spd})"
     if (!requireNotNull(spd, "setSpeed")) return
-    if (spd=="off") return off()
-    if (spd=="sleep") { setMode("sleep"); device.sendEvent(name:"speed", value:"on"); return }
+    // BP25: normalize to lowercase so Rule Machine "OFF"/"SLEEP" route correctly.
+    String s = (spd as String).toLowerCase()
+    if (s == "off") return off()
+    if (s == "sleep") { setMode("sleep"); device.sendEvent(name:"speed", value:"on"); return }
 
     ensureSwitchOn()
 
     // setLevel establishes manual mode + speed atomically; no setMode("manual") pre-call needed (V2 quirk)
-    def lvl = mapSpeedToInteger(spd)
+    def lvl = mapSpeedToInteger(s)
     def ok = setSpeedLevel(lvl)
     if (ok) {
-        state.speed = spd
+        state.speed = s
         state.mode = "manual"
-        device.sendEvent(name:"speed", value: spd)
+        device.sendEvent(name:"speed", value: s)
         device.sendEvent(name:"mode", value: "manual")
         device.sendEvent(name:"petMode", value: "off")
-        logInfo "Speed: ${spd}"
+        logInfo "Speed: ${s}"
     }
 }
 
@@ -297,7 +299,9 @@ def setMode(mode) {
 
 def setPetMode(onOff) {
     if (!requireNotNull(onOff, "setPetMode")) return
-    setMode(onOff=="on" ? "pet" : "auto")
+    // BP25: normalize to lowercase before mode selection.
+    String v = (onOff as String).toLowerCase()
+    setMode(v == "on" ? "pet" : "auto")
 }
 
 def setAutoPreference(pref) {
@@ -317,24 +321,31 @@ def setRoomSize(sz) {
 def setChildLock(onOff) {
     logDebug "setChildLock(${onOff})"
     if (!requireNotNull(onOff, "setChildLock")) return
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    // Without this, "ON" bypasses the gate (gate compares against "on") AND the payload
+    // coercion evaluates ("ON" == "on") as false → sends childLockSwitch:0 (unlock) when
+    // the caller intended to lock. Both the gate and the coercion must see the same form.
+    String v = (onOff as String).toLowerCase()
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
-    if (device.currentValue("childLock") == onOff) return
-    def resp = hubBypass("setChildLock", [childLockSwitch: onOff=="on" ? 1:0], "setChildLock")
+    if (device.currentValue("childLock") == v) return
+    def resp = hubBypass("setChildLock", [childLockSwitch: v == "on" ? 1 : 0], "setChildLock")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: onOff)
-        logInfo "Child lock: ${onOff}"
+        device.sendEvent(name:"childLock", value: v)
+        logInfo "Child lock: ${v}"
     }
 }
 
 def setDisplay(onOff) {
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return
+    // BP25: normalize to lowercase before C3 gate and payload coercion (same rationale as setChildLock).
+    String v = (onOff as String).toLowerCase()
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
-    if (device.currentValue("display") == onOff) return
-    def resp = hubBypass("setDisplay", [screenSwitch: onOff=="on" ? 1:0], "setDisplay")
+    if (device.currentValue("display") == v) return
+    def resp = hubBypass("setDisplay", [screenSwitch: v == "on" ? 1 : 0], "setDisplay")
     if (httpOk(resp)) {
-        device.sendEvent(name:"display", value: onOff)
-        logInfo "Display: ${onOff}"
+        device.sendEvent(name:"display", value: v)
+        logInfo "Display: ${v}"
     }
 }
 

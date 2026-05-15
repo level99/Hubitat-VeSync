@@ -636,4 +636,38 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         onReq != null
         onReq.data.switchIdx == 0
     }
+
+    // ---- BP25: setNightlight (3-param: onOff, brightness, colorTemp) ----
+
+    def "BP25: setNightlight('ON') with no brightness sends nightLightSwitch:1 (not 0) (BP25 regression guard)"() {
+        // Pre-fix: (onOff == "on" && br > 0) where onOff="ON" evaluates false → nlSwitch=0 (wrong).
+        // Post-fix: toLowerCase() normalizes "ON"→"on" → on branch, br defaults to 100 → nlSwitch=1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setNightlight called with uppercase 'ON' and no brightness"
+        driver.setNightlight("ON")
+
+        then: "setLightStatus sent with nightLightSwitch:1 (on)"
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.nightLightSwitch == 1
+
+        and: "nightlightOn event emitted as 'on'"
+        lastEventValue("nightlightOn") == "on"
+    }
+
+    def "BP25: setNightlight('OFF') sends nightLightSwitch:0 and brightness:0 (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setNightlight("OFF")
+
+        then: "setLightStatus sent with nightLightSwitch:0 (off) and brightness:0"
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.nightLightSwitch == 0
+        req.data.brightness == 0
+    }
 }

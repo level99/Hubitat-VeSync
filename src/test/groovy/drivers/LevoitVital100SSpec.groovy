@@ -788,4 +788,53 @@ class LevoitVital100SSpec extends HubitatSpec {
         and: "logWarn fired with the method name"
         testLog.warns.any { it.contains("setRoomSize") }
     }
+
+    // ---- BP25: setPetMode (VitalPurifierLib shared) ----
+
+    def "BP25: setPetMode('ON') sends setPurifierMode with workMode:'pet', not 'auto' (BP25 regression guard)"() {
+        // Pre-fix: (onOff=="on") where onOff="ON" evaluates false → setMode("auto") instead of "pet".
+        // Post-fix: toLowerCase() normalizes "ON"→"on" → setMode("pet").
+        // setMode has an off-state guard; seed switch='on' so the guard passes.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setPetMode("ON")
+
+        then: "setPurifierMode sent with workMode:'pet' (not 'auto')"
+        def req = testParent.allRequests.find { it.method == "setPurifierMode" }
+        req != null
+        req.data.workMode == "pet"
+    }
+
+    def "BP25: setPetMode('OFF') sends setPurifierMode with workMode:'auto' (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setPetMode("OFF")
+
+        then: "setPurifierMode sent with workMode:'auto'"
+        def req = testParent.allRequests.find { it.method == "setPurifierMode" }
+        req != null
+        req.data.workMode == "auto"
+    }
+
+    def "BP25: setSpeed('OFF') routes to off() sending setSwitch powerSwitch:0 (BP25 regression guard)"() {
+        // Pre-fix: (spd=="off") where spd="OFF" evaluates false → proceeds to mapSpeedToInteger("OFF")
+        //          which returns a default/wrong speed level instead of powering off the device.
+        // Post-fix: toLowerCase() normalizes "OFF"→"off" → early return via off().
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setSpeed("OFF")
+
+        then: "setSwitch sent with powerSwitch:0 (device off command via off())"
+        def req = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 }
+        req != null
+        req.data.switchIdx == 0
+    }
 }

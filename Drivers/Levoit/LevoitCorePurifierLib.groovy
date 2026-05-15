@@ -57,9 +57,15 @@ def toggle() {
 
 def setDisplay(displayOn) {
     logDebug "setDisplay(${displayOn})"
+    // BP18: null-guard — Rule Machine passes null for blank parameter slots.
+    if (!requireNotNull(displayOn, "setDisplay")) return false
+    // BP25: normalize to lowercase before C3 gate so "ON"/"OFF" strings from Rule Machine
+    // are treated the same as "on"/"off". Without this, "ON" bypasses the gate AND the
+    // downstream payload coercion evaluates ("ON" == "on") as false → sends wrong boolean.
+    String v = (displayOn as String).toLowerCase()
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
-    if (device.currentValue("display") == displayOn) return
-    handleDisplayOn(displayOn)
+    if (device.currentValue("display") == v) return
+    handleDisplayOn(v)
 }
 
 def handlePower(on) {
@@ -119,6 +125,8 @@ def handleMode(mode) {
 def handleDisplayOn(displayOn)
 {
     logDebug "handleDisplayOn()"
+    // displayOn is expected to be pre-normalized to lowercase by the setDisplay caller.
+    // The payload coercion and event value both use it directly.
 
     def result = false
 
@@ -141,17 +149,22 @@ def handleDisplayOn(displayOn)
 def setChildLock(value) {
     // Core-line API uses child_lock (boolean); Vital-line API uses childLockSwitch (integer). Intentional divergence per pyvesync class hierarchy.
     logDebug "setChildLock(${value})"
+    // BP18: null-guard — Rule Machine passes null for blank parameter slots.
+    if (!requireNotNull(value, "setChildLock")) return false
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    // "ON" from Rule Machine bypasses the gate and inverts the payload without this guard.
+    String v = (value as String).toLowerCase()
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
-    if (device.currentValue("childLock") == value) return
+    if (device.currentValue("childLock") == v) return
     def result = false
     parent.sendBypassRequest(device, [
-                data: [ child_lock: (value == "on") ],
+                data: [ child_lock: (v == "on") ],
                 "method": "setChildLock",
                 "source": "APP"
             ]) { resp ->
         if (checkHttpResponse("setChildLock", resp)) {
-            device.sendEvent(name: "childLock", value: value)
-            logInfo "Child lock (Display Lock): ${value}"
+            device.sendEvent(name: "childLock", value: v)
+            logInfo "Child lock (Display Lock): ${v}"
             result = true
         }
     }

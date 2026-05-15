@@ -109,8 +109,11 @@ metadata {
 // Not extracted to the shared library because it is per-driver-only.
 def setLightDetection(onOff) {
     logDebug "setLightDetection(${onOff})"
-    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: onOff=="on" ? 1:0], "setLightDetection")
-    if (httpOk(resp)) device.sendEvent(name:"lightDetection", value: onOff)
+    if (!requireNotNull(onOff, "setLightDetection")) return
+    // BP25: normalize to lowercase before payload coercion.
+    String v = (onOff as String).toLowerCase()
+    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: v == "on" ? 1 : 0], "setLightDetection(${v})")
+    if (httpOk(resp)) device.sendEvent(name:"lightDetection", value: v)
 }
 
 def applyStatus(status) {

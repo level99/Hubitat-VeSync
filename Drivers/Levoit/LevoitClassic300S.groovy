@@ -204,12 +204,15 @@ def setDisplay(onOff){
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
     if (!requireNotNull(onOff, "setAutoStop")) return false
-    if (device.currentValue("autoStopEnabled") == onOff) return  // C3 state-change gate
-    Boolean v = (onOff == "on")
-    def resp = hubBypass("setAutomaticStop", [enabled: v], "setAutomaticStop(${onOff})")
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    // "ON" from Rule Machine bypasses the gate and evaluates ("ON"=="on") as false
+    // → sets enabled:false (disables auto-stop) when the intent was to enable it.
+    String v = (onOff as String).toLowerCase()
+    if (device.currentValue("autoStopEnabled") == v) return  // C3 state-change gate
+    def resp = hubBypass("setAutomaticStop", [enabled: (v == "on")], "setAutomaticStop(${v})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: onOff)
-        logInfo "Auto-stop: ${onOff}"
+        device.sendEvent(name:"autoStopEnabled", value: v)
+        logInfo "Auto-stop: ${v}"
     } else {
         logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
     }
