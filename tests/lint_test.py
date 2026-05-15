@@ -2111,17 +2111,22 @@ class TestRule28CaptureDiagnosticsPresence:
         findings = run_rule(check_rule28_capturediagnostics_presence, self.MISSING_COMMAND, "LevoitVital200S")
         rule_ids_found = [f['rule_id'] for f in findings]
         assert "RULE28_missing_command_captureDiagnostics" in rule_ids_found
+        assert any(f['severity'] == 'FAIL' for f in findings)
 
     def test_missing_attribute_fails(self):
         findings = run_rule(check_rule28_capturediagnostics_presence, self.MISSING_ATTRIBUTE, "LevoitVital200S")
         rule_ids_found = [f['rule_id'] for f in findings]
         assert "RULE28_missing_attribute_diagnostics" in rule_ids_found
+        assert any(f['severity'] == 'FAIL' for f in findings)
 
     def test_wrong_attribute_type_fails(self):
-        # attribute "diagnostics", "String" (capital S) must fail — Hubitat needs lowercase "string"
+        # attribute "diagnostics", "String" (capital S) must fail — Hubitat needs lowercase "string".
+        # ATTR_RE is case-sensitive by design; re.IGNORECASE was removed because Hubitat's
+        # attribute type enum requires the exact literal "string".
         findings = run_rule(check_rule28_capturediagnostics_presence, self.WRONG_ATTR_TYPE, "LevoitVital200S")
         rule_ids_found = [f['rule_id'] for f in findings]
         assert "RULE28_missing_attribute_diagnostics" in rule_ids_found
+        assert any(f['severity'] == 'FAIL' for f in findings)
 
     def test_not_checked_for_non_groovy(self):
         # Python files, markdown, etc. must not be checked

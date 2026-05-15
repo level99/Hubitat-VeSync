@@ -31,7 +31,7 @@ so the contributor knows exactly which piece is missing.
 import re
 from pathlib import Path
 
-from lint_rules._helpers import is_library_file
+from lint_rules._helpers import is_library_file, make_finding
 
 
 DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
@@ -47,20 +47,7 @@ OUT_OF_SCOPE_BASENAMES = {
 # Patterns for the three required declarations
 INCLUDE_RE  = re.compile(r'(?m)^#include\s+level99\.LevoitDiagnostics\s*$')
 COMMAND_RE  = re.compile(r'''command\s+["']captureDiagnostics["']''')
-ATTR_RE     = re.compile(r'''attribute\s+["']diagnostics["']\s*,\s*["']string["']''', re.IGNORECASE)
-
-
-def _making_finding(rule_id, title, file_str, why, fix):
-    return {
-        "severity": "FAIL",
-        "rule_id": rule_id,
-        "title": title,
-        "file": file_str,
-        "line": 0,
-        "context": "",
-        "why": why,
-        "fix": fix,
-    }
+ATTR_RE     = re.compile(r'''attribute\s+["']diagnostics["']\s*,\s*["']string["']''')
 
 
 def check_rule28_capturediagnostics_presence(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
@@ -93,10 +80,13 @@ def check_rule28_capturediagnostics_presence(path, raw_lines, cleaned_lines, raw
 
     # Check 1: #include level99.LevoitDiagnostics
     if not INCLUDE_RE.search(raw_text):
-        findings.append(_making_finding(
+        findings.append(make_finding(
+            severity='FAIL',
             rule_id="RULE28_missing_include_LevoitDiagnostics",
             title="Missing '#include level99.LevoitDiagnostics' directive (Phase 5)",
-            file_str=file_rel,
+            file_rel=file_rel,
+            lineno=0,
+            raw_lines=[],
             why=(
                 "Phase 5 (v2.4) requires every Levoit driver to include the LevoitDiagnostics "
                 "library so that captureDiagnostics() and recordError() are available at "
@@ -115,10 +105,13 @@ def check_rule28_capturediagnostics_presence(path, raw_lines, cleaned_lines, raw
 
     # Check 2: command "captureDiagnostics"
     if not COMMAND_RE.search(raw_text):
-        findings.append(_making_finding(
+        findings.append(make_finding(
+            severity='FAIL',
             rule_id="RULE28_missing_command_captureDiagnostics",
             title="Missing 'command \"captureDiagnostics\"' in metadata block (Phase 5)",
-            file_str=file_rel,
+            file_rel=file_rel,
+            lineno=0,
+            raw_lines=[],
             why=(
                 "Phase 5 (v2.4) requires every Levoit driver to expose captureDiagnostics "
                 "as a Hubitat command so users can trigger it from the device page UI. "
@@ -135,11 +128,16 @@ def check_rule28_capturediagnostics_presence(path, raw_lines, cleaned_lines, raw
         ))
 
     # Check 3: attribute "diagnostics", "string"
+    # Note: case-sensitive match — Hubitat's attribute type enum requires lowercase "string",
+    # not "String". ATTR_RE intentionally has no re.IGNORECASE.
     if not ATTR_RE.search(raw_text):
-        findings.append(_making_finding(
+        findings.append(make_finding(
+            severity='FAIL',
             rule_id="RULE28_missing_attribute_diagnostics",
             title="Missing 'attribute \"diagnostics\", \"string\"' in metadata block (Phase 5)",
-            file_str=file_rel,
+            file_rel=file_rel,
+            lineno=0,
+            raw_lines=[],
             why=(
                 "Phase 5 (v2.4) requires every Levoit driver to declare the 'diagnostics' "
                 "string attribute so that Hubitat stores and displays the captureDiagnostics() "
