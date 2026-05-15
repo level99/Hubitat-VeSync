@@ -319,20 +319,54 @@ class LevoitCore200SSpec extends HubitatSpec {
     // SwitchLevel 2-arg overload
     // -------------------------------------------------------------------------
 
-    def "setLevel(50) 1-arg sends Core-line setLevel API call"() {
-        // Baseline: confirm 1-arg setLevel routes to the speed API.
-        given: "device is on"
+    def "setLevel(20) maps to speed 1 (low band: pct < 33)"() {
+        // Regression guard: before the Fix 3 band-mapping fix, mapSpeedToInteger("1") returned 3
+        // (default branch) so setLevel(20) → setLevel(50) → setLevel(80) all sent speed 3 (high).
+        given: "device is on and in manual mode"
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
 
-        when: "setLevel(50) is called -- maps to speed 2 (33 <= 50 < 66)"
-        driver.setLevel(50)
+        when: "setLevel(20) is called -- falls in pct < 33 band → speed 1"
+        driver.setLevel(20)
 
-        then: "Core-line setLevel request was sent with {level, id, type}"
+        then: "Core-line setLevel request was sent with level=1"
         noExceptionThrown()
         def req = testParent.allRequests.find { it.method == "setLevel" }
         req != null
-        req.data.containsKey("level")
+        req.data.level == 1
+    }
+
+    def "setLevel(50) maps to speed 2 (mid band: 33 <= pct < 66)"() {
+        given: "device is on and in manual mode"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when: "setLevel(50) is called -- 33 <= 50 < 66 → speed 2"
+        driver.setLevel(50)
+
+        then: "Core-line setLevel request was sent with level=2"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.level == 2
+    }
+
+    def "setLevel(80) maps to speed 3 (high band: pct >= 66)"() {
+        given: "device is on and in manual mode"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when: "setLevel(80) is called -- pct >= 66 → speed 3"
+        driver.setLevel(80)
+
+        then: "Core-line setLevel request was sent with level=3"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.level == 3
     }
 
     def "setLevel(50, 30) 2-arg form delegates to 1-arg (SwitchLevel standard signature)"() {
@@ -341,6 +375,7 @@ class LevoitCore200SSpec extends HubitatSpec {
         given: "device is on"
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
 
         when: "setLevel is called with two args (level=50, duration=30)"
         driver.setLevel(50, 30)
@@ -349,7 +384,40 @@ class LevoitCore200SSpec extends HubitatSpec {
         noExceptionThrown()
         def req = testParent.allRequests.find { it.method == "setLevel" }
         req != null
-        req.data.containsKey("level")
+        req.data.level == 2   // 50 → speed 2
+    }
+
+    def "BP18: setLevel(null) does not throw and does not send a speed command"() {
+        // Regression guard: before this fix, null < 33 threw NPE (Groovy null arithmetic),
+        // which the Hubitat sandbox swallowed silently. Now coerces null → 0 → off() path.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(null)
+
+        then: "no NPE thrown"
+        noExceptionThrown()
+
+        and: "no setLevel (speed) API call was made — null coerces to 0, routes to off()"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
+
+    def "setSpeed emits named speed attribute ('low'/'medium'/'high'), not integer string"() {
+        // Regression guard for Fix 3 secondary bug: setLevel→setSpeed passed integer 1/2/3;
+        // state.speed and speed attribute were set to "1"/"2"/"3" instead of "low"/"medium"/"high".
+        given: "device is on and in manual mode"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when: "setSpeed(1) is called (as setLevel would invoke it internally)"
+        driver.setSpeed(1)
+
+        then: "speed attribute is emitted as 'low', not '1'"
+        def speedEvt = testDevice.events.findAll { it.name == "speed" }.last()
+        speedEvt.value == "low"
     }
 
     // -------------------------------------------------------------------------

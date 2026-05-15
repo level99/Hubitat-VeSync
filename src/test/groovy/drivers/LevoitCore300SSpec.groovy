@@ -519,4 +519,25 @@ class LevoitCore300SSpec extends HubitatSpec {
         and: "a warning was logged mentioning the invalid mode"
         testLog.warns.any { it.contains("invalid mode") || it.contains("badvalue") }
     }
+
+    // -------------------------------------------------------------------------
+    // BP18 regression guard: setLevel(null) does not throw NPE
+    // -------------------------------------------------------------------------
+
+    def "BP18: setLevel(null) does not throw and does not send a speed command (Core 300S)"() {
+        // Regression guard: before this fix, null < 33 threw NPE (Groovy null arithmetic),
+        // which the Hubitat sandbox swallowed silently. Now coerces null → 0 → off() path.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(null)
+
+        then: "no NPE thrown"
+        noExceptionThrown()
+
+        and: "no setLevel (speed) API call was made — null coerces to 0, routes to off()"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
 }

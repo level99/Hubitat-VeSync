@@ -157,6 +157,8 @@ def setLevel(level, duration) {
 
 def setLevel(level) {
     logDebug "setLevel(${level})"
+    // BP18: null-guard converts null → 0 (null < N throws NPE; null from blank RM param slot).
+    if (level == null) { logWarn "setLevel called with null (likely empty Rule Machine parameter)"; return }
     if (level < 10) { setNightLight("off") }
     else if (level > 75) { setNightLight("on") }
     else setNightLight("dim");

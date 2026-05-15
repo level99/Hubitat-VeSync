@@ -313,18 +313,27 @@ def resetFilter(){
 
 // ---------- Timer ----------
 // VeSyncAirBaseV2 set_timer/clear_timer parity.
-// Timer shape: {action: 'on'|'off', total: <seconds>}
-// action: what the device does when the timer fires (default "off").
-// Cookie-cutter port from Tower Fan timer pattern (Phase 5b-hardened).
+// EverestAir is VeSyncAirBaseV2 class — uses addTimerV2 / delTimerV2 API names
+// and the PurifierV2TimerPayloadData shape, same as Vital 200S / Vital 100S.
+// Timer shape (set): {enabled:true, startAct:[{type:"powerSwitch", act:0|1}], tmgEvt:{clkSec:<seconds>}}
+// Timer shape (cancel): {id: <timerId>, subDeviceNo: 0}
+// action parameter: "off" (act:0, device powers off when timer fires) or "on" (act:1).
+// The Tower Fan uses setTimer/clearTimer (different device class) -- do NOT use those names here.
 def setTimer(seconds, action="off"){
     if (!requireNotNull(seconds, "setTimer")) return
     int secs = seconds as Integer
     if (secs <= 0) { cancelTimer(); return }
     // action defaults to "off" in the Groovy signature; only null-guard when explicitly null
     String act = (action != null) ? (action as String).toLowerCase() : "off"
-    if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"setTimer"]); return }
+    if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"addTimerV2"]); return }
     logDebug "setTimer(${secs}s, action=${act})"
-    def resp = hubBypass("setTimer", [action: act, total: secs], "setTimer(${secs}s,${act})")
+    int actVal = (act == "on") ? 1 : 0
+    def data = [
+        enabled: true,
+        startAct: [[type: "powerSwitch", act: actVal]],
+        tmgEvt: [clkSec: secs]
+    ]
+    def resp = hubBypass("addTimerV2", data, "addTimerV2(${secs}s,${act})")
     if (httpOk(resp)) {
         // Capture timer ID from response so cancelTimer can reference it
         def tid = resp?.data?.result?.result?.id ?: resp?.data?.result?.id
@@ -333,9 +342,9 @@ def setTimer(seconds, action="off"){
         } else {
             logDebug "setTimer: response did not include timer id -- cancelTimer will use state.timerId if known"
         }
-        logInfo "Timer set: ${act} in ${secs}s (id=${state.timerId})"
+        logInfo "Timer set: power ${act} in ${secs}s (id=${state.timerId})"
     } else {
-        logError "Timer set failed"; recordError("Timer set failed", [method:"setTimer"])
+        logError "Timer set failed"; recordError("Timer set failed", [method:"addTimerV2"])
     }
 }
 
@@ -345,12 +354,12 @@ def cancelTimer(){
         logDebug "cancelTimer: no active timer id in state -- no-op"
         return
     }
-    def resp = hubBypass("clearTimer", [id: state.timerId], "clearTimer(id=${state.timerId})")
+    def resp = hubBypass("delTimerV2", [id: state.timerId, subDeviceNo: 0], "delTimerV2(id=${state.timerId})")
     if (httpOk(resp)) {
         state.remove("timerId")
         logInfo "Timer cancelled"
     } else {
-        logError "Timer cancel failed"; recordError("Timer cancel failed", [method:"clearTimer"])
+        logError "Timer cancel failed"; recordError("Timer cancel failed", [method:"delTimerV2"])
     }
 }
 

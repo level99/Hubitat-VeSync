@@ -702,6 +702,78 @@ class LevoitVital200SSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setAutoPreference") }
     }
 
+    // -------------------------------------------------------------------------
+    // Fix 1 regression guard: setAutoPreference field name (autoPreference, not autoPreferenceType)
+    // -------------------------------------------------------------------------
+
+    def "setAutoPreference('default') sends payload with field 'autoPreference' NOT 'autoPreferenceType'"() {
+        // Regression guard: before this fix, the driver sent {autoPreferenceType: pref, ...}
+        // which the VeSync cloud silently accepted but applied no preference change.
+        // pyvesync VeSyncAirBaseV2.set_auto_preference() sends {'autoPreference': preference, ...}.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setAutoPreference("default")
+
+        then: "setAutoPreference API call was made"
+        def req = testParent.allRequests.find { it.method == "setAutoPreference" }
+        req != null
+
+        and: "payload contains 'autoPreference' (correct pyvesync field name)"
+        req.data.containsKey("autoPreference")
+        req.data.autoPreference == "default"
+
+        and: "payload does NOT contain 'autoPreferenceType' (wrong field name from before fix)"
+        !req.data.containsKey("autoPreferenceType")
+    }
+
+    def "setRoomSize(400) sends payload with field 'autoPreference' NOT 'autoPreferenceType'"() {
+        // Same regression guard as above — setRoomSize calls setAutoPreference endpoint with
+        // the current preference type and new room size. Must use 'autoPreference', not 'autoPreferenceType'.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.autoPreference = "efficient"
+
+        when:
+        driver.setRoomSize(400)
+
+        then: "setAutoPreference API call was made (setRoomSize uses the same endpoint)"
+        def req = testParent.allRequests.find { it.method == "setAutoPreference" }
+        req != null
+
+        and: "payload contains 'autoPreference' (not 'autoPreferenceType')"
+        req.data.containsKey("autoPreference")
+        req.data.autoPreference == "efficient"   // reads from state.autoPreference
+        req.data.roomSize == 400
+
+        and: "payload does NOT contain 'autoPreferenceType'"
+        !req.data.containsKey("autoPreferenceType")
+    }
+
+    // -------------------------------------------------------------------------
+    // BP18 regression guard: setLevel(null) does not throw NPE
+    // -------------------------------------------------------------------------
+
+    def "BP18: setLevel(null) does not throw and does not send a speed command"() {
+        // Regression guard: before this fix, null < 20 threw NPE (Groovy null arithmetic),
+        // which the Hubitat sandbox swallowed silently. Now routes to off() via 0 coercion.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(null)
+
+        then: "no NPE thrown"
+        noExceptionThrown()
+
+        and: "no setLevel (speed) API call was made — null routes to off() path"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
+
     def "BP18: setPetMode(null) returns silently with logWarn (no API call)"() {
         when:
         driver.setPetMode(null)

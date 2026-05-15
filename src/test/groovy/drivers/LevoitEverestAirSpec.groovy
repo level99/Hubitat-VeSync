@@ -36,9 +36,12 @@ import support.TestParent
  *   Vent angle        -- fanRotateAngle passive read -> ventAngle attribute
  *                     -- no setVentAngle command (no write path in pyvesync)
  *   Reset filter      -- resetFilter() sends resetFilter {}
- *   Timer set/cancel  -- setTimer(60,"off") sends {action:'off',total:60}; secs<=0 routes to
- *                        cancelTimer; null seconds rejected (BP18); cancelTimer sends clearTimer
- *                        with state.timerId; no-op when no timerId in state
+ *   Timer set/cancel  -- setTimer(3600,"off") sends addTimerV2 with V2 payload shape
+ *                        {enabled, startAct:[{type:"powerSwitch", act:0}], tmgEvt:{clkSec:N}};
+ *                        action "on" → act:1; secs<=0 routes to cancelTimer;
+ *                        null seconds rejected (BP18); cancelTimer sends delTimerV2
+ *                        with {id, subDeviceNo:0}; no-op when no timerId in state.
+ *                        Regression guard: Tower Fan API names (setTimer/clearTimer) must NOT appear.
  */
 class LevoitEverestAirSpec extends HubitatSpec {
 
@@ -594,18 +597,47 @@ class LevoitEverestAirSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Timer set and cancel (pyvesync VeSyncAirBaseV2 set_timer/clear_timer parity)
+    // Timer set and cancel — EverestAir is VeSyncAirBaseV2, uses addTimerV2 / delTimerV2
+    // NOT setTimer / clearTimer (Tower Fan / Core line shape).
+    // Payload shape (set): {enabled:true, startAct:[{type:"powerSwitch", act:0|1}], tmgEvt:{clkSec:<seconds>}}
+    // Payload shape (cancel): {id: <timerId>, subDeviceNo: 0}
     // -------------------------------------------------------------------------
 
-    def "setTimer(60, 'off') sends setTimer with {action:'off', total:60}"() {
+    def "setTimer(3600, 'off') sends addTimerV2 with V2 payload shape (NOT Tower Fan setTimer)"() {
+        // Regression guard: before this fix, setTimer sent 'setTimer' + {action, total} — Tower Fan
+        // shape — which VeSyncAirBaseV2 firmware silently rejects. Must now be addTimerV2.
         when:
-        driver.setTimer(60, "off")
+        driver.setTimer(3600, "off")
 
-        then: "setTimer request has correct payload shape for EverestAir"
-        def req = testParent.allRequests.find { it.method == "setTimer" }
+        then: "addTimerV2 request was sent (not the old Tower Fan 'setTimer' API name)"
+        def req = testParent.allRequests.find { it.method == "addTimerV2" }
         req != null
-        req.data.action == "off"
-        req.data.total == 60
+
+        and: "payload matches PurifierV2TimerPayloadData shape"
+        req.data.enabled == true
+        req.data.startAct instanceof List
+        req.data.startAct[0].type == "powerSwitch"
+        req.data.startAct[0].act == 0             // "off" action → act:0
+        req.data.tmgEvt instanceof Map
+        req.data.tmgEvt.clkSec == 3600
+
+        and: "Tower Fan payload fields are absent"
+        !req.data.containsKey("action")
+        !req.data.containsKey("total")
+
+        and: "Tower Fan API name was NOT used"
+        testParent.allRequests.find { it.method == "setTimer" } == null
+    }
+
+    def "setTimer(60, 'on') sends addTimerV2 with act:1 (power-on action)"() {
+        when:
+        driver.setTimer(60, "on")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "addTimerV2" }
+        req != null
+        req.data.startAct[0].act == 1             // "on" action → act:1
+        req.data.tmgEvt.clkSec == 60
     }
 
     def "setTimer(0, 'off') routes to cancelTimer (secs <= 0 short-circuit)"() {
@@ -615,9 +647,9 @@ class LevoitEverestAirSpec extends HubitatSpec {
         when:
         driver.setTimer(0, "off")
 
-        then: "clearTimer API call was made (not setTimer)"
-        testParent.allRequests.find { it.method == "clearTimer" } != null
-        testParent.allRequests.find { it.method == "setTimer" }   == null
+        then: "delTimerV2 API call was made (not addTimerV2)"
+        testParent.allRequests.find { it.method == "delTimerV2" } != null
+        testParent.allRequests.find { it.method == "addTimerV2" } == null
     }
 
     def "setTimer(null, 'off') is rejected with logWarn and no API call (BP18)"() {
@@ -626,20 +658,29 @@ class LevoitEverestAirSpec extends HubitatSpec {
 
         then:
         noExceptionThrown()
-        testParent.allRequests.findAll { it.method == "setTimer" }.isEmpty()
+        testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
+        testParent.allRequests.findAll { it.method == "setTimer" }.isEmpty()   // guard: old API name also absent
     }
 
-    def "cancelTimer with state.timerId set sends clearTimer with {id} and removes state.timerId"() {
+    def "cancelTimer with state.timerId set sends delTimerV2 with {id, subDeviceNo:0} and removes state.timerId"() {
+        // Regression guard: before fix, cancelTimer sent 'clearTimer' + {id} — Tower Fan shape.
+        // Must now be delTimerV2 + {id, subDeviceNo: 0}.
         given: "a timer id is stored in state"
         state.timerId = 42
 
         when:
         driver.cancelTimer()
 
-        then: "clearTimer was called with the stored id"
-        def req = testParent.allRequests.find { it.method == "clearTimer" }
+        then: "delTimerV2 was called (not the old Tower Fan 'clearTimer' API name)"
+        def req = testParent.allRequests.find { it.method == "delTimerV2" }
         req != null
+
+        and: "payload contains id and subDeviceNo:0"
         req.data.id == 42
+        req.data.subDeviceNo == 0
+
+        and: "Tower Fan API name was NOT used"
+        testParent.allRequests.find { it.method == "clearTimer" } == null
     }
 
     def "cancelTimer with no state.timerId is a no-op (no API call)"() {
@@ -649,7 +690,8 @@ class LevoitEverestAirSpec extends HubitatSpec {
         when:
         driver.cancelTimer()
 
-        then: "no clearTimer API call was made"
+        then: "no delTimerV2 API call was made"
+        testParent.allRequests.findAll { it.method == "delTimerV2" }.isEmpty()
         testParent.allRequests.findAll { it.method == "clearTimer" }.isEmpty()
         noExceptionThrown()
     }

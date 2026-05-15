@@ -25,6 +25,13 @@ SOFTWARE.
 
 // History:
 //
+// 2026-05-14: v2.5  Fix: setLevel(N) band-mapping bug — all percentages landed on speed 3 (high)
+//                  because mapSpeedToInteger didn't handle integer-string inputs "1"/"2"/"3" from
+//                  setLevel's internal setSpeed() call. Added cases for "1"/"2"/"3" matching Core
+//                  300S canonical pattern; added integer-string remap in setSpeed() to emit named
+//                  speed attributes ("low"/"medium"/"high") not "1"/"2"/"3".
+//                  Fix: setLevel(null) NPE (BP18) — added Math.max/min/(val as Integer)?:0 coercion
+//                  before null-unsafe arithmetic comparisons.
 // 2026-05-03: v2.5  Migrated to LevoitCorePurifier shared library (Phase 2, Round 6).
 //                  Removed 14 shared methods now provided by LevoitCorePurifierLib.
 //                  BP24-A fix: cycleSpeed() dead state.switch branch replaced with
@@ -188,19 +195,21 @@ def setLevel(value, duration)
 def setLevel(value)
 {
     logDebug "setLevel $value"
+    // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
+    Integer pct = Math.max(0, Math.min(100, (value as Integer) ?: 0))
     // SwitchLevel convention: setLevel(0) means off (Z-Wave dimmer platform expectation).
-    if (value == 0) { off(); return }
+    if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off (SwitchLevel capability convention).
     // state.turningOn guard prevents recursive on()->setSpeed()->setLevel() loop.
     if (!state.turningOn && device.currentValue("switch") != "on") on()
     def speed = 0
     setMode("manual") // always manual if setLevel() cmd was called
 
-    if(value < 33) speed = 1
-    if(value >= 33 && value < 66) speed = 2
-    if(value >= 66) speed = 3
+    if(pct < 33) speed = 1
+    if(pct >= 33 && pct < 66) speed = 2
+    if(pct >= 66) speed = 3
 
-    device.sendEvent(name: "level", value: value)
+    device.sendEvent(name: "level", value: pct)
     setSpeed(speed)
 }
 
@@ -208,6 +217,10 @@ def setSpeed(speed) {
     logDebug "setSpeed(${speed})"
     if (!requireNotNull(speed, "setSpeed")) return false                        // BP18 null-guard
     String s = (speed as String).toLowerCase()
+    // Remap integer-string values from setLevel() path to named speed strings.
+    // setLevel() passes Integer 1/2/3; (speed as String) yields "1"/"2"/"3".
+    // Emit named speeds ("low"/"medium"/"high") for attribute consistency.
+    if (s in ["1", "2", "3"]) s = mapIntegerStringToSpeed(s)
     // Power short-circuits BEFORE ensureSwitchOn — setSpeed("off") must NOT auto-on first
     if (s == "off") { off(); return }
     ensureSwitchOn()                                                             // BP24-B auto-on (after short-circuit)
@@ -255,7 +268,16 @@ def setMode(mode) {
 }
 
 def mapSpeedToInteger(speed) {
-    return (speed == "low") ? 1 : ( (speed == "medium") ? 2 : 3)
+    switch(speed)
+    {
+        case "1":
+        case "low":
+            return 1;
+        case "2":
+        case "medium":
+            return 2;
+    }
+    return 3;
 }
 
 def mapIntegerStringToSpeed(speed) {

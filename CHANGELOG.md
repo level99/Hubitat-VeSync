@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Vital 100S/200S `setAutoPreference` and `setRoomSize` silently failing since v2.1.** The driver sent the wrong field name (`autoPreferenceType`) to the VeSync cloud; the cloud silently accepted the request but applied no change. Both commands now send the correct field name (`autoPreference`) matching what the VeSync cloud expects.
+- **EverestAir `setTimer` / `cancelTimer` silently failing since v2.5.** The timer commands were ported from Tower Fan and sent the Tower Fan API names (`setTimer` / `clearTimer`) and payload shape (`{action, total}`) to the EverestAir. The EverestAir requires the V2 purifier API names (`addTimerV2` / `delTimerV2`) and V2 payload shape (`{enabled, startAct, tmgEvt}` / `{id, subDeviceNo}`). Timer scheduling now works correctly. User-facing `setTimer(seconds, action)` signature is unchanged.
+- **Core 200S `setLevel(N)` always set the device to high speed regardless of percentage.** `setLevel(20)`, `setLevel(50)`, and `setLevel(80)` all produced speed 3 (high) because the speed-band selection logic only matched named speed strings (`"low"`, `"medium"`) — not the numeric values that `setLevel`'s internal speed call produces. The missing cases are now handled correctly, and speed attributes emit `"low"`/`"medium"`/`"high"` as expected. Core 300S/400S/600S were unaffected.
+- **`setLevel(null)` from Rule Machine no longer silently fails.** Blank parameter slots in Rule Machine "Set Level" actions threw an internal null-pointer exception that the Hubitat sandbox swallowed — the user saw no log entry and no attribute change. The blank-slot path is now silently treated as `setLevel(0)` (which routes to `off()` per the SwitchLevel platform convention). Core 200S Light additionally logs a warning, since its `setLevel` maps to night-light modes rather than `off()`. Affects Core 200S/300S/400S/600S, Vital 100S/200S, and Core 200S Light.
+
 ## [2.5] - 2026-05-04
 
 ### Fixed

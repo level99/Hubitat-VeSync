@@ -193,19 +193,21 @@ def setLevel(val, duration) {
 
 // SwitchLevel convention: setLevel(0) turns the device off (matches Z-Wave dimmer platform expectation).
 // BP23: setLevel(N>0) auto-turns-on when switch is off (SwitchLevel capability convention).
+// BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
 def setLevel(val) {
     logDebug "setLevel $val"
-    if (val == 0) { off(); return }
+    Integer pct = Math.max(0, Math.min(100, (val as Integer) ?: 0))
+    if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off.
     // state.turningOn is set by on() while configureOnState() runs async;
     // skip the redundant on() call if a turn-on cycle is already in flight.
     ensureSwitchOn()
     Integer lvl
-    if (val < 20) lvl=1
-    else if (val < 40) lvl=2
-    else if (val < 60) lvl=3
+    if (pct < 20) lvl=1
+    else if (pct < 40) lvl=2
+    else if (pct < 60) lvl=3
     else lvl=4
-    sendEvent(name:"level", value: val)
+    sendEvent(name:"level", value: pct)
     def ok = setSpeedLevel(lvl)
     if (ok) {
         // setLevel establishes manual mode + speed atomically (V2 quirk); emit mode events here.
@@ -214,7 +216,7 @@ def setLevel(val) {
         state.mode = "manual"
         device.sendEvent(name:"mode", value: "manual")
         device.sendEvent(name:"petMode", value: "off")
-        logInfo "Level: ${val}% (fan level ${lvl})"
+        logInfo "Level: ${pct}% (fan level ${lvl})"
     }
 }
 
@@ -301,14 +303,14 @@ def setPetMode(onOff) {
 def setAutoPreference(pref) {
     logDebug "setAutoPreference(${pref})"
     if (!requireNotNull(pref, "setAutoPreference")) return
-    def resp = hubBypass("setAutoPreference", [autoPreferenceType: pref, roomSize: state.roomSize ?: 600], "setAutoPreference")
+    def resp = hubBypass("setAutoPreference", [autoPreference: pref, roomSize: state.roomSize ?: 600], "setAutoPreference")
     if (httpOk(resp)) { state.autoPreference = pref; device.sendEvent(name:"autoPreference", value: pref) }
 }
 
 def setRoomSize(sz) {
     logDebug "setRoomSize(${sz})"
     if (!requireNotNull(sz, "setRoomSize")) return
-    def resp = hubBypass("setAutoPreference", [autoPreferenceType: state.autoPreference ?: "default", roomSize: sz], "setAutoPreference(roomSize)")
+    def resp = hubBypass("setAutoPreference", [autoPreference: state.autoPreference ?: "default", roomSize: sz], "setAutoPreference(roomSize)")
     if (httpOk(resp)) { state.roomSize = sz as Integer; device.sendEvent(name:"roomSize", value: sz as Integer) }
 }
 

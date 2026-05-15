@@ -214,20 +214,22 @@ def setLevel(value, duration)
 def setLevel(value)
 {
     logDebug "setLevel $value"
+    // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
+    Integer pct = Math.max(0, Math.min(100, (value as Integer) ?: 0))
     // SwitchLevel convention: setLevel(0) means off (Z-Wave dimmer platform expectation).
-    if (value == 0) { off(); return }
+    if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off (SwitchLevel capability convention).
     // state.turningOn guard prevents recursive on()->setSpeed()->setLevel() loop.
     if (!state.turningOn && device.currentValue("switch") != "on") on()
     def speed = 0
     setMode("manual") // always manual if setLevel() cmd was called
 
-    if(value < 25) speed = 1
-    if(value >= 25 && value < 50) speed = 2
-    if(value >= 50 && value < 75) speed = 3
-    if(value >= 75) speed = 4
+    if(pct < 25) speed = 1
+    if(pct >= 25 && pct < 50) speed = 2
+    if(pct >= 50 && pct < 75) speed = 3
+    if(pct >= 75) speed = 4
 
-    device.sendEvent(name: "level", value: value)
+    device.sendEvent(name: "level", value: pct)
     setSpeed(speed)
 }
 

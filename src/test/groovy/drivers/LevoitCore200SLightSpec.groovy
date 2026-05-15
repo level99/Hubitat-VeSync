@@ -213,4 +213,29 @@ class LevoitCore200SLightSpec extends HubitatSpec {
         req != null
         req.data.night_light == "on"
     }
+
+    // -------------------------------------------------------------------------
+    // BP18 regression guard: setLevel(null) does not throw NPE
+    // -------------------------------------------------------------------------
+
+    def "BP18: setLevel(null) does not throw and logs a warn (Core 200S Light)"() {
+        // Regression guard: before this fix, null < 10 threw NPE (Groovy null arithmetic),
+        // which the Hubitat sandbox swallowed silently. Core 200S Light's setLevel routing
+        // (to setNightLight on/off/dim) has different semantics than the purifier's off() path,
+        // so we use an explicit null early-return with a logWarn instead of the coerce-to-0 idiom.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setLevel(null)
+
+        then: "no NPE thrown"
+        noExceptionThrown()
+
+        and: "no setNightLight API call was made"
+        testParent.allRequests.findAll { it.method == "setNightLight" }.isEmpty()
+
+        and: "a warning was logged"
+        testLog.warns.any { it.contains("setLevel") }
+    }
 }
