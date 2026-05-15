@@ -32,7 +32,7 @@ if a future driver genuinely needs an ungated log call (document the reason).
 import re
 from pathlib import Path
 
-from lint_rules._helpers import is_library_file
+from lint_rules._helpers import is_library_file, make_finding
 
 
 # ---------------------------------------------------------------------------
@@ -67,16 +67,7 @@ def _context(lines, lineno, window=1):
 
 
 def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": str(path.relative_to(rel_base)).replace('\\', '/'),
-        "line": lineno,
-        "context": _context(lines, lineno),
-        "why": why,
-        "fix": fix,
-    }
+    return make_finding(severity, rule_id, title, str(path.relative_to(rel_base)).replace('\\', '/'), lineno, lines, why, fix)
 
 
 def check_rule30_direct_log_in_driver(path, raw_lines, cleaned_lines, raw_text, config, rel_base):

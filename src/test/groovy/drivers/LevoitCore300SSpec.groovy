@@ -612,4 +612,39 @@ class LevoitCore300SSpec extends HubitatSpec {
         then: "no API call was made"
         testParent.allRequests.find { it.method == "setDisplay" } == null
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #26: safeIntArg regression — non-numeric RM inputs must not throw
+    // -------------------------------------------------------------------------
+
+    def "BP26: setTimer('') does not throw on empty-string input from Rule Machine (Core 300S)"() {
+        // Before BP26 fix, `seconds as Integer` on "" threw NumberFormatException (swallowed
+        // silently by Hubitat sandbox, leaving the command a no-op with no log entry).
+        // safeIntArg("", 0) returns 0, which routes to the cancelTimer / early-return path.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setTimer called with empty string (Rule Machine blank slot)"
+        driver.setTimer("")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setTimer('abc') does not throw on non-numeric input from Rule Machine (Core 300S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setTimer called with non-numeric string"
+        driver.setTimer("abc")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
 }

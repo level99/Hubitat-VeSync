@@ -507,7 +507,7 @@ def setColor(Map colorMap){
 def setHue(hue){
     logDebug "setHue(${hue})"
     if (!isRgbVariant()) return
-    Integer hue100 = Math.max(0, Math.min(100, safeIntArg(hue, 0)))   // BP26
+    Integer hue100 = safeIntArg(hue, 0, 0, 100)   // BP26 + I1
     Integer sat100 = (state.nightlightSaturation as Integer) ?: 100
     Integer brightness = (state.nightlightBrightness as Integer) ?: 100
     setColor([hue: hue100, saturation: sat100, level: brightness])
@@ -521,7 +521,7 @@ def setSaturation(saturation){
     // Convert stored internal hue (0-360) back to Hubitat hue (0-100) for setColor round-trip.
     Integer hueInternal = (state.nightlightHue as Integer) ?: 0  // 0-360
     Integer hue100      = (hueInternal * 100 / 360) as Integer   // -> 0-100
-    Integer sat100      = Math.max(0, Math.min(100, safeIntArg(saturation, 100)))   // BP26
+    Integer sat100      = safeIntArg(saturation, 100, 0, 100)   // BP26 + I1
     Integer brightness  = (state.nightlightBrightness as Integer) ?: 100
     setColor([hue: hue100, saturation: sat100, level: brightness])
 }

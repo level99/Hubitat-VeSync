@@ -615,4 +615,26 @@ class LevoitCore600SSpec extends HubitatSpec {
         then: "no API call was made"
         testParent.allRequests.find { it.method == "setDisplay" } == null
     }
+
+    def "BP26: setTimer('') does not throw on empty-string input from Rule Machine (Core 600S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setTimer called with empty string (Rule Machine blank slot)"
+        driver.setTimer("")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setTimer('abc') does not throw on non-numeric input from Rule Machine (Core 600S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setTimer called with non-numeric string"
+        driver.setTimer("abc")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
 }

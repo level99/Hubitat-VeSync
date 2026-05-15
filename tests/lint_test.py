@@ -35,7 +35,7 @@ if str(TESTS_DIR) not in sys.path:
 
 def make_fake_path(name: str) -> Path:
     """Return a fake path under Drivers/Levoit/ for rel_base calculations."""
-    if not name.endswith('.groovy') and not name.endswith('.md') and not name.endswith('.json'):
+    if not name.endswith('.groovy') and not name.endswith('.md') and not name.endswith('.json') and not name.endswith('.py'):
         name = name + '.groovy'
     return REPO_ROOT / "Drivers" / "Levoit" / name
 
@@ -170,11 +170,13 @@ class TestBP2HardcodedPurifierMethod:
     def test_bad_hardcoded_fails(self):
         findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD_HARDCODED, "VeSyncIntegration")
         assert any(f['rule_id'] == 'BP2_missing_deviceMethodFor_call' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP2_missing_deviceMethodFor_call')
 
     def test_bad_typename_contains_fails(self):
         # The old "correct" pattern is now also a violation — it re-inlines routing
         findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD_TYPENAME_CONTAINS, "VeSyncIntegration")
         assert any(f['rule_id'] == 'BP2_missing_deviceMethodFor_call' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP2_missing_deviceMethodFor_call')
 
     def test_not_checked_for_children(self):
         findings = run_rule(check_bp2_hardcoded_purifier_method, self.BAD_HARDCODED, "LevoitVital200S")
@@ -214,6 +216,7 @@ class TestBP3EnvelopePeel:
     def test_bad_fails(self):
         findings = run_rule(check_bp3_envelope_peel, self.BAD, "LevoitVital200S")
         assert any(f['rule_id'] == 'BP3_missing_envelope_peel' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP3_missing_envelope_peel')
 
     def test_not_checked_for_core_drivers(self):
         # Core drivers don't use V2 envelope — not checked
@@ -251,10 +254,12 @@ class TestBP4SetLevelFieldNames:
     def test_bad_switchidx_fails(self):
         findings = run_rule(check_bp4_setlevel_field_names, self.BAD_SWITCHIDX, "LevoitVital200S")
         assert any(f['rule_id'] == 'BP4_switchIdx_in_setLevel' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP4_switchIdx_in_setLevel')
 
     def test_bad_type_instead_of_leveltype_fails(self):
         findings = run_rule(check_bp4_setlevel_field_names, self.BAD_TYPE, "LevoitVital200S")
         assert any(f['rule_id'] == 'BP4_type_instead_of_levelType' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP4_type_instead_of_levelType')
 
     def test_not_checked_for_core_drivers(self):
         findings = run_rule(check_bp4_setlevel_field_names, self.BAD_SWITCHIDX, "LevoitCore400S")
@@ -289,6 +294,7 @@ class TestBP5ManualViaPurifierMode:
     def test_bad_fails(self):
         findings = run_rule(check_bp5_manual_via_setPurifierMode, self.BAD, "LevoitVital200S")
         assert any(f['rule_id'] == 'BP5_manual_via_setPurifierMode' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP5_manual_via_setPurifierMode')
 
     def test_not_checked_for_core_drivers(self):
         findings = run_rule(check_bp5_manual_via_setPurifierMode, self.BAD, "LevoitCore400S")
@@ -366,6 +372,7 @@ class TestBP9DriverNameFrozen:
     def test_bad_fails(self):
         findings = run_rule(check_bp9_driver_name_frozen, self.BAD, "LevoitVital200S", self.CONFIG)
         assert any(f['rule_id'] == 'BP9_driver_name_changed' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP9_driver_name_changed')
 
     def test_unknown_file_skipped(self):
         # File not in frozen list — skipped
@@ -404,10 +411,12 @@ class TestBP10SmartThingsIcons:
     def test_icon_url_fails(self):
         findings = run_rule(check_bp10_smartthings_icons, self.BAD_ICON_URL, "LevoitCore200S")
         assert any(f['rule_id'] == 'BP10_smartthings_icon' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP10_smartthings_icon')
 
     def test_my_apps_category_fails(self):
         findings = run_rule(check_bp10_smartthings_icons, self.BAD_MY_APPS, "LevoitCore200S")
         assert any(f['rule_id'] == 'BP10_smartthings_icon' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP10_smartthings_icon')
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +439,7 @@ class TestBP11DocumentationLink:
     def test_bad_fails(self):
         findings = run_rule(check_bp11_documentation_link, self.BAD, "LevoitVital200S")
         assert any(f['rule_id'] == 'BP11_wrong_documentation_link' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP11_wrong_documentation_link')
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +471,7 @@ class TestBP12PrefSeed:
     def test_bad_fails(self):
         findings = run_rule(check_bp12_pref_seed, self.BAD, "LevoitVital200S")
         assert any(f['rule_id'] == 'BP12_missing_pref_seed' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP12_missing_pref_seed')
 
 
 # ---------------------------------------------------------------------------
@@ -494,6 +505,7 @@ class TestRule13DirectLogInParent:
     def test_bad_fails(self):
         findings = run_rule(check_rule13_direct_log_in_parent, self.BAD, "VeSyncIntegration")
         assert any(f['rule_id'] == 'RULE13_direct_log_in_parent' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE13_direct_log_in_parent')
 
     def test_not_checked_for_children(self):
         # Children don't hold credentials; rule only applies to parent
@@ -523,6 +535,7 @@ class TestRule14BareSettingsRef:
     def test_bad_fails(self):
         findings = run_rule(check_rule14_bare_settings_ref, self.BAD, "LevoitVital200S")
         assert any(f['rule_id'] == 'RULE14_bare_settings_ref' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE14_bare_settings_ref')
 
 
 # ---------------------------------------------------------------------------
@@ -562,10 +575,12 @@ class TestRule15AutoDisableWiring:
     def test_bad_no_runin_fails(self):
         findings = run_rule(check_rule15_auto_disable_wiring, self.BAD_NO_RUNIN, "LevoitVital200S")
         assert any(f['rule_id'] == 'RULE15_missing_runin_1800' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE15_missing_runin_1800')
 
     def test_bad_no_method_fails(self):
         findings = run_rule(check_rule15_auto_disable_wiring, self.BAD_NO_METHOD, "LevoitVital200S")
         assert any(f['rule_id'] == 'RULE15_missing_logdebugoff_method' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE15_missing_logdebugoff_method')
 
     # --- Library-include-aware cases (Phase 1 migration) ---
 
@@ -662,14 +677,17 @@ class TestRule17SandboxSafety:
     def test_bad_import_fails(self):
         findings = run_rule(check_rule17_sandbox_forbidden, self.BAD_IMPORT, "LevoitVital200S")
         assert any(f['rule_id'] == 'RULE17_forbidden_import' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE17_forbidden_import')
 
     def test_eval_fails(self):
         findings = run_rule(check_rule17_sandbox_forbidden, self.BAD_EVAL, "LevoitVital200S")
         assert any(f['rule_id'] == 'RULE17_forbidden_reflection' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE17_forbidden_reflection')
 
     def test_class_for_name_fails(self):
         findings = run_rule(check_rule17_sandbox_forbidden, self.BAD_CLASS_FOR_NAME, "LevoitVital200S")
         assert any(f['rule_id'] == 'RULE17_forbidden_reflection' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE17_forbidden_reflection')
 
 
 # ---------------------------------------------------------------------------
@@ -1670,12 +1688,14 @@ class TestRule35BP17PollHealth:
         from lint_rules.bp17_poll_health import check_rule35_bp17_poll_health
         findings = run_rule(check_rule35_bp17_poll_health, self.BAD_MISSING_DEF, "VeSyncIntegration")
         assert any(f['rule_id'] == 'RULE35_missing_ensurePollHealth_def' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE35_missing_ensurePollHealth_def')
 
     def test_not_called_in_updatedevices_fails(self):
         """ensurePollHealth() defined but not called in updateDevices(): FAIL."""
         from lint_rules.bp17_poll_health import check_rule35_bp17_poll_health
         findings = run_rule(check_rule35_bp17_poll_health, self.BAD_NOT_CALLED, "VeSyncIntegration")
         assert any(f['rule_id'] == 'RULE35_ensurePollHealth_not_called' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE35_ensurePollHealth_not_called')
 
     def test_not_checked_for_child_drivers(self):
         """Child drivers are out of scope."""
@@ -1766,6 +1786,7 @@ class TestRule36BP22NetworkBreaker:
             check_rule36_bp22_network_breaker, self.BAD_MISSING_UNREACHABLE_SINCE, "VeSyncIntegration"
         )
         assert any(f['rule_id'] == 'RULE36_missing_networkUnreachableSince' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE36_missing_networkUnreachableSince')
 
     def test_missing_probe_in_flight_fails(self):
         """state.networkProbeInFlight not referenced: FAIL."""
@@ -1774,6 +1795,7 @@ class TestRule36BP22NetworkBreaker:
             check_rule36_bp22_network_breaker, self.BAD_MISSING_PROBE_IN_FLIGHT, "VeSyncIntegration"
         )
         assert any(f['rule_id'] == 'RULE36_missing_networkProbeInFlight' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE36_missing_networkProbeInFlight')
 
     def test_missing_emit_def_fails(self):
         """emitNetworkWarnIfDue() not defined: FAIL."""
@@ -1782,6 +1804,7 @@ class TestRule36BP22NetworkBreaker:
             check_rule36_bp22_network_breaker, self.BAD_MISSING_EMIT_DEF, "VeSyncIntegration"
         )
         assert any(f['rule_id'] == 'RULE36_missing_emitNetworkWarnIfDue' for f in findings)
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE36_missing_emitNetworkWarnIfDue')
 
     def test_not_checked_for_child_drivers(self):
         """Child drivers are out of scope."""
@@ -1906,6 +1929,30 @@ class TestRule37BP26UnsafeIntCoercion:
         )
         assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
             f"Exempted method must not flag RULE37, got: {findings}"
+        )
+
+    # B2b regression pin: bare unparenthesized `seconds as Integer` must also flag RULE37.
+    # This is the TowerFan:270 shape that the original AS_INTEGER_RE (requiring parens)
+    # missed — the false-negative that B2b closes.
+    BAD_BARE_CAST = textwrap.dedent("""\
+        def setTimer(seconds) {
+            if (!requireNotNull(seconds, "setTimer")) return
+            int secs = seconds as Integer
+            if (secs <= 0) { cancelTimer(); return }
+        }
+    """)
+
+    def test_bare_unparenthesized_as_integer_fails(self):
+        """Bare ``seconds as Integer`` (no parentheses) must flag RULE37 — TowerFan:270 shape."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_BARE_CAST)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for bare unparenthesized 'seconds as Integer', "
+            f"got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE37_unsafe_int_coercion'), (
+            f"RULE37 finding must carry severity='FAIL'; got: {findings}"
         )
 
 
@@ -2246,16 +2293,19 @@ class TestRule30DirectLogInDriver:
         findings = run_rule(check_rule30_direct_log_in_driver, self.BAD_DIRECT_LOG_DEBUG, "LevoitVital200S")
         assert any(f['rule_id'] == 'RULE30_direct_log_in_driver' for f in findings), \
             "Direct log.debug in driver body must trigger RULE30"
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE30_direct_log_in_driver')
 
     def test_direct_log_info_fails(self):
         findings = run_rule(check_rule30_direct_log_in_driver, self.BAD_DIRECT_LOG_INFO, "LevoitVital200S")
         assert any(f['rule_id'] == 'RULE30_direct_log_in_driver' for f in findings), \
             "Direct log.info in driver body must trigger RULE30"
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE30_direct_log_in_driver')
 
     def test_direct_log_error_fails(self):
         findings = run_rule(check_rule30_direct_log_in_driver, self.BAD_DIRECT_LOG_ERROR, "LevoitVital200S")
         assert any(f['rule_id'] == 'RULE30_direct_log_in_driver' for f in findings), \
             "Direct log.error in driver body must trigger RULE30"
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE30_direct_log_in_driver')
 
     def test_notification_tile_excluded_by_name(self):
         # Notification Tile.groovy is excluded (logsOff() pattern, deferred).
@@ -2403,6 +2453,7 @@ class TestRule29LibraryNoBlockComment:
         )
         assert any(f['rule_id'] == 'RULE29_library_block_comment_at_top' for f in findings), \
             "Second /* */ block before library() must fail RULE29 (file-scope)"
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE29_library_block_comment_at_top')
 
     def test_body_scope_javadoc_fails(self):
         findings = run_rule(
@@ -2411,6 +2462,7 @@ class TestRule29LibraryNoBlockComment:
         )
         assert any(f['rule_id'] == 'RULE29_library_block_comment_in_body' for f in findings), \
             "/** */ javadoc block after library() must fail RULE29 (body-scope)"
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE29_library_block_comment_in_body')
 
     def test_body_scope_plain_block_fails(self):
         findings = run_rule(
@@ -2419,6 +2471,7 @@ class TestRule29LibraryNoBlockComment:
         )
         assert any(f['rule_id'] == 'RULE29_library_block_comment_in_body' for f in findings), \
             "/* */ plain block after library() must fail RULE29 (body-scope)"
+        assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE29_library_block_comment_in_body')
 
     def test_driver_file_body_scope_javadoc_exempt(self):
         # Driver files (definition() block) are not subject to RULE29.

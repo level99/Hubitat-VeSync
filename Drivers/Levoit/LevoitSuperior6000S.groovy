@@ -193,7 +193,7 @@ def setLevel(val, duration) {
 // turns an off device ON at level 1 — inverted behaviour.
 def setLevel(val){
     logDebug "setLevel(${val})"
-    Integer pct = Math.max(0, Math.min(100, safeIntArg(val, 0)))
+    Integer pct = safeIntArg(val, 0, 0, 100)
     if (pct == 0) { off(); return }
     Integer lvl = levelFromPercent(pct)
     sendEvent(name:"level", value: pct)

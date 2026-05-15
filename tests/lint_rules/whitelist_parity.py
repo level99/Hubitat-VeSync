@@ -21,6 +21,7 @@ Skips:
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding
 
 
 # ---------------------------------------------------------------------------
@@ -142,16 +143,8 @@ def _all_regex_cases_are_prefix_anchored(body: str, resolved_prefixes: set) -> b
 
 
 def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": file_str,
-        "line": lineno,
-        "context": context,
-        "why": why,
-        "fix": fix,
-    }
+    raw_lines = [context.lstrip()] if context else []
+    return make_finding(severity, rule_id, title, file_str, lineno, raw_lines, why, fix)
 
 
 # ---------------------------------------------------------------------------

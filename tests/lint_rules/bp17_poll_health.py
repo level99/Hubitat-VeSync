@@ -31,6 +31,7 @@ Scope: VeSyncIntegration.groovy only.
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding
 
 PARENT_DRIVER = "VeSyncIntegration.groovy"
 
@@ -89,19 +90,7 @@ def _extract_updateDevices_body(raw_text: str):
 
 
 def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    start = max(0, lineno - 2)
-    end = min(len(lines), lineno + 1)
-    context = '\n'.join(f"    {lines[i]}" for i in range(start, end))
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": str(path.relative_to(rel_base)).replace('\\', '/'),
-        "line": lineno,
-        "context": context,
-        "why": why,
-        "fix": fix,
-    }
+    return make_finding(severity, rule_id, title, str(path.relative_to(rel_base)).replace('\\', '/'), lineno, lines, why, fix)
 
 
 def check_rule35_bp17_poll_health(path, raw_lines, cleaned_lines, raw_text, config, rel_base):

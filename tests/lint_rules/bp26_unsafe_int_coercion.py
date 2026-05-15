@@ -48,8 +48,11 @@ SET_METHOD_RE = re.compile(
     re.MULTILINE,
 )
 
-# Matches (x as Integer) or (x as int) — group 1 is the cast subject
-AS_INTEGER_RE = re.compile(r'\((\w+)\s+as\s+(?:Integer|int)\)')
+# Matches (x as Integer) / (x as int) [parenthesized] OR bare x as Integer / x as int
+# [unparenthesized, word-boundary anchored].  Group 1 is the cast subject in both forms.
+# The parenthesized form is tried first (longer, more specific); the bare form catches
+# unparenthesized assignments like `int secs = seconds as Integer`.
+AS_INTEGER_RE = re.compile(r'(?:\((\w+)\s+as\s+(?:Integer|int)\)|\b(\w+)\s+as\s+(?:Integer|int)\b)')
 
 # Matches x.toInteger() — group 1 is the receiver
 TO_INTEGER_RE = re.compile(r'\b(\w+)\.toInteger\s*\(\s*\)')
@@ -152,31 +155,33 @@ def check_rule37_unsafe_int_coercion(
         # the need for the two LevoitPedestalFan/LevoitTowerFan setSpeed exemptions
         # in lint_config.yaml.  The static regex currently cannot see that guard.
 
-        # Search for (param as Integer) or (param as int)
+        # Search for (param as Integer) / (param as int) — group(1) for parens form,
+        # group(2) for bare unparenthesized form (e.g. `int secs = seconds as Integer`).
         for cast_m in AS_INTEGER_RE.finditer(body_clean):
-            if cast_m.group(1) == param_name:
+            matched_name = cast_m.group(1) or cast_m.group(2)
+            if matched_name == param_name:
                 abs_pos = brace_start + cast_m.start()
                 lineno = _line_of(raw_text, abs_pos)
                 findings.append(make_finding(
                     severity='FAIL',
                     rule_id='RULE37_unsafe_int_coercion',
                     title=(
-                        f'BP26: {method_name}() uses `({param_name} as Integer)` '
+                        f'BP26: {method_name}() uses `{param_name} as Integer` '
                         f'on untyped command parameter'
                     ),
                     file_rel=file_rel,
                     lineno=lineno,
                     raw_lines=raw_lines,
                     why=(
-                        f'`({param_name} as Integer)` throws NumberFormatException / '
+                        f'`{param_name} as Integer` throws NumberFormatException / '
                         f'GroovyCastException on non-numeric input ("abc", "", "5.7", '
                         f'"true"). The `?:` Elvis operator catches null but NOT thrown '
                         f'exceptions — the exception is swallowed silently by the Hubitat '
                         f'sandbox, leaving the command a no-op with no log entry.'
                     ),
                     fix=(
-                        f'Replace `({param_name} as Integer) ?: N` with '
-                        f'`safeIntArg({param_name}, N)` from LevoitChildBaseLib. '
+                        f'Replace `{param_name} as Integer` (or `({param_name} as Integer) ?: N`) '
+                        f'with `safeIntArg({param_name}, N)` from LevoitChildBaseLib. '
                         f'safeIntArg() uses .isInteger()/.isBigDecimal() chain and '
                         f'never throws.'
                     ),

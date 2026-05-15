@@ -241,6 +241,7 @@ def setMistLevel(level){
 //   Source: pyvesync LUH-A603S-WUS.yaml set_warm_level: {levelIdx:0, levelType:'warm', mistLevel:0, warmLevel:3}
 //   Source: pyvesync LUH-A603S-WUS.yaml set_warm_off: (warmLevel:0 case from set_warm_level)
 def setWarmMistLevel(level){
+    if (!requireNotNull(level, "setWarmMistLevel")) return
     logDebug "setWarmMistLevel(${level})"
     Integer lvl = safeIntArg(level, 0)   // BP26: safeIntArg never throws on non-numeric RM input
     if (lvl < 0 || lvl > 3) {

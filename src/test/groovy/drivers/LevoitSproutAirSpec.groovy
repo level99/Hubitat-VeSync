@@ -625,4 +625,26 @@ class LevoitSproutAirSpec extends HubitatSpec {
         testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
         testParent.allRequests.find { it.method == "setLevel" && it.data.manualSpeedLevel == 2 } != null
     }
+
+    def "BP26: setFanSpeed('') does not throw on empty-string input from Rule Machine (Sprout Air)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setFanSpeed called with empty string (Rule Machine blank slot)"
+        driver.setFanSpeed("")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setFanSpeed('abc') does not throw on non-numeric input from Rule Machine (Sprout Air)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setFanSpeed called with non-numeric string"
+        driver.setFanSpeed("abc")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
 }

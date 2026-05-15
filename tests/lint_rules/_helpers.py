@@ -44,6 +44,8 @@ def make_finding(severity, rule_id, title, file_rel, lineno, raw_lines, why, fix
     dict
         Keys: severity, rule_id, title, file, line, context, why, fix.
     """
+    if severity not in ('FAIL', 'WARN'):
+        raise ValueError(f"make_finding: invalid severity {severity!r} (must be 'FAIL' or 'WARN')")
     start = max(0, lineno - 2)
     end = min(len(raw_lines), lineno + 1)
     context = '\n'.join(f"    {raw_lines[i]}" for i in range(start, end))

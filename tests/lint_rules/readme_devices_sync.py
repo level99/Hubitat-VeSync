@@ -14,7 +14,7 @@ FAIL rather than a silent omission.
 
 Normalization note: driver definition(name: ...) values in Core-line drivers use
 "Core200S" (no internal space) while the README table writes "Core 200S" (with
-space) in its bold cell text.  Both sides are whitespace-collapsed (all \s+
+space) in its bold cell text.  Both sides are whitespace-collapsed (all \\s+
 removed) before the substring comparison, so "Core200S" == "Core 200S" after
 normalization.  Markdown bold markers (**) are stripped from the README cell text
 before comparison.
@@ -22,6 +22,7 @@ before comparison.
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding
 
 
 # ---------------------------------------------------------------------------
@@ -40,16 +41,8 @@ EXCLUDED_FILES = {
 # ---------------------------------------------------------------------------
 
 def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": file_str,
-        "line": lineno,
-        "context": context,
-        "why": why,
-        "fix": fix,
-    }
+    raw_lines = [context.lstrip()] if context else []
+    return make_finding(severity, rule_id, title, file_str, lineno, raw_lines, why, fix)
 
 
 def _extract_definition_block(source: str):

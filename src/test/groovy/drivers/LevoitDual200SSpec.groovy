@@ -842,4 +842,26 @@ class LevoitDual200SSpec extends HubitatSpec {
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
         onReq != null
     }
+
+    def "BP26: setMistLevel('') does not throw on empty-string input from Rule Machine (Dual 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setMistLevel called with empty string (Rule Machine blank slot)"
+        driver.setMistLevel("")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setMistLevel('abc') does not throw on non-numeric input from Rule Machine (Dual 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setMistLevel called with non-numeric string"
+        driver.setMistLevel("abc")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
 }

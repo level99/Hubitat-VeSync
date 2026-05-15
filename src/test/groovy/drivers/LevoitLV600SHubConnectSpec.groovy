@@ -857,4 +857,26 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
         onReq != null
     }
+
+    def "BP26: setWarmMistLevel('') does not throw on empty-string input from Rule Machine (LV600S HubConnect)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setWarmMistLevel called with empty string (Rule Machine blank slot)"
+        driver.setWarmMistLevel("")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setWarmMistLevel('abc') does not throw on non-numeric input from Rule Machine (LV600S HubConnect)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setWarmMistLevel called with non-numeric string"
+        driver.setWarmMistLevel("abc")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
 }

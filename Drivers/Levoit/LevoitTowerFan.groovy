@@ -267,7 +267,7 @@ def setOscillation(onOff){
 // used by all other fan/humidifier command methods.
 def setTimer(seconds, action="off"){
     if (!requireNotNull(seconds, "setTimer")) return
-    int secs = seconds as Integer
+    int secs = safeIntArg(seconds, 0)
     if (secs <= 0) { cancelTimer(); return }
     // action defaults to "off" in the Groovy signature; only null-guard when explicitly null
     String act = (action != null) ? (action as String).trim().toLowerCase() : "off"

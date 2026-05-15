@@ -196,7 +196,7 @@ def setLevel(val, duration) {
 // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
 def setLevel(val) {
     logDebug "setLevel $val"
-    Integer pct = Math.max(0, Math.min(100, safeIntArg(val, 0)))
+    Integer pct = safeIntArg(val, 0, 0, 100)
     if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off.
     // state.turningOn is set by on() while configureOnState() runs async;
@@ -314,8 +314,9 @@ def setAutoPreference(pref) {
 def setRoomSize(sz) {
     logDebug "setRoomSize(${sz})"
     if (!requireNotNull(sz, "setRoomSize")) return
-    def resp = hubBypass("setAutoPreference", [autoPreference: state.autoPreference ?: "default", roomSize: sz], "setAutoPreference(roomSize)")
-    if (httpOk(resp)) { state.roomSize = sz as Integer; device.sendEvent(name:"roomSize", value: sz as Integer) }
+    Integer roomSz = safeIntArg(sz, 600)   // BP26: safeIntArg never throws on non-numeric RM input
+    def resp = hubBypass("setAutoPreference", [autoPreference: state.autoPreference ?: "default", roomSize: roomSz], "setAutoPreference(roomSize)")
+    if (httpOk(resp)) { state.roomSize = roomSz; device.sendEvent(name:"roomSize", value: roomSz) }
 }
 
 def setChildLock(onOff) {

@@ -97,6 +97,8 @@ Parse commit subjects into buckets by intent (not literal prefix — many commit
 
 Skip bullets that are pure churn (CI tweaks, agent-config edits, lint exemption juggling) — CHANGELOG is for things downstream consumers care about.
 
+**Strip `### Internal` before writing the versioned entry.** The `[Unreleased]` section may contain a `### Internal` subsection with lint-infra, test-coverage, and contributor-tooling bullets. These are NOT included in the versioned `## [<version>]` entry — they are development archaeology, not user-facing release content. When converting `[Unreleased]` to a versioned entry: copy `### Added`, `### Changed`, `### Fixed`, `### Removed` subsections verbatim; drop `### Internal` entirely. After the cut, the `[Unreleased]` section itself is cleared (all subsections including `### Internal` are removed or replaced by a fresh empty `## [Unreleased]` placeholder).
+
 ### Artifact C — Driver-version surfaces (if any)
 
 Scan for any `DRIVER_VERSION` constants or top-of-file `// vX.Y` version comments in `Drivers/Levoit/*.groovy`. These are distinct from the `version:` field in `definition()` — they are imperative version strings sometimes used by driver logic at runtime. If found and the value differs from the new package version, propose an update.

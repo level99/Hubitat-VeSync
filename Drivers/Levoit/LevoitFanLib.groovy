@@ -187,7 +187,7 @@ def setLevel(val, duration) {
 // BP23: setLevel(N>0) auto-turns-on when switch is off (SwitchLevel capability convention).
 def setLevel(val) {
     logDebug "setLevel(${val})"
-    Integer pct = Math.max(0, Math.min(100, safeIntArg(val, 0)))
+    Integer pct = safeIntArg(val, 0, 0, 100)
     if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off.
     // state.turningOn guard set in on() prevents re-entrance.

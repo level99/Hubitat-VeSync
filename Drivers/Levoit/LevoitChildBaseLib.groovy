@@ -97,21 +97,44 @@ boolean requireNotNull(arg, String methodName) {
 // input BEFORE the ?: fallback can intercept it — the Hubitat sandbox swallows
 // the exception silently, leaving the command a no-op with no log entry.
 //
-// Decimal strings/BigDecimals truncate toward zero. Use the fallback that
-// makes the method's own downstream guard safe (0 where 0→off/reject is the
-// convention; 1 where a min-floor is a better default).
+// Decimal strings/BigDecimals truncate toward zero (matches Groovy native int()
+// semantics and is spec-asserted by LevoitCore200SSpec.groovy:796).
 //
-// Belt-and-suspenders with requireNotNull: keep the null-guard, use safeIntArg
-// to handle the non-null-but-non-numeric vector.
+// W1 guard: BigDecimal values outside [Integer.MIN_VALUE, Integer.MAX_VALUE] fall
+// back instead of bit-wrapping (BigDecimal.intValue() silently narrows on overflow).
+//
+// W2 warn: non-null, non-empty inputs that cannot be parsed log a one-line WARN
+// before returning fallback. Null and empty-string inputs are silently → fallback
+// (the routine Rule Machine blank-slot path; requireNotNull already handles null warn).
+//
+// Belt-and-suspenders with requireNotNull: keep the null-guard at call sites,
+// use safeIntArg to handle the non-null-but-non-numeric vector.
 private Integer safeIntArg(raw, Integer fallback = 0) {
     if (raw == null) return fallback
     try {
         String s = raw.toString().trim()
         if (s.isEmpty()) return fallback
         if (s.isInteger()) return s.toInteger()
-        if (s.isBigDecimal()) return s.toBigDecimal().intValue()
+        if (s.isBigDecimal()) {
+            BigDecimal bd = s.toBigDecimal()
+            if (bd > Integer.MAX_VALUE || bd < Integer.MIN_VALUE) {
+                logWarn "safeIntArg: out-of-range input ${raw} -> using fallback ${fallback}"
+                return fallback
+            }
+            return bd.intValue()
+        }
+        logWarn "safeIntArg: non-numeric input ${raw} -> using fallback ${fallback}"
         return fallback
     } catch (ignored) {
+        logWarn "safeIntArg: non-numeric input ${raw} -> using fallback ${fallback}"
         return fallback
     }
+}
+
+// 4-arg clamp overload: coerce raw to Integer (W1/W2-hardened), then clamp to [lo, hi].
+// Collapses Math.max(lo, Math.min(hi, safeIntArg(x, fallback))) to one call.
+// Clamp is applied AFTER coercion and AFTER fallback — fallback is the pre-clamp value.
+private Integer safeIntArg(raw, Integer fallback, Integer lo, Integer hi) {
+    Integer v = safeIntArg(raw, fallback)
+    return Math.max(lo, Math.min(hi, v))
 }

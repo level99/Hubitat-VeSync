@@ -2011,4 +2011,26 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         req != null
         req.data.action == "off"
     }
+
+    def "BP26: setMistLevel('') does not throw on empty-string input from Rule Machine (OasisMist 450S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setMistLevel called with empty string (Rule Machine blank slot)"
+        driver.setMistLevel("")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setMistLevel('abc') does not throw on non-numeric input from Rule Machine (OasisMist 450S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setMistLevel called with non-numeric string"
+        driver.setMistLevel("abc")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
 }

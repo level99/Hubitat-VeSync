@@ -220,7 +220,7 @@ def setFanSpeed(speed){
     logDebug "setFanSpeed(${speed})"
     // BP18: null-guard — Rule Machine blank slots pass null; silent coercion to speed 1 is wrong.
     if (!requireNotNull(speed, "setFanSpeed")) return
-    Integer spd = Math.max(1, Math.min(3, safeIntArg(speed, 1)))
+    Integer spd = safeIntArg(speed, 1, 1, 3)
     // BP24-B: auto-on from off-state. on() re-entrance guard (state.turningOn) prevents recursion
     // when setMode("manual") delegates here and on() calls setFanSpeed internally.
     ensureSwitchOn()

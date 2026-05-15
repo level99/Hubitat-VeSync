@@ -14,6 +14,7 @@ Rule 17 — Forbidden imports and reflection patterns:
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding
 
 
 FORBIDDEN_IMPORTS = [
@@ -38,16 +39,7 @@ def _context(lines, lineno, window=1):
 
 
 def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": str(path.relative_to(rel_base)).replace('\\', '/'),
-        "line": lineno,
-        "context": _context(lines, lineno),
-        "why": why,
-        "fix": fix,
-    }
+    return make_finding(severity, rule_id, title, str(path.relative_to(rel_base)).replace('\\', '/'), lineno, lines, why, fix)
 
 
 def check_rule17_sandbox_forbidden(path, raw_lines, cleaned_lines, raw_text, config, rel_base):

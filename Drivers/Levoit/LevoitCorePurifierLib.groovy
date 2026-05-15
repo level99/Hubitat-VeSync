@@ -253,6 +253,7 @@ def setAutoMode(mode) {
 }
 
 def setAutoMode(mode, roomSize) {
+    if (!requireNotNull(mode, "setAutoMode")) return
     // 200S guard: 200S firmware doesn't support setAutoPreference (no AQ sensor).
     // The lib is shared but the cloud rejects this call on 200S. Block at lib boundary
     // to prevent state divergence + log noise on Rule Machine / MCP misuse.

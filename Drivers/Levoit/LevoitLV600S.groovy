@@ -275,6 +275,7 @@ def setMistLevel(level){
 // setVirtualLevel payload: {id: 0, level: N, type: 'warm'}
 // Valid range: 0-3 (0 = warm mist off; 1-3 = warm intensity levels)
 def setWarmMistLevel(level){
+    if (!requireNotNull(level, "setWarmMistLevel")) return
     logDebug "setWarmMistLevel(${level})"
     Integer lvl = safeIntArg(level, 0)   // BP26: safeIntArg never throws on non-numeric RM input
     if (lvl < 0 || lvl > 3) {

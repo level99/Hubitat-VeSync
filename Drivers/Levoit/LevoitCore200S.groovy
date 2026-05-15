@@ -196,7 +196,7 @@ def setLevel(value)
 {
     logDebug "setLevel $value"
     // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
-    Integer pct = Math.max(0, Math.min(100, safeIntArg(value, 0)))
+    Integer pct = safeIntArg(value, 0, 0, 100)
     // SwitchLevel convention: setLevel(0) means off (Z-Wave dimmer platform expectation).
     if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off (SwitchLevel capability convention).

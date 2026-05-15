@@ -166,7 +166,7 @@ def setLevel(val){
     logDebug "setLevel(${val})"
     // Record the level; we can't know which speed/mist command applies until we know
     // the device shape, so just store and emit for rules/automations.
-    device.sendEvent(name:"level", value: val as Integer)
+    device.sendEvent(name:"level", value: safeIntArg(val, 0))
     logDebug "setLevel: emitted level=${val} (no API call — unknown device shape; use captureDiagnostics)"
 }
 
