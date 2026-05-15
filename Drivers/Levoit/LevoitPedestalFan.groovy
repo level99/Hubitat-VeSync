@@ -380,8 +380,9 @@ def setHorizontalRange(left, right){
     logDebug "setHorizontalRange(left=${left}, right=${right})"
     if (!requireNotNull(left, "setHorizontalRange left")) return
     if (!requireNotNull(right, "setHorizontalRange right")) return
-    Integer l = left as Integer
-    Integer r = right as Integer
+    // Clamp to device valid range 0-100 (per pyvesync LPF-R423S.yaml fixture values and driver convention).
+    Integer l = Math.max(0, Math.min(100, (left as Integer)))
+    Integer r = Math.max(0, Math.min(100, (right as Integer)))
     def resp = hubBypass("setOscillationStatus",
         [horizontalOscillationState: 1, actType: "default", left: l, right: r],
         "setOscillationStatus(H_range=${l}..${r})")
@@ -403,8 +404,9 @@ def setVerticalRange(top, bottom){
     logDebug "setVerticalRange(top=${top}, bottom=${bottom})"
     if (!requireNotNull(top, "setVerticalRange top")) return
     if (!requireNotNull(bottom, "setVerticalRange bottom")) return
-    Integer t = top as Integer
-    Integer b = bottom as Integer
+    // Clamp to device valid range 0-100 (per pyvesync LPF-R423S.yaml fixture values and driver convention).
+    Integer t = Math.max(0, Math.min(100, (top as Integer)))
+    Integer b = Math.max(0, Math.min(100, (bottom as Integer)))
     def resp = hubBypass("setOscillationStatus",
         [verticalOscillationState: 1, actType: "default", top: t, bottom: b],
         "setOscillationStatus(V_range=${t}..${b})")

@@ -308,15 +308,18 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
 // NOTE: field names id/level/type -- NOT levelIdx/virtualLevel/levelType (Superior 6000S)
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    if (!requireNotNull(level, "setMistLevel")) return
+    Integer lvl = (level as Integer)
+    if (lvl <= 0) { off(); return }
+    Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
-    def resp = hubBypass("setVirtualLevel", [id: 0, level: lvl, type: "mist"], "setVirtualLevel(mist,${lvl})")
+    def resp = hubBypass("setVirtualLevel", [id: 0, level: clamped, type: "mist"], "setVirtualLevel(mist,${clamped})")
     if (httpOk(resp)) {
-        state.mistLevel = lvl
-        device.sendEvent(name:"mistLevel", value: lvl)
-        logInfo "Mist level: ${lvl}"
+        state.mistLevel = clamped
+        device.sendEvent(name:"mistLevel", value: clamped)
+        logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
+        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -380,7 +383,10 @@ def setWarmMistLevel(level){
 // setTargetHumidity payload: {target_humidity: N} -- note snake_case (not camelCase)
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
-    Integer p = Math.max(40, Math.min(80, (percent as Integer) ?: 50))
+    if (!requireNotNull(percent, "setHumidity")) return
+    Integer p = (percent as Integer)
+    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
+    p = Math.max(40, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [target_humidity: p], "setTargetHumidity(${p})")
     if (httpOk(resp)) {
         state.targetHumidity = p

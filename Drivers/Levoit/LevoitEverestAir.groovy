@@ -182,9 +182,17 @@ def initialize(){ logDebug "Initializing" }
 // V2-style convention — different from VeSyncAirBypass Core line: {switch: 'on'/'off', id: 0}
 def on(){
     logDebug "on()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
-    if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    // Re-entrance guard: ensureSwitchOn() → on() → setFanSpeed() → ensureSwitchOn() would recurse
+    // without this. state.turningOn matches the pattern used in humidifier drivers (e.g. Sup6000S).
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
+        if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
 }
 
 def off(){
@@ -240,7 +248,12 @@ def setMode(mode){
 // Setting a fan speed implicitly establishes manual mode.
 def setFanSpeed(speed){
     logDebug "setFanSpeed(${speed})"
-    Integer spd = Math.max(1, Math.min(3, (speed as Integer) ?: 1))
+    // BP18: null-guard — Rule Machine blank slots pass null; silent coercion to speed 1 is wrong.
+    if (!requireNotNull(speed, "setFanSpeed")) return
+    Integer spd = Math.max(1, Math.min(3, (speed as Integer)))
+    // BP24-B: auto-on from off-state. on() re-entrance guard (state.turningOn) prevents recursion
+    // when setMode("manual") delegates here and on() calls setFanSpeed internally.
+    ensureSwitchOn()
     def resp = hubBypass("setLevel", [levelIdx: 0, manualSpeedLevel: spd, levelType: "wind"], "setLevel(wind,${spd})")
     if (httpOk(resp)) {
         state.lastFanSpeed = spd

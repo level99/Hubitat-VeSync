@@ -353,12 +353,12 @@ class LevoitClassic300SSpec extends HubitatSpec {
         !req.data.containsKey("levelType")
     }
 
-    def "setMistLevel clamps values below 1 to 1"() {
-        given:
-        settings.descriptionTextEnable = false
+    def "setMistLevel(1) passes through as the minimum valid level"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
-        driver.setMistLevel(0)
+        driver.setMistLevel(1)
 
         then:
         def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
@@ -873,5 +873,51 @@ class LevoitClassic300SSpec extends HubitatSpec {
 
         then: "no API call was made"
         testParent.allRequests.find { it.method == "setAutomaticStop" } == null
+    }
+
+    // -------------------------------------------------------------------------
+    // Tier-3 regression tests — setMistLevel null/0/valid (Fix 4)
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel(null) is rejected with logWarn and no API call (BP18 Fix 4)"() {
+        // Pre-fix: (null as Integer) ?: 1 silently set level to 1; no warning.
+        // Post-fix: requireNotNull rejects null before coercion.
+        when:
+        driver.setMistLevel(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+        testLog.warns.any { it.contains("setMistLevel") || it.contains("null") }
+    }
+
+    def "setMistLevel(0) routes to off() (Fix 4 — SwitchLevel setLevel(0) convention)"() {
+        // Pre-fix: 0 was clamped to 1 via Math.max(1, ...) — device stayed on at level 1.
+        // Post-fix: lvl <= 0 → off() called.
+        when:
+        driver.setMistLevel(0)
+
+        then: "setSwitch powerSwitch=0 (off) was sent"
+        def req = testParent.allRequests.find { it.method == "setSwitch" }
+        req != null
+        req.data.enabled == false  // Classic 300S uses {enabled: bool, id: 0}
+        and: "no setVirtualLevel was sent"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+    }
+
+    def "setMistLevel(3) sends setVirtualLevel with id:0, level:3, type:'mist'"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(3)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
+        req != null
+        req.data.id    == 0
+        req.data.level == 3
+        req.data.type  == "mist"
+        lastEventValue("mistLevel") == 3
     }
 }

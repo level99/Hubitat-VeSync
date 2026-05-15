@@ -194,15 +194,18 @@ def setMode(mode){
 // Different field names from VeSyncHumid200300S ({id, level, type}) and different method name.
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    if (!requireNotNull(level, "setMistLevel")) return
+    Integer lvl = (level as Integer)
+    if (lvl <= 0) { off(); return }
+    Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
-    def resp = hubBypass("virtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "virtualLevel(mist,${lvl})")
+    def resp = hubBypass("virtualLevel", [levelIdx: 0, virtualLevel: clamped, levelType: "mist"], "virtualLevel(mist,${clamped})")
     if (httpOk(resp)) {
-        state.mistLevel = lvl
-        device.sendEvent(name:"mistLevel", value: lvl)
-        logInfo "Mist level: ${lvl}"
+        state.mistLevel = clamped
+        device.sendEvent(name:"mistLevel", value: clamped)
+        logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"virtualLevel"])
+        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"virtualLevel"])
     }
 }
 
@@ -212,7 +215,10 @@ def setMistLevel(level){
 // Range: 30-80% per pyvesync device_map.py (no custom humidity_min for this model family).
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
-    Integer p = Math.max(30, Math.min(80, (percent as Integer) ?: 50))
+    if (!requireNotNull(percent, "setHumidity")) return
+    Integer p = (percent as Integer)
+    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
+    p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [targetHumidity: p], "setTargetHumidity(${p})")
     if (httpOk(resp)) {
         state.targetHumidity = p

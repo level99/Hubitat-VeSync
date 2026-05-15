@@ -17,7 +17,7 @@ import support.TestParent
  *   Toggle          -- reads state.lastSwitchSet to avoid read-after-write race (BP#7 protection)
  *   Mist level      -- setMistLevel(1) produces setVirtualLevel with {id:0, level:1, type:'mist'}
  *   Mist level      -- setMistLevel(2) produces setVirtualLevel with {id:0, level:2, type:'mist'}
- *   Mist clamping   -- setMistLevel(0) clamped to 1 (range floor)
+ *   Mist clamping   -- setMistLevel(0) routes to off() (SwitchLevel setLevel(0) convention)
  *   Mist clamping   -- setMistLevel(3+) clamped to 2 (range ceiling; NOT 9 like Classic 300S)
  *   Mode write-path -- setMode("auto") canonical-accept: payload="auto", cached as "std"
  *                   -- setMode("auto") canonical-reject, alt-accept: falls back to "humidity", cached as "alt"
@@ -364,12 +364,12 @@ class LevoitDual200SSpec extends HubitatSpec {
         req.data.level == 2
     }
 
-    def "setMistLevel clamps values below 1 to 1 (Dual 200S range floor)"() {
-        given:
-        settings.descriptionTextEnable = false
+    def "setMistLevel(1) passes through as the minimum valid level (Dual 200S range floor)"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
-        driver.setMistLevel(0)
+        driver.setMistLevel(1)
 
         then:
         def req = testParent.allRequests.find { it.method == "setVirtualLevel" }

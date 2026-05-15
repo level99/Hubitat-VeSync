@@ -210,15 +210,18 @@ def setMode(mode){
 // Range: 1-2 only (mist_levels=[1,2] per device_map.py — Sprout is a 2-level device).
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    Integer lvl = Math.max(1, Math.min(2, (level as Integer) ?: 1))
+    if (!requireNotNull(level, "setMistLevel")) return
+    Integer lvl = (level as Integer)
+    if (lvl <= 0) { off(); return }
+    Integer clamped = Math.max(1, Math.min(2, lvl))
     ensureSwitchOn()
-    def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "setVirtualLevel(mist,${lvl})")
+    def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: clamped, levelType: "mist"], "setVirtualLevel(mist,${clamped})")
     if (httpOk(resp)) {
-        state.mistLevel = lvl
-        device.sendEvent(name:"mistLevel", value: lvl)
-        logInfo "Mist level: ${lvl}"
+        state.mistLevel = clamped
+        device.sendEvent(name:"mistLevel", value: clamped)
+        logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
+        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -227,7 +230,10 @@ def setMistLevel(level){
 // Range: 30-80 % per device_map.py target_minmax=(30,80).
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
-    Integer p = Math.max(30, Math.min(80, (percent as Integer) ?: 50))
+    if (!requireNotNull(percent, "setHumidity")) return
+    Integer p = (percent as Integer)
+    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
+    p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [targetHumidity: p], "setTargetHumidity(${p})")
     if (httpOk(resp)) {
         state.targetHumidity = p

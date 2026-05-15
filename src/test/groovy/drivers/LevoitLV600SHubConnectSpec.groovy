@@ -418,12 +418,12 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         !req.data.containsKey("type")
     }
 
-    def "setMistLevel clamps values below 1 to 1"() {
-        given:
-        settings.descriptionTextEnable = false
+    def "setMistLevel(1) passes through as the minimum valid level"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
-        driver.setMistLevel(0)
+        driver.setMistLevel(1)
 
         then:
         def req = testParent.allRequests.find { it.method == "setVirtualLevel" }

@@ -810,4 +810,49 @@ class LevoitEverestAirSpec extends HubitatSpec {
         req.data.lightDetectionSwitch == 0
         lastEventValue("lightDetection") == "off"
     }
+
+    // -------------------------------------------------------------------------
+    // Tier-3 regression tests (v2.5 batch)
+    // -------------------------------------------------------------------------
+
+    def "on() re-entrance guard: second call while turningOn=true is a no-op (Fix 1)"() {
+        // Regression guard: BP24-B fix adds state.turningOn guard to on().
+        // If ensureSwitchOn() calls on() recursively, the second call must short-circuit.
+        given:
+        state.turningOn = true
+
+        when:
+        driver.on()
+
+        then: "no setSwitch API call because re-entrance was blocked"
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "setFanSpeed(null) is rejected with logWarn and no API call (BP18 Fix 2)"() {
+        // Pre-fix: (null as Integer) -> NPE in sandbox or ?: 1 silently set speed to 1.
+        // Post-fix: requireNotNull rejects null before any coercion.
+        when:
+        driver.setFanSpeed(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+        testLog.warns.any { it.contains("setFanSpeed") || it.contains("null") }
+    }
+
+    def "setFanSpeed(2) calls ensureSwitchOn() (BP24-B Fix 2)"() {
+        // Pre-fix: setFanSpeed had no ensureSwitchOn() call — device stayed off.
+        // Post-fix: ensureSwitchOn() fires before the API write.
+        // We verify by seeding switch=off and confirming on() was called (setSwitch fired).
+        given: "device is off"
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when:
+        driver.setFanSpeed(2)
+
+        then: "setSwitch (on) AND setLevel (fan speed) both sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+        testParent.allRequests.find { it.method == "setLevel" && it.data.manualSpeedLevel == 2 } != null
+    }
 }

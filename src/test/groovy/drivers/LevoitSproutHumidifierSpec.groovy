@@ -373,15 +373,38 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         !call.data.containsKey("type")
     }
 
-    def "setMistLevel clamps to 1-2 range (2-level hardware)"() {
+    def "setMistLevel(0) routes to off() (SwitchLevel setLevel(0) convention)"() {
         when:
-        driver.setMistLevel(0)   // below min -> 1
-        driver.setMistLevel(9)   // above max -> 2 (Sprout max is 2, not 9)
+        driver.setMistLevel(0)
+
+        then: "setSwitch off was sent, no setVirtualLevel call"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+    }
+
+    def "setMistLevel(1) passes through as the minimum valid level (Sprout floor)"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(1)
 
         then:
         def calls = testParent.allRequests.findAll { it.method == "setVirtualLevel" }
+        calls.size() == 1
         calls[0].data.virtualLevel == 1
-        calls[1].data.virtualLevel == 2
+    }
+
+    def "setMistLevel(9) clamps to 2 (Sprout 2-level ceiling — NOT 9 like Classic 300S)"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(9)   // above max → 2 (Sprout max is 2, not 9)
+
+        then:
+        def calls = testParent.allRequests.findAll { it.method == "setVirtualLevel" }
+        calls.size() == 1
+        calls[0].data.virtualLevel == 2
     }
 
     // -------------------------------------------------------------------------

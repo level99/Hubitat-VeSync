@@ -582,4 +582,43 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         req != null
         req.data.autoStopSwitch == 0
     }
+
+    // -------------------------------------------------------------------------
+    // Tier-3 regression tests — setTargetHumidity null/0/valid (Fix 5)
+    // -------------------------------------------------------------------------
+
+    def "setTargetHumidity(null) is rejected with logWarn and no API call (BP18 Fix 5)"() {
+        // Pre-fix: (null as Integer) ?: 50 silently set humidity to 50; no warning.
+        // Post-fix: requireNotNull rejects null before coercion.
+        when:
+        driver.setTargetHumidity(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setTargetHumidity" }.isEmpty()
+        testLog.warns.any { it.contains("setTargetHumidity") || it.contains("null") }
+    }
+
+    def "setTargetHumidity(0) is rejected with logWarn and no API call (Fix 5 — 0% is not valid)"() {
+        // 0% is not a meaningful humidifier target. Pre-fix: clamped to 30 silently.
+        // Post-fix: p <= 0 → logWarn + return before the API call.
+        when:
+        driver.setTargetHumidity(0)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setTargetHumidity" }.isEmpty()
+        testLog.warns.any { it.contains("0") }
+    }
+
+    def "setTargetHumidity(50) sends setTargetHumidity {targetHumidity:50} (Fix 5 happy path)"() {
+        when:
+        driver.setTargetHumidity(50)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
+        req != null
+        req.data.targetHumidity == 50
+        lastEventValue("targetHumidity") == 50
+    }
 }

@@ -1364,4 +1364,45 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         and: "no error was logged"
         testLog.errors.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // Tier-3 regression tests — range clamp (Fix 3)
+    // -------------------------------------------------------------------------
+
+    def "setHorizontalRange(-10, 200) clamps to (0, 100) — out-of-range inputs rejected gracefully"() {
+        // Pre-fix: (level as Integer) accepted -10 and 200 directly — pyvesync range is 0-100.
+        // Post-fix: Math.max(0, Math.min(100, val)) clamps each bound.
+        when:
+        driver.setHorizontalRange(-10, 200)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
+        req != null
+        req.data.left  == 0    // -10 clamped to 0
+        req.data.right == 100  // 200 clamped to 100
+        noExceptionThrown()
+    }
+
+    def "setVerticalRange(-10, 200) clamps to (0, 100) — out-of-range inputs rejected gracefully"() {
+        when:
+        driver.setVerticalRange(-10, 200)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
+        req != null
+        req.data.top    == 0    // -10 clamped to 0
+        req.data.bottom == 100  // 200 clamped to 100
+        noExceptionThrown()
+    }
+
+    def "setHorizontalRange valid in-bounds values pass through unchanged"() {
+        when:
+        driver.setHorizontalRange(10, 80)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
+        req != null
+        req.data.left  == 10
+        req.data.right == 80
+    }
 }

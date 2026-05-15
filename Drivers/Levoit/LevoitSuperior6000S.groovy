@@ -159,17 +159,20 @@ def setMode(mode){
 // ---------- Mist level ----------
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    if (!requireNotNull(level, "setMistLevel")) return
+    Integer lvl = (level as Integer)
+    if (lvl <= 0) { off(); return }
+    Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
-    def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "setVirtualLevel(${lvl})")
+    def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: clamped, levelType: "mist"], "setVirtualLevel(${clamped})")
     if (httpOk(resp)) {
-        state.virtualLevel = lvl
-        device.sendEvent(name:"virtualLevel", value: lvl)
-        device.sendEvent(name:"level", value: percentFromLevel(lvl))
-        logInfo "Mist level: ${lvl}"
+        state.virtualLevel = clamped
+        device.sendEvent(name:"virtualLevel", value: clamped)
+        device.sendEvent(name:"level", value: percentFromLevel(clamped))
+        logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${lvl}"
-        recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
+        logError "Mist level write failed: ${clamped}"
+        recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -200,7 +203,10 @@ def setLevel(val){
 // ---------- Target humidity ----------
 def setTargetHumidity(percent){
     logDebug "setTargetHumidity(${percent})"
-    Integer p = Math.max(30, Math.min(80, (percent as Integer) ?: 50))
+    if (!requireNotNull(percent, "setTargetHumidity")) return
+    Integer p = (percent as Integer)
+    if (p <= 0) { logWarn "setTargetHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
+    p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [targetHumidity: p], "setTargetHumidity(${p})")
     if (httpOk(resp)) {
         state.targetHumidity = p

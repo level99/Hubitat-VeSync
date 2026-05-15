@@ -299,19 +299,19 @@ exemptions:
   - rule_id: "RULE32_auto_on_guard_missing"
     file: "Drivers/Levoit/LevoitEverestAir.groovy"
     reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 206 and setFanSpeed()
-      line 234. setFanSpeed is SHOULD-ON. setMode classification is deferred
-      pending live-capture: EverestAir uses V2 API (VeSyncAirBaseV2 class),
-      and if the V2 API rejects mode changes while off (same behaviour as Vital
-      line setMode), then setMode is SKIP-OK rather than SHOULD-ON. Remove this
-      entry when Tier-3 live-capture confirms the mode classification and the
-      BP24-B fix lands on EverestAir.
+      SKIP-OK-pending exemption: setFanSpeed() is now fixed (ensureSwitchOn() added,
+      v2.5 Tier-3 batch). Only remaining BP24-B site is setMode(), deferred pending
+      live-capture: EverestAir uses V2 API (VeSyncAirBaseV2 class); if the V2 API
+      rejects mode changes while off (same behaviour as Vital line setMode), then
+      setMode is SKIP-OK rather than SHOULD-ON. Remove this entry when Tier-3
+      live-capture confirms the mode classification and either the fix lands or
+      setMode is promoted to bp24_auto_on_exemptions.
 
   - rule_id: "RULE32_auto_on_guard_missing"
     file: "Drivers/Levoit/LevoitSproutAir.groovy"
     reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 188 and setFanSpeed()
-      line 212. setFanSpeed is SHOULD-ON. setMode classification deferred
-      pending live-capture (same V2-API concern as EverestAir). Remove this
-      entry when Tier-3 live-capture confirms the mode classification and the
-      BP24-B fix lands on SproutAir.
+      SKIP-OK-pending exemption: setFanSpeed() is now fixed (ensureSwitchOn() added,
+      v2.5 Tier-3 batch). Only remaining BP24-B site is setMode(), deferred pending
+      live-capture (same V2-API concern as EverestAir). Remove this entry when
+      Tier-3 live-capture confirms the mode classification and either the fix lands
+      or setMode is promoted to bp24_auto_on_exemptions.

@@ -415,15 +415,38 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
         !call.data.containsKey("type")  // NOT {type: 'mist'}
     }
 
-    def "setMistLevel clamps to 1-9 range"() {
+    def "setMistLevel(0) routes to off() (SwitchLevel setLevel(0) convention)"() {
         when:
-        driver.setMistLevel(0)    // below min → 1
+        driver.setMistLevel(0)
+
+        then: "setSwitch off was sent, no virtualLevel call"
+        testParent.allRequests.findAll { it.method == "virtualLevel" }.isEmpty()
+    }
+
+    def "setMistLevel(1) passes through as the minimum valid level (OasisMist 1000S floor)"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(1)
+
+        then:
+        def calls = testParent.allRequests.findAll { it.method == "virtualLevel" }
+        calls.size() == 1
+        calls[0].data.virtualLevel == 1
+    }
+
+    def "setMistLevel(10) clamps to 9 (OasisMist 1000S ceiling)"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
         driver.setMistLevel(10)   // above max → 9
 
         then:
         def calls = testParent.allRequests.findAll { it.method == "virtualLevel" }
-        calls[0].data.virtualLevel == 1
-        calls[1].data.virtualLevel == 9
+        calls.size() == 1
+        calls[0].data.virtualLevel == 9
     }
 
     // -------------------------------------------------------------------------
