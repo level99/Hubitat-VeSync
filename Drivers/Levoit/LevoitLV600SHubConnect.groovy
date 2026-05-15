@@ -191,7 +191,7 @@ def off(){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) {
         logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"
         recordError("Invalid mode: ${m}", [method:"setHumidityMode"])
@@ -219,7 +219,7 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    Integer lvl = (level as Integer)
+    Integer lvl = safeIntArg(level, 0)
     if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
@@ -242,7 +242,7 @@ def setMistLevel(level){
 //   Source: pyvesync LUH-A603S-WUS.yaml set_warm_off: (warmLevel:0 case from set_warm_level)
 def setWarmMistLevel(level){
     logDebug "setWarmMistLevel(${level})"
-    Integer lvl = (level as Integer) ?: 0
+    Integer lvl = safeIntArg(level, 0)   // BP26: safeIntArg never throws on non-numeric RM input
     if (lvl < 0 || lvl > 3) {
         logError "Invalid warm mist level ${lvl} -- must be 0-3 (0=off, 1-3=warm intensity)"
         recordError("Invalid warm mist level ${lvl}", [method:"setLevel"])
@@ -274,7 +274,7 @@ def setWarmMistLevel(level){
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
     if (!requireNotNull(percent, "setHumidity")) return
-    Integer p = (percent as Integer)
+    Integer p = safeIntArg(percent, 0)
     if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
     p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [targetHumidity: p], "setTargetHumidity(${p})")

@@ -221,7 +221,7 @@ def toggle(){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual","turbo"])) {
         logError "Invalid mode: ${m} -- must be: auto, sleep, manual, turbo"
         recordError("Invalid mode: ${m}", [method:"setPurifierMode"])
@@ -250,7 +250,7 @@ def setFanSpeed(speed){
     logDebug "setFanSpeed(${speed})"
     // BP18: null-guard — Rule Machine blank slots pass null; silent coercion to speed 1 is wrong.
     if (!requireNotNull(speed, "setFanSpeed")) return
-    Integer spd = Math.max(1, Math.min(3, (speed as Integer)))
+    Integer spd = Math.max(1, Math.min(3, safeIntArg(speed, 1)))
     // BP24-B: auto-on from off-state. on() re-entrance guard (state.turningOn) prevents recursion
     // when setMode("manual") delegates here and on() calls setFanSpeed internally.
     ensureSwitchOn()
@@ -273,8 +273,8 @@ def setDisplay(onOff){
     if (!requireNotNull(onOff, "setDisplay")) return
     // BP25: normalize to lowercase before payload coercion.
     // "ON" evaluates ("ON" == "on") as false → sends screenSwitch:0 (off) when intent was on.
-    String v = (onOff as String).toLowerCase()
-    Integer sw = (v == "on") ? 1 : 0
+    String v = (onOff as String).trim().toLowerCase()
+    Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${v})")
     if (httpOk(resp)) {
         device.sendEvent(name:"displayOn", value: v)
@@ -291,8 +291,8 @@ def setChildLock(onOff){
     if (!requireNotNull(onOff, "setChildLock")) return
     // BP25: normalize to lowercase before payload coercion.
     // "ON" evaluates ("ON" == "on") as false → sends childLockSwitch:0 (unlocked) when intent was locked.
-    String v = (onOff as String).toLowerCase()
-    Integer sw = (v == "on") ? 1 : 0
+    String v = (onOff as String).trim().toLowerCase()
+    Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${v})")
     if (httpOk(resp)) {
         device.sendEvent(name:"childLock", value: v)
@@ -312,8 +312,8 @@ def setLightDetection(onOff){
     if (!requireNotNull(onOff, "setLightDetection")) return
     // BP25: normalize to lowercase before payload coercion.
     // "ON" evaluates ("ON" == "on") as false → sends lightDetectionSwitch:0 (off) when intent was on.
-    String v = (onOff as String).toLowerCase()
-    Integer sw = (v == "on") ? 1 : 0
+    String v = (onOff as String).trim().toLowerCase()
+    Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setLightDetection", [lightDetectionSwitch: sw], "setLightDetection(${v})")
     if (httpOk(resp)) {
         device.sendEvent(name:"lightDetection", value: v)
@@ -346,10 +346,10 @@ def resetFilter(){
 // The Tower Fan uses setTimer/clearTimer (different device class) -- do NOT use those names here.
 def setTimer(seconds, action="off"){
     if (!requireNotNull(seconds, "setTimer")) return
-    int secs = seconds as Integer
+    int secs = safeIntArg(seconds, 0)   // BP26: safeIntArg never throws on non-numeric RM input
     if (secs <= 0) { cancelTimer(); return }
     // action defaults to "off" in the Groovy signature; only null-guard when explicitly null
-    String act = (action != null) ? (action as String).toLowerCase() : "off"
+    String act = (action != null) ? (action as String).trim().toLowerCase() : "off"
     if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"addTimerV2"]); return }
     logDebug "setTimer(${secs}s, action=${act})"
     int actVal = (act == "on") ? 1 : 0

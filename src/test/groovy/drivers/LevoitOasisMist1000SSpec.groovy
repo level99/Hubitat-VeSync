@@ -804,4 +804,68 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
         req != null
         req.data.nightLightSwitch == 0
     }
+
+    // -------------------------------------------------------------------------
+    // BP26: safe numeric coercion — setNightlight brightness (2nd param)
+    // RULE37 is first-param-only by design; non-first-param coercions are gated
+    // by Spock regression specs instead of lint. setNightlight brightness is the
+    // canonical worked example of this pattern.
+    // -------------------------------------------------------------------------
+
+    def "BP26: setNightlight('on', 50) happy path — numeric brightness reaches API unchanged"() {
+        // Baseline: confirms the brightness path works correctly with a valid numeric input.
+        // safeIntArg(50, 0) → 50; Math.max(0, Math.min(100, 50)) = 50; nlSwitch = 1.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-M101S-WEUR"
+
+        when:
+        driver.setNightlight("on", 50)
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness      == 50
+        req.data.nightLightSwitch == 1
+    }
+
+    def "BP26: setNightlight('on', '#badBr') does not throw; brightness coerces to 0, nightLightSwitch=0"() {
+        // safeIntArg("abc"/""/true → fallback 0) → Math.max(0,Math.min(100,0)) = 0.
+        // nl="on", br=0 → nlSwitch = (0>0)?1:0 = 0. setLightStatus called with brightness=0.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-M101S-WEUR"
+
+        when:
+        driver.setNightlight("on", badBr)
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness       == 0
+        req.data.nightLightSwitch == 0
+
+        where:
+        badBr << ["abc", "", true]
+    }
+
+    def "BP26: setNightlight('on', '55.7') does not throw; brightness truncates to 55, nightLightSwitch=1"() {
+        // safeIntArg("55.7", 0) → BigDecimal("55.7").intValue() = 55 (truncation).
+        // Math.max(0, Math.min(100, 55)) = 55. nlSwitch = (55>0)?1:0 = 1.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-M101S-WEUR"
+
+        when:
+        driver.setNightlight("on", "55.7")
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness       == 55
+        req.data.nightLightSwitch == 1
+    }
 }

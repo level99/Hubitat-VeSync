@@ -125,7 +125,7 @@ def off(){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    String m = (mode as String).trim().toLowerCase()
     // Validate BEFORE ensureSwitchOn() so invalid input does not auto-turn on an off device.
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     ensureSwitchOn()
@@ -156,7 +156,7 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    Integer lvl = (level as Integer)
+    Integer lvl = safeIntArg(level, 0)
     if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
@@ -175,7 +175,7 @@ def setMistLevel(level){
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
     if (!requireNotNull(percent, "setHumidity")) return
-    Integer p = (percent as Integer)
+    Integer p = safeIntArg(percent, 0)
     if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
     p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [target_humidity: p], "setTargetHumidity(${p})")
@@ -193,7 +193,7 @@ def setHumidity(percent){
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return false
-    String val = (onOff as String).toLowerCase()
+    String val = (onOff as String).trim().toLowerCase()
     if (device.currentValue("displayOn") == val) return  // C3 state-change gate
     Boolean v = (val == "on")
     def resp = hubBypass("setDisplay", [state: v], "setDisplay(${val})")
@@ -213,7 +213,7 @@ def setAutoStop(onOff){
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" from Rule Machine bypasses the gate and evaluates ("ON"=="on") as false
     // → sets enabled:false (disables auto-stop) when the intent was to enable it.
-    String v = (onOff as String).toLowerCase()
+    String v = (onOff as String).trim().toLowerCase()
     if (device.currentValue("autoStopEnabled") == v) return  // C3 state-change gate
     def resp = hubBypass("setAutomaticStop", [enabled: (v == "on")], "setAutomaticStop(${v})")
     if (httpOk(resp)) {
@@ -241,7 +241,7 @@ def setAutoStop(onOff){
 def setNightLight(level){
     logDebug "setNightLight(${level})"
     if (level == null) { logWarn "setNightLight called with null level (likely empty Rule Machine action parameter); ignoring"; return }
-    String lvlStr = (level as String).toLowerCase()
+    String lvlStr = (level as String).trim().toLowerCase()
     // Night-light is discrete 3-step only (HA finding #9 -- physical device constraint)
     Map nlNameToInt = [off: 0, dim: 50, bright: 100]
     if (!nlNameToInt.containsKey(lvlStr)) {

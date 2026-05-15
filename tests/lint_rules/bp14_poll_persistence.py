@@ -121,8 +121,11 @@ def check_rule34_bp14_poll_persistence(path, raw_lines, cleaned_lines, raw_text,
                 "See VeSyncIntegration v2.2+ for the canonical implementation.",
         ))
 
-    # Check 3: schedule() must be called (confirms the cron is actually armed)
-    if not SCHEDULE_CALL_PATTERN.search(raw_text):
+    # Check 3: schedule() must be called (confirms the cron is actually armed).
+    # Search comment-stripped source so "// forgot to call schedule()" in a comment
+    # does not suppress a real missing-schedule() finding.
+    cleaned_text = '\n'.join(cleaned_lines)
+    if not SCHEDULE_CALL_PATTERN.search(cleaned_text):
         findings.append(_making_finding(
             severity="FAIL",
             rule_id="RULE34_missing_schedule_call",

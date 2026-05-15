@@ -76,6 +76,7 @@ metadata {
         attribute "mode", "string"
         attribute "pm25", "number"
         attribute "airQualityIndex", "number"
+        attribute "airQuality", "string"
         attribute "petMode", "string"
         attribute "autoPreference", "string"
         attribute "roomSize", "number"

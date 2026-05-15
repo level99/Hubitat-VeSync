@@ -693,4 +693,103 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         req.data.nightLightSwitch == 0
         req.data.brightness == 0
     }
+
+    // -------------------------------------------------------------------------
+    // BP26: safe numeric coercion — setNightlight brightness + colorTemp (2nd + 3rd params)
+    // RULE37 is first-param-only by design; non-first-param coercions are gated
+    // by Spock regression specs instead of lint. setNightlight brightness/colorTemp
+    // is the canonical worked example of this pattern for multi-param methods.
+    // -------------------------------------------------------------------------
+
+    def "BP26: setNightlight('on', 80, 2700) happy path — both numeric params reach API unchanged"() {
+        // Baseline: confirms safeIntArg correctly passes-through valid numeric inputs.
+        // safeIntArg(80, 0) = 80; safeIntArg(2700, 3500) = 2700; nlSwitch=1.
+        when:
+        driver.setNightlight("on", 80, 2700)
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness        == 80
+        req.data.colorTemperature  == 2700
+        req.data.nightLightSwitch  == 1
+    }
+
+    def "BP26: setNightlight('on', '#badBr') does not throw; garbage brightness coerces to fallback 0 then promoted to 50"() {
+        // safeIntArg("abc"/""/true → fallback 0) → Math.max(0,Math.min(100,0)) = 0 → br=0.
+        // nl="on", not-off branch: br==0 → promoted to 50 (Sprout's "turn on with no brightness" default).
+        // colorTemp: null → skips safeIntArg → null → in on-branch: ct = ct ?: 3500 = 3500.
+        // nlSwitch = ("on"=="on" && 50>0) ? 1 : 0 = 1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setNightlight("on", badBr)
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness       == 50
+        req.data.colorTemperature == 3500
+        req.data.nightLightSwitch == 1
+
+        where:
+        badBr << ["abc", "", true]
+    }
+
+    def "BP26: setNightlight('on', '55.7') does not throw; brightness truncates to 55"() {
+        // safeIntArg("55.7", 0) → BigDecimal("55.7").intValue() = 55 (truncation).
+        // Math.max(0, Math.min(100, 55)) = 55. br=55, not 0 → not promoted. nlSwitch=1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setNightlight("on", "55.7")
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness       == 55
+        req.data.nightLightSwitch == 1
+    }
+
+    def "BP26: setNightlight('on', 50, 'abc') does not throw; garbage colorTemp coerces to fallback 3500"() {
+        // safeIntArg("abc", 3500) → fallback 3500. Math.max(2000, Math.min(3500, 3500)) = 3500.
+        // brightness=50: safeIntArg(50, 0) = 50; not promoted (br!=0). nlSwitch=1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setNightlight("on", 50, "abc")
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness       == 50
+        req.data.colorTemperature == 3500
+        req.data.nightLightSwitch == 1
+    }
+
+    def "BP26: setNightlight('on', 50, '2750.9') does not throw; colorTemp truncates to 2750"() {
+        // safeIntArg("2750.9", 3500) → BigDecimal("2750.9").intValue() = 2750 (truncation).
+        // Math.max(2000, Math.min(3500, 2750)) = 2750 (within range, no clamping).
+        // brightness=50 unchanged; nlSwitch=1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setNightlight("on", 50, "2750.9")
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness       == 50
+        req.data.colorTemperature == 2750
+        req.data.nightLightSwitch == 1
+    }
 }

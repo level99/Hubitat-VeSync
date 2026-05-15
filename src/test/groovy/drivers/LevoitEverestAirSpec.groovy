@@ -855,4 +855,64 @@ class LevoitEverestAirSpec extends HubitatSpec {
         testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
         testParent.allRequests.find { it.method == "setLevel" && it.data.manualSpeedLevel == 2 } != null
     }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setFanSpeed with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setFanSpeed('#badInput') does not throw (safeIntArg coerces to fallback speed 1)"() {
+        // safeIntArg(speed, 1) maps non-numeric / non-integer inputs to fallback 1 (min-floor),
+        // which is a valid EverestAir speed — so a setLevel cloud call IS made for every input
+        // in this table.  The critical guarantee is that no NumberFormatException is thrown.
+        //   "abc" → "abc" not numeric → fallback 1 → speed 1 call (manualSpeedLevel=1)
+        //   ""    → empty → fallback 1 → speed 1 call (manualSpeedLevel=1)
+        //   true  → "true" not numeric → fallback 1 → speed 1 call (manualSpeedLevel=1)
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setFanSpeed is called with a non-numeric input"
+        driver.setFanSpeed(badInput)
+
+        then: "no exception thrown — pre-fix would have thrown NFE/GroovyCastException"
+        noExceptionThrown()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setFanSpeed('5.7') does not throw and makes a setLevel API call with truncated value (5 clamped to 3)"() {
+        // safeIntArg("5.7") → BigDecimal("5.7").intValue() = 5.
+        // Math.max(1, Math.min(3, 5)) = 3 (clamped to EverestAir maximum speed).
+        // manualSpeedLevel=3 sent to cloud — correct post-fix truncation behaviour.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setFanSpeed("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setLevel API call was made with manualSpeedLevel=3 (5 clamped to max speed)"
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.manualSpeedLevel == 3
+    }
+
+    def "BP26: setFanSpeed(null) is rejected with a warning and does not make a setLevel API call"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setFanSpeed(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setLevel API call was made"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
 }

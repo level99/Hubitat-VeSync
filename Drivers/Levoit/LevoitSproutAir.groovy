@@ -195,7 +195,7 @@ def toggle(){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setPurifierMode"]); return }
     if (m == "manual") {
         // Manual established by setting fan speed (same as pyvesync VeSyncAirBaseV2.set_mode(MANUAL))
@@ -220,7 +220,7 @@ def setFanSpeed(speed){
     logDebug "setFanSpeed(${speed})"
     // BP18: null-guard — Rule Machine blank slots pass null; silent coercion to speed 1 is wrong.
     if (!requireNotNull(speed, "setFanSpeed")) return
-    Integer spd = Math.max(1, Math.min(3, (speed as Integer)))
+    Integer spd = Math.max(1, Math.min(3, safeIntArg(speed, 1)))
     // BP24-B: auto-on from off-state. on() re-entrance guard (state.turningOn) prevents recursion
     // when setMode("manual") delegates here and on() calls setFanSpeed internally.
     ensureSwitchOn()
@@ -242,8 +242,8 @@ def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return
     // BP25: normalize to lowercase before payload coercion.
-    String v = (onOff as String).toLowerCase()
-    Integer sw = (v == "on") ? 1 : 0
+    String v = (onOff as String).trim().toLowerCase()
+    Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${v})")
     if (httpOk(resp)) {
         device.sendEvent(name:"displayOn", value: v)
@@ -259,8 +259,8 @@ def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
     if (!requireNotNull(onOff, "setChildLock")) return
     // BP25: normalize to lowercase before payload coercion.
-    String v = (onOff as String).toLowerCase()
-    Integer sw = (v == "on") ? 1 : 0
+    String v = (onOff as String).trim().toLowerCase()
+    Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${v})")
     if (httpOk(resp)) {
         device.sendEvent(name:"childLock", value: v)
@@ -279,7 +279,7 @@ def setChildLock(onOff){
 def setNightlightMode(nlMode){
     logDebug "setNightlightMode(${nlMode})"
     if (nlMode == null) { logWarn "setNightlightMode called with null nlMode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (nlMode as String).toLowerCase()
+    String m = (nlMode as String).trim().toLowerCase()
     if (!(m in ["on","off","dim"])) { logError "Invalid nightlight mode: ${m} -- must be: on, off, dim"; recordError("Invalid nightlight mode: ${m}", [method:"setNightLight"]); return }
     def resp = hubBypass("setNightLight", [night_light: m], "setNightLight(${m})")
     if (httpOk(resp)) {

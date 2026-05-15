@@ -1426,6 +1426,93 @@ class TestBP1Missing1ArgUpdate:
 
 
 # ---------------------------------------------------------------------------
+# RULE33 — BP25 case-sensitivity (set* methods, on/off param normalization)
+# ---------------------------------------------------------------------------
+
+class TestRule33CaseSensitivity:
+    """
+    RULE33 (Bug Pattern #25): set* methods must call toLowerCase() before comparing
+    a raw on/off parameter against the string literals "on" / "off".
+    """
+
+    from lint_rules.bp25_case_sensitivity import check_rule33_case_sensitivity as _rule
+
+    # A method that normalizes before comparing — must NOT flag.
+    GOOD_NORMALIZED = textwrap.dedent("""\
+        def setChildLock(onOff) {
+            if (!requireNotNull(onOff, "setChildLock")) return
+            String v = (onOff as String).toLowerCase()
+            if (device.currentValue("childLock") == v) return true
+            Integer sw = (v == "on") ? 1 : 0
+            hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${v})")
+        }
+    """)
+
+    # A method that compares raw onOff against "on" without toLowerCase() — MUST flag.
+    BAD_RAW_COMPARE = textwrap.dedent("""\
+        def setChildLock(onOff) {
+            if (!requireNotNull(onOff, "setChildLock")) return
+            Integer sw = (onOff == "on") ? 1 : 0
+            hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${onOff})")
+        }
+    """)
+
+    # A method that compares a DIFFERENT var (not the raw param) without toLowerCase.
+    # The rule skips derived-variable comparisons (param is "onOff"; compared var is "v").
+    GOOD_DERIVED_NO_LOWER = textwrap.dedent("""\
+        def setDisplay(onOff) {
+            String v = onOff ? "on" : "off"
+            Integer sw = (v == "on") ? 1 : 0
+            hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${v})")
+        }
+    """)
+
+    def test_normalized_passes(self):
+        from lint_rules.bp25_case_sensitivity import check_rule33_case_sensitivity
+        findings = run_rule(check_rule33_case_sensitivity, self.GOOD_NORMALIZED)
+        assert findings == [], f"Expected no findings on normalized method, got: {findings}"
+
+    def test_raw_compare_fails(self):
+        """Comparing raw param against 'on' without toLowerCase() must flag RULE33 with severity FAIL."""
+        from lint_rules.bp25_case_sensitivity import check_rule33_case_sensitivity
+        findings = run_rule(check_rule33_case_sensitivity, self.BAD_RAW_COMPARE)
+        assert any(f['rule_id'] == 'RULE33_case_sensitivity' for f in findings), (
+            f"Expected RULE33_case_sensitivity, got: {findings}"
+        )
+        # Regression guard: missing severity key is a dead-gate — verify it's present and FAIL.
+        assert any(f.get('severity') == 'FAIL' for f in findings if f.get('rule_id') == 'RULE33_case_sensitivity'), (
+            f"RULE33 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_derived_variable_no_lower_passes(self):
+        """Rule only flags the raw parameter — derived local vars are not flagged."""
+        from lint_rules.bp25_case_sensitivity import check_rule33_case_sensitivity
+        findings = run_rule(
+            check_rule33_case_sensitivity, self.GOOD_DERIVED_NO_LOWER
+        )
+        assert not any(f['rule_id'] == 'RULE33_case_sensitivity' for f in findings), (
+            f"Derived-variable comparison must not trigger RULE33, got: {findings}"
+        )
+
+    def test_exemption_suppresses_finding(self):
+        """A config-level exemption must suppress the finding."""
+        from lint_rules.bp25_case_sensitivity import check_rule33_case_sensitivity
+        path = make_fake_path("TestDriver.groovy")
+        file_rel = str(path.relative_to(REPO_ROOT)).replace('\\', '/')
+        config = {
+            'bp25_case_sensitivity_exemptions': [
+                {'file': file_rel, 'method': 'setChildLock', 'rationale': 'test exemption'}
+            ]
+        }
+        findings = run_rule(
+            check_rule33_case_sensitivity, self.BAD_RAW_COMPARE, config=config
+        )
+        assert not any(f['rule_id'] == 'RULE33_case_sensitivity' for f in findings), (
+            f"Exempted method must not trigger RULE33, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # RULE34 — BP14 poll persistence (VeSyncIntegration only)
 # ---------------------------------------------------------------------------
 
@@ -1703,6 +1790,123 @@ class TestRule36BP22NetworkBreaker:
             check_rule36_bp22_network_breaker, self.BAD_MISSING_EMIT_DEF, "LevoitSuperior6000S"
         )
         assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# RULE37 — BP26 unsafe integer coercion in command parameters
+# ---------------------------------------------------------------------------
+
+class TestRule37BP26UnsafeIntCoercion:
+    """
+    RULE37 (Bug Pattern #26): set*/cycle* methods must not use bare ``as Integer``
+    or ``.toInteger()`` on untyped command parameters.  These throw on non-numeric
+    Rule Machine inputs before ``?:`` can rescue.  Use ``safeIntArg()`` instead.
+    """
+
+    from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion as _rule
+
+    GOOD_SAFE_INT_ARG = textwrap.dedent("""\
+        def setMistLevel(level) {
+            if (!requireNotNull(level, "setMistLevel")) return
+            Integer lvl = safeIntArg(level, 0)
+            if (lvl <= 0) { off(); return }
+            Integer clamped = Math.max(1, Math.min(9, lvl))
+            hubBypass("setVirtualLevel", [level: clamped], "setVirtualLevel(${clamped})")
+        }
+    """)
+
+    GOOD_TYPED_PARAM = textwrap.dedent("""\
+        def setMistLevel(Integer level) {
+            Integer lvl = (level as Integer) ?: 0
+            hubBypass("setVirtualLevel", [level: lvl], "setVirtualLevel(${lvl})")
+        }
+    """)
+
+    BAD_AS_INTEGER = textwrap.dedent("""\
+        def setMistLevel(level) {
+            Integer lvl = (level as Integer) ?: 0
+            if (lvl <= 0) { off(); return }
+            hubBypass("setVirtualLevel", [level: lvl], "setVirtualLevel(${lvl})")
+        }
+    """)
+
+    BAD_TO_INTEGER = textwrap.dedent("""\
+        def setFanSpeed(speed) {
+            Integer spd = speed.toInteger()
+            hubBypass("setLevel", [manualSpeedLevel: spd], "setLevel(${spd})")
+        }
+    """)
+
+    BAD_AS_INT = textwrap.dedent("""\
+        def setTargetHumidity(percent) {
+            Integer p = (percent as int)
+            hubBypass("setTargetHumidity", [targetHumidity: p], "setTarget(${p})")
+        }
+    """)
+
+    def test_safe_int_arg_passes(self):
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_SAFE_INT_ARG)
+        assert findings == [], f"safeIntArg usage must not flag, got: {findings}"
+
+    def test_typed_param_passes(self):
+        """Typed parameter (Integer level) is exempt — sandbox enforces type at dispatch."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_TYPED_PARAM)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Typed param must not flag RULE37, got: {findings}"
+        )
+
+    def test_as_integer_on_param_fails(self):
+        """Bare ``(level as Integer)`` on raw command param must flag RULE37 with severity FAIL."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_AS_INTEGER)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for (level as Integer), got: {findings}"
+        )
+        # Regression guard: missing severity key is a dead-gate — verify it's present and FAIL.
+        assert any(f.get('severity') == 'FAIL' for f in findings if f.get('rule_id') == 'RULE37_unsafe_int_coercion'), (
+            f"RULE37 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_to_integer_on_param_fails(self):
+        """``.toInteger()`` on raw command param must flag RULE37 with severity FAIL."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_TO_INTEGER)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for .toInteger(), got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings if f.get('rule_id') == 'RULE37_unsafe_int_coercion'), (
+            f"RULE37 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_as_int_on_param_fails(self):
+        """Bare ``(percent as int)`` on raw command param must flag RULE37 with severity FAIL."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_AS_INT)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for (percent as int), got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings if f.get('rule_id') == 'RULE37_unsafe_int_coercion'), (
+            f"RULE37 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_exemption_suppresses_finding(self):
+        """Config-level exemption must suppress the finding."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        path = make_fake_path("TestDriver.groovy")
+        file_rel = str(path.relative_to(REPO_ROOT)).replace('\\', '/')
+        config = {
+            'bp26_unsafe_int_coercion_exemptions': [
+                {'file': file_rel, 'method': 'setMistLevel', 'rationale': 'test exemption'}
+            ]
+        }
+        findings = run_rule(
+            check_rule37_unsafe_int_coercion, self.BAD_AS_INTEGER, config=config
+        )
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Exempted method must not flag RULE37, got: {findings}"
+        )
 
 
 # ---------------------------------------------------------------------------

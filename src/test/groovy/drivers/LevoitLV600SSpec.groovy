@@ -1036,4 +1036,29 @@ class LevoitLV600SSpec extends HubitatSpec {
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
         onReq != null
     }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setWarmMistLevel with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setWarmMistLevel('#badInput') does not throw and does not make a setVirtualLevel API call"() {
+        // safeIntArg coercion:
+        //   "abc" / "" / true  → 0 → warm-off guard (lvl==0 && switch!="on") → return
+        //   "5.7" → 5 → range guard (5 > 3) → logError + return
+        // In all cases no setVirtualLevel(warm) call is made; the critical guarantee is
+        // no NumberFormatException is thrown and swallowed silently.
+        given: "device is off so the lvl==0 short-circuit fires for zero-coerced inputs"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when:
+        driver.setWarmMistLevel(badInput)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", "5.7", true]
+    }
 }

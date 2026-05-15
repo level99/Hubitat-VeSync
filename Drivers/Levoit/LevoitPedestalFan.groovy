@@ -245,7 +245,7 @@ def setSpeed(spd){
     // setSpeed("off") must NOT trigger ensureSwitchOn() — the intent is explicitly to turn off.
     // setSpeed("on") short-circuits here too for symmetry (on() does everything needed).
     if (!(spd instanceof Number) && !(spd instanceof String && spd.isInteger())) {
-        String early = (spd as String).toLowerCase()
+        String early = (spd as String).trim().toLowerCase()
         if (early == "off") { off(); return }
         if (early == "on")  { on(); return }
     }
@@ -265,7 +265,7 @@ def setSpeed(spd){
         return
     }
     // Enum string (FanControl capability path)
-    String s = (spd as String).toLowerCase()
+    String s = (spd as String).trim().toLowerCase()
     if (s == "auto") { setMode("eco"); return }  // Pedestal Fan: auto maps to eco (no auto mode)
     Integer lvl = fanControlEnumToLevel(s)
     if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; recordError("setSpeed: unknown enum '${s}'", [method:"setLevel"]); return }
@@ -295,7 +295,7 @@ def setSpeed(spd){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["normal","turbo","eco","sleep"])) {
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|eco|sleep"
         recordError("setMode: invalid mode '${m}'", [method:"setFanMode"])
@@ -339,9 +339,9 @@ def setDisplay(o) { doSetDisplayScreenSwitch(o) }
 def setHorizontalOscillation(onOff){
     logDebug "setHorizontalOscillation(${onOff})"
     if (onOff == null) { logWarn "setHorizontalOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
-    String s = (onOff as String).toLowerCase()
+    String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setHorizontalOscillation: invalid value '${s}'"; recordError("setHorizontalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
-    Integer v = (s == "on") ? 1 : 0
+    Integer v = (s in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setOscillationStatus",
         [horizontalOscillationState: v, actType: "default"],
         "setOscillationStatus(H=${s})")
@@ -357,9 +357,9 @@ def setHorizontalOscillation(onOff){
 def setVerticalOscillation(onOff){
     logDebug "setVerticalOscillation(${onOff})"
     if (onOff == null) { logWarn "setVerticalOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
-    String s = (onOff as String).toLowerCase()
+    String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setVerticalOscillation: invalid value '${s}'"; recordError("setVerticalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
-    Integer v = (s == "on") ? 1 : 0
+    Integer v = (s in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setOscillationStatus",
         [verticalOscillationState: v, actType: "default"],
         "setOscillationStatus(V=${s})")
@@ -381,8 +381,8 @@ def setHorizontalRange(left, right){
     if (!requireNotNull(left, "setHorizontalRange left")) return
     if (!requireNotNull(right, "setHorizontalRange right")) return
     // Clamp to device valid range 0-100 (per pyvesync LPF-R423S.yaml fixture values and driver convention).
-    Integer l = Math.max(0, Math.min(100, (left as Integer)))
-    Integer r = Math.max(0, Math.min(100, (right as Integer)))
+    Integer l = Math.max(0, Math.min(100, safeIntArg(left, 0)))
+    Integer r = Math.max(0, Math.min(100, safeIntArg(right, 0)))
     def resp = hubBypass("setOscillationStatus",
         [horizontalOscillationState: 1, actType: "default", left: l, right: r],
         "setOscillationStatus(H_range=${l}..${r})")
@@ -405,8 +405,8 @@ def setVerticalRange(top, bottom){
     if (!requireNotNull(top, "setVerticalRange top")) return
     if (!requireNotNull(bottom, "setVerticalRange bottom")) return
     // Clamp to device valid range 0-100 (per pyvesync LPF-R423S.yaml fixture values and driver convention).
-    Integer t = Math.max(0, Math.min(100, (top as Integer)))
-    Integer b = Math.max(0, Math.min(100, (bottom as Integer)))
+    Integer t = Math.max(0, Math.min(100, safeIntArg(top, 0)))
+    Integer b = Math.max(0, Math.min(100, safeIntArg(bottom, 0)))
     def resp = hubBypass("setOscillationStatus",
         [verticalOscillationState: 1, actType: "default", top: t, bottom: b],
         "setOscillationStatus(V_range=${t}..${b})")
@@ -445,13 +445,13 @@ def setChildLock(onOff){
         logWarn "setChildLock called with null (likely empty Rule Machine action parameter); ignoring"
         return
     }
-    String s = (onOff as String).toLowerCase()
+    String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) {
         logError "setChildLock: invalid value '${s}' -- must be on|off"
         recordError("setChildLock invalid: ${s}", [method:"setChildLock"])
         return
     }
-    int v = (s == "on") ? 1 : 0
+    int v = (s in ["on","true","1","yes"]) ? 1 : 0
     // [PREVIEW v2.4] iteration #1: method setChildLock + payload {childLock} (symmetric to read field)
     def resp = hubBypass("setChildLock", [childLock: v], "setChildLock(${s})")
     if (httpOk(resp)) {
@@ -510,13 +510,13 @@ def setChildLock(onOff){
 def setSmartCleaningReminder(onOff){
     logDebug "setSmartCleaningReminder(${onOff})"
     if (onOff == null) { logWarn "setSmartCleaningReminder called with null; ignoring"; return }
-    String s = (onOff as String).toLowerCase()
+    String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) {
         logError "setSmartCleaningReminder: invalid value '${s}'"
         recordError("setSmartCleaningReminder invalid: ${s}", [method:"setSmartCleaningReminder"])
         return
     }
-    int v = (s == "on") ? 1 : 0
+    int v = (s in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setSmartCleaningReminder", [smartCleaningReminderState: v],
                          "setSmartCleaningReminder(${s})")
     if (httpOk(resp)) {

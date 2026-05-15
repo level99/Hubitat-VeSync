@@ -168,9 +168,9 @@ private boolean httpOk(resp) {
 def doSetDisplayScreenSwitch(onOff) {
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return false
-    String val = (onOff as String).toLowerCase()
+    String val = (onOff as String).trim().toLowerCase()
     if (device.currentValue("displayOn") == val) return true
-    Integer v = (val == "on") ? 1 : 0
+    Integer v = (val in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${val})")
     if (httpOk(resp)) {
         device.sendEvent(name:"displayOn", value: val)
@@ -183,9 +183,9 @@ def doSetDisplayScreenSwitch(onOff) {
 def doSetAutoStopSwitch(onOff) {
     logDebug "setAutoStop(${onOff})"
     if (!requireNotNull(onOff, "setAutoStop")) return false
-    String val = (onOff as String).toLowerCase()
+    String val = (onOff as String).trim().toLowerCase()
     if (device.currentValue("autoStopEnabled") == val) return true
-    Integer v = (val == "on") ? 1 : 0
+    Integer v = (val in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${val})")
     if (httpOk(resp)) {
         device.sendEvent(name:"autoStopEnabled", value: val)

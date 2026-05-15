@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 
 /**
@@ -764,5 +765,49 @@ class LevoitCore200SSpec extends HubitatSpec {
 
         and: "a warning was logged mentioning the invalid mode"
         testLog.warns.any { it.contains("invalid mode") || it.contains("badvalue") }
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setLevel with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    @Unroll
+    def "BP26: setLevel('#badInput') does not throw and does not make a setLevel API call (fallback=0 → off)"() {
+        // Inputs that safeIntArg() maps to 0: "abc" (not numeric), "" (empty), true ("true"
+        // is not a valid integer string).  0 → pct==0 → off() path; no setLevel speed call.
+        // Pre-fix: (level as Integer) on any of these threw before the guard could fire.
+        given: "device is on so the auto-on guard doesn't confuse the assertion"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setLevel (speed) API call — 0 coercion routes to off()"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setLevel('5.7') does not throw and makes a setLevel API call with truncated value (5 → speed 1)"() {
+        // safeIntArg("5.7") → BigDecimal("5.7").intValue() = 5 (truncation, not rounding).
+        // 5% < 33% → speed band 1.  setLevel(5) is a legitimate near-valid call — truncating
+        // matches Groovy's native (5.7 as Integer) and is the correct post-fix behaviour.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setLevel (speed) API call was made with level corresponding to speed 1"
+        !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
 }

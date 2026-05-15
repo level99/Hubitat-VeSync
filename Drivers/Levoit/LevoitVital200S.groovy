@@ -68,6 +68,7 @@ metadata {
         attribute "mode", "string"
         attribute "pm25", "number"
         attribute "airQualityIndex", "number"
+        attribute "airQuality", "string"
         attribute "petMode", "string"
         attribute "autoPreference", "string"
         attribute "roomSize", "number"
@@ -111,8 +112,8 @@ def setLightDetection(onOff) {
     logDebug "setLightDetection(${onOff})"
     if (!requireNotNull(onOff, "setLightDetection")) return
     // BP25: normalize to lowercase before payload coercion.
-    String v = (onOff as String).toLowerCase()
-    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: v == "on" ? 1 : 0], "setLightDetection(${v})")
+    String v = (onOff as String).trim().toLowerCase()
+    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: (v in ["on","true","1","yes"]) ? 1 : 0], "setLightDetection(${v})")
     if (httpOk(resp)) device.sendEvent(name:"lightDetection", value: v)
 }
 

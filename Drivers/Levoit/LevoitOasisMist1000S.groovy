@@ -176,7 +176,7 @@ def off(){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     def resp = hubBypass("setHumidityMode", [workMode: m], "setHumidityMode(${m})")
     if (httpOk(resp)) {
@@ -195,7 +195,7 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    Integer lvl = (level as Integer)
+    Integer lvl = safeIntArg(level, 0)
     if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
@@ -216,7 +216,7 @@ def setMistLevel(level){
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
     if (!requireNotNull(percent, "setHumidity")) return
-    Integer p = (percent as Integer)
+    Integer p = safeIntArg(percent, 0)
     if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
     p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [targetHumidity: p], "setTargetHumidity(${p})")
@@ -265,10 +265,10 @@ def setNightlight(onOff, brightness = null){
     if (!requireNotNull(onOff, "setNightlight")) return
     if (!isNightlightVariant()) return
     // BP25: normalize to lowercase before all comparisons.
-    String nl = (onOff as String).toLowerCase()
+    String nl = (onOff as String).trim().toLowerCase()
     if (brightness == null) {
         // Pure on/off toggle -- use setNightLightStatus (pyvesync toggle_nightlight path)
-        Integer nlSwitch = (nl == "on") ? 1 : 0
+        Integer nlSwitch = (nl in ["on","true","1","yes"]) ? 1 : 0
         def resp = hubBypass("setNightLightStatus", [nightLightSwitch: nlSwitch], "setNightLightStatus(${nl})")
         if (httpOk(resp)) {
             String onOffStr = (nlSwitch == 1) ? "on" : "off"
@@ -279,7 +279,7 @@ def setNightlight(onOff, brightness = null){
         }
     } else {
         // Brightness control -- use setLightStatus (pyvesync set_nightlight_brightness path)
-        Integer br = Math.max(0, Math.min(100, (brightness as Integer) ?: 0))
+        Integer br = Math.max(0, Math.min(100, safeIntArg(brightness, 0)))   // BP26: safeIntArg handles non-numeric RM input ("abc", "", "5.7")
         if (nl == "off") br = 0
         Integer nlSwitch = (br > 0) ? 1 : 0
         def resp = hubBypass("setLightStatus", [brightness: br, nightLightSwitch: nlSwitch], "setLightStatus(brightness=${br})")

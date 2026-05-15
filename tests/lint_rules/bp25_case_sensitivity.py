@@ -103,6 +103,22 @@ def _strip_line_comments(text: str) -> str:
     return re.sub(r'(?m)^\s*//.*$', '', text)
 
 
+def _making_finding(severity, rule_id, title, file_rel, lineno, raw_lines, why, fix):
+    start = max(0, lineno - 2)
+    end = min(len(raw_lines), lineno + 1)
+    context = '\n'.join(f"    {raw_lines[i]}" for i in range(start, end))
+    return {
+        'severity': severity,
+        'rule_id': rule_id,
+        'title': title,
+        'file': file_rel,
+        'line': lineno,
+        'context': context,
+        'why': why,
+        'fix': fix,
+    }
+
+
 def _build_exemption_set(config: dict) -> set:
     exemptions = set()
     entries = config.get('bp25_case_sensitivity_exemptions', [])
@@ -196,23 +212,31 @@ def check_rule33_case_sensitivity(
             continue
 
         # BP25 site: raw parameter compared without prior toLowerCase().
-        method_start_line = _line_of(raw_text, m.start())
         compare_line = _line_of(raw_text, brace_start + compare_pos)
 
-        findings.append({
-            'rule_id': 'RULE33_case_sensitivity',
-            'file': file_rel,
-            'line': compare_line,
-            'message': (
-                f'BP25: {method_name}() compares raw parameter `{param_name}` '
-                f'against "on"/"off" at line {compare_line} without a prior '
-                f'toLowerCase() normalization. Rule Machine/dashboards may pass '
-                f'"ON"/"OFF" — this bypasses the C3 gate and inverts the payload. '
-                f'Fix: add `String v = ({param_name} as String).toLowerCase()` '
-                f'immediately after the requireNotNull guard, then use `v` '
-                f'throughout the method.'
+        findings.append(_making_finding(
+            severity='FAIL',
+            rule_id='RULE33_case_sensitivity',
+            title=(
+                f'BP25: {method_name}() compares raw `{param_name}` against '
+                f'"on"/"off" without prior toLowerCase()'
             ),
-        })
+            file_rel=file_rel,
+            lineno=compare_line,
+            raw_lines=raw_lines,
+            why=(
+                f'Rule Machine and dashboards may pass "ON"/"OFF" (uppercase). '
+                f'Without toLowerCase() normalization: (a) the C3 idempotency gate '
+                f'(`device.currentValue("attr") == {param_name}`) evaluates false even '
+                f'when the device is already in the requested state; (b) the payload '
+                f'coercion (`{param_name} == "on" ? 1 : 0`) sends the OPPOSITE value.'
+            ),
+            fix=(
+                f'Add `String v = ({param_name} as String).trim().toLowerCase()` '
+                f'immediately after the requireNotNull guard, then use `v` throughout '
+                f'the method for all comparisons and payload coercions.'
+            ),
+        ))
 
     return findings
 

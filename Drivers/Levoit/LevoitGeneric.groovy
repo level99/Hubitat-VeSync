@@ -69,6 +69,7 @@ metadata {
         attribute "mode", "string"            // best-effort mode string if present in response
         attribute "filter", "number"          // filter/wick life % if present
         attribute "airQualityIndex", "number" // numeric AQ index (required by AirQuality capability)
+        attribute "airQuality", "string"      // human-readable AQ label ("Excellent", "Good", etc.)
 
         command "captureDiagnostics"
         command "toggle"

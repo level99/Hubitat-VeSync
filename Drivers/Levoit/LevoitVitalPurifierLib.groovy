@@ -196,7 +196,7 @@ def setLevel(val, duration) {
 // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
 def setLevel(val) {
     logDebug "setLevel $val"
-    Integer pct = Math.max(0, Math.min(100, (val as Integer) ?: 0))
+    Integer pct = Math.max(0, Math.min(100, safeIntArg(val, 0)))
     if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off.
     // state.turningOn is set by on() while configureOnState() runs async;
@@ -224,7 +224,7 @@ def setSpeed(spd) {
     logDebug "setSpeed(${spd})"
     if (!requireNotNull(spd, "setSpeed")) return
     // BP25: normalize to lowercase so Rule Machine "OFF"/"SLEEP" route correctly.
-    String s = (spd as String).toLowerCase()
+    String s = (spd as String).trim().toLowerCase()
     if (s == "off") return off()
     if (s == "sleep") { setMode("sleep"); device.sendEvent(name:"speed", value:"on"); return }
 
@@ -300,7 +300,7 @@ def setMode(mode) {
 def setPetMode(onOff) {
     if (!requireNotNull(onOff, "setPetMode")) return
     // BP25: normalize to lowercase before mode selection.
-    String v = (onOff as String).toLowerCase()
+    String v = (onOff as String).trim().toLowerCase()
     setMode(v == "on" ? "pet" : "auto")
 }
 
@@ -325,7 +325,7 @@ def setChildLock(onOff) {
     // Without this, "ON" bypasses the gate (gate compares against "on") AND the payload
     // coercion evaluates ("ON" == "on") as false → sends childLockSwitch:0 (unlock) when
     // the caller intended to lock. Both the gate and the coercion must see the same form.
-    String v = (onOff as String).toLowerCase()
+    String v = (onOff as String).trim().toLowerCase()
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
     if (device.currentValue("childLock") == v) return
     def resp = hubBypass("setChildLock", [childLockSwitch: v == "on" ? 1 : 0], "setChildLock")
@@ -339,7 +339,7 @@ def setDisplay(onOff) {
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return
     // BP25: normalize to lowercase before C3 gate and payload coercion (same rationale as setChildLock).
-    String v = (onOff as String).toLowerCase()
+    String v = (onOff as String).trim().toLowerCase()
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
     if (device.currentValue("display") == v) return
     def resp = hubBypass("setDisplay", [screenSwitch: v == "on" ? 1 : 0], "setDisplay")
@@ -358,7 +358,8 @@ def resetFilter() {
 // ---- Timer (V2-line uses addTimerV2 / delTimerV2) ----
 
 def setTimer(minutes) {
-    int n = (minutes as Integer) ?: 0
+    if (!requireNotNull(minutes, "setTimer")) return   // BP18: null-guard (RM blank slot)
+    int n = safeIntArg(minutes, 0)                     // BP26: safeIntArg never throws on non-numeric RM input
     logDebug "setTimer(${n} min)"
     if (n <= 0) { cancelTimer(); return }
     int secs = n * 60

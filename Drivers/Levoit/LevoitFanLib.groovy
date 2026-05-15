@@ -187,7 +187,7 @@ def setLevel(val, duration) {
 // BP23: setLevel(N>0) auto-turns-on when switch is off (SwitchLevel capability convention).
 def setLevel(val) {
     logDebug "setLevel(${val})"
-    Integer pct = Math.max(0, Math.min(100, (val as Integer) ?: 0))
+    Integer pct = Math.max(0, Math.min(100, safeIntArg(val, 0)))
     if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off.
     // state.turningOn guard set in on() prevents re-entrance.
@@ -275,9 +275,9 @@ private Integer levelFromPercent(Integer pct) {
 def doSetMuteSwitch(onOff) {
     logDebug "setMute(${onOff})"
     if (!requireNotNull(onOff, "setMute")) return
-    String s = (onOff as String).toLowerCase()
+    String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setMute: invalid value '${s}'"; recordError("setMute invalid: ${s}", [method:"setMuteSwitch"]); return }
-    int v = (s == "on") ? 1 : 0
+    int v = (s in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setMuteSwitch", [muteSwitch: v], "setMuteSwitch(${s})")
     if (httpOk(resp)) {
         device.sendEvent(name:"mute", value: s)
@@ -290,9 +290,9 @@ def doSetMuteSwitch(onOff) {
 def doSetDisplayScreenSwitch(onOff) {
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return
-    String s = (onOff as String).toLowerCase()
+    String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setDisplay: invalid value '${s}'"; recordError("setDisplay invalid: ${s}", [method:"setDisplay"]); return }
-    int v = (s == "on") ? 1 : 0
+    int v = (s in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${s})")
     if (httpOk(resp)) {
         device.sendEvent(name:"displayOn", value: s)

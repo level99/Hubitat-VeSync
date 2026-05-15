@@ -196,7 +196,7 @@ def setLevel(value)
 {
     logDebug "setLevel $value"
     // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
-    Integer pct = Math.max(0, Math.min(100, (value as Integer) ?: 0))
+    Integer pct = Math.max(0, Math.min(100, safeIntArg(value, 0)))
     // SwitchLevel convention: setLevel(0) means off (Z-Wave dimmer platform expectation).
     if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off (SwitchLevel capability convention).
@@ -216,7 +216,7 @@ def setLevel(value)
 def setSpeed(speed) {
     logDebug "setSpeed(${speed})"
     if (!requireNotNull(speed, "setSpeed")) return false                        // BP18 null-guard
-    String s = (speed as String).toLowerCase()
+    String s = (speed as String).trim().toLowerCase()
     // Remap integer-string values from setLevel() path to named speed strings.
     // setLevel() passes Integer 1/2/3; (speed as String) yields "1"/"2"/"3".
     // Emit named speeds ("low"/"medium"/"high") for attribute consistency.
@@ -246,7 +246,7 @@ def setSpeed(speed) {
 def setMode(mode) {
     logDebug "setMode(${mode})"
     if (!requireNotNull(mode, "setMode")) return false                          // BP18 null-guard
-    String m = (mode as String).toLowerCase()
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["manual", "sleep"])) {                                          // reject invalid BEFORE auto-on
         logWarn "setMode: invalid mode '${m}' -- must be one of: manual, sleep; ignoring"
         return false

@@ -159,7 +159,7 @@ def setSpeed(spd){
     // setSpeed("off") must NOT trigger ensureSwitchOn() — the intent is explicitly to turn off.
     // setSpeed("on") short-circuits here too for symmetry (on() does everything needed).
     if (!(spd instanceof Number) && !(spd instanceof String && spd.isInteger())) {
-        String early = (spd as String).toLowerCase()
+        String early = (spd as String).trim().toLowerCase()
         if (early == "off") { off(); return }
         if (early == "on")  { on(); return }
     }
@@ -179,7 +179,7 @@ def setSpeed(spd){
         return
     }
     // Enum string (FanControl capability path)
-    String s = (spd as String).toLowerCase()
+    String s = (spd as String).trim().toLowerCase()
     if (s == "auto") { setMode("auto"); return }
     Integer lvl = fanControlEnumToLevel(s)
     if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; recordError("setSpeed: unknown enum '${s}'", [method:"setLevel"]); return }
@@ -211,7 +211,7 @@ def setSpeed(spd){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["normal","turbo","auto","sleep"])) {
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|auto|sleep"
         recordError("setMode: invalid mode '${m}'", [method:"setTowerFanMode"])
@@ -237,9 +237,9 @@ def setDisplay(o) { doSetDisplayScreenSwitch(o) }
 def setOscillation(onOff){
     logDebug "setOscillation(${onOff})"
     if (onOff == null) { logWarn "setOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
-    String s = (onOff as String).toLowerCase()
+    String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setOscillation: invalid value '${s}'"; recordError("setOscillation invalid: ${s}", [method:"setOscillationSwitch"]); return }
-    int v = (s == "on") ? 1 : 0
+    int v = (s in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setOscillationSwitch", [oscillationSwitch: v], "setOscillationSwitch(${s})")
     if (httpOk(resp)) {
         device.sendEvent(name:"oscillation", value: s)
@@ -270,7 +270,7 @@ def setTimer(seconds, action="off"){
     int secs = seconds as Integer
     if (secs <= 0) { cancelTimer(); return }
     // action defaults to "off" in the Groovy signature; only null-guard when explicitly null
-    String act = (action != null) ? (action as String).toLowerCase() : "off"
+    String act = (action != null) ? (action as String).trim().toLowerCase() : "off"
     if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"setTimer"]); return }
     logDebug "setTimer(${secs}s, action=${act})"
     def resp = hubBypass("setTimer", [action: act, total: secs], "setTimer(${secs}s,${act})")

@@ -558,4 +558,70 @@ class LevoitCore400SSpec extends HubitatSpec {
         and: "no setLevel (speed) API call was made — null coerces to 0, routes to off()"
         testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
+
+    // -----------------------------------------------------------------------
+    // BP25: case-sensitivity — setChildLock / setDisplay uppercase inputs
+    // -----------------------------------------------------------------------
+
+    def "BP25: setChildLock('ON') uppercase makes the API call and sends child_lock:true (not false)"() {
+        given: "childLock is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when: "setChildLock is called with uppercase 'ON'"
+        driver.setChildLock("ON")
+
+        then: "API call was made"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+
+        and: "payload carries child_lock:true (lock), NOT false (unlock)"
+        req.data.child_lock == true
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25: setChildLock('ON') when childLock is already 'on' is a no-op (C3 gate works with uppercase)"() {
+        given: "childLock is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when: "setChildLock called with uppercase 'ON'"
+        driver.setChildLock("ON")
+
+        then: "no API call was made (C3 gate worked correctly)"
+        testParent.allRequests.find { it.method == "setChildLock" } == null
+    }
+
+    def "BP25: setDisplay('ON') uppercase makes the API call and sends state:true (not false)"() {
+        given: "display is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "off"])
+
+        when: "setDisplay is called with uppercase 'ON'"
+        driver.setDisplay("ON")
+
+        then: "API call was made"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+
+        and: "payload carries state:true (on), NOT false (off)"
+        req.data.state == true
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25: setDisplay('ON') when display is already 'on' is a no-op (C3 gate works with uppercase)"() {
+        given: "display is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "on"])
+
+        when:
+        driver.setDisplay("ON")
+
+        then: "no API call was made"
+        testParent.allRequests.find { it.method == "setDisplay" } == null
+    }
 }

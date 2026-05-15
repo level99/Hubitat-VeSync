@@ -621,4 +621,47 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         req.data.targetHumidity == 50
         lastEventValue("targetHumidity") == 50
     }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setTargetHumidity with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setTargetHumidity('#badInput') does not throw and does not make a setTargetHumidity API call (fallback=0 → rejected)"() {
+        // Inputs that safeIntArg() maps to 0: "abc", "" (empty), true ("true" is not numeric).
+        // 0 → p<=0 guard fires → logWarn + return; no cloud call.
+        // Pre-fix: (percent as Integer) on any of these threw before the guard could fire.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTargetHumidity(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setTargetHumidity API call — 0 coercion rejected by minimum-humidity guard"
+        testParent.allRequests.findAll { it.method == "setTargetHumidity" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setTargetHumidity('5.7') does not throw and makes a setTargetHumidity API call with clamped value (30)"() {
+        // safeIntArg("5.7") → BigDecimal("5.7").intValue() = 5.  5 > 0 so the rejection guard
+        // is skipped; Math.max(30, Math.min(80, 5)) = 30 (clamped to minimum).  A valid cloud
+        // call is made with targetHumidity: 30.  Truncation is the correct post-fix behaviour.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTargetHumidity("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setTargetHumidity API call was made with targetHumidity=30 (5 clamped to minimum)"
+        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
+        req != null
+        req.data.targetHumidity == 30
+    }
 }

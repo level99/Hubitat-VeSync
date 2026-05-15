@@ -62,7 +62,7 @@ def setDisplay(displayOn) {
     // BP25: normalize to lowercase before C3 gate so "ON"/"OFF" strings from Rule Machine
     // are treated the same as "on"/"off". Without this, "ON" bypasses the gate AND the
     // downstream payload coercion evaluates ("ON" == "on") as false → sends wrong boolean.
-    String v = (displayOn as String).toLowerCase()
+    String v = (displayOn as String).trim().toLowerCase()
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
     if (device.currentValue("display") == v) return
     handleDisplayOn(v)
@@ -153,7 +153,7 @@ def setChildLock(value) {
     if (!requireNotNull(value, "setChildLock")) return false
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" from Rule Machine bypasses the gate and inverts the payload without this guard.
-    String v = (value as String).toLowerCase()
+    String v = (value as String).trim().toLowerCase()
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
     if (device.currentValue("childLock") == v) return
     def result = false
@@ -172,7 +172,7 @@ def setChildLock(value) {
 }
 
 def setTimer(seconds) {
-    int secs = (seconds as Integer) ?: 0
+    int secs = safeIntArg(seconds, 0)
     logDebug "setTimer(${secs}s)"
     if (secs <= 0) { cancelTimer(); return }
     def result = false

@@ -920,4 +920,49 @@ class LevoitClassic300SSpec extends HubitatSpec {
         req.data.type  == "mist"
         lastEventValue("mistLevel") == 3
     }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setMistLevel with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setMistLevel('#badInput') does not throw and does not make a setVirtualLevel API call (fallback=0 → off)"() {
+        // Inputs that safeIntArg() maps to 0: "abc", "" (empty), true ("true" is not numeric).
+        // 0 → lvl<=0 → off() path; no setVirtualLevel call made.
+        // Pre-fix: (level as Integer) on any of these threw before the guard could fire.
+        given: "device is on so the auto-on guard doesn't confuse the assertion"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setVirtualLevel API call — 0 coercion routes to off()"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setMistLevel('5.7') does not throw and makes a setVirtualLevel API call with truncated value (5)"() {
+        // safeIntArg("5.7") → BigDecimal("5.7").intValue() = 5.  5 > 0 so the off() early-return
+        // is skipped; 5 is clamped to Math.max(1, Math.min(9, 5)) = 5 and sent to the cloud.
+        // Truncation is the correct post-fix behaviour — matches Groovy's native (5.7 as Integer).
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setVirtualLevel API call was made with level=5 (truncated from 5.7)"
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
+        req != null
+        req.data.level == 5
+    }
 }

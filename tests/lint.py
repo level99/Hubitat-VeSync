@@ -144,6 +144,7 @@ def _collect_per_file_rules():
         bp24_state_switch_dead_branch, bp24_auto_on_guard_missing,
         bp25_case_sensitivity,
         bp14_poll_persistence, bp17_poll_health, bp22_network_breaker,
+        bp26_unsafe_int_coercion,
     )
     rules = []
     for module in [
@@ -154,6 +155,7 @@ def _collect_per_file_rules():
         bp24_state_switch_dead_branch, bp24_auto_on_guard_missing,
         bp25_case_sensitivity,
         bp14_poll_persistence, bp17_poll_health, bp22_network_breaker,
+        bp26_unsafe_int_coercion,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

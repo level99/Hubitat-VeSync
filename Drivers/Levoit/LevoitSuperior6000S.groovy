@@ -141,7 +141,7 @@ def off(){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }  // no recordError — not an error, just a guard
-    String m = (mode as String).toLowerCase()
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","manual","sleep"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     // autoPro is the canonical API value for "auto" on Superior 6000S
     String apiMode = (m == "auto") ? "autoPro" : m
@@ -160,7 +160,7 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    Integer lvl = (level as Integer)
+    Integer lvl = safeIntArg(level, 0)
     if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
@@ -193,7 +193,7 @@ def setLevel(val, duration) {
 // turns an off device ON at level 1 — inverted behaviour.
 def setLevel(val){
     logDebug "setLevel(${val})"
-    Integer pct = Math.max(0, Math.min(100, (val as Integer) ?: 0))
+    Integer pct = Math.max(0, Math.min(100, safeIntArg(val, 0)))
     if (pct == 0) { off(); return }
     Integer lvl = levelFromPercent(pct)
     sendEvent(name:"level", value: pct)
@@ -204,7 +204,7 @@ def setLevel(val){
 def setTargetHumidity(percent){
     logDebug "setTargetHumidity(${percent})"
     if (!requireNotNull(percent, "setTargetHumidity")) return
-    Integer p = (percent as Integer)
+    Integer p = safeIntArg(percent, 0)
     if (p <= 0) { logWarn "setTargetHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
     p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [targetHumidity: p], "setTargetHumidity(${p})")
@@ -226,9 +226,9 @@ def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
     if (!requireNotNull(onOff, "setChildLock")) return false
-    String val = (onOff as String).toLowerCase()
+    String val = (onOff as String).trim().toLowerCase()
     if (device.currentValue("childLock") == val) return true
-    Integer v = (val == "on") ? 1 : 0
+    Integer v = (val in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${val})")
     if (httpOk(resp)) {
         device.sendEvent(name:"childLock", value: val)
@@ -239,7 +239,7 @@ def setChildLock(onOff){
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
     if (!requireNotNull(onOff, "setDryingMode")) return false
-    Integer v = ((onOff as String).toLowerCase() == "on") ? 1 : 0
+    Integer v = ((onOff as String).trim().toLowerCase() in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
     if (httpOk(resp)) logInfo "Drying mode auto-switch set: ${onOff}"
     else { logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"]) }

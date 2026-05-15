@@ -919,4 +919,45 @@ class LevoitVital200SSpec extends HubitatSpec {
         testParent.allRequests.find { it.method == "setLightDetection" } == null
         testLog.warns.any { it.contains("setLightDetection") }
     }
+
+    // -----------------------------------------------------------------------
+    // BP26 + BP18: setTimer (VitalPurifierLib) — numeric coercion + null-guard
+    // -----------------------------------------------------------------------
+
+    def "BP18+BP26: setTimer(null) returns silently with no API call"() {
+        // VitalPurifierLib.setTimer previously had neither requireNotNull nor safeIntArg.
+        // Post-fix: requireNotNull rejects null; safeIntArg handles non-numeric strings.
+        when:
+        driver.setTimer(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
+    }
+
+    def "BP26: setTimer('#badInput') does not throw and does not make an addTimerV2 API call (fallback=0 → cancelTimer)"() {
+        // safeIntArg maps "abc" and "" to 0; true maps to 0 ("true" is not numeric).
+        // 0 → n<=0 guard → cancelTimer() path; no addTimerV2 call.
+        when:
+        driver.setTimer(badInput)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setTimer('5.7') does not throw and makes an addTimerV2 API call with truncated value (5 minutes)"() {
+        // safeIntArg("5.7") → 5 (truncation). 5 > 0 → addTimerV2 called with clkSec=300 (5×60).
+        when:
+        driver.setTimer("5.7")
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "addTimerV2" }
+        req != null
+        req.data.tmgEvt?.clkSec == 300
+    }
 }

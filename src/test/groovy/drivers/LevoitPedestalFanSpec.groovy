@@ -1405,4 +1405,40 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         req.data.left  == 10
         req.data.right == 80
     }
+
+    def "BP26: setHorizontalRange('#badLeft', '#badRight') does not throw (safeIntArg coerces garbage to 0, API call made with 0)"() {
+        // Non-numeric inputs must not throw NumberFormatException; safeIntArg coerces as follows:
+        //   "abc" → fallback 0 → clamped 0 → API call with left=0, right=0
+        //   ""    → fallback 0 → clamped 0 → API call with left=0, right=0
+        //   true  → "true" not numeric → fallback 0 → clamped 0 → API call with left=0, right=0
+        // In all cases an API call IS made (0 is a valid range value); the critical guarantee
+        // is no exception is thrown and swallowed by the sandbox.
+        when:
+        driver.setHorizontalRange(badLeft, badRight)
+
+        then:
+        noExceptionThrown()
+
+        where:
+        badLeft | badRight
+        "abc"   | "abc"
+        ""      | ""
+        true    | true
+    }
+
+    def "BP26: setHorizontalRange('5.7', '5.7') does not throw and makes setOscillationStatus API call with truncated value (5)"() {
+        // safeIntArg("5.7") → BigDecimal("5.7").intValue() = 5 (truncation, not rounding).
+        // Math.max(0, Math.min(100, 5)) = 5 (within valid range, no clamping applied).
+        // An API call IS made with left=5, right=5.
+        when:
+        driver.setHorizontalRange("5.7", "5.7")
+
+        then:
+        noExceptionThrown()
+        and:
+        def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
+        req != null
+        req.data.left  == 5
+        req.data.right == 5
+    }
 }

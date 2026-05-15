@@ -89,3 +89,29 @@ boolean requireNotNull(arg, String methodName) {
     }
     return true
 }
+
+// BP26 safe numeric coercion: convert any command-arg type to Integer without
+// ever throwing. Rule Machine and dashboard tiles can pass String, GString,
+// BigDecimal, Boolean, or null. Plain `(x as Integer)` throws
+// NumberFormatException/GroovyCastException on non-numeric/decimal/empty/boolean
+// input BEFORE the ?: fallback can intercept it — the Hubitat sandbox swallows
+// the exception silently, leaving the command a no-op with no log entry.
+//
+// Decimal strings/BigDecimals truncate toward zero. Use the fallback that
+// makes the method's own downstream guard safe (0 where 0→off/reject is the
+// convention; 1 where a min-floor is a better default).
+//
+// Belt-and-suspenders with requireNotNull: keep the null-guard, use safeIntArg
+// to handle the non-null-but-non-numeric vector.
+private Integer safeIntArg(raw, Integer fallback = 0) {
+    if (raw == null) return fallback
+    try {
+        String s = raw.toString().trim()
+        if (s.isEmpty()) return fallback
+        if (s.isInteger()) return s.toInteger()
+        if (s.isBigDecimal()) return s.toBigDecimal().intValue()
+        return fallback
+    } catch (ignored) {
+        return fallback
+    }
+}

@@ -190,7 +190,7 @@ def off(){
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     // Wire-value mapping: auto -> 'autoPro' (device_map.py mist_modes for Sprout)
     String wire = (m == "auto") ? "autoPro" : m
@@ -211,7 +211,7 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    Integer lvl = (level as Integer)
+    Integer lvl = safeIntArg(level, 0)
     if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(2, lvl))
     ensureSwitchOn()
@@ -231,7 +231,7 @@ def setMistLevel(level){
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
     if (!requireNotNull(percent, "setHumidity")) return
-    Integer p = (percent as Integer)
+    Integer p = safeIntArg(percent, 0)
     if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
     p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [targetHumidity: p], "setTargetHumidity(${p})")
@@ -252,9 +252,9 @@ def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
     if (!requireNotNull(onOff, "setChildLock")) return false
-    String val = (onOff as String).toLowerCase()
+    String val = (onOff as String).trim().toLowerCase()
     if (device.currentValue("childLock") == val) return true
-    Integer v = (val == "on") ? 1 : 0
+    Integer v = (val in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${val})")
     if (httpOk(resp)) {
         device.sendEvent(name:"childLock", value: val)
@@ -272,7 +272,7 @@ def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
     if (!requireNotNull(onOff, "setDryingMode")) return false
-    Integer v = ((onOff as String).toLowerCase() == "on") ? 1 : 0
+    Integer v = ((onOff as String).trim().toLowerCase() in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
     if (httpOk(resp)) {
         device.sendEvent(name:"dryingEnabled", value: onOff)
@@ -293,9 +293,9 @@ def setNightlight(onOff, brightness = null, colorTemp = null){
     logDebug "setNightlight(${onOff}, ${brightness}, ${colorTemp})"
     if (!requireNotNull(onOff, "setNightlight")) return
     // BP25: normalize to lowercase before all comparisons.
-    String nl = (onOff as String).toLowerCase()
-    Integer br   = (brightness  != null) ? Math.max(0, Math.min(100, (brightness as Integer) ?: 0))    : null
-    Integer ct   = (colorTemp   != null) ? Math.max(2000, Math.min(3500, (colorTemp as Integer) ?: 3500)) : null
+    String nl = (onOff as String).trim().toLowerCase()
+    Integer br   = (brightness  != null) ? Math.max(0, Math.min(100, safeIntArg(brightness, 0)))       : null   // BP26
+    Integer ct   = (colorTemp   != null) ? Math.max(2000, Math.min(3500, safeIntArg(colorTemp, 3500))) : null   // BP26
     if (nl == "off") { br = 0; ct = ct ?: 3500 }
     else {
         // on: if no brightness supplied default to 100; clamp floor to 1

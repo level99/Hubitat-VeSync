@@ -188,6 +188,7 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 | filter | 0-100 | Filter life (%) |
 | pm25 | µg/m³ | Real-time PM2.5 reading |
 | airQualityIndex | 1-4 | Levoit-internal AQ index |
+| airQuality | Excellent, Good, Moderate, Poor | Human-readable AQ label derived from index |
 | autoPreference | default, efficient, quiet | Auto-mode preference |
 | roomSize | sq ft | User-configured room size for auto mode |
 | lightDetection | on, off | Whether light-detection is enabled |
@@ -213,6 +214,7 @@ Same V2 platform as Vital 200S. Differs in one capability: **no light-detection*
 | filter | 0-100 | Filter life (%) |
 | pm25 | µg/m³ | Real-time PM2.5 reading |
 | airQualityIndex | 1-4 | Levoit-internal AQ index |
+| airQuality | Excellent, Good, Moderate, Poor | Human-readable AQ label derived from index |
 | autoPreference | default, efficient, quiet | Auto-mode preference |
 | roomSize | sq ft | User-configured room size for auto mode |
 | childLock | on, off | Child-lock state |

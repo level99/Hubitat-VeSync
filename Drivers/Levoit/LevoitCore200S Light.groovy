@@ -117,7 +117,7 @@ def setNightLight(mode)
     if (!requireNotNull(mode, "setNightLight")) return false                    // BP18 null-guard
     // BP25: normalize to lowercase so Rule Machine "ON"/"OFF"/"DIM" routes correctly.
     // API expects literal "on"/"off"/"dim" string in night_light field.
-    String m = (mode as String).toLowerCase()
+    String m = (mode as String).trim().toLowerCase()
 
     def result = false
 

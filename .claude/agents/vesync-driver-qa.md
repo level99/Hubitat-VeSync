@@ -927,6 +927,34 @@ def setSomething(onOff) {
 
 ---
 
+### BP26: unsafe integer coercion on command parameters — `as Integer` throws before `?:` fallback
+
+**Fix scope:** class-wide — every command method that coerces a user-supplied numeric parameter via `(x as Integer)`, `(x as int)`, or `.toInteger()` anywhere in the command-parameter handling path.
+
+**Root cause:** In Groovy 2.5.23 (Hubitat sandbox), `(x as Integer)` and `.toInteger()` throw `NumberFormatException` / `GroovyCastException` when `x` is a non-numeric string (`""`, `"abc"`, `"5.7"`, `"true"`). The `?:` Elvis operator catches `null` but NOT thrown exceptions — so `(x as Integer) ?: 0` does NOT produce `0` on `"abc"` input; it propagates the exception. The Hubitat sandbox silently swallows it, leaving the command a no-op with no log entry and no user feedback. Sources of non-numeric args in practice: Rule Machine parameter slot left blank (passes `""` — note: NOT `null`), dashboard numeric tile sends decimal strings (`"5.7"`), hub variable binding passes `"true"` or `"1"`.
+
+**Detection:** grep for `\((\w+) as Integer\)` or `\.toInteger\(\)` in command method parameter paths (i.e., within `def set\w+` / `def cycle\w+` method bodies, before the arg is validated). Filter out sites where the arg is already typed Integer/Number from the Groovy signature (only `Object` / untyped params can receive non-numeric values from Rule Machine).
+
+**Canonical fix:** replace every command-param coercion site with `safeIntArg(x, fallback)` from `LevoitChildBaseLib`:
+```groovy
+// BEFORE (throws on "abc" / "" / "5.7" before ?: can rescue)
+Integer lvl = (level as Integer) ?: 0
+
+// AFTER (never throws; fallback is explicitly stated)
+Integer lvl = safeIntArg(level, 0)
+```
+Fallback semantics: use `0` where 0 maps to an off/reject downstream guard (e.g., `setMistLevel(0) → off()`); use `1` where 1 is a min-floor (e.g., `setFanSpeed` default to lowest speed, not off).
+
+**Known sites (all fixed in v2.6 sweep):** `setLevel` / `setMistLevel` / `setWarmMistLevel` / `setTargetHumidity` / `setHumidity` / `setFanSpeed` / `setTimer` / `setHorizontalRange` / `setVerticalRange` across Core 200S/300S/400S/600S, LevoitCorePurifierLib, LevoitVitalPurifierLib, LevoitFanLib, Superior 6000S, Classic 200S/300S, Dual 200S, LV600S, LV600S HubConnect, OasisMist 450S/1000S, Sprout Humidifier, EverestAir, Sprout Air, Pedestal Fan (~20 sites, 14 files).
+
+**Regression guard:** Spock spec must cover: `setX("abc")`, `setX("")`, `setX("5.7")`, `setX(true)` — each asserts `noExceptionThrown()` AND no API call was made (bad arg rejected cleanly by downstream guard). Required for the 5 representative drivers listed in ITEM 11 of the v2.6 sweep; backfill for others on next per-driver touch.
+
+**Lint enforcement:** RULE37 (`tests/lint_rules/bp26_unsafe_int_coercion.py`) flags bare `as Integer` / `as int` / `.toInteger()` in command-param coercion paths of set*/cycle* methods. Requires `safeIntArg` or an explicit type annotation on the param (typed params never receive non-numeric values from the sandbox).
+
+**Shipped:** v2.6 (2026-05-14) — ~20 sites across 14 driver/lib files.
+
+---
+
 ## Report format
 
 Return ONE of:
