@@ -142,10 +142,6 @@ def _all_regex_cases_are_prefix_anchored(body: str, resolved_prefixes: set) -> b
     return total_regex == len(resolved_prefixes)
 
 
-def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
-    return make_finding_for_file(severity, rule_id, title, file_str, lineno, context, why, fix)
-
-
 # ---------------------------------------------------------------------------
 # Rule entry point
 # ---------------------------------------------------------------------------
@@ -162,7 +158,7 @@ def check_rule22_whitelist_parity(repo_root: Path, config: dict):
     rel_path = "Drivers/Levoit/VeSyncIntegration.groovy"
 
     if not parent_path.exists():
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="WARN",
             rule_id="RULE22_file_missing",
             title="VeSyncIntegration.groovy not found -- RULE22 skipped",
@@ -186,7 +182,7 @@ def check_rule22_whitelist_parity(repo_root: Path, config: dict):
         r'\bdef\b\s+deviceType\b\s*\([^)]*\)\s*\{',
     )
     if not device_type_body:
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="WARN",
             rule_id="RULE22_deviceType_not_found",
             title="Could not locate deviceType() body -- RULE22 skipped",
@@ -208,7 +204,7 @@ def check_rule22_whitelist_parity(repo_root: Path, config: dict):
         r'\bdef\b\s+isLevoitClimateDevice\b\s*\([^)]*\)\s*\{',
     )
     if not whitelist_body:
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="WARN",
             rule_id="RULE22_whitelist_not_found",
             title="Could not locate isLevoitClimateDevice() body -- RULE22 skipped",
@@ -239,7 +235,7 @@ def check_rule22_whitelist_parity(repo_root: Path, config: dict):
         # Check parity for each resolved prefix against the whitelist
         for prefix in sorted(resolved_prefixes):
             if prefix not in wl_prefixes:
-                findings.append(_making_finding(
+                findings.append(make_finding_for_file(
                     severity="FAIL",
                     rule_id="RULE22a_regex_prefix_missing_from_whitelist",
                     title=f'deviceType() has regex case ~/^{prefix}.*$/: but isLevoitClimateDevice() has no matching startsWith("{prefix}")',
@@ -258,7 +254,7 @@ def check_rule22_whitelist_parity(repo_root: Path, config: dict):
         # (detect unresolvable by checking whether all regex cases were prefix-anchored)
         all_regex_anchored = _all_regex_cases_are_prefix_anchored(device_type_body, resolved_prefixes)
         if not all_regex_anchored:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="WARN",
                 rule_id="RULE22_regex_cases_skipped",
                 title="deviceType() contains non-prefix-anchored regex case patterns -- RULE22 cannot verify parity for those",
@@ -275,7 +271,7 @@ def check_rule22_whitelist_parity(repo_root: Path, config: dict):
     # RULE22a: prefix parity
     for prefix in sorted(dt_prefixes):
         if prefix not in wl_prefixes:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="FAIL",
                 rule_id="RULE22a_prefix_missing_from_whitelist",
                 title=f'deviceType() uses startsWith("{prefix}") but isLevoitClimateDevice() has no matching prefix',
@@ -304,7 +300,7 @@ def check_rule22_whitelist_parity(repo_root: Path, config: dict):
         covered_by_literal = literal in wl_literals
         covered_by_prefix = any(literal.startswith(p) for p in wl_prefixes)
         if not (covered_by_literal or covered_by_prefix):
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="FAIL",
                 rule_id="RULE22b_literal_missing_from_whitelist",
                 title=f'deviceType() recognizes literal "{literal}" but isLevoitClimateDevice() does not cover it',

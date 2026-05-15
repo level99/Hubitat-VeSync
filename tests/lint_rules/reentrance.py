@@ -21,14 +21,6 @@ from lint_rules._helpers import make_finding, make_finding_for_path
 GUARD_KEYS = ['turningOn', 'turningOff', 'driverReloading', 'reAuthInProgress']
 
 
-def _context(lines, lineno, window=1):
-    start = max(0, lineno - 1 - window)
-    end = min(len(lines), lineno + window)
-    return '\n'.join(f"    {lines[i]}" for i in range(start, end))
-
-
-def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return make_finding_for_path(severity, rule_id, title, path, rel_base, lineno, lines, why, fix)
 
 
 # Patterns for setting a guard
@@ -89,7 +81,7 @@ def check_rule20_reentrance_guards(path, raw_lines, cleaned_lines, raw_text, con
                 if not has_clear:
                     missing.append(f"state.remove('{key}') / state.{key}=false")
 
-                findings.append(_making_finding(
+                findings.append(make_finding_for_path(
                     severity="WARN",
                     rule_id="RULE20_reentrance_guard_unclosed",
                     title=f"Re-entrance guard state.{key}=true may not be cleared in finally",

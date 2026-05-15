@@ -146,6 +146,7 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 | timerRemain | seconds | Auto-off timer remaining (0 if no timer set). |
 | pm25 | µg/m³ | Real-time PM2.5 reading. |
 | airQualityIndex | 1-4 | Levoit's categorical air-quality (1=excellent, 4=very bad). Distinct from the driver-computed US AQI (`aqi` attribute). |
+| airQuality | 0-500 | US-formula AQI (same value as `aqi`); satisfies the standard Hubitat AirQuality capability so dashboards and Rule Machine can use the canonical attribute name. |
 | aqi | 0-500 | US-formula AQI |
 | aqiDanger | string | Risk level for tile display |
 | aqiColor | hex | Color for HTML |
@@ -158,6 +159,8 @@ Commands: `setDisplay`, `setSpeed`, `setMode`, `setAutoMode`, `setChildLock`, `s
 Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
 
 **Timer units:** `setTimer` accepts seconds for Core line (matches the Levoit V1 API). The Vital line's `setTimer` accepts minutes — be aware if you have both device families.
+
+**`airQuality` attribute type differs by family:** on Core 300S/400S/600S the `airQuality` attribute is a **number** (US AQI, 0–500). On Vital 100S/200S and the Generic driver it is a **string** (a categorical label such as "good" or "poor"). A Rule Machine condition or dashboard binding that compares `airQuality` numerically (e.g., `airQuality > 100`) will work correctly on Core devices but will not behave as expected on Vital or Generic devices — and vice versa for string comparisons. Do not copy automations that reference `airQuality` across the Core ↔ Vital boundary without updating the comparison type.
 
 ### Core 400S
 

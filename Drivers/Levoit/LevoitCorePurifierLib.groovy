@@ -250,13 +250,18 @@ def update(status) { update(status, null) }
 // ---- Group 2: AQ-group 7 — called by 300S/400S/600S only (200S does not have AQ sensor) ----
 
 def setAutoMode(mode) {
-    setAutoMode(mode, 100);
+    // Re-use last-set value so the device keeps its prior room-size calibration.
+    // Fall back to 800 (pyvesync VeSyncAirBypass canonical default) when no prior
+    // value exists, so the device doesn't receive an unrealistic sentinel.
+    setAutoMode(mode, state.room_size ?: 800);
 }
 
 def setAutoMode(mode, roomSize) {
     if (!requireNotNull(mode, "setAutoMode")) return
     // BP26: safe integer coercion — Rule Machine passes "" or null for blank numeric slots.
-    Integer sz = safeIntArg(roomSize, 100)
+    // Fallback: preserved last-set room_size, or 800 (pyvesync VeSyncAirBypass canonical default).
+    // Range clamp deferred: no authoritative min/max confirmed from pyvesync or VeSync API docs.
+    Integer sz = safeIntArg(roomSize, (state.room_size ?: 800) as Integer)
     // 200S guard: 200S firmware doesn't support setAutoPreference (no AQ sensor).
     // The lib is shared but the cloud rejects this call on 200S. Block at lib boundary
     // to prevent state divergence + log noise on Rule Machine / MCP misuse.
@@ -351,6 +356,9 @@ private void updateAQIandFilter(String val, filter) {
         else                 aqi = convertRange(pm, 350.5, 500.4, 401, 500);
 
         handleEvent("aqi", aqi);
+        // T11-5: satisfy the AirQuality capability contract (requires airQuality NUMBER = AQI).
+        // Emitted additively — airQualityIndex and aqi remain unchanged for backward compatibility.
+        handleEvent("airQuality", aqi);
 
         String danger;
         String color;

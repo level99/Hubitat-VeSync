@@ -60,14 +60,6 @@ HELPER_DEF_RE = re.compile(
 )
 
 
-def _context(lines, lineno, window=1):
-    start = max(0, lineno - 1 - window)
-    end = min(len(lines), lineno + window)
-    return '\n'.join(f"    {lines[i]}" for i in range(start, end))
-
-
-def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return make_finding_for_path(severity, rule_id, title, path, rel_base, lineno, lines, why, fix)
 
 
 def check_rule30_direct_log_in_driver(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
@@ -124,7 +116,7 @@ def check_rule30_direct_log_in_driver(path, raw_lines, cleaned_lines, raw_text, 
                 if DIRECT_LOG_RE.search(line):
                     m = DIRECT_LOG_RE.search(line)
                     level = m.group(1) if m else "X"
-                    findings.append(_making_finding(
+                    findings.append(make_finding_for_path(
                         severity="FAIL",
                         rule_id="RULE30_direct_log_in_driver",
                         title=f"Direct log.{level}() call in driver body (bypasses library helpers)",

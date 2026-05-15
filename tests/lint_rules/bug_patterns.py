@@ -126,15 +126,6 @@ BP5_MANUAL_MODE_DRIVERS = {
 FORK_DOC_DOMAIN = "github.com/level99/Hubitat-VeSync"
 
 
-def _context(lines, lineno, window=1):
-    """Return up to (window) lines of context around lineno (1-based)."""
-    start = max(0, lineno - 1 - window)
-    end = min(len(lines), lineno + window)
-    return '\n'.join(f"    {lines[i]}" for i in range(start, end))
-
-
-def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return make_finding_for_path(severity, rule_id, title, path, rel_base, lineno, lines, why, fix)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +166,7 @@ def check_bp1_missing_2arg_update(path, raw_lines, cleaned_lines, raw_text, conf
             if re.search(r'\bdef\s+update\s*\(', line):
                 lineno = i
                 break
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP1_missing_2arg_update",
             title="Missing 2-arg update(status, nightLight) signature",
@@ -191,7 +182,7 @@ def check_bp1_missing_2arg_update(path, raw_lines, cleaned_lines, raw_text, conf
             if re.search(r'\bdef\s+update\s*\(', line):
                 lineno = i
                 break
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP1_missing_1arg_update",
             title="Missing 1-arg update(status) defensive delegator signature",
@@ -209,7 +200,7 @@ def check_bp1_missing_2arg_update(path, raw_lines, cleaned_lines, raw_text, conf
             if re.search(r'\bdef\s+update\s*\(', line):
                 lineno = i
                 break
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP1_missing_0arg_update",
             title="Missing no-arg update() self-fetch signature",
@@ -253,7 +244,7 @@ def check_bp2_hardcoded_purifier_method(path, raw_lines, cleaned_lines, raw_text
     for (start_line, body) in bodies:
         has_helper_call = bool(re.search(r'\bdeviceMethodFor\s*\(', body))
         if not has_helper_call:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="BP2_missing_deviceMethodFor_call",
                 title="updateDevices() does not call deviceMethodFor() for API-method routing",
@@ -303,7 +294,7 @@ def check_bp3_envelope_peel(path, raw_lines, cleaned_lines, raw_text, config, re
     bodies = find_method_bodies(raw_text, "applyStatus")
     if not bodies:
         # applyStatus missing entirely — flag
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP3_no_applyStatus",
             title="applyStatus() method not found",
@@ -315,7 +306,7 @@ def check_bp3_envelope_peel(path, raw_lines, cleaned_lines, raw_text, config, re
 
     for (start_line, body) in bodies:
         if not PEEL_PATTERN.search(body):
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="BP3_missing_envelope_peel",
                 title="Missing envelope-peel while-loop in applyStatus()",
@@ -361,7 +352,7 @@ def check_bp4_setlevel_field_names(path, raw_lines, cleaned_lines, raw_text, con
         window = '\n'.join(cleaned_lines[window_start:window_end])
 
         if re.search(r'\bswitchIdx\b', window):
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="BP4_switchIdx_in_setLevel",
                 title="Non-canonical field 'switchIdx' in setLevel payload",
@@ -373,7 +364,7 @@ def check_bp4_setlevel_field_names(path, raw_lines, cleaned_lines, raw_text, con
 
         # Check for 'type:' without 'levelType' nearby
         if re.search(r'\btype\s*:', window) and not re.search(r'\blevelType\b', window):
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="BP4_type_instead_of_levelType",
                 title="Non-canonical field 'type:' instead of 'levelType' in setLevel payload",
@@ -413,7 +404,7 @@ def check_bp5_manual_via_setPurifierMode(path, raw_lines, cleaned_lines, raw_tex
         window_end = min(len(cleaned_lines), i + 3)
         window = '\n'.join(cleaned_lines[window_start:window_end])
         if re.search(r'"manual"', window) or re.search(r"'manual'", window):
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="BP5_manual_via_setPurifierMode",
                 title="V201S manual mode set via setPurifierMode (always fails)",
@@ -458,7 +449,7 @@ def check_bp7_currentvalue_race(path, raw_lines, cleaned_lines, raw_text, config
             else:
                 check_line = bline
             if re.search(r'device\.currentValue\s*\(', check_line):
-                findings.append(_making_finding(
+                findings.append(make_finding_for_path(
                     severity="WARN",
                     rule_id="BP7_currentvalue_race",
                     title="device.currentValue() inside applyStatus() may race with sendEvent()",
@@ -504,7 +495,7 @@ def check_bp9_driver_name_frozen(path, raw_lines, cleaned_lines, raw_text, confi
     actual_name = m.group(1)
     if actual_name != expected_name:
         lineno = raw_text[:m.start()].count('\n') + 1
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP9_driver_name_changed",
             title=f"Driver metadata name changed (was: '{expected_name}', now: '{actual_name}')",
@@ -542,7 +533,7 @@ def check_bp10_smartthings_icons(path, raw_lines, cleaned_lines, raw_text, confi
     for i, line in enumerate(raw_lines, 1):
         for pat in ST_ICON_PATTERNS:
             if pat.search(line):
-                findings.append(_making_finding(
+                findings.append(make_finding_for_path(
                     severity="FAIL",
                     rule_id="BP10_smartthings_icon",
                     title="SmartThings-era metadata artifact (icon URL or 'My Apps' category)",
@@ -577,7 +568,7 @@ def check_bp11_documentation_link(path, raw_lines, cleaned_lines, raw_text, conf
             continue
         url = m.group(1)
         if FORK_DOC_DOMAIN not in url:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="BP11_wrong_documentation_link",
                 title=f"documentationLink points to wrong project: {url!r}",
@@ -650,7 +641,7 @@ def check_bp12_pref_seed(path, raw_lines, cleaned_lines, raw_text, config, rel_b
         else:
             method = "update (2-arg form)"
 
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP12_missing_pref_seed",
             title="Missing state.prefsSeeded self-healing block",

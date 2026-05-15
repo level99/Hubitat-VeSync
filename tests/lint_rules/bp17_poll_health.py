@@ -89,8 +89,6 @@ def _extract_updateDevices_body(raw_text: str):
     return start_line, body
 
 
-def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return make_finding_for_path(severity, rule_id, title, path, rel_base, lineno, lines, why, fix)
 
 
 def check_rule35_bp17_poll_health(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
@@ -104,7 +102,7 @@ def check_rule35_bp17_poll_health(path, raw_lines, cleaned_lines, raw_text, conf
 
     # Check 1: ensurePollHealth() must be defined
     if not ENSURE_POLL_HEALTH_DEF_PATTERN.search(raw_text):
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="RULE35_missing_ensurePollHealth_def",
             title="ensurePollHealth() not defined in VeSyncIntegration.groovy",
@@ -121,7 +119,7 @@ def check_rule35_bp17_poll_health(path, raw_lines, cleaned_lines, raw_text, conf
     # Check 2: ensurePollHealth() must be called inside updateDevices()
     result = _extract_updateDevices_body(raw_text)
     if result is None:
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="RULE35_missing_updateDevices",
             title="updateDevices() not found — cannot verify ensurePollHealth() call",
@@ -132,7 +130,7 @@ def check_rule35_bp17_poll_health(path, raw_lines, cleaned_lines, raw_text, conf
     else:
         start_line, body = result
         if not ENSURE_POLL_HEALTH_CALL_PATTERN.search(body):
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="RULE35_ensurePollHealth_not_called",
                 title="ensurePollHealth() not called inside updateDevices()",

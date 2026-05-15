@@ -47,8 +47,6 @@ EMIT_NETWORK_WARN_DEF_PATTERN = re.compile(
 )
 
 
-def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return make_finding_for_path(severity, rule_id, title, path, rel_base, lineno, lines, why, fix)
 
 
 def check_rule36_bp22_network_breaker(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
@@ -63,7 +61,7 @@ def check_rule36_bp22_network_breaker(path, raw_lines, cleaned_lines, raw_text, 
 
     # Check 1: state.networkUnreachableSince must be referenced
     if not NETWORK_UNREACHABLE_SINCE_PATTERN.search(raw_text):
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="RULE36_missing_networkUnreachableSince",
             title="state.networkUnreachableSince not referenced in VeSyncIntegration.groovy",
@@ -80,7 +78,7 @@ def check_rule36_bp22_network_breaker(path, raw_lines, cleaned_lines, raw_text, 
 
     # Check 2: state.networkProbeInFlight must be referenced
     if not NETWORK_PROBE_IN_FLIGHT_PATTERN.search(raw_text):
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="RULE36_missing_networkProbeInFlight",
             title="state.networkProbeInFlight not referenced in VeSyncIntegration.groovy",
@@ -98,7 +96,7 @@ def check_rule36_bp22_network_breaker(path, raw_lines, cleaned_lines, raw_text, 
 
     # Check 3: emitNetworkWarnIfDue() must be defined
     if not EMIT_NETWORK_WARN_DEF_PATTERN.search(raw_text):
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="RULE36_missing_emitNetworkWarnIfDue",
             title="emitNetworkWarnIfDue() not defined in VeSyncIntegration.groovy",

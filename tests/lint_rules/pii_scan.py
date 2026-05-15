@@ -73,14 +73,6 @@ ALWAYS_SKIP_FILES = {
 }
 
 
-def _context(lines, lineno, window=1):
-    start = max(0, lineno - 1 - window)
-    end = min(len(lines), lineno + window)
-    return '\n'.join(f"    {lines[i]}" for i in range(start, end))
-
-
-def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return make_finding_for_path(severity, rule_id, title, path, rel_base, lineno, lines, why, fix)
 
 
 def _is_allowed(line, allow_patterns):
@@ -126,7 +118,7 @@ def check_rule16_pii_scan(path, raw_lines, cleaned_lines, raw_text, config, rel_
         m = LAN_IP_PATTERN.search(line)
         if m:
             ip = m.group(0)
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="RULE16_lan_ip",
                 title=f"Hardcoded LAN IP address: {ip}",
@@ -145,7 +137,7 @@ def check_rule16_pii_scan(path, raw_lines, cleaned_lines, raw_text, config, rel_
             if email.lower() in {'your@email.com', 'example@example.com', 'user@example.com',
                                   'noreply@anthropic.com'}:
                 continue
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="RULE16_email",
                 title=f"Email address found: {email}",
@@ -159,7 +151,7 @@ def check_rule16_pii_scan(path, raw_lines, cleaned_lines, raw_text, config, rel_
         # MAC addresses
         m = MAC_PATTERN.search(line)
         if m:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="RULE16_mac_address",
                 title=f"MAC address found: {m.group(0)}",
@@ -171,7 +163,7 @@ def check_rule16_pii_scan(path, raw_lines, cleaned_lines, raw_text, config, rel_
 
         # Hardcoded passwords
         if HARDCODED_PASSWORD.search(line):
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="RULE16_hardcoded_password",
                 title="Hardcoded password literal",
@@ -193,7 +185,7 @@ def check_rule16_pii_scan(path, raw_lines, cleaned_lines, raw_text, config, rel_
                 skip_tokens = config.get('pii_token_allowlist', [])
                 if tok in skip_tokens:
                     continue
-                findings.append(_making_finding(
+                findings.append(make_finding_for_path(
                     severity="FAIL",
                     rule_id="RULE16_token_shaped",
                     title=f"Token-shaped string near auth keyword: {tok[:12]}...",
@@ -207,7 +199,7 @@ def check_rule16_pii_scan(path, raw_lines, cleaned_lines, raw_text, config, rel_
         # Personal domains
         for pat in personal_domain_patterns:
             if pat.search(line):
-                findings.append(_making_finding(
+                findings.append(make_finding_for_path(
                     severity="FAIL",
                     rule_id="RULE16_personal_domain",
                     title=f"Personal domain reference found",

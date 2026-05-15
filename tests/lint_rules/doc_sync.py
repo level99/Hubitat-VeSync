@@ -25,10 +25,6 @@ README_EXCLUDED = {
 }
 
 
-def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
-    return make_finding_for_file(severity, rule_id, title, file_str, lineno, context, why, fix)
-
-
 def check_rule19_doc_sync(repo_root: Path, config: dict):
     """
     Check that readme.md includes every driver file in its table.
@@ -40,7 +36,7 @@ def check_rule19_doc_sync(repo_root: Path, config: dict):
     drivers_dir = repo_root / "Drivers" / "Levoit"
 
     if not readme_path.exists():
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="FAIL",
             rule_id="RULE19_readme_missing",
             title="Drivers/Levoit/readme.md not found",
@@ -74,7 +70,7 @@ def check_rule19_doc_sync(repo_root: Path, config: dict):
     for fname in sorted(expected_in_readme):
         # Check for the filename (case-insensitive) anywhere in the readme
         if fname.lower() not in readme_lower:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="FAIL",
                 rule_id="RULE19_driver_not_in_readme",
                 title=f"Driver not mentioned in readme.md: {fname}",

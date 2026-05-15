@@ -16,7 +16,10 @@ Run:
 """
 
 import json
+import os
+import subprocess
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -2595,6 +2598,34 @@ class TestLintSeverityHardCheck:
 
 
 # ---------------------------------------------------------------------------
+# Lead-Finding-1 (T11 QA): make_finding_for_file severity gate parity test
+# ---------------------------------------------------------------------------
+
+class TestMakeFindingForFileSeverityGate:
+    """
+    Lead-Finding-1: make_finding_for_file re-implements the severity gate inline
+    (bypassing make_finding). This test verifies the inline gate raises ValueError
+    on an invalid severity, keeping it in sync with make_finding's own gate.
+    Nothing else tests make_finding_for_file's gate directly.
+    """
+
+    def test_invalid_severity_raises_value_error(self):
+        """make_finding_for_file with severity='INFO' must raise ValueError."""
+        from lint_rules._helpers import make_finding_for_file
+        with pytest.raises(ValueError, match="invalid severity"):
+            make_finding_for_file(
+                severity='INFO',
+                rule_id='TEST_GATE',
+                title='test',
+                file_str='Drivers/Levoit/SomeDriver.groovy',
+                lineno=5,
+                context='    def someMethod() {',
+                why='why',
+                fix='fix',
+            )
+
+
+# ---------------------------------------------------------------------------
 # RULE25 — BP16 ensureDebugWatchdog call-site (T10-3)
 # ---------------------------------------------------------------------------
 
@@ -2815,3 +2846,474 @@ class TestRule32AutoOnGuardMissing:
         assert any(f['severity'] == 'FAIL' for f in rule32), (
             f"RULE32 finding must carry severity='FAIL' to gate lint --strict; got: {rule32}"
         )
+
+
+# ---------------------------------------------------------------------------
+# T11-1 — End-to-end call-site regression guard for _assert_all_severities_valid
+# ---------------------------------------------------------------------------
+
+class TestLintMainInvalidSeverityAborts:
+    """
+    T11-1: Prove that the CALL to _assert_all_severities_valid at lint.py:~505
+    (not just its function body) is what terminates a run carrying a bad severity.
+
+    The existing TestLintSeverityHardCheck tests call the function directly —
+    they verify the function body is correct but cannot detect if the call line
+    were deleted while the body remained.
+
+    This test drives the REAL lint.main() via subprocess against a temp driver
+    tree that contains a throwaway rule module injected via monkeypatching of
+    _collect_per_file_rules.  The injected rule emits a finding with
+    severity='INFO' (invalid).  If the line-505 call is present, lint exits
+    non-zero and stderr contains 'invalid severity'.  If only the call line is
+    deleted (body intact), the function is never called, the bad finding flows
+    through, and the test FAILS — proving this test guards the call, not just
+    the body.
+
+    Guarantee mechanism: the test monkeypatches _collect_per_file_rules to
+    inject a rule that returns [{'severity': 'INFO', 'rule_id': 'BAD', ...}].
+    It then calls lint.main() via importlib/runpy with patched sys.argv pointing
+    at a temp driver tree.  The only path to a non-zero exit + 'invalid severity'
+    in stderr is through the _assert_all_severities_valid call at line ~505.
+    Deleting that call → the bad finding passes through silently → lint exits 0
+    (or 2 for strict) with no RuntimeError → assert fails.
+    """
+
+    def _make_temp_tree(self):
+        """Create a minimal temp repo tree with one dummy .groovy file."""
+        td = tempfile.mkdtemp()
+        drivers_dir = Path(td) / "Drivers" / "Levoit"
+        drivers_dir.mkdir(parents=True)
+        (drivers_dir / "Dummy.groovy").write_text(
+            'metadata { definition(name: "Dummy") {} }', encoding='utf-8'
+        )
+        return td
+
+    def test_bad_severity_in_rule_aborts_lint_main(self, monkeypatch):
+        """
+        lint.main() must raise RuntimeError (exit non-zero) when any rule emits
+        severity='INFO'.  This test fails if the _assert_all_severities_valid
+        CALL at lint.py:~505 is deleted — the function body becomes unreachable
+        and the bad-severity finding flows silently to exit 0.
+        """
+        import importlib.util
+        td = self._make_temp_tree()
+
+        try:
+            # Load lint as a fresh module instance so monkeypatching is isolated.
+            spec = importlib.util.spec_from_file_location("lint_t11", TESTS_DIR / "lint.py")
+            lint_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(lint_mod)
+
+            # Inject a rule that emits a raw dict with severity='INFO' — bypassing
+            # make_finding's ValueError gate to simulate a hypothetical future rule
+            # that hand-constructs findings.
+            def _bad_rule(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
+                return [{'severity': 'INFO', 'rule_id': 'T11_BAD_SEV', 'title': 'test',
+                          'file': str(path), 'line': 1, 'context': '', 'why': '', 'fix': ''}]
+
+            # Monkeypatch _collect_per_file_rules to inject our bad rule.
+            monkeypatch.setattr(lint_mod, '_collect_per_file_rules', lambda: [_bad_rule])
+            # Monkeypatch _collect_repo_level_rules to return empty (no repo rules needed).
+            monkeypatch.setattr(lint_mod, '_collect_repo_level_rules', lambda: [])
+
+            # Patch sys.argv so lint.main() targets our temp tree.
+            monkeypatch.setattr(sys, 'argv', ['lint.py', '--paths', td])
+
+            # lint.main() must raise RuntimeError because _assert_all_severities_valid
+            # detects 'INFO' severity.  If the call-line at ~505 were deleted while the
+            # function body remained intact, main() would exit normally (sys.exit(0) or
+            # sys.exit(2)) — NOT raise RuntimeError — and this pytest.raises would FAIL.
+            with pytest.raises((RuntimeError, SystemExit)) as exc_info:
+                lint_mod.main()
+
+            # Discriminate: a SystemExit(0) means the call was deleted and bad severity
+            # passed through silently — that is the failure we are guarding against.
+            if isinstance(exc_info.value, SystemExit):
+                assert exc_info.value.code != 0, (
+                    "lint.main() exited 0 despite a finding with severity='INFO'. "
+                    "This means _assert_all_severities_valid was NOT called (the call "
+                    "line at lint.py:~505 may have been deleted while the body remains). "
+                    "The choke-point is broken."
+                )
+                # A non-zero SystemExit could also be the RuntimeError re-raised as SystemExit
+                # by some wrapper — acceptable.  The key invariant is that exit 0 is impossible.
+        finally:
+            import shutil
+            shutil.rmtree(td, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# T11-4 — Severity-asserting tests for 7 previously untested FAIL rules
+# ---------------------------------------------------------------------------
+
+class TestRule23DriverAppOnlyApi:
+    """
+    RULE23 (Bug Pattern #15): subscribe() and unsubscribe() in driver code.
+    Good path: neither call present.
+    Bad path: subscribe() present in driver code — FAIL.
+    """
+    from lint_rules.driver_app_only_api import check_rule23_driver_app_only_api
+
+    GOOD = textwrap.dedent("""\
+        def setupPoll() {
+            schedule("0/30 * * * * ?", "updateDevices")
+        }
+    """)
+
+    BAD = textwrap.dedent("""\
+        def initialize() {
+            subscribe(location, "systemStart", restartHandler)
+        }
+    """)
+
+    def test_good_passes(self):
+        from lint_rules.driver_app_only_api import check_rule23_driver_app_only_api
+        findings = run_rule(check_rule23_driver_app_only_api, self.GOOD)
+        assert findings == [], f"Expected no findings on clean source, got: {findings}"
+
+    def test_bad_subscribe_fails(self):
+        from lint_rules.driver_app_only_api import check_rule23_driver_app_only_api
+        findings = run_rule(check_rule23_driver_app_only_api, self.BAD)
+        rule23 = [f for f in findings if f['rule_id'] == 'RULE23_driver_app_only_api']
+        assert rule23, "Expected RULE23 finding on driver source with subscribe()"
+        assert any(f['severity'] == 'FAIL' for f in rule23), (
+            f"RULE23 finding must carry severity='FAIL'; got: {rule23}"
+        )
+
+
+class TestRule24AgentPointerIntegrity:
+    """
+    RULE24: broken section pointer in .claude/agents/*.md.
+    Good path: pointer to a real section.
+    Bad path: pointer to a non-existent section — FAIL.
+    """
+
+    def _run_rule24(self, src, fname):
+        """Run RULE24 on source with a path under .claude/agents/ so the rule triggers."""
+        from lint_rules.agent_pointer_integrity import check_rule24_agent_pointer_integrity
+        from lint_rules.groovy_lite import clean_source
+        path = REPO_ROOT / ".claude" / "agents" / fname
+        raw_lines = src.splitlines()
+        _, cleaned_lines = clean_source(src)
+        return check_rule24_agent_pointer_integrity(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+
+    GOOD = textwrap.dedent("""\
+        See `CONTRIBUTING.md` "Codebase orientation"
+    """)
+
+    # Two blank lines before the pointer put it on line 3:
+    #   line 1: (blank)
+    #   line 2: (blank)
+    #   line 3: See `CONTRIBUTING.md` "..."   ← lineno = 3 (from enumerate(raw_lines, 1))
+    # T11-7 fix: old make_finding_for_file with raw_lines=[ctx] and lineno=3:
+    #   range(max(0,3-2), min(1,3+1)) = range(1, 1) → empty → context blanked.
+    # New make_finding_for_file stores context directly → non-empty.
+    # Verified arithmetic: range(1, min(1, 4)) = range(1, 1) = [] (empty). ✓
+    BAD = textwrap.dedent("""\
+
+
+        See `CONTRIBUTING.md` "Nonexistent Section That Does Not Exist XYZ987"
+    """)
+
+    def test_good_passes(self):
+        # Only passes if CONTRIBUTING.md has the section. Use the real file.
+        # If CONTRIBUTING.md doesn't exist we get WARN (not FAIL) — still passes test.
+        findings = self._run_rule24(self.GOOD, "test_agent.md")
+        fail_findings = [f for f in findings if f['severity'] == 'FAIL']
+        assert fail_findings == [], f"Expected no FAIL findings on clean pointer, got: {fail_findings}"
+
+    def test_bad_broken_pointer_fails(self):
+        findings = self._run_rule24(self.BAD, "test_agent.md")
+        rule24 = [f for f in findings if f['rule_id'] == 'RULE24_broken_section_pointer']
+        assert rule24, (
+            "Expected RULE24_broken_section_pointer finding on non-existent section pointer"
+        )
+        assert any(f['severity'] == 'FAIL' for f in rule24), (
+            f"RULE24_broken_section_pointer must carry severity='FAIL'; got: {rule24}"
+        )
+        # T11-7 regression guard: pointer is on line 3 of BAD fixture. Old
+        # make_finding_for_file: range(1, min(1,4))=range(1,1)=[] → context blanked
+        # → assert FAILs on T11-7 revert. New: context preserved directly.
+        assert any(f['context'] for f in rule24), (
+            "T11-7 regression: context blanked for RULE24_broken_section_pointer at lineno=3 "
+            "(range(1,min(1,4))=[] in old make_finding_for_file → should be non-empty post-fix)"
+        )
+
+
+class TestRule18ManifestConsistency:
+    """
+    RULE18: levoitManifest.json must exist and cover every .groovy driver.
+    Good path: manifest present and consistent.
+    Bad path: manifest missing — FAIL.
+    """
+
+    def test_good_manifest_passes(self):
+        """Real repo root has a valid manifest — rule must produce no FAIL findings."""
+        from lint_rules.manifest_consistency import check_rule18_manifest_consistency
+        findings = check_rule18_manifest_consistency(repo_root=REPO_ROOT, config={})
+        fail_findings = [f for f in findings if f['severity'] == 'FAIL']
+        assert fail_findings == [], (
+            f"Expected no FAIL on real manifest; got: {fail_findings}"
+        )
+
+    def test_missing_manifest_fails(self):
+        """No levoitManifest.json in temp dir — FAIL with severity='FAIL'."""
+        from lint_rules.manifest_consistency import check_rule18_manifest_consistency
+        with tempfile.TemporaryDirectory() as td:
+            fake_root = Path(td)
+            (fake_root / "Drivers" / "Levoit").mkdir(parents=True)
+            findings = check_rule18_manifest_consistency(repo_root=fake_root, config={})
+        rule18 = [f for f in findings if f['rule_id'] == 'RULE18_manifest_missing']
+        assert rule18, "Expected RULE18_manifest_missing finding when manifest absent"
+        assert any(f['severity'] == 'FAIL' for f in rule18), (
+            f"RULE18 finding must carry severity='FAIL'; got: {rule18}"
+        )
+
+
+class TestRule19DocSync:
+    """
+    RULE19: readme.md must document every driver.
+    Good path: readme exists and mentions the driver.
+    Bad path: readme missing — FAIL.
+    """
+
+    def test_good_readme_passes(self):
+        """Real repo root has readme.md — rule must produce no FAIL findings."""
+        from lint_rules.doc_sync import check_rule19_doc_sync
+        findings = check_rule19_doc_sync(repo_root=REPO_ROOT, config={})
+        fail_findings = [f for f in findings if f['severity'] == 'FAIL']
+        assert fail_findings == [], (
+            f"Expected no FAIL on real readme; got: {fail_findings}"
+        )
+
+    def test_missing_readme_fails(self):
+        """No readme.md present — FAIL with severity='FAIL'."""
+        from lint_rules.doc_sync import check_rule19_doc_sync
+        with tempfile.TemporaryDirectory() as td:
+            fake_root = Path(td)
+            drivers_dir = fake_root / "Drivers" / "Levoit"
+            drivers_dir.mkdir(parents=True)
+            # Add a driver file that would require a readme entry
+            (drivers_dir / "LevoitVital200S.groovy").write_text(
+                'metadata { definition(name: "Levoit Vital 200S Air Purifier") {} }',
+                encoding='utf-8',
+            )
+            findings = check_rule19_doc_sync(repo_root=fake_root, config={})
+        rule19 = [f for f in findings if f['severity'] == 'FAIL']
+        assert rule19, "Expected FAIL finding when readme.md is absent"
+        assert any(f['rule_id'].startswith('RULE19') for f in rule19), (
+            f"Expected a RULE19 FAIL finding; got: {rule19}"
+        )
+
+
+class TestRule20VersionLockstep:
+    """
+    RULE20: every driver's version must match levoitManifest.json.
+    Good path: real repo passes (all drivers at matching version).
+    Bad path: driver version differs from manifest — FAIL.
+    """
+
+    def test_good_version_passes(self):
+        """Real repo root — rule must produce no FAIL findings."""
+        from lint_rules.version_lockstep import check_rule20_version_lockstep
+        findings = check_rule20_version_lockstep(repo_root=REPO_ROOT, config={})
+        fail_findings = [f for f in findings if f['severity'] == 'FAIL']
+        assert fail_findings == [], (
+            f"Expected no FAIL on real codebase; got: {fail_findings}"
+        )
+
+    def test_version_mismatch_fails(self):
+        """Driver version != manifest version — FAIL with severity='FAIL'."""
+        from lint_rules.version_lockstep import check_rule20_version_lockstep
+        with tempfile.TemporaryDirectory() as td:
+            fake_root = Path(td)
+            drivers_dir = fake_root / "Drivers" / "Levoit"
+            drivers_dir.mkdir(parents=True)
+            # Manifest at version "9.9.9"
+            import json as _json
+            manifest = {
+                "packageName": "Test",
+                "version": "9.9.9",
+                "drivers": [
+                    {
+                        "id": "aaaaaaaa-0000-0000-0000-000000000001",
+                        "name": "Test Driver",
+                        "namespace": "level99",
+                        "location": "https://example.com/TestDriver.groovy",
+                        "required": True,
+                    }
+                ],
+            }
+            (fake_root / "levoitManifest.json").write_text(
+                _json.dumps(manifest), encoding='utf-8'
+            )
+            # Driver at version "1.0.0" — intentional mismatch.
+            # Two leading comment lines pad the file so `definition(` lands on line 4:
+            #   line 1: // padding comment A
+            #   line 2: // padding comment B
+            #   line 3: metadata {
+            #   line 4: definition(   ← def_lineno = 4
+            # T11-7 fix: old make_finding_for_file with raw_lines=[ctx] and lineno=4:
+            #   range(max(0,4-2), min(1,4+1)) = range(2, 1) → empty → context blanked.
+            # New make_finding_for_file stores context directly → non-empty.
+            # Verified arithmetic: range(2, min(1, 5)) = range(2, 1) = [] (empty). ✓
+            (drivers_dir / "TestDriver.groovy").write_text(
+                textwrap.dedent("""\
+                    // padding comment A
+                    // padding comment B
+                    metadata {
+                        definition(
+                            name: "Test Driver",
+                            namespace: "level99",
+                            version: "1.0.0") {
+                        }
+                    }
+                """),
+                encoding='utf-8',
+            )
+            findings = check_rule20_version_lockstep(repo_root=fake_root, config={})
+        rule20 = [f for f in findings if f['rule_id'] == 'RULE20_version_drift']
+        assert rule20, "Expected RULE20_version_drift finding for version mismatch"
+        assert any(f['severity'] == 'FAIL' for f in rule20), (
+            f"RULE20 finding must carry severity='FAIL'; got: {rule20}"
+        )
+        # T11-7 regression guard: fixture yields def_lineno=4 (definition( at line 4 of
+        # the padded source). Old make_finding_for_file: range(2, min(1,5))=range(2,1)=[]
+        # → context blanked → this assert FAILs on a T11-7 revert. New: context preserved.
+        assert any(f['context'] for f in rule20), (
+            "T11-7 regression: context blanked for RULE20_version_drift at lineno=4 "
+            "(range(2,min(1,5))=[] in old make_finding_for_file → should be non-empty post-fix)"
+        )
+
+
+class TestRule21ReadmeDevicesSync:
+    """
+    RULE21: every driver must appear in README.md's Supported devices section.
+    Good path: real repo passes.
+    Bad path: driver not in README — FAIL.
+    """
+
+    def test_good_readme_passes(self):
+        """Real repo root — rule must produce no FAIL findings."""
+        from lint_rules.readme_devices_sync import check_rule21_readme_devices_sync
+        findings = check_rule21_readme_devices_sync(repo_root=REPO_ROOT, config={})
+        fail_findings = [f for f in findings if f['severity'] == 'FAIL']
+        assert fail_findings == [], (
+            f"Expected no FAIL on real codebase; got: {fail_findings}"
+        )
+
+    def test_driver_missing_from_readme_fails(self):
+        """Driver present in Drivers/ but not in README — FAIL with severity='FAIL'."""
+        from lint_rules.readme_devices_sync import check_rule21_readme_devices_sync
+        with tempfile.TemporaryDirectory() as td:
+            fake_root = Path(td)
+            drivers_dir = fake_root / "Drivers" / "Levoit"
+            drivers_dir.mkdir(parents=True)
+            # Driver with a distinctive name not in the README.
+            # Two leading comment lines pad the file so `definition(` lands on line 4:
+            #   line 1: // padding comment A
+            #   line 2: // padding comment B
+            #   line 3: metadata {
+            #   line 4: definition(   ← def_lineno = 4
+            # T11-7 fix: old make_finding_for_file with raw_lines=[ctx] and lineno=4:
+            #   range(max(0,4-2), min(1,4+1)) = range(2, 1) → empty → context blanked.
+            # New make_finding_for_file stores context directly → non-empty.
+            (drivers_dir / "LevoitTestXXX999.groovy").write_text(
+                textwrap.dedent("""\
+                    // padding comment A
+                    // padding comment B
+                    metadata {
+                        definition(
+                            name: "Levoit Test XXX999 Purifier",
+                            namespace: "NiklasGustafsson",
+                            version: "1.0") {
+                        }
+                    }
+                """),
+                encoding='utf-8',
+            )
+            # README that does NOT mention "Levoit Test XXX999 Purifier"
+            (fake_root / "README.md").write_text(
+                textwrap.dedent("""\
+                    ## Supported devices
+
+                    | Device | Notes |
+                    | --- | --- |
+                    | **Levoit Core 200S** | Supported |
+                """),
+                encoding='utf-8',
+            )
+            findings = check_rule21_readme_devices_sync(repo_root=fake_root, config={})
+        rule21 = [f for f in findings if f['severity'] == 'FAIL']
+        assert rule21, "Expected FAIL finding when driver not in README"
+        assert any(f['rule_id'].startswith('RULE21') for f in rule21), (
+            f"Expected a RULE21 FAIL finding; got: {rule21}"
+        )
+        # T11-7 regression guard: fixture yields def_lineno=4. Old make_finding_for_file:
+        # range(2, min(1,5))=range(2,1)=[] → context blanked → assert FAILs on T11-7 revert.
+        assert any(f['context'] for f in rule21), (
+            "T11-7 regression: context blanked for RULE21 finding at lineno=4 "
+            "(range(2,min(1,5))=[] in old make_finding_for_file → should be non-empty post-fix)"
+        )
+
+
+class TestRule22WhitelistParity:
+    """
+    RULE22: isLevoitClimateDevice() must cover every prefix from deviceType().
+    Good path: real VeSyncIntegration.groovy passes.
+    Bad path: prefix in deviceType() but missing from isLevoitClimateDevice() — FAIL.
+    """
+
+    def test_good_parity_passes(self):
+        """Real repo root — rule must produce no FAIL findings."""
+        from lint_rules.whitelist_parity import check_rule22_whitelist_parity
+        findings = check_rule22_whitelist_parity(repo_root=REPO_ROOT, config={})
+        fail_findings = [f for f in findings if f['severity'] == 'FAIL']
+        assert fail_findings == [], (
+            f"Expected no FAIL on real codebase; got: {fail_findings}"
+        )
+
+    def test_missing_whitelist_prefix_fails(self):
+        """Prefix in deviceType() absent from isLevoitClimateDevice() — FAIL."""
+        from lint_rules.whitelist_parity import check_rule22_whitelist_parity
+        with tempfile.TemporaryDirectory() as td:
+            fake_root = Path(td)
+            drivers_dir = fake_root / "Drivers" / "Levoit"
+            drivers_dir.mkdir(parents=True)
+            # Parent driver: deviceType has "ZZZZ-" prefix, whitelist doesn't
+            parent_src = textwrap.dedent("""\
+                metadata {
+                    definition(name: "VeSync Integration", namespace: "NiklasGustafsson", version: "1.0") {}
+                }
+
+                private String deviceType(String code) {
+                    switch (code) {
+                        case { it.startsWith("ZZZZ-") }: return "TestDevice"
+                        default: return "GENERIC"
+                    }
+                }
+
+                private boolean isLevoitClimateDevice(String code) {
+                    return (code.startsWith("AAAA-"))
+                }
+            """)
+            (drivers_dir / "VeSyncIntegration.groovy").write_text(parent_src, encoding='utf-8')
+            findings = check_rule22_whitelist_parity(repo_root=fake_root, config={})
+        rule22 = [f for f in findings if f['severity'] == 'FAIL']
+        assert rule22, "Expected FAIL finding when prefix in deviceType() missing from whitelist"
+        assert any(f['rule_id'].startswith('RULE22') for f in rule22), (
+            f"Expected a RULE22 FAIL finding; got: {rule22}"
+        )
+        # NOTE: no T11-7 regression guard here. RULE22 prefix/literal findings are emitted
+        # with hardcoded lineno=0 (see whitelist_parity.py). At lineno=0 the old
+        # make_finding_for_file produced range(0, min(1,1))=range(0,1)=[0] → raw_lines[0]
+        # = the hardcoded context string → context was always preserved even before T11-7.
+        # T11-7 only changed behaviour for lineno>2; lineno=0 was never the broken path.

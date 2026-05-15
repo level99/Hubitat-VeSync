@@ -18,10 +18,6 @@ from pathlib import Path
 from lint_rules._helpers import make_finding, make_finding_for_file
 
 
-def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
-    return make_finding_for_file(severity, rule_id, title, file_str, lineno, context, why, fix)
-
-
 def _extract_definition_block(source: str):
     """
     Return (block_text, start_line) for the definition(...) named-argument span,
@@ -108,7 +104,7 @@ def check_rule20_version_lockstep(repo_root: Path, config: dict):
 
     manifest_version = manifest.get('version', '')
     if not manifest_version:
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="FAIL",
             rule_id="RULE20_manifest_no_version",
             title="levoitManifest.json has no 'version' field",
@@ -143,7 +139,7 @@ def check_rule20_version_lockstep(repo_root: Path, config: dict):
         driver_version = _extract_version_from_block(block_interior)
 
         if driver_version is None:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="FAIL",
                 rule_id="RULE20_missing_version_field",
                 title=f"Driver missing version: field in definition(): {driver_path.name}",
@@ -161,7 +157,7 @@ def check_rule20_version_lockstep(repo_root: Path, config: dict):
                     "Alternatively, run /cut-release which keeps all version: fields in lockstep.",
             ))
         elif driver_version != manifest_version:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="FAIL",
                 rule_id="RULE20_version_drift",
                 title=f"Driver version: field drifts from manifest version: {driver_path.name}",

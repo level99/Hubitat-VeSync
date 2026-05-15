@@ -40,10 +40,6 @@ EXCLUDED_FILES = {
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
-    return make_finding_for_file(severity, rule_id, title, file_str, lineno, context, why, fix)
-
-
 def _extract_definition_block(source: str):
     """
     Return (block_interior, start_line) for the definition(...) named-argument span,
@@ -137,7 +133,7 @@ def check_rule21_readme_devices_sync(repo_root: Path, config: dict):
 
     # --- Guard: README missing ---
     if not readme_path.exists():
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="FAIL",
             rule_id="RULE21_readme_missing",
             title="README.md not found at repo root",
@@ -157,7 +153,7 @@ def check_rule21_readme_devices_sync(repo_root: Path, config: dict):
     # --- Guard: section missing ---
     section_text, section_start_line = _extract_supported_devices_section(readme_text)
     if section_text is None:
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="FAIL",
             rule_id="RULE21_section_missing",
             title="README.md has no '## Supported devices' section",
@@ -205,7 +201,7 @@ def check_rule21_readme_devices_sync(repo_root: Path, config: dict):
         driver_name_normalized = _normalize(driver_name)
 
         if driver_name_normalized not in section_normalized:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="FAIL",
                 rule_id="RULE21_driver_not_in_readme",
                 title=f"Driver not listed in README.md 'Supported devices' table: {driver_path.name}",

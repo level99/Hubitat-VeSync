@@ -84,28 +84,45 @@ def make_finding_for_path(severity, rule_id, title, path, rel_base, lineno, line
 
 def make_finding_for_file(severity, rule_id, title, file_str, lineno, context, why, fix):
     """
-    Convenience wrapper for repo-level rules that work with pre-computed
-    repo-relative file strings and a single-line context snippet.
+    Builder for repo-level rules that supply a pre-computed repo-relative file
+    string and a single-line context snippet.
 
-    Converts ``context`` into the ``raw_lines`` list expected by ``make_finding``,
-    passes ``lineno`` through unchanged, then delegates to ``make_finding``.
-    Inherits the ``severity`` ValueError gate from ``make_finding``.
+    Builds the finding dict **directly** — does NOT delegate to ``make_finding``
+    and does NOT use ``make_finding``'s window-range logic.  This is intentional:
+    ``make_finding``'s window uses ``range(lineno-2, min(len(raw_lines), lineno+1))``;
+    when ``raw_lines`` is a 1-element synthetic list, that range is empty for any
+    ``lineno > 2``, silently discarding the caller's context.  By storing
+    ``context`` verbatim in the dict, this function preserves the caller-supplied
+    snippet for all line numbers.
+
+    Has its own inline severity gate (mirroring ``make_finding``'s).
+    ``lint.py``'s post-collection ``_assert_all_severities_valid`` is the backstop.
 
     Parameters
     ----------
     file_str : str
         Repo-relative file path with forward slashes.
     lineno : int
-        1-based line number of the finding (passed through to ``make_finding``,
-        NOT hardcoded — preserves real line numbers for RULE20/21/24 findings).
+        1-based line number of the finding.
     context : str
-        Single-line context snippet (typically ``raw_lines[lineno - 1]``).
-        Leading whitespace is stripped to match the display format used by
-        the per-module shims this helper replaces.
+        Single-line context snippet (typically the source line at ``lineno``).
+        Stored verbatim; never passed through a window-range computation.
     All other parameters: identical to ``make_finding``.
     """
-    raw_lines = [context.lstrip()] if context else []
-    return make_finding(severity, rule_id, title, file_str, lineno, raw_lines, why, fix)
+    # Severity gate intentionally mirrors make_finding's gate (keep in sync);
+    # lint.py's post-collection _assert_all_severities_valid is the real backstop.
+    if severity not in ('FAIL', 'WARN'):
+        raise ValueError(f"make_finding_for_file: invalid severity {severity!r} (must be 'FAIL' or 'WARN')")
+    return {
+        'severity': severity,
+        'rule_id': rule_id,
+        'title': title,
+        'file': file_str,
+        'line': lineno,
+        'context': context if context else '',
+        'why': why,
+        'fix': fix,
+    }
 
 
 # ---------------------------------------------------------------------------
