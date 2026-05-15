@@ -1,3 +1,8 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["pytest", "pyyaml"]
+# ///
 """
 lint_test.py — pytest tests for each lint rule.
 
@@ -5,7 +10,7 @@ Tests use in-memory Groovy snippets to verify rules fire on known-bad code
 and stay silent on known-good code. No real driver files are modified.
 
 Run:
-    uv run --python 3.12 --with pytest tests/lint_test.py -v
+    uv run --python 3.12 tests/lint_test.py -v
     # or from repo root:
     uv run --python 3.12 -m pytest tests/lint_test.py -v
 """
@@ -288,6 +293,20 @@ class TestBP5ManualViaPurifierMode:
     def test_not_checked_for_core_drivers(self):
         findings = run_rule(check_bp5_manual_via_setPurifierMode, self.BAD, "LevoitCore400S")
         assert findings == []
+
+    def test_not_checked_for_everestair(self):
+        # EverestAir correctly uses setPurifierMode("manual") — BP5 is V201S-specific
+        findings = run_rule(check_bp5_manual_via_setPurifierMode, self.BAD, "LevoitEverestAir")
+        assert findings == [], (
+            "BP5 must not fire on EverestAir: it uses setPurifierMode for manual mode correctly"
+        )
+
+    def test_not_checked_for_sproutair(self):
+        # SproutAir same as EverestAir — V2-air class, setPurifierMode("manual") is correct
+        findings = run_rule(check_bp5_manual_via_setPurifierMode, self.BAD, "LevoitSproutAir")
+        assert findings == [], (
+            "BP5 must not fire on SproutAir: it uses setPurifierMode for manual mode correctly"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1303,6 +1322,387 @@ class TestRule27NullGuardOnSetCommands:
         assert rule27
         assert any('setMode' in f['title'] for f in rule27)
         assert all(f['line'] > 0 for f in rule27)
+
+    # --- Arithmetic-on-null patterns (v2.5+ RULE27 extension) ---
+
+    FAIL_ARITHMETIC_LT = textwrap.dedent("""\
+        def setMistLevel(level) {
+            if (level < 1) { level = 1 }
+            hubBypass("setVirtualLevel", [virtualLevel: level], "setMistLevel")
+        }
+    """)
+
+    FAIL_ARITHMETIC_GT = textwrap.dedent("""\
+        def setTargetHumidity(humidity) {
+            if (humidity > 80) { humidity = 80 }
+            hubBypass("setTargetHumidity", [targetHumidity: humidity], "setTargetHumidity")
+        }
+    """)
+
+    PASS_ARITHMETIC_AFTER_GUARD = textwrap.dedent("""\
+        def setMistLevel(level) {
+            if (level == null) { logWarn "setMistLevel called with null; ignoring"; return }
+            Integer lvl = (level as Integer)
+            if (lvl < 1) { lvl = 1 }
+            hubBypass("setVirtualLevel", [virtualLevel: lvl], "setMistLevel")
+        }
+    """)
+
+    def test_fail_arithmetic_lt_without_guard(self):
+        """``if (level < 1)`` on raw param without null-guard: FAIL (arithmetic-on-null)."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.FAIL_ARITHMETIC_LT)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27, "Expected RULE27 FAIL on unguarded 'if (level < 1)'"
+        assert all(f['severity'] == 'FAIL' for f in rule27)
+
+    def test_fail_arithmetic_gt_without_guard(self):
+        """``if (humidity > 80)`` on raw param without null-guard: FAIL (arithmetic-on-null)."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.FAIL_ARITHMETIC_GT)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27, "Expected RULE27 FAIL on unguarded 'if (humidity > 80)'"
+        assert all(f['severity'] == 'FAIL' for f in rule27)
+
+    def test_pass_arithmetic_after_guard(self):
+        """Arithmetic comparison on a local var (not raw param) after null-guard: no finding."""
+        findings = run_rule(check_rule27_bp18_null_guard, self.PASS_ARITHMETIC_AFTER_GUARD)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27 == [], (
+            f"Expected no RULE27 findings when arithmetic is on local var 'lvl' (not raw param "
+            f"'level') and a null-guard precedes the cast, got: {rule27}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE27 — BP1 1-arg update overload enforcement
+# ---------------------------------------------------------------------------
+
+class TestBP1Missing1ArgUpdate:
+    """
+    BP1_missing_1arg_update fires when a polled child has the 2-arg update() but
+    is missing the 1-arg delegator.  The 1-arg form can be provided by the driver
+    directly or by an #included library (library-aware via included_lib_texts).
+    """
+
+    from lint_rules.bug_patterns import check_bp1_missing_2arg_update as _rule
+
+    GOOD_ALL_THREE = textwrap.dedent("""\
+        def update() { refresh() }
+        def update(status) { update(status, null) }
+        def update(status, nightLight) { applyStatus(status); return true }
+    """)
+
+    BAD_MISSING_1ARG = textwrap.dedent("""\
+        def update() { refresh() }
+        def update(status, nightLight) { applyStatus(status); return true }
+    """)
+
+    def test_good_all_three_passes(self):
+        """All three overloads present: no BP1 finding."""
+        from lint_rules.bug_patterns import check_bp1_missing_2arg_update
+        findings = run_rule(check_bp1_missing_2arg_update, self.GOOD_ALL_THREE, "LevoitVital200S")
+        assert findings == []
+
+    def test_bad_missing_1arg_fails(self):
+        """Has 2-arg but missing 1-arg delegator: RULE BP1_missing_1arg_update fires."""
+        from lint_rules.bug_patterns import check_bp1_missing_2arg_update
+        findings = run_rule(check_bp1_missing_2arg_update, self.BAD_MISSING_1ARG, "LevoitVital200S")
+        assert any(f['rule_id'] == 'BP1_missing_1arg_update' for f in findings)
+        assert any(f['severity'] == 'FAIL'
+                   for f in findings if f['rule_id'] == 'BP1_missing_1arg_update')
+
+    def test_missing_both_1arg_and_2arg_only_fires_2arg(self):
+        """
+        When both 1-arg AND 2-arg are absent, only BP1_missing_2arg_update fires —
+        BP1_missing_1arg_update is conditional on 2-arg being present to avoid double-reporting.
+        """
+        from lint_rules.bug_patterns import check_bp1_missing_2arg_update
+        src = "def update() { refresh() }"
+        findings = run_rule(check_bp1_missing_2arg_update, src, "LevoitVital200S")
+        assert any(f['rule_id'] == 'BP1_missing_2arg_update' for f in findings)
+        assert not any(f['rule_id'] == 'BP1_missing_1arg_update' for f in findings), (
+            "BP1_missing_1arg_update must not fire when 2-arg is also absent "
+            "(would be double-reporting; fix 2-arg first)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE34 — BP14 poll persistence (VeSyncIntegration only)
+# ---------------------------------------------------------------------------
+
+class TestRule34BP14PollPersistence:
+    """
+    RULE34 (Bug Pattern #14): parent driver must use schedule()-based poll cron,
+    not runIn() chains for updateDevices.
+    """
+
+    from lint_rules.bp14_poll_persistence import check_rule34_bp14_poll_persistence as _rule
+
+    GOOD = textwrap.dedent("""\
+        def updateDevices() {
+            ensurePollHealth()
+            getChildDevices().each { dev -> /* poll */ }
+        }
+        private void setupPollSchedule(int interval) {
+            unschedule("updateDevices")
+            String cron = "0 */${interval} * * * ?"
+            schedule(cron, "updateDevices")
+        }
+    """)
+
+    BAD_RUNIN_UPDATEDEVICES = textwrap.dedent("""\
+        def updateDevices() {
+            getChildDevices().each { dev -> /* poll */ }
+            runIn(60, "updateDevices")
+        }
+        private void setupPollSchedule(int interval) {
+            schedule("0 */1 * * * ?", "updateDevices")
+        }
+    """)
+
+    BAD_MISSING_SETUP = textwrap.dedent("""\
+        def updateDevices() {
+            schedule("0 */1 * * * ?", "updateDevices")
+            getChildDevices().each { dev -> /* poll */ }
+        }
+        // setupPollSchedule missing
+    """)
+
+    BAD_MISSING_SCHEDULE = textwrap.dedent("""\
+        def updateDevices() {
+            runIn(60, "logDebugOff")
+            getChildDevices().each { dev -> /* poll */ }
+        }
+        private void setupPollSchedule(int interval) {
+            // forgot to call schedule()
+        }
+    """)
+
+    def test_good_passes(self):
+        from lint_rules.bp14_poll_persistence import check_rule34_bp14_poll_persistence
+        findings = run_rule(check_rule34_bp14_poll_persistence, self.GOOD, "VeSyncIntegration")
+        assert findings == [], f"Expected no findings, got: {findings}"
+
+    def test_runin_updatedevices_fails(self):
+        """runIn(N, 'updateDevices') is the known anti-pattern: FAIL."""
+        from lint_rules.bp14_poll_persistence import check_rule34_bp14_poll_persistence
+        findings = run_rule(
+            check_rule34_bp14_poll_persistence, self.BAD_RUNIN_UPDATEDEVICES, "VeSyncIntegration"
+        )
+        assert any(f['rule_id'] == 'RULE34_runin_updateDevices' for f in findings)
+        assert any(f['severity'] == 'FAIL'
+                   for f in findings if f['rule_id'] == 'RULE34_runin_updateDevices')
+
+    def test_missing_setup_poll_schedule_fails(self):
+        """setupPollSchedule() missing: FAIL."""
+        from lint_rules.bp14_poll_persistence import check_rule34_bp14_poll_persistence
+        findings = run_rule(
+            check_rule34_bp14_poll_persistence, self.BAD_MISSING_SETUP, "VeSyncIntegration"
+        )
+        assert any(f['rule_id'] == 'RULE34_missing_setupPollSchedule' for f in findings)
+
+    def test_missing_schedule_call_fails(self):
+        """No schedule() call anywhere: FAIL."""
+        from lint_rules.bp14_poll_persistence import check_rule34_bp14_poll_persistence
+        findings = run_rule(
+            check_rule34_bp14_poll_persistence, self.BAD_MISSING_SCHEDULE, "VeSyncIntegration"
+        )
+        assert any(f['rule_id'] == 'RULE34_missing_schedule_call' for f in findings)
+
+    def test_exempt_runin_handlers_not_flagged(self):
+        """runIn with exempted handlers (logDebugOff, initialize, etc.) must not flag."""
+        from lint_rules.bp14_poll_persistence import check_rule34_bp14_poll_persistence
+        src = textwrap.dedent("""\
+            def updated() {
+                runIn(1800, "logDebugOff")
+                runIn(15, "initialize")
+                runIn(2, "getDevices")
+            }
+            private void setupPollSchedule(int interval) {
+                schedule("0 */1 * * * ?", "updateDevices")
+            }
+        """)
+        findings = run_rule(check_rule34_bp14_poll_persistence, src, "VeSyncIntegration")
+        runin_fails = [f for f in findings if f['rule_id'] == 'RULE34_runin_updateDevices']
+        assert runin_fails == [], (
+            f"Exempted runIn handlers must not trigger RULE34_runin_updateDevices, got: {runin_fails}"
+        )
+
+    def test_not_checked_for_child_drivers(self):
+        """Child drivers are out of scope: no findings even on bad patterns."""
+        from lint_rules.bp14_poll_persistence import check_rule34_bp14_poll_persistence
+        findings = run_rule(
+            check_rule34_bp14_poll_persistence, self.BAD_RUNIN_UPDATEDEVICES, "LevoitVital200S"
+        )
+        assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# RULE35 — BP17 poll health watchdog (VeSyncIntegration only)
+# ---------------------------------------------------------------------------
+
+class TestRule35BP17PollHealth:
+    """
+    RULE35 (Bug Pattern #17): ensurePollHealth() must be defined and called inside
+    updateDevices() in VeSyncIntegration.groovy.
+    """
+
+    GOOD = textwrap.dedent("""\
+        def updateDevices() {
+            ensurePollHealth()
+            getChildDevices().each { dev -> /* poll */ }
+        }
+        private void ensurePollHealth() {
+            // tracks consecutiveEmpty + triggers getDevices() on threshold
+        }
+    """)
+
+    BAD_MISSING_DEF = textwrap.dedent("""\
+        def updateDevices() {
+            ensurePollHealth()
+            getChildDevices().each { dev -> /* poll */ }
+        }
+        // ensurePollHealth definition is missing
+    """)
+
+    BAD_NOT_CALLED = textwrap.dedent("""\
+        def updateDevices() {
+            getChildDevices().each { dev -> /* poll */ }
+        }
+        private void ensurePollHealth() {
+            // defined but not called
+        }
+    """)
+
+    def test_good_passes(self):
+        from lint_rules.bp17_poll_health import check_rule35_bp17_poll_health
+        findings = run_rule(check_rule35_bp17_poll_health, self.GOOD, "VeSyncIntegration")
+        assert findings == [], f"Expected no findings, got: {findings}"
+
+    def test_missing_def_fails(self):
+        """ensurePollHealth() not defined: FAIL."""
+        from lint_rules.bp17_poll_health import check_rule35_bp17_poll_health
+        findings = run_rule(check_rule35_bp17_poll_health, self.BAD_MISSING_DEF, "VeSyncIntegration")
+        assert any(f['rule_id'] == 'RULE35_missing_ensurePollHealth_def' for f in findings)
+
+    def test_not_called_in_updatedevices_fails(self):
+        """ensurePollHealth() defined but not called in updateDevices(): FAIL."""
+        from lint_rules.bp17_poll_health import check_rule35_bp17_poll_health
+        findings = run_rule(check_rule35_bp17_poll_health, self.BAD_NOT_CALLED, "VeSyncIntegration")
+        assert any(f['rule_id'] == 'RULE35_ensurePollHealth_not_called' for f in findings)
+
+    def test_not_checked_for_child_drivers(self):
+        """Child drivers are out of scope."""
+        from lint_rules.bp17_poll_health import check_rule35_bp17_poll_health
+        findings = run_rule(check_rule35_bp17_poll_health, self.BAD_NOT_CALLED, "LevoitSuperior6000S")
+        assert findings == []
+
+    def test_return_type_in_signature_is_handled(self):
+        """``def Boolean updateDevices()`` with next-line brace is correctly detected."""
+        from lint_rules.bp17_poll_health import check_rule35_bp17_poll_health
+        src = textwrap.dedent("""\
+            def Boolean updateDevices()
+            {
+                ensurePollHealth()
+                getChildDevices().each { dev -> /* poll */ }
+            }
+            private void ensurePollHealth() {
+                // watchdog body
+            }
+        """)
+        findings = run_rule(check_rule35_bp17_poll_health, src, "VeSyncIntegration")
+        assert findings == [], (
+            f"Expected no findings on 'def Boolean updateDevices()' form, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE36 — BP22 network circuit-breaker invariants (VeSyncIntegration only)
+# ---------------------------------------------------------------------------
+
+class TestRule36BP22NetworkBreaker:
+    """
+    RULE36 (Bug Pattern #22): dual network circuit-breaker state keys and helper
+    must all be present in VeSyncIntegration.groovy.
+    """
+
+    GOOD = textwrap.dedent("""\
+        def updateDevices() {
+            if (state.networkUnreachableSince != null && !state.networkProbeInFlight) {
+                emitNetworkWarnIfDue()
+                return
+            }
+            state.networkProbeInFlight = false
+        }
+        private void emitNetworkWarnIfDue() {
+            if (state.networkUnreachableSince == null) return
+            // hourly warn re-surface
+        }
+        def sendBypassRequest(dev, Map payload) {
+            if (state.networkUnreachableSince != null && !state.networkProbeInFlight) return null
+        }
+    """)
+
+    BAD_MISSING_UNREACHABLE_SINCE = textwrap.dedent("""\
+        def updateDevices() {
+            // no network breaker state
+            getChildDevices().each { dev -> /* poll */ }
+        }
+        private void emitNetworkWarnIfDue() { }
+    """)
+
+    BAD_MISSING_PROBE_IN_FLIGHT = textwrap.dedent("""\
+        def updateDevices() {
+            if (state.networkUnreachableSince != null) return
+            emitNetworkWarnIfDue()
+        }
+        private void emitNetworkWarnIfDue() {
+            if (state.networkUnreachableSince == null) return
+        }
+    """)
+
+    BAD_MISSING_EMIT_DEF = textwrap.dedent("""\
+        def updateDevices() {
+            if (state.networkUnreachableSince != null && !state.networkProbeInFlight) return
+        }
+        // emitNetworkWarnIfDue missing
+    """)
+
+    def test_good_passes(self):
+        from lint_rules.bp22_network_breaker import check_rule36_bp22_network_breaker
+        findings = run_rule(check_rule36_bp22_network_breaker, self.GOOD, "VeSyncIntegration")
+        assert findings == [], f"Expected no findings, got: {findings}"
+
+    def test_missing_unreachable_since_fails(self):
+        """state.networkUnreachableSince not referenced: FAIL."""
+        from lint_rules.bp22_network_breaker import check_rule36_bp22_network_breaker
+        findings = run_rule(
+            check_rule36_bp22_network_breaker, self.BAD_MISSING_UNREACHABLE_SINCE, "VeSyncIntegration"
+        )
+        assert any(f['rule_id'] == 'RULE36_missing_networkUnreachableSince' for f in findings)
+
+    def test_missing_probe_in_flight_fails(self):
+        """state.networkProbeInFlight not referenced: FAIL."""
+        from lint_rules.bp22_network_breaker import check_rule36_bp22_network_breaker
+        findings = run_rule(
+            check_rule36_bp22_network_breaker, self.BAD_MISSING_PROBE_IN_FLIGHT, "VeSyncIntegration"
+        )
+        assert any(f['rule_id'] == 'RULE36_missing_networkProbeInFlight' for f in findings)
+
+    def test_missing_emit_def_fails(self):
+        """emitNetworkWarnIfDue() not defined: FAIL."""
+        from lint_rules.bp22_network_breaker import check_rule36_bp22_network_breaker
+        findings = run_rule(
+            check_rule36_bp22_network_breaker, self.BAD_MISSING_EMIT_DEF, "VeSyncIntegration"
+        )
+        assert any(f['rule_id'] == 'RULE36_missing_emitNetworkWarnIfDue' for f in findings)
+
+    def test_not_checked_for_child_drivers(self):
+        """Child drivers are out of scope."""
+        from lint_rules.bp22_network_breaker import check_rule36_bp22_network_breaker
+        findings = run_rule(
+            check_rule36_bp22_network_breaker, self.BAD_MISSING_EMIT_DEF, "LevoitSuperior6000S"
+        )
+        assert findings == []
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ bug_patterns.py — lint rules derived from the VeSync driver bug-pattern catalo
 
 Rules implemented here:
   BP1  — Missing 2-arg update(status, nightLight) on child drivers
+         (also enforces 1-arg and 0-arg overloads — all three required per BP1)
   BP2  — Hardcoded getPurifierStatus in parent's updateDevices()
   BP3  — Missing envelope-peel while-loop in V2-line drivers
   BP4  — V201S/V2-line setLevel payload field-name mismatch
@@ -16,8 +17,21 @@ Rules implemented here:
 Child drivers: all .groovy files in Drivers/Levoit/ except VeSyncIntegration.groovy
                and files not in the known-driver set (e.g. Notification Tile.groovy
                is excluded from BP1/BP3 checks — it is not a polled child).
-V2-line drivers: LevoitVital200S.groovy, LevoitSuperior6000S.groovy
-                 (and future LAP-/LEH- new-model files detected heuristically).
+
+Driver family classification (source: pyvesync device_map.py + CLAUDE.md):
+  V2-line (bypassV2 double-envelope peel required):
+    Vital purifiers (VeSyncAirBaseV2): Vital 100S, Vital 200S
+    V2 fans (VeSyncAirBaseV2): EverestAir, Sprout Air
+    V2 humidifiers (VeSyncHumid1000S, VeSyncSproutHumid, LV600SHubConnect variant):
+      LV600S HubConnect, OasisMist 1000S, Sprout Humidifier, Superior 6000S
+    Generic: LevoitGeneric
+  V2-purifier (V2-style setLevel field names — levelIdx/manualSpeedLevel/levelType):
+    Vital 100S, Vital 200S, EverestAir, Sprout Air
+    (NOT humidifiers — they use setVirtualLevel / virtualLevel fields)
+  Classic-line (VeSyncAirBypass older payload conventions):
+    Core 200S/300S/400S/600S, Core 200S Light
+  Classic-humidifier (VeSyncHumid200300S — enabled:bool/target_humidity snake_case):
+    Classic 200S/300S, Dual 200S, LV600S, OasisMist 450S
 """
 
 import re
@@ -36,28 +50,76 @@ NOTIFICATION_TILE = "Notification Tile.groovy"
 # Drivers that are polled children and must declare all three update() signatures.
 # When a driver delegates its method bodies to a shared library via #include, the
 # regex search is expanded to include the library text (see check_bp1_missing_2arg_update).
+# Includes all currently-shipping child drivers; libs (LevoitChildBaseLib, etc.) excluded
+# because library() files are not polled by the parent directly.
 POLLED_CHILD_DRIVERS = {
+    # Core purifier line (VeSyncAirBypass)
     "LevoitCore200S.groovy",
     "LevoitCore200S Light.groovy",
     "LevoitCore300S.groovy",
     "LevoitCore400S.groovy",
     "LevoitCore600S.groovy",
+    # Vital purifier line (VeSyncAirBaseV2)
     "LevoitVital100S.groovy",
     "LevoitVital200S.groovy",
+    # V2 fan/purifier line (VeSyncAirBaseV2)
+    "LevoitEverestAir.groovy",
+    "LevoitSproutAir.groovy",
+    # Fan line
+    "LevoitTowerFan.groovy",
+    "LevoitPedestalFan.groovy",
+    # Humidifier drivers — all 9 humidifier models
+    "LevoitClassic200S.groovy",
+    "LevoitClassic300S.groovy",
+    "LevoitDual200S.groovy",
+    "LevoitLV600S.groovy",
+    "LevoitLV600SHubConnect.groovy",
+    "LevoitOasisMist450S.groovy",
+    "LevoitOasisMist1000S.groovy",
+    "LevoitSproutHumidifier.groovy",
     "LevoitSuperior6000S.groovy",
+    # Generic catch-all
     "LevoitGeneric.groovy",
 }
 
-# V2-line drivers that must have the envelope-peel while loop
+# V2-line drivers that must have the envelope-peel while loop in their per-driver applyStatus().
+# Source: pyvesync device_map.py class membership + CLAUDE.md family table.
+# NOTE: humidifier drivers (Classic200S, Classic300S, Dual200S, LV600S, LV600SHubConnect,
+#   OasisMist450S, OasisMist1000S, SproutHumidifier, Superior6000S) also use V2-style
+#   envelopes but share their applyStatus peel via LevoitHumidifierLib — the lib carries
+#   the peel and is not directly checkable here. These are intentionally excluded from
+#   BP3 scope to avoid false-positive "missing peel" findings on drivers that inherit it
+#   from the library. BP3 expansion to humidifier drivers is tracked in ROADMAP.md.
 V2_LINE_DRIVERS = {
+    # Vital purifier line (VeSyncAirBaseV2)
+    "LevoitVital100S.groovy",
     "LevoitVital200S.groovy",
+    # V2 fan/purifier line (VeSyncAirBaseV2)
+    "LevoitEverestAir.groovy",
+    "LevoitSproutAir.groovy",
+    # V2 humidifier drivers with per-driver applyStatus (no lib peel)
     "LevoitSuperior6000S.groovy",
+    # Generic catch-all (VeSyncAirBaseV2 compatible)
     "LevoitGeneric.groovy",
 }
 
-# V2-line drivers where setLevel field names are enforced (Vital line, not Core)
+# V2-purifier drivers where setLevel field names are enforced (BP4).
+# These use: levelIdx (not switchIdx), levelType (not type), manualSpeedLevel (not level).
+# Source: pyvesync VeSyncAirBaseV2.set_fan_speed() canonical payload.
+# Does NOT include humidifier V2 drivers — they use setVirtualLevel/virtualLevel fields.
 V2_PURIFIER_DRIVERS = {
+    "LevoitVital100S.groovy",
     "LevoitVital200S.groovy",
+    "LevoitEverestAir.groovy",
+    "LevoitSproutAir.groovy",
+}
+
+# BP5-specific scope: only Vital 200S has the quirk where setPurifierMode("manual") fails.
+# EverestAir and Sprout Air are VeSyncAirBaseV2-class drivers that correctly use
+# setPurifierMode for ALL modes including manual — the BP5 quirk is V201S-specific.
+BP5_MANUAL_MODE_DRIVERS = {
+    "LevoitVital200S.groovy",
+    "LevoitVital100S.groovy",
 }
 
 FORK_DOC_DOMAIN = "github.com/level99/Hubitat-VeSync"
@@ -129,6 +191,24 @@ def check_bp1_missing_2arg_update(path, raw_lines, cleaned_lines, raw_text, conf
             why="Bug Pattern #1: parent calls update(status, nightLight) on every poll; child missing "
                 "the 2-arg signature throws MissingMethodException silently on each poll cycle.",
             fix='Add: def update(status, nightLight) { applyStatus(status); return true }',
+        ))
+
+    if has_2arg and not has_1arg:
+        lineno = 1
+        for i, line in enumerate(raw_lines, 1):
+            if re.search(r'\bdef\s+update\s*\(', line):
+                lineno = i
+                break
+        findings.append(_making_finding(
+            severity="FAIL",
+            rule_id="BP1_missing_1arg_update",
+            title="Missing 1-arg update(status) defensive delegator signature",
+            path=path, rel_base=rel_base, lineno=lineno, lines=raw_lines,
+            why="Bug Pattern #1: all three update() overloads are required. The 1-arg form "
+                "is called when the parent dispatches with a single argument (rare but real). "
+                "Missing it throws MissingMethodException silently. "
+                "Canonical form: def update(status) { update(status, null) }",
+            fix='Add: def update(status) { update(status, null) }',
         ))
 
     if has_2arg and not has_0arg:
@@ -320,11 +400,16 @@ def check_bp4_setlevel_field_names(path, raw_lines, cleaned_lines, raw_text, con
 
 def check_bp5_manual_via_setPurifierMode(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
     """
-    In V201S (and V2 purifier) drivers, setPurifierMode with workMode:"manual"
-    always returns inner code -1. Manual mode must be established via setLevel.
+    In the Vital 200S / Vital 100S (VeSyncAirBaseV2 LAP-V201S family), setPurifierMode
+    with workMode:"manual" always returns inner code -1. Manual mode must be established
+    via setLevel with a speed value.
+
+    Scope: BP5_MANUAL_MODE_DRIVERS only (Vital 200S, Vital 100S).
+    EverestAir and Sprout Air (also VeSyncAirBaseV2) correctly use setPurifierMode for
+    ALL modes including "manual" — the quirk is V201S-firmware-specific, not class-wide.
     """
     findings = []
-    if path.name not in V2_PURIFIER_DRIVERS:
+    if path.name not in BP5_MANUAL_MODE_DRIVERS:
         return findings
 
     # Look for setPurifierMode with "manual" nearby
@@ -526,8 +611,17 @@ BP12_INSERTION_POINTS = {
     "Notification Tile.groovy": "deviceNotification",
 }
 BP12_APPLY_STATUS_DRIVERS = {
+    # V2 purifier line — applyStatus is the pref-seed insertion point
+    "LevoitVital100S.groovy",
     "LevoitVital200S.groovy",
+    "LevoitEverestAir.groovy",
+    "LevoitSproutAir.groovy",
+    # V2 humidifier drivers with per-driver applyStatus
+    "LevoitLV600SHubConnect.groovy",
+    "LevoitOasisMist1000S.groovy",
+    "LevoitSproutHumidifier.groovy",
     "LevoitSuperior6000S.groovy",
+    # Generic
     "LevoitGeneric.groovy",
 }
 # Core drivers use update(status, nightLight) as insertion point

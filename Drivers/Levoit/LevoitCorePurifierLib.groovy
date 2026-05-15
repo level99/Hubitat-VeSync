@@ -242,6 +242,10 @@ def checkHttpResponse(action, resp) {
 	}
 }
 
+// 1-arg parent callback — BP1 requires all three overloads; this delegator lives in the lib
+// so all four Core drivers (200S/300S/400S/600S) inherit it automatically.
+def update(status) { update(status, null) }
+
 // ---- Group 2: AQ-group 7 — called by 300S/400S/600S only (200S does not have AQ sensor) ----
 
 def setAutoMode(mode) {
