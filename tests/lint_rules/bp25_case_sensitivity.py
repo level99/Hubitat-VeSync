@@ -58,6 +58,7 @@ Exemptions:
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding
 
 
 DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
@@ -101,22 +102,6 @@ def _line_of(source: str, pos: int) -> int:
 def _strip_line_comments(text: str) -> str:
     """Remove full-line // comments."""
     return re.sub(r'(?m)^\s*//.*$', '', text)
-
-
-def _making_finding(severity, rule_id, title, file_rel, lineno, raw_lines, why, fix):
-    start = max(0, lineno - 2)
-    end = min(len(raw_lines), lineno + 1)
-    context = '\n'.join(f"    {raw_lines[i]}" for i in range(start, end))
-    return {
-        'severity': severity,
-        'rule_id': rule_id,
-        'title': title,
-        'file': file_rel,
-        'line': lineno,
-        'context': context,
-        'why': why,
-        'fix': fix,
-    }
 
 
 def _build_exemption_set(config: dict) -> set:
@@ -214,7 +199,7 @@ def check_rule33_case_sensitivity(
         # BP25 site: raw parameter compared without prior toLowerCase().
         compare_line = _line_of(raw_text, brace_start + compare_pos)
 
-        findings.append(_making_finding(
+        findings.append(make_finding(
             severity='FAIL',
             rule_id='RULE33_case_sensitivity',
             title=(

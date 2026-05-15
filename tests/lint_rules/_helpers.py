@@ -10,6 +10,56 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
+# Finding builder — REQUIRED for all lint rules
+# ---------------------------------------------------------------------------
+
+def make_finding(severity, rule_id, title, file_rel, lineno, raw_lines, why, fix):
+    """
+    Build a finding dict with all required keys.
+
+    Parameters
+    ----------
+    severity : str
+        'FAIL' or 'WARN'.  lint.py counts exit-status by this key — omitting it
+        produces a silently non-gating rule (false-green ``lint --strict``).
+    rule_id : str
+        Machine-readable rule identifier, e.g. ``'RULE33_case_sensitivity'``.
+    title : str
+        Short human-readable description shown in lint output.
+    file_rel : str
+        Repo-relative file path with forward slashes, e.g.
+        ``'Drivers/Levoit/LevoitVital200S.groovy'``.
+    lineno : int
+        1-based line number of the finding.
+    raw_lines : list[str]
+        The file's raw source lines (as returned by ``path.read_text().splitlines()``).
+        Used to build the context snippet; the list is never mutated.
+    why : str
+        One-sentence (or short paragraph) rationale — explains WHY this is wrong.
+    fix : str
+        Suggested corrective action — shown verbatim in lint output.
+
+    Returns
+    -------
+    dict
+        Keys: severity, rule_id, title, file, line, context, why, fix.
+    """
+    start = max(0, lineno - 2)
+    end = min(len(raw_lines), lineno + 1)
+    context = '\n'.join(f"    {raw_lines[i]}" for i in range(start, end))
+    return {
+        'severity': severity,
+        'rule_id': rule_id,
+        'title': title,
+        'file': file_rel,
+        'line': lineno,
+        'context': context,
+        'why': why,
+        'fix': fix,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Library-file detection
 # ---------------------------------------------------------------------------
 

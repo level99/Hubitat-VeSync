@@ -32,6 +32,7 @@ recurring poll of their own; ``runIn()`` in children is safe (one-shot callbacks
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding
 
 PARENT_DRIVER = "VeSyncIntegration.groovy"
 
@@ -56,22 +57,6 @@ SCHEDULE_CALL_PATTERN = re.compile(r'\bschedule\s*\(')
 SETUP_POLL_SCHEDULE_DEF_PATTERN = re.compile(r'\bsetupPollSchedule\s*\(')
 
 
-def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    start = max(0, lineno - 2)
-    end = min(len(lines), lineno + 1)
-    context = '\n'.join(f"    {lines[i]}" for i in range(start, end))
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": str(path.relative_to(rel_base)).replace('\\', '/'),
-        "line": lineno,
-        "context": context,
-        "why": why,
-        "fix": fix,
-    }
-
-
 def check_rule34_bp14_poll_persistence(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
     """
     RULE34 (Bug Pattern #14): enforce schedule()-based poll cycle in the parent driver.
@@ -85,6 +70,8 @@ def check_rule34_bp14_poll_persistence(path, raw_lines, cleaned_lines, raw_text,
     if path.name != PARENT_DRIVER:
         return findings
 
+    file_rel = str(path.relative_to(rel_base)).replace('\\', '/')
+
     # Check 1: runIn("updateDevices") is the known anti-pattern
     for i, line in enumerate(cleaned_lines, 1):
         m = RUNIN_PATTERN.search(line)
@@ -92,11 +79,13 @@ def check_rule34_bp14_poll_persistence(path, raw_lines, cleaned_lines, raw_text,
             continue
         handler = m.group(1)
         if handler == "updateDevices":
-            findings.append(_making_finding(
+            findings.append(make_finding(
                 severity="FAIL",
                 rule_id="RULE34_runin_updateDevices",
                 title="runIn() used as recurring poll trigger for 'updateDevices'",
-                path=path, rel_base=rel_base, lineno=i, lines=raw_lines,
+                file_rel=file_rel,
+                lineno=i,
+                raw_lines=raw_lines,
                 why="Bug Pattern #14: runIn() is an in-memory timer that evaporates on hub reboot. "
                     "Using it to chain poll cycles means the poll stops after every hub restart "
                     "until the user manually saves preferences. Use schedule() with a cron string "
@@ -109,11 +98,13 @@ def check_rule34_bp14_poll_persistence(path, raw_lines, cleaned_lines, raw_text,
 
     # Check 2: setupPollSchedule must be defined
     if not SETUP_POLL_SCHEDULE_DEF_PATTERN.search(raw_text):
-        findings.append(_making_finding(
+        findings.append(make_finding(
             severity="FAIL",
             rule_id="RULE34_missing_setupPollSchedule",
             title="setupPollSchedule() not found in VeSyncIntegration.groovy",
-            path=path, rel_base=rel_base, lineno=1, lines=raw_lines,
+            file_rel=file_rel,
+            lineno=1,
+            raw_lines=raw_lines,
             why="Bug Pattern #14: the parent driver must define setupPollSchedule() to arm "
                 "a schedule()-based cron for recurring polling. Without it, the poll cycle "
                 "is either absent or relies on fragile runIn() chains that evaporate on reboot.",
@@ -126,11 +117,13 @@ def check_rule34_bp14_poll_persistence(path, raw_lines, cleaned_lines, raw_text,
     # does not suppress a real missing-schedule() finding.
     cleaned_text = '\n'.join(cleaned_lines)
     if not SCHEDULE_CALL_PATTERN.search(cleaned_text):
-        findings.append(_making_finding(
+        findings.append(make_finding(
             severity="FAIL",
             rule_id="RULE34_missing_schedule_call",
             title="schedule() not called anywhere in VeSyncIntegration.groovy",
-            path=path, rel_base=rel_base, lineno=1, lines=raw_lines,
+            file_rel=file_rel,
+            lineno=1,
+            raw_lines=raw_lines,
             why="Bug Pattern #14: schedule() is how Hubitat arms a persistent cron-based poll. "
                 "Without any schedule() call, the poll cycle is not reboot-safe.",
             fix="Call schedule(cronExpr, 'updateDevices') inside setupPollSchedule(). "

@@ -313,6 +313,34 @@ The order assertion (`findIndexOf < findIndexOf`) is the load-bearing check — 
 
 `tests/lint_rules/` has one Python module per rule. Run `uv run --python 3.12 tests/lint.py --strict` to see all rule IDs. Each finding includes the rule ID, file path, line number, and a `fix:` hint.
 
+### Writing a new lint rule
+
+**Lint rules MUST emit findings via `lint_rules._helpers.make_finding(severity=..., ...)`.** Never hand-construct a finding dict inline. `tests/lint.py` counts failures by the `severity` key — an inline dict that omits `severity` produces a silently non-gating rule (false-green `lint --strict`). The shared helper makes the `severity` argument positional and required, preventing omission.
+
+```python
+from lint_rules._helpers import make_finding
+
+findings.append(make_finding(
+    severity='FAIL',       # or 'WARN'
+    rule_id='RULE99_example',
+    title='Short description of the violation',
+    file_rel=file_rel,     # repo-relative path with forward slashes
+    lineno=line_number,    # 1-based
+    raw_lines=raw_lines,   # full source lines list, for context snippet
+    why='One-sentence rationale explaining why this is wrong.',
+    fix='Suggested corrective action shown verbatim in lint output.',
+))
+```
+
+Every new rule's test in `tests/lint_test.py` must also assert that at least one finding has `severity == 'FAIL'` on its bad-case fixture:
+
+```python
+assert any(f['severity'] == 'FAIL' for f in findings), \
+    "Rule produced no FAIL finding — check that make_finding is called with severity='FAIL'"
+```
+
+This assertion catches severity regressions (e.g., accidental removal of the `severity` argument) in the rule's own test, before CI runs against real driver files.
+
 ### Bug-pattern catalog references
 
 The catalog (`CLAUDE.md` root) numbers each pattern (`Bug Pattern #N`). Lint rules and Spock specs cite these numbers in finding/test-name strings. When you see `BP9` in a finding, that's catalog entry #9 (driver-name change orphan).

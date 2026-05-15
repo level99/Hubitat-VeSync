@@ -36,6 +36,7 @@ Exemptions:
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding
 
 DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
 
@@ -92,22 +93,6 @@ def _build_exemption_set(config: dict) -> set:
         if file_ and method and rationale:
             exemptions.add((file_, method))
     return exemptions
-
-
-def _making_finding(severity, rule_id, title, file_rel, lineno, raw_lines, why, fix):
-    start = max(0, lineno - 2)
-    end = min(len(raw_lines), lineno + 1)
-    context = '\n'.join(f"    {raw_lines[i]}" for i in range(start, end))
-    return {
-        'severity': severity,
-        'rule_id': rule_id,
-        'title': title,
-        'file': file_rel,
-        'line': lineno,
-        'context': context,
-        'why': why,
-        'fix': fix,
-    }
 
 
 def check_rule37_unsafe_int_coercion(
@@ -172,7 +157,7 @@ def check_rule37_unsafe_int_coercion(
             if cast_m.group(1) == param_name:
                 abs_pos = brace_start + cast_m.start()
                 lineno = _line_of(raw_text, abs_pos)
-                findings.append(_making_finding(
+                findings.append(make_finding(
                     severity='FAIL',
                     rule_id='RULE37_unsafe_int_coercion',
                     title=(
@@ -204,7 +189,7 @@ def check_rule37_unsafe_int_coercion(
                 if ti_m.group(1) == param_name:
                     abs_pos = brace_start + ti_m.start()
                     lineno = _line_of(raw_text, abs_pos)
-                    findings.append(_making_finding(
+                    findings.append(make_finding(
                         severity='FAIL',
                         rule_id='RULE37_unsafe_int_coercion',
                         title=(

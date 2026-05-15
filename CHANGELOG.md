@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Lint rule coverage expanded: the null-guard rule now catches numeric-coercion patterns in addition to string-coercion patterns; the BP1 update-signature rule now enforces the 1-arg form in addition to the 2-arg form; parent-driver rules added for schedule-based poll cron, poll-health watchdog, and network circuit-breaker invariants. New RULE37 enforces safe numeric coercion on command parameters. New automated regression tests added for the uppercase input handling and null-parameter paths across the Core line.
 - RULE34 (BP14 poll-persistence check 3) now correctly searches comment-stripped source, so a comment containing the word "schedule" no longer masks a real missing `schedule()` call.
+- Consolidated lint-rule finding emission into a shared `make_finding` helper in `tests/lint_rules/_helpers.py`. All rules now use the shared helper; hand-constructed finding dicts (which could silently omit the `severity` key and produce a non-gating rule) are gone from bp14, bp25, and bp26.
 
 ## [2.5] - 2026-05-04
 
