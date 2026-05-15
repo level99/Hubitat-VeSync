@@ -172,6 +172,7 @@ def setChildLock(value) {
 }
 
 def setTimer(seconds) {
+    if (!requireNotNull(seconds, "setTimer")) return
     int secs = safeIntArg(seconds, 0)
     logDebug "setTimer(${secs}s)"
     if (secs <= 0) { cancelTimer(); return }
@@ -254,6 +255,8 @@ def setAutoMode(mode) {
 
 def setAutoMode(mode, roomSize) {
     if (!requireNotNull(mode, "setAutoMode")) return
+    // BP26: safe integer coercion — Rule Machine passes "" or null for blank numeric slots.
+    Integer sz = safeIntArg(roomSize, 100)
     // 200S guard: 200S firmware doesn't support setAutoPreference (no AQ sensor).
     // The lib is shared but the cloud rejects this call on 200S. Block at lib boundary
     // to prevent state divergence + log noise on Rule Machine / MCP misuse.
@@ -262,10 +265,10 @@ def setAutoMode(mode, roomSize) {
         return
     }
 
-    logDebug "setAutoMode(${mode}, ${roomSize})"
+    logDebug "setAutoMode(${mode}, ${sz})"
 
     if (mode == "efficient") {
-        handleAutoMode(mode, roomSize);
+        handleAutoMode(mode, sz);
     }
     else {
         handleAutoMode(mode);
@@ -274,7 +277,7 @@ def setAutoMode(mode, roomSize) {
     handleMode("auto");
     state.mode = "auto";
     state.auto_mode = mode;
-    state.room_size = roomSize;
+    state.room_size = sz;
 
 	handleEvent("auto_mode", mode)
 	handleEvent("mode", "auto")

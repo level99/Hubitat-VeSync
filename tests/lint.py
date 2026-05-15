@@ -82,6 +82,31 @@ def _build_exemption_set(config: dict) -> set:
     return result
 
 
+def _assert_all_severities_valid(findings: list) -> None:
+    """
+    Hard-check: every finding MUST have severity in ('FAIL', 'WARN').
+
+    This is the choke-point that closes the dead-gate class.  It is called
+    once at the genuinely-final position in finding collection — after ALL
+    post-exemption appends (LINT_UNUSED_EXEMPTION etc.) and before the sort
+    and exit-code computation.  Placing it here means it covers every finding
+    that will ever appear in output, including harness-internal findings
+    appended by lint.py itself.
+
+    Raises RuntimeError on the first finding whose severity is missing or
+    not in ('FAIL', 'WARN').  Callers must not catch RuntimeError from this
+    function — a bad severity is a programmer error in a rule module and
+    must abort the run loudly.
+    """
+    for f in findings:
+        sev = f.get('severity')
+        if sev not in ('FAIL', 'WARN'):
+            raise RuntimeError(
+                f"lint internal error: rule {f.get('rule_id')!r} emitted invalid severity "
+                f"{sev!r} (must be 'FAIL' or 'WARN'). Check the rule implementation."
+            )
+
+
 def _apply_exemptions(findings: list, exemption_set: set, repo_root: Path) -> tuple:
     """
     Filter findings that match an exemption (rule_id, file) pair.
@@ -282,7 +307,7 @@ def format_human(findings: list[dict], files_scanned: int, strict: bool,
     lines = []
 
     for f in findings:
-        sev = f.get('severity', 'WARN')
+        sev = f.get('severity')
         rule = f.get('rule_id', '?')
         title = f.get('title', '(no title)')
         fpath = f.get('file', '?')
@@ -473,6 +498,11 @@ def main():
             "fix": f"Remove or correct the exemption for rule_id={rule_id!r} file={file_!r} "
                    "in tests/lint_config.yaml.",
         })
+
+    # Final hard-check: every finding (including LINT_UNUSED_EXEMPTION appended above)
+    # MUST have severity in ('FAIL', 'WARN').  This is the genuine choke-point — placed
+    # after all post-exemption appends so it covers harness-internal findings too.
+    _assert_all_severities_valid(all_findings)
 
     # Sort findings: FAILs first, then WARNs; within each, by file+line
     all_findings.sort(key=lambda f: (

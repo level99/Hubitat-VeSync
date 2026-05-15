@@ -47,7 +47,7 @@ no debug-output preference of their own.
 import re
 from pathlib import Path
 
-from lint_rules._helpers import is_library_file, included_lib_texts
+from lint_rules._helpers import is_library_file, included_lib_texts, make_finding_for_path
 
 
 # Pattern that matches an invocation (not a definition) of ensureDebugWatchdog().
@@ -124,21 +124,22 @@ def check_rule25_bp16_watchdog_call_site(path, raw_lines, cleaned_lines, raw_tex
                 return findings
 
     # No call site found in driver or any included library — FAIL
-    findings.append({
-        "severity": "FAIL",
-        "rule_id": "RULE25_bp16_watchdog_call_site",
-        "title": "Missing ensureDebugWatchdog() call (Bug Pattern #16)",
-        "file": str(path.relative_to(rel_base)).replace('\\', '/'),
-        "line": 0,
-        "context": "",
-        "why": (
+    findings.append(make_finding_for_path(
+        severity="FAIL",
+        rule_id="RULE25_bp16_watchdog_call_site",
+        title="Missing ensureDebugWatchdog() call (Bug Pattern #16)",
+        path=path,
+        rel_base=rel_base,
+        lineno=0,
+        lines=[],
+        why=(
             "Bug Pattern #16: when a hub reboots while debugOutput is true, the "
             "runIn(1800, 'logDebugOff') job is lost. Without ensureDebugWatchdog(), "
             "debugOutput stays on permanently after a reboot -- flooding logs indefinitely. "
             "The watchdog detects elapsed time > 30 min since debug was enabled and "
             "auto-disables debugOutput on the next poll."
         ),
-        "fix": (
+        fix=(
             "Add a call to ensureDebugWatchdog() in the driver's primary poll entry method "
             "(e.g. applyStatus(), update(status, nightLight), or updateDevices() for the "
             "parent). The method reads state.debugEnabledAt and auto-disables debugOutput "
@@ -146,7 +147,7 @@ def check_rule25_bp16_watchdog_call_site(path, raw_lines, cleaned_lines, raw_tex
             "pattern. If this driver intentionally has no poll cycle and no debug logging, "
             "add an exemption in tests/lint_config.yaml with a substantive reason string."
         ),
-    })
+    ))
 
     return findings
 

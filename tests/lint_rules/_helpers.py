@@ -61,6 +61,53 @@ def make_finding(severity, rule_id, title, file_rel, lineno, raw_lines, why, fix
     }
 
 
+def make_finding_for_path(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
+    """
+    Convenience wrapper for rules that receive a ``pathlib.Path`` + ``rel_base``.
+
+    Converts ``path`` to a repo-relative forward-slash string, then delegates to
+    ``make_finding``.  Inherits the ``severity`` ValueError gate from ``make_finding``.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Absolute path to the source file being linted.
+    rel_base : pathlib.Path
+        Repository root — used to compute the relative path.
+    lines : list[str]
+        The file's raw source lines (same as ``make_finding``'s ``raw_lines``).
+    All other parameters: identical to ``make_finding``.
+    """
+    file_rel = str(path.relative_to(rel_base)).replace('\\', '/')
+    return make_finding(severity, rule_id, title, file_rel, lineno, lines, why, fix)
+
+
+def make_finding_for_file(severity, rule_id, title, file_str, lineno, context, why, fix):
+    """
+    Convenience wrapper for repo-level rules that work with pre-computed
+    repo-relative file strings and a single-line context snippet.
+
+    Converts ``context`` into the ``raw_lines`` list expected by ``make_finding``,
+    passes ``lineno`` through unchanged, then delegates to ``make_finding``.
+    Inherits the ``severity`` ValueError gate from ``make_finding``.
+
+    Parameters
+    ----------
+    file_str : str
+        Repo-relative file path with forward slashes.
+    lineno : int
+        1-based line number of the finding (passed through to ``make_finding``,
+        NOT hardcoded — preserves real line numbers for RULE20/21/24 findings).
+    context : str
+        Single-line context snippet (typically ``raw_lines[lineno - 1]``).
+        Leading whitespace is stripped to match the display format used by
+        the per-module shims this helper replaces.
+    All other parameters: identical to ``make_finding``.
+    """
+    raw_lines = [context.lstrip()] if context else []
+    return make_finding(severity, rule_id, title, file_str, lineno, raw_lines, why, fix)
+
+
 # ---------------------------------------------------------------------------
 # Library-file detection
 # ---------------------------------------------------------------------------

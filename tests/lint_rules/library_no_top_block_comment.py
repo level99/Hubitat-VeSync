@@ -51,7 +51,7 @@ Out-of-scope:
 import re
 from pathlib import Path
 
-from lint_rules._helpers import is_library_file
+from lint_rules._helpers import is_library_file, make_finding
 
 
 def check_rule29_library_no_top_block_comment(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
@@ -119,14 +119,14 @@ def check_rule29_library_no_top_block_comment(path, raw_lines, cleaned_lines, ra
                 in_block = False
 
     if second_block_open_line is not None:
-        findings.append({
-            "severity": "FAIL",
-            "rule_id": "RULE29_library_block_comment_at_top",
-            "title": "Library file contains /* */ block comment after the MIT header and before library() (Hubitat platform-bug workaround)",
-            "file": file_rel,
-            "line": second_block_open_line,
-            "context": raw_lines[second_block_open_line - 1].rstrip(),
-            "why": (
+        findings.append(make_finding(
+            severity="FAIL",
+            rule_id="RULE29_library_block_comment_at_top",
+            title="Library file contains /* */ block comment after the MIT header and before library() (Hubitat platform-bug workaround)",
+            file_rel=file_rel,
+            lineno=second_block_open_line,
+            raw_lines=raw_lines,
+            why=(
                 "Hubitat's library parser (verified on FW 2.4.4.156 and 2.5.0.126) "
                 "fails to save library files containing /* ... */ block comments at "
                 "file scope (after the optional MIT header, before the library() "
@@ -135,13 +135,13 @@ def check_rule29_library_no_top_block_comment(path, raw_lines, cleaned_lines, ra
                 "logged. End users hitting this through HPM see the same generic "
                 "toast and the library install fails. v2.4 release blocker class."
             ),
-            "fix": (
+            fix=(
                 "Convert the /* ... */ block to // line comments. Same content, "
                 "different syntax. Each line of the block becomes a `// ` line. "
                 "See Drivers/Levoit/LevoitDiagnosticsLib.groovy for the canonical "
                 "example. Track the upstream Hubitat bug filing in TODO.md."
             ),
-        })
+        ))
 
     # ------------------------------------------------------------------
     # Pass 2: body-scope — forbid any /* */ or /** */ block after the
@@ -173,14 +173,14 @@ def check_rule29_library_no_top_block_comment(path, raw_lines, cleaned_lines, ra
                 break  # one finding is enough
 
     if body_block_line is not None:
-        findings.append({
-            "severity": "FAIL",
-            "rule_id": "RULE29_library_block_comment_in_body",
-            "title": "Library file contains /* */ block comment after library() declaration (Hubitat platform-bug defensive policy)",
-            "file": file_rel,
-            "line": body_block_line,
-            "context": raw_lines[body_block_line - 1].rstrip(),
-            "why": (
+        findings.append(make_finding(
+            severity="FAIL",
+            rule_id="RULE29_library_block_comment_in_body",
+            title="Library file contains /* */ block comment after library() declaration (Hubitat platform-bug defensive policy)",
+            file_rel=file_rel,
+            lineno=body_block_line,
+            raw_lines=raw_lines,
+            why=(
                 "One transient save failure was observed during a body-scope /* */ "
                 "polish pass (v2.5 cycle). Not reproducible on re-deploy, but the "
                 "defensive policy is to keep ALL /* */ blocks out of library files. "
@@ -189,13 +189,13 @@ def check_rule29_library_no_top_block_comment(path, raw_lines, cleaned_lines, ra
                 "also forbidden by convention to prevent drift. Use // line comments "
                 "for all documentation in library files."
             ),
-            "fix": (
+            fix=(
                 "Convert the /* ... */ or /** ... */ block to // line comments. "
                 "Same content, different syntax. Each line of the block becomes a "
                 "`// ` line. See Drivers/Levoit/LevoitDiagnosticsLib.groovy for "
                 "the canonical example."
             ),
-        })
+        ))
 
     return findings
 

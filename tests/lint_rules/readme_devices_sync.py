@@ -22,7 +22,7 @@ before comparison.
 
 import re
 from pathlib import Path
-from lint_rules._helpers import make_finding
+from lint_rules._helpers import make_finding, make_finding_for_file
 
 
 # ---------------------------------------------------------------------------
@@ -41,8 +41,7 @@ EXCLUDED_FILES = {
 # ---------------------------------------------------------------------------
 
 def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
-    raw_lines = [context.lstrip()] if context else []
-    return make_finding(severity, rule_id, title, file_str, lineno, raw_lines, why, fix)
+    return make_finding_for_file(severity, rule_id, title, file_str, lineno, context, why, fix)
 
 
 def _extract_definition_block(source: str):

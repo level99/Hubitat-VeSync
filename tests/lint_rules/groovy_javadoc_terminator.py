@@ -53,6 +53,7 @@ trigger the parse bug and should be flagged.
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding
 
 
 # Only check .groovy files in the driver directory.
@@ -75,13 +76,6 @@ _LEGITIMATE_CLOSE_RE = re.compile(r'^\s*\*?\s*\*/$')
 def _line_of(text: str, pos: int) -> int:
     """Return the 1-based line number of character position pos in text."""
     return text[:pos].count('\n') + 1
-
-
-def _context_at_line(raw_lines: list, lineno: int, window: int = 1) -> str:
-    """Return up to (window) lines of context around lineno (1-based)."""
-    start = max(0, lineno - 1 - window)
-    end = min(len(raw_lines), lineno + window)
-    return '\n'.join(f"    {raw_lines[i]}" for i in range(start, end))
 
 
 def _is_legitimate_close(raw_lines: list, lineno: int) -> bool:
@@ -190,19 +184,18 @@ def check_rule26_javadoc_terminator(
             else:
                 # Embedded `*/` — flag it and continue scanning in case
                 # there are more embedded terminators before the close.
-                context = _context_at_line(raw_lines, slash_lineno)
-                findings.append({
-                    "severity": "FAIL",
-                    "rule_id": "RULE26_javadoc_terminator",
-                    "title": (
+                findings.append(make_finding(
+                    severity="FAIL",
+                    rule_id="RULE26_javadoc_terminator",
+                    title=(
                         f"Embedded `*/` inside Javadoc block "
                         f"(opened line {open_lineno}, "
                         f"premature close at line {slash_lineno})"
                     ),
-                    "file": file_rel,
-                    "line": slash_lineno,
-                    "context": context,
-                    "why": (
+                    file_rel=file_rel,
+                    lineno=slash_lineno,
+                    raw_lines=raw_lines,
+                    why=(
                         "Groovy closes a block comment at the first `*/` it "
                         "encounters. A `*/` embedded inside a `/**` Javadoc block "
                         "(e.g. in a model-code list like `LUH-O451S-*/LUH-O601S-*` "
@@ -213,7 +206,7 @@ def check_rule26_javadoc_terminator(
                         "compile error. See tests/lint_rules/groovy_javadoc_terminator.py "
                         "for background and historical occurrences."
                     ),
-                    "fix": (
+                    fix=(
                         "Remove or escape the `*/` sequence from inside the Javadoc "
                         "block. Options: (a) replace `*/` in a model-code list with a "
                         "comma or line break (e.g. `LUH-O451S-*,` then newline "
@@ -222,7 +215,7 @@ def check_rule26_javadoc_terminator(
                         "(c) use an HTML-safe representation in prose "
                         "(e.g. `* /` with a space, or `{@literal */}`)."
                     ),
-                })
+                ))
                 # Advance scan_pos past this embedded `*/` and keep looking.
                 scan_pos = slash_pos + 2
 

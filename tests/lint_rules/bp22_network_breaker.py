@@ -36,7 +36,7 @@ Scope: VeSyncIntegration.groovy only.
 
 import re
 from pathlib import Path
-from lint_rules._helpers import make_finding
+from lint_rules._helpers import make_finding, make_finding_for_path
 
 PARENT_DRIVER = "VeSyncIntegration.groovy"
 
@@ -48,7 +48,7 @@ EMIT_NETWORK_WARN_DEF_PATTERN = re.compile(
 
 
 def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return make_finding(severity, rule_id, title, str(path.relative_to(rel_base)).replace('\\', '/'), lineno, lines, why, fix)
+    return make_finding_for_path(severity, rule_id, title, path, rel_base, lineno, lines, why, fix)
 
 
 def check_rule36_bp22_network_breaker(path, raw_lines, cleaned_lines, raw_text, config, rel_base):

@@ -341,6 +341,15 @@ assert any(f['severity'] == 'FAIL' for f in findings), \
 
 This assertion catches severity regressions (e.g., accidental removal of the `severity` argument) in the rule's own test, before CI runs against real driver files.
 
+**Completeness of "migrate all X" tasks MUST be proven by a mechanical zero-result check, not by agent self-report.** When a task says "migrate every rule to the shared helper" or "add a null-guard to every set* method," the completion claim must be backed by a grep or static check that produces an empty result. For example, after eliminating all raw finding dicts, the proof is:
+
+```bash
+grep -rn 'findings.append({' tests/lint_rules/
+# must produce no output
+```
+
+Two real instances where self-report failed and mechanical proof would have caught it early: (1) BP26 v2.6 initial sweep reported all `safeIntArg` sites migrated, but a third site in Tower Fan was missed — caught only because a subsequent lint rule (RULE37) also flagged bare `as Integer` forms; (2) the v2.6 lint-helper migration reported all rules using `make_finding`, but 6 rules still emitted raw inline dicts — missed because the migration relied on agent recall rather than a grep. The grep-to-zero standard closes both gaps in the same review cycle.
+
 ### Bug-pattern catalog references
 
 The catalog (`CLAUDE.md` root) numbers each pattern (`Bug Pattern #N`). Lint rules and Spock specs cite these numbers in finding/test-name strings. When you see `BP9` in a finding, that's catalog entry #9 (driver-name change orphan).

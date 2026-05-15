@@ -72,11 +72,14 @@ def rule_ids(findings):
 # Import all rules at module level (avoids class-binding pitfalls)
 # ---------------------------------------------------------------------------
 
+from lint_rules.bp16_watchdog_call_site import check_rule25_bp16_watchdog_call_site
 from lint_rules.groovy_javadoc_terminator import check_rule26_javadoc_terminator
 from lint_rules.bp18_null_guard import check_rule27_bp18_null_guard
 from lint_rules.captureDiagnostics_presence import check_rule28_capturediagnostics_presence
 from lint_rules.library_no_top_block_comment import check_rule29_library_no_top_block_comment
 from lint_rules.direct_log_calls import check_rule30_direct_log_in_driver
+from lint_rules.bp24_state_switch_dead_branch import check_rule31_state_switch_dead_branch
+from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
 from lint_rules.bug_patterns import (
     check_bp1_missing_2arg_update,
     check_bp2_hardcoded_purifier_method,
@@ -2513,3 +2516,302 @@ class TestLintExitCodes:
         assert 'files_scanned' in data
         assert 'findings' in data
         assert data['result'] in ('PASS', 'FAIL', 'WARN')
+
+
+# ---------------------------------------------------------------------------
+# T10-1 — post-collection severity hard-check in lint.py
+# ---------------------------------------------------------------------------
+
+class TestLintSeverityHardCheck:
+    """
+    T10-1 regression guard: lint._assert_all_severities_valid() must raise
+    RuntimeError when any finding carries a missing or invalid severity.
+
+    All tests call lint._assert_all_severities_valid() directly — the real
+    extracted function from lint.py.  If that function's body were deleted or
+    emptied, test_bad_severity_raises_runtime_error would FAIL, proving these
+    tests are non-vacuous (they test the real code, not a local re-implementation).
+    """
+
+    def _import_lint(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("lint_hctest", TESTS_DIR / "lint.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_bad_severity_raises_runtime_error(self):
+        """
+        A finding with no severity key fed to _assert_all_severities_valid() MUST raise
+        RuntimeError.  This is the shape a raw inline dict
+        ``findings.append({"rule_id": "FAKE", "file": "x.groovy"})`` produces —
+        get('severity') returns None, which was silently non-gating pre-T10-1.
+        """
+        lint = self._import_lint()
+        bad_finding = {"rule_id": "FAKE_RULE_NO_SEV", "file": "x.groovy", "line": 1}
+        with pytest.raises(RuntimeError, match="invalid severity"):
+            lint._assert_all_severities_valid([bad_finding])
+
+    def test_bogus_string_severity_raises_runtime_error(self):
+        """
+        A finding with severity='ERROR' (wrong string) must also raise — confirms
+        the check rejects all non-('FAIL','WARN') values, not just None.
+        """
+        lint = self._import_lint()
+        bad_finding = {"rule_id": "FAKE_RULE_BAD_SEV", "severity": "ERROR",
+                       "file": "x.groovy", "line": 1}
+        with pytest.raises(RuntimeError, match="invalid severity"):
+            lint._assert_all_severities_valid([bad_finding])
+
+    def test_valid_fail_severity_does_not_raise(self):
+        """A list containing only severity='FAIL' findings must NOT raise."""
+        lint = self._import_lint()
+        good = {"rule_id": "SOME_RULE", "severity": "FAIL", "file": "x.groovy", "line": 1}
+        lint._assert_all_severities_valid([good])  # must not raise
+
+    def test_valid_warn_severity_does_not_raise(self):
+        """A list containing only severity='WARN' findings must NOT raise."""
+        lint = self._import_lint()
+        good = {"rule_id": "SOME_RULE", "severity": "WARN", "file": "x.groovy", "line": 1}
+        lint._assert_all_severities_valid([good])  # must not raise
+
+    def test_empty_list_does_not_raise(self):
+        """Empty findings list (no findings at all) must NOT raise."""
+        lint = self._import_lint()
+        lint._assert_all_severities_valid([])  # must not raise
+
+    def test_mixed_valid_and_bad_raises_on_bad(self):
+        """
+        A mixed list where the first finding is valid but the second has no severity
+        must still raise — confirms the function iterates the whole list.
+        """
+        lint = self._import_lint()
+        findings = [
+            {"rule_id": "RULE_A", "severity": "FAIL", "file": "a.groovy", "line": 1},
+            {"rule_id": "RULE_B", "file": "b.groovy", "line": 2},  # no severity key
+        ]
+        with pytest.raises(RuntimeError, match="invalid severity"):
+            lint._assert_all_severities_valid(findings)
+
+
+# ---------------------------------------------------------------------------
+# RULE25 — BP16 ensureDebugWatchdog call-site (T10-3)
+# ---------------------------------------------------------------------------
+
+class TestRule25DebugWatchdogCallSite:
+    """
+    RULE25 (Bug Pattern #16): every driver file under Drivers/Levoit/ must have at
+    least one live call site for ensureDebugWatchdog().  Absence means debugOutput
+    can stay permanently on after a hub reboot.
+
+    Good path: driver contains ensureDebugWatchdog() invocation.
+    Bad path:  driver has no such call — FAIL with severity == 'FAIL'.
+
+    Both the definition line (``def ensureDebugWatchdog()``) and comment-only
+    occurrences are excluded; only true invocations satisfy the check.
+    """
+
+    GOOD_HAS_CALL = textwrap.dedent("""\
+        def update(status, nightLight) {
+            ensureDebugWatchdog()
+            applyStatus(status)
+        }
+        private void ensureDebugWatchdog() {
+            if (!settings?.debugOutput) return
+            if (state.debugEnabledAt == null) { state.debugEnabledAt = now(); return }
+            if ((now() - state.debugEnabledAt) > 1800000) {
+                device.updateSetting("debugOutput", [type: "bool", value: false])
+                state.remove("debugEnabledAt")
+            }
+        }
+    """)
+
+    # A driver with ensureDebugWatchdog() only in its definition line and in a comment
+    # — no live call site.
+    BAD_NO_LIVE_CALL = textwrap.dedent("""\
+        def update(status, nightLight) {
+            // ensureDebugWatchdog() -- disabled for testing
+            applyStatus(status)
+        }
+        private void ensureDebugWatchdog() {
+            // placeholder
+        }
+    """)
+
+    def test_good_passes(self):
+        """Driver with a live ensureDebugWatchdog() call: no findings."""
+        findings = run_rule(check_rule25_bp16_watchdog_call_site, self.GOOD_HAS_CALL)
+        assert findings == [], f"Expected no findings, got: {findings}"
+
+    def test_bad_no_live_call_fails(self):
+        """Driver missing any live ensureDebugWatchdog() call: FAIL with severity == 'FAIL'."""
+        findings = run_rule(check_rule25_bp16_watchdog_call_site, self.BAD_NO_LIVE_CALL)
+        rule25 = [f for f in findings if f['rule_id'] == 'RULE25_bp16_watchdog_call_site']
+        assert rule25, "Expected RULE25_bp16_watchdog_call_site finding on driver with no live call"
+        # W11 dead-gate assertion: finding MUST carry severity='FAIL' to gate lint --strict.
+        assert any(f['severity'] == 'FAIL' for f in rule25), (
+            f"RULE25 finding must carry severity='FAIL' to gate lint --strict; got: {rule25}"
+        )
+
+    def test_library_file_skipped(self):
+        """Library files (using library() block) are skipped — they have no debug pref."""
+        lib_src = textwrap.dedent("""\
+            library(
+                name: "SomeLib",
+                namespace: "level99",
+                author: "a"
+            )
+            def someMethod() { logDebug "hello" }
+        """)
+        findings = run_rule(
+            check_rule25_bp16_watchdog_call_site, lib_src, "SomethingLib"
+        )
+        assert findings == [], "Library files must be excluded from RULE25"
+
+
+# ---------------------------------------------------------------------------
+# RULE31 — BP24-A state.switch dead branch (T10-3)
+# ---------------------------------------------------------------------------
+
+class TestRule31StateSwitchDeadBranch:
+    """
+    RULE31 (Bug Pattern #24-A): reading ``state.switch`` in a conditional is a
+    permanently-dead guard because ``state.switch`` is never written anywhere in the
+    codebase.  Power state is tracked only via ``device.currentValue('switch')``.
+
+    Good path:  driver reads ``device.currentValue('switch')`` — correct pattern.
+    Bad path:   driver reads ``state.switch`` in a comparison — FAIL.
+    """
+
+    GOOD_CORRECT_GUARD = textwrap.dedent("""\
+        def cycleSpeed() {
+            ensureSwitchOn()
+            state.speed = nextSpeed()
+            setSpeed(state.speed)
+        }
+    """)
+
+    GOOD_CURRENTVALUE_GUARD = textwrap.dedent("""\
+        def cycleSpeed() {
+            if (!state.turningOn && device.currentValue("switch") != "on") on()
+            state.speed = nextSpeed()
+            setSpeed(state.speed)
+        }
+    """)
+
+    # The classic BP24-A dead-branch pattern found in Core line cycleSpeed() prior to v2.5.
+    BAD_STATE_SWITCH_READ = textwrap.dedent("""\
+        def cycleSpeed() {
+            state.speed = nextSpeed()
+            if (state.switch == "off") { on() }
+            setSpeed(state.speed)
+        }
+    """)
+
+    BAD_STATE_SWITCH_NEQ = textwrap.dedent("""\
+        def setSpeed(speed) {
+            if (state.switch != "on") { on() }
+            handleSpeed(speed)
+        }
+    """)
+
+    def test_good_correct_guard_passes(self):
+        """Using ensureSwitchOn() — no state.switch reads: no findings."""
+        findings = run_rule(check_rule31_state_switch_dead_branch, self.GOOD_CORRECT_GUARD)
+        assert findings == [], f"Expected no findings, got: {findings}"
+
+    def test_good_currentvalue_guard_passes(self):
+        """device.currentValue('switch') read is correct — no state.switch: no findings."""
+        findings = run_rule(check_rule31_state_switch_dead_branch, self.GOOD_CURRENTVALUE_GUARD)
+        assert findings == [], f"Expected no findings, got: {findings}"
+
+    def test_bad_state_switch_eq_fails(self):
+        """``if (state.switch == 'off')`` is a dead branch — FAIL with severity == 'FAIL'."""
+        findings = run_rule(check_rule31_state_switch_dead_branch, self.BAD_STATE_SWITCH_READ)
+        rule31 = [f for f in findings if f['rule_id'] == 'RULE31_state_switch_dead_branch']
+        assert rule31, "Expected RULE31_state_switch_dead_branch finding"
+        # W11 dead-gate assertion: finding MUST carry severity='FAIL' to gate lint --strict.
+        assert any(f['severity'] == 'FAIL' for f in rule31), (
+            f"RULE31 finding must carry severity='FAIL' to gate lint --strict; got: {rule31}"
+        )
+
+    def test_bad_state_switch_neq_fails(self):
+        """``if (state.switch != 'on')`` is also a dead branch — FAIL."""
+        findings = run_rule(check_rule31_state_switch_dead_branch, self.BAD_STATE_SWITCH_NEQ)
+        rule31 = [f for f in findings if f['rule_id'] == 'RULE31_state_switch_dead_branch']
+        assert rule31, "Expected RULE31_state_switch_dead_branch finding on != form"
+        assert any(f['severity'] == 'FAIL' for f in rule31), (
+            f"RULE31 finding must carry severity='FAIL'; got: {rule31}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE32 — BP24-B/C auto-on guard missing on SHOULD-ON commands (T10-3)
+# ---------------------------------------------------------------------------
+
+class TestRule32AutoOnGuardMissing:
+    """
+    RULE32 (Bug Pattern #24-B/C): SHOULD-ON configure-style commands (cycleSpeed,
+    setFanSpeed, setSpeed, setMistLevel, setWarmMistLevel, setMode) that make a
+    direct API call must have a preceding auto-on guard.
+
+    Good path: method calls ensureSwitchOn() (canonical) or has inline
+    device.currentValue("switch") + state.turningOn guard.
+    Bad path:  API call without any guard — FAIL with severity == 'FAIL'.
+    """
+
+    GOOD_ENSURE_SWITCH_ON = textwrap.dedent("""\
+        def cycleSpeed() {
+            ensureSwitchOn()
+            state.speed = nextSpeed()
+            parent.sendBypassRequest(device, [
+                data: [level: mapSpeedToInteger(state.speed), id: 0, type: "wind"],
+                "method": "setLevel", "source": "APP"
+            ]) { resp -> }
+        }
+    """)
+
+    GOOD_INLINE_GUARD = textwrap.dedent("""\
+        def setSpeed(speed) {
+            if (!state.turningOn && device.currentValue("switch") != "on") on()
+            parent.sendBypassRequest(device, [
+                data: [level: mapSpeedToInteger(speed), id: 0, type: "wind"],
+                "method": "setLevel", "source": "APP"
+            ]) { resp -> }
+        }
+    """)
+
+    # BP24-B: API call present, no guard at all.
+    BAD_NO_GUARD = textwrap.dedent("""\
+        def cycleSpeed() {
+            state.speed = nextSpeed()
+            parent.sendBypassRequest(device, [
+                data: [level: mapSpeedToInteger(state.speed), id: 0, type: "wind"],
+                "method": "setLevel", "source": "APP"
+            ]) { resp -> }
+        }
+    """)
+
+    def test_good_ensure_switch_on_passes(self):
+        """ensureSwitchOn() present — RULE32 must not fire."""
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.GOOD_ENSURE_SWITCH_ON)
+        rule32 = [f for f in findings if f['rule_id'] == 'RULE32_auto_on_guard_missing']
+        assert rule32 == [], f"Expected no RULE32 with ensureSwitchOn(), got: {rule32}"
+
+    def test_good_inline_guard_passes(self):
+        """Inline device.currentValue + state.turningOn guard present — RULE32 must not fire."""
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.GOOD_INLINE_GUARD)
+        rule32 = [f for f in findings if f['rule_id'] == 'RULE32_auto_on_guard_missing']
+        assert rule32 == [], f"Expected no RULE32 with inline guard, got: {rule32}"
+
+    def test_bad_no_guard_fails(self):
+        """API call in SHOULD-ON method with no guard — FAIL with severity == 'FAIL'."""
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.BAD_NO_GUARD)
+        rule32 = [f for f in findings if f['rule_id'] == 'RULE32_auto_on_guard_missing']
+        assert rule32, (
+            "Expected RULE32_auto_on_guard_missing finding on cycleSpeed() with no guard"
+        )
+        # W11 dead-gate assertion: finding MUST carry severity='FAIL' to gate lint --strict.
+        assert any(f['severity'] == 'FAIL' for f in rule32), (
+            f"RULE32 finding must carry severity='FAIL' to gate lint --strict; got: {rule32}"
+        )

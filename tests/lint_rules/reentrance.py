@@ -15,7 +15,7 @@ Severity: WARN (not FAIL) because the heuristic has bounded false-positive risk.
 import re
 from pathlib import Path
 from .groovy_lite import find_method_bodies, strip_block_comments
-from lint_rules._helpers import make_finding
+from lint_rules._helpers import make_finding, make_finding_for_path
 
 # Known re-entrance guard state keys
 GUARD_KEYS = ['turningOn', 'turningOff', 'driverReloading', 'reAuthInProgress']
@@ -28,7 +28,7 @@ def _context(lines, lineno, window=1):
 
 
 def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return make_finding(severity, rule_id, title, str(path.relative_to(rel_base)).replace('\\', '/'), lineno, lines, why, fix)
+    return make_finding_for_path(severity, rule_id, title, path, rel_base, lineno, lines, why, fix)
 
 
 # Patterns for setting a guard

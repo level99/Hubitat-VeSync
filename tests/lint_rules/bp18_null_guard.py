@@ -67,6 +67,7 @@ Exemptions: use the standard lint_config.yaml exemptions mechanism.
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding
 
 # Only check .groovy driver files.
 DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
@@ -249,20 +250,17 @@ def check_rule27_bp18_null_guard(path, raw_lines, cleaned_lines, raw_text, confi
             abs_vuln_pos = brace_start + vuln_pos_in_body
             vuln_line = _line_of(raw_text, abs_vuln_pos)
 
-            # Pull the raw line for context
-            raw_line = raw_lines[vuln_line - 1] if 0 < vuln_line <= len(raw_lines) else ""
-
-            findings.append({
-                "severity": "FAIL",
-                "rule_id": "RULE27_bp18_null_guard",
-                "title": (
+            findings.append(make_finding(
+                severity="FAIL",
+                rule_id="RULE27_bp18_null_guard",
+                title=(
                     f"{method_name}({arg_name}) uses parameter without a preceding "
                     f"null-guard (string-normalization or arithmetic-on-null — Bug Pattern #18)"
                 ),
-                "file": file_rel,
-                "line": vuln_line,
-                "context": f"    {raw_line}",
-                "why": (
+                file_rel=file_rel,
+                lineno=vuln_line,
+                raw_lines=raw_lines,
+                why=(
                     f"Rule Machine 'Run Custom Action' with an empty/unset parameter "
                     f"passes null to the driver method. String coercions like `({arg_name} as String)` "
                     f"and arithmetic comparisons like `if ({arg_name} < N)` both throw "
@@ -270,7 +268,7 @@ def check_rule27_bp18_null_guard(path, raw_lines, cleaned_lines, raw_text, confi
                     f"discards driver exceptions silently — the user sees nothing: no attribute "
                     f"change, no log entry, no error. See Bug Pattern #18 in CLAUDE.md."
                 ),
-                "fix": (
+                fix=(
                     f"Add a null-guard at the top of {method_name}(), before the first use of "
                     f"the parameter. Two accepted forms: "
                     f"(1) helper (canonical): "
@@ -283,7 +281,7 @@ def check_rule27_bp18_null_guard(path, raw_lines, cleaned_lines, raw_text, confi
                     f"with a wrong value. Also ensure `def logWarn(msg){{ log.warn msg }}` is "
                     f"defined in the driver (or included via LevoitChildBaseLib)."
                 ),
-            })
+            ))
 
     return findings
 
