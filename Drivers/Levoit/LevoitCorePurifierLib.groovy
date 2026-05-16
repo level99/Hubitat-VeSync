@@ -259,9 +259,16 @@ def setAutoMode(mode) {
 def setAutoMode(mode, roomSize) {
     if (!requireNotNull(mode, "setAutoMode")) return
     // BP26: safe integer coercion — Rule Machine passes "" or null for blank numeric slots.
-    // Fallback: preserved last-set room_size, or 800 (pyvesync VeSyncAirBypass canonical default).
-    // Range clamp deferred: no authoritative min/max confirmed from pyvesync or VeSync API docs.
-    Integer sz = safeIntArg(roomSize, (state.room_size ?: 800) as Integer)
+    // T12-2: nested safeIntArg eliminates the unguarded `(state.room_size ?: 800) as Integer`
+    // cast that could throw NumberFormatException if state.room_size holds a non-numeric String
+    // written raw from the VeSync API response.  safeIntArg's try/catch cannot protect the
+    // fallback expression if it throws before the call — nesting avoids the unguarded cast.
+    // Fallback chain: roomSize → state.room_size (safeIntArg-guarded) → 800 (literal, always safe).
+    Integer sz = safeIntArg(roomSize, safeIntArg(state.room_size, 800))
+    // Floor: room_size must be ≥1 (negative values from e.g. safeIntArg("-50"→-50 on valid-but-
+    // negative RM input would self-poison state and send an invalid API value on every blank call).
+    // Max clamp deferred: no authoritative upper bound confirmed from pyvesync or VeSync API docs.
+    sz = Math.max(1, sz)
     // 200S guard: 200S firmware doesn't support setAutoPreference (no AQ sensor).
     // The lib is shared but the cloud rejects this call on 200S. Block at lib boundary
     // to prevent state divergence + log noise on Rule Machine / MCP misuse.
@@ -356,8 +363,10 @@ private void updateAQIandFilter(String val, filter) {
         else                 aqi = convertRange(pm, 350.5, 500.4, 401, 500);
 
         handleEvent("aqi", aqi);
-        // T11-5: satisfy the AirQuality capability contract (requires airQuality NUMBER = AQI).
-        // Emitted additively — airQualityIndex and aqi remain unchanged for backward compatibility.
+        // Adds a conventional `airQuality` NUMBER (US-AQI) attribute for Rule Machine / dashboard
+        // ergonomics. The AirQuality capability's required attribute (`airQualityIndex`) was already
+        // emitted above; this is additive convenience, not a capability-contract fix.
+        // airQualityIndex and aqi are unchanged — backward-compatible.
         handleEvent("airQuality", aqi);
 
         String danger;

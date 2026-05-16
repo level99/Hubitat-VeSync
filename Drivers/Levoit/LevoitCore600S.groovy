@@ -84,7 +84,7 @@ metadata {
             attribute "timerRemain", "number";                         // Auto-off timer remaining (seconds; 0 when no timer)
             attribute "pm25", "number";                                // Raw PM2.5 reading (µg/m³)
             attribute "airQualityIndex", "number";                     // Levoit categorical AQ index (1-4); distinct from computed US-AQI 'aqi'
-            attribute "airQuality", "number";                          // US-AQI (0-500); satisfies AirQuality capability contract (additive — airQualityIndex preserved)
+            attribute "airQuality", "number";                          // US-AQI (0-500); Rule Machine / dashboard convenience (airQualityIndex, the required AirQuality capability attribute, was already present — this is additive)
 
             attribute "aqi", "number";                                 // AQI (0-500)
             attribute "aqiDanger", "string";                           // AQI danger level

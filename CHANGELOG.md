@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tower Fan `setTimer(seconds)` no longer silently fails when `seconds` is a non-integer string from Rule Machine.** Decimal or text values (`"5.7"`, `"abc"`) are now handled safely.
 - **Out-of-range numeric inputs no longer silently wrap to wrong values.** Very large numbers (e.g., `999999999999999999999`) previously caused an incorrect integer value to be used. They now return the safe fallback value instead.
 - **Invalid numeric inputs from Rule Machine now log a warning before falling back.** When a command receives a value that cannot be interpreted as a number (e.g., `"abc"`, `"true"`), the driver now logs a `WARN` line identifying the value and the method, so the problem is visible in Hubitat logs. Null and empty-string inputs (the normal Rule Machine blank-slot path) remain silent to avoid double-warning alongside the existing null-guard.
+- **Core 300S/400S/600S `setAutoMode` no longer silently does nothing when the device's stored room size is unusable.** In rare cases where the device reported a non-numeric room size, a later auto-mode command could silently fail; it now always uses a valid room size (your last-set value, or 800 sq ft). A negative room size passed from Rule Machine can also no longer "stick" and be re-sent on subsequent calls.
 
 ### Changed
 

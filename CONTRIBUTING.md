@@ -350,6 +350,8 @@ grep -rn 'findings.append({' tests/lint_rules/
 
 Two real instances where self-report failed and mechanical proof would have caught it early: (1) BP26 v2.6 initial sweep reported all `safeIntArg` sites migrated, but a third site in Tower Fan was missed — caught only because a subsequent lint rule (RULE37) also flagged bare `as Integer` forms; (2) the v2.6 lint-helper migration reported all rules using `make_finding`, but 6 rules still emitted raw inline dicts — missed because the migration relied on agent recall rather than a grep. The grep-to-zero standard closes both gaps in the same review cycle.
 
+**Any regression guard or fix proof-of-concept MUST be proven empirically both ways** — observed FAILING when the fix is absent/reverted, AND observed PASSING on the correct tree. Theoretical QA review is not sufficient. The canonical failure: T11-1's choke-point guard was QA-reviewed sound twice but was empirically vacuous — a `SystemExit(1)` from incidental WARN findings in strict mode satisfied its `code != 0` discriminator regardless of whether the choke-point call was present. See `CLAUDE.md` "Empirical both-ways proof for regression guards and fix PoCs" for the full 5-step protocol.
+
 ### Bug-pattern catalog references
 
 The catalog (`CLAUDE.md` root) numbers each pattern (`Bug Pattern #N`). Lint rules and Spock specs cite these numbers in finding/test-name strings. When you see `BP9` in a finding, that's catalog entry #9 (driver-name change orphan).

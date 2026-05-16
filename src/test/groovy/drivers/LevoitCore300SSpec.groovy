@@ -647,4 +647,62 @@ class LevoitCore300SSpec extends HubitatSpec {
         and: "no error logged"
         testLog.errors.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // T12-2: setAutoMode fallback hardening — non-numeric state.room_size + floor
+    // -------------------------------------------------------------------------
+
+    def "T12-2: setAutoMode('efficient') with garbage state.room_size makes the API call with room_size=800 (not a silent no-op)"() {
+        // Pre-fix: state.room_size written raw from VeSync API; if it ever holds a non-numeric
+        // String, `(state.room_size ?: 800) as Integer` throws NumberFormatException BEFORE
+        // safeIntArg runs — sandbox swallows it, setAutoMode is a silent no-op.
+        // Post-fix: nested safeIntArg(state.room_size, 800) absorbs non-numeric state.
+        // Uses mode='efficient' because that is the only code path that calls
+        // handleAutoMode(mode, sz) — the 2-arg overload that sends room_size in the payload.
+        given: "state.room_size is a non-numeric string (e.g. from a corrupted API response)"
+        settings.descriptionTextEnable = false
+        state.room_size = "garbage"   // non-numeric; pre-fix caused NumberFormatException
+
+        when: "setAutoMode called with no explicit roomSize (1-arg form, efficient mode)"
+        driver.setAutoMode("efficient")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "the setAutoPreference API call IS made (not a silent no-op)"
+        def req = testParent.allRequests.find { it.method == "setAutoPreference" }
+        req != null
+
+        and: "the room_size in the payload is the safe fallback 800, not garbage"
+        req.data.room_size == 800
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "T12-2: setAutoMode('efficient', '-50') then blank setAutoMode('efficient') does NOT send room_size=-50"() {
+        // Pre-fix self-poison: setAutoMode("efficient", "-50") → safeIntArg returns -50 (valid parse
+        // of numeric string "-50") → state.room_size = -50 → -50 is truthy in Groovy → next blank
+        // 1-arg call passes -50 as roomSize → 2-arg overload sends room_size:-50 (invalid API value).
+        // Post-fix floor Math.max(1, sz) prevents the negative value from reaching the API.
+        given: "poisoned state: a prior call left state.room_size = -50 (negative)"
+        settings.descriptionTextEnable = false
+        state.room_size = -50   // explicitly poisoned; would be truthy in Groovy (?:) expressions
+
+        when: "setAutoMode called again with no explicit roomSize (blank-slot 1-arg call)"
+        driver.setAutoMode("efficient")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "the setAutoPreference API call IS made"
+        def req = testParent.allRequests.find { it.method == "setAutoPreference" }
+        req != null
+
+        and: "room_size sent is >= 1 (floor applied — -50 is rejected by Math.max(1, sz))"
+        req.data.room_size >= 1
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
 }

@@ -2854,93 +2854,102 @@ class TestRule32AutoOnGuardMissing:
 
 class TestLintMainInvalidSeverityAborts:
     """
-    T11-1: Prove that the CALL to _assert_all_severities_valid at lint.py:~505
-    (not just its function body) is what terminates a run carrying a bad severity.
+    T12-1 (fixes vacuous T11-1): Prove that the CALL to _assert_all_severities_valid
+    at lint.py:~505 (not just its function body) is what terminates a run carrying a
+    bad severity.
 
     The existing TestLintSeverityHardCheck tests call the function directly —
     they verify the function body is correct but cannot detect if the call line
     were deleted while the body remained.
 
-    This test drives the REAL lint.main() via subprocess against a temp driver
-    tree that contains a throwaway rule module injected via monkeypatching of
-    _collect_per_file_rules.  The injected rule emits a finding with
-    severity='INFO' (invalid).  If the line-505 call is present, lint exits
-    non-zero and stderr contains 'invalid severity'.  If only the call line is
-    deleted (body intact), the function is never called, the bad finding flows
-    through, and the test FAILS — proving this test guards the call, not just
-    the body.
+    T11-1 was empirically vacuous: its `code != 0` discriminator was satisfied by
+    incidental LINT_UNUSED_EXEMPTION WARN findings in strict mode even when the
+    choke-point call was deleted.  T12-1 fixes this by:
+    (a) Using an empty exemptions config so no LINT_UNUSED_EXEMPTION noise fires.
+    (b) Asserting RuntimeError specifically — any SystemExit (code 0 or non-zero)
+        is a test FAILURE, meaning the choke-point did NOT fire.
 
-    Guarantee mechanism: the test monkeypatches _collect_per_file_rules to
-    inject a rule that returns [{'severity': 'INFO', 'rule_id': 'BAD', ...}].
-    It then calls lint.main() via importlib/runpy with patched sys.argv pointing
-    at a temp driver tree.  The only path to a non-zero exit + 'invalid severity'
-    in stderr is through the _assert_all_severities_valid call at line ~505.
-    Deleting that call → the bad finding passes through silently → lint exits 0
-    (or 2 for strict) with no RuntimeError → assert fails.
+    Deletion proof: with `pass` replacing the call at lint.py:~505, lint.main()
+    runs to completion (no FAILs or WARNs in the clean temp tree, empty config),
+    emits sys.exit(0), which is a SystemExit — pytest.raises(RuntimeError) FAILs
+    as required, proving this guard is non-vacuous.
     """
 
-    def _make_temp_tree(self):
-        """Create a minimal temp repo tree with one dummy .groovy file."""
-        td = tempfile.mkdtemp()
-        drivers_dir = Path(td) / "Drivers" / "Levoit"
+    def test_bad_severity_in_rule_aborts_lint_main(self, monkeypatch, tmp_path):
+        """
+        T12-1 (replaces T11-1): Prove that the CALL to _assert_all_severities_valid
+        at lint.py:~505 (not just its function body) terminates a run carrying a
+        bad severity — by asserting a RuntimeError with the specific 'invalid severity'
+        message, NOT a SystemExit of any code.
+
+        Vacuity fix: the old T11-1 discriminator (`code != 0`) was satisfied by
+        incidental LINT_UNUSED_EXEMPTION WARN findings in strict mode even when the
+        choke-point call was deleted, making the guard empirically false-green.
+
+        This version:
+        (a) Points lint at a private temp config with ZERO exemptions so no
+            LINT_UNUSED_EXEMPTION WARNs can fire — eliminating all incidental
+            exit-1 paths.
+        (b) Asserts specifically RuntimeError with 'invalid severity' in the message.
+            Any SystemExit (regardless of code) is treated as a TEST FAILURE,
+            meaning the choke-point did NOT fire.
+
+        Deletion proof: with the _assert_all_severities_valid(all_findings) call
+        at lint.py:~505 replaced by `pass`, lint.main() runs to completion with an
+        INFO finding, exits via sys.exit(0) (no FAILs, no WARNs in temp tree, no
+        strict WARNs because config is empty), which is a SystemExit(0) — the
+        `with pytest.raises(RuntimeError)` block then FAILS as expected, proving
+        the guard is non-vacuous.
+        """
+        import importlib.util
+
+        # --- Build a minimal temp driver tree with an empty exemption config ---
+        drivers_dir = tmp_path / "Drivers" / "Levoit"
         drivers_dir.mkdir(parents=True)
         (drivers_dir / "Dummy.groovy").write_text(
             'metadata { definition(name: "Dummy") {} }', encoding='utf-8'
         )
-        return td
+        # Empty exemptions config — no LINT_UNUSED_EXEMPTION noise can fire.
+        empty_cfg = tmp_path / "empty_lint_config.yaml"
+        empty_cfg.write_text("exemptions: []\n", encoding='utf-8')
 
-    def test_bad_severity_in_rule_aborts_lint_main(self, monkeypatch):
-        """
-        lint.main() must raise RuntimeError (exit non-zero) when any rule emits
-        severity='INFO'.  This test fails if the _assert_all_severities_valid
-        CALL at lint.py:~505 is deleted — the function body becomes unreachable
-        and the bad-severity finding flows silently to exit 0.
-        """
-        import importlib.util
-        td = self._make_temp_tree()
+        # Load lint as a fresh module instance so monkeypatching is isolated.
+        spec = importlib.util.spec_from_file_location("lint_t12", TESTS_DIR / "lint.py")
+        lint_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(lint_mod)
 
-        try:
-            # Load lint as a fresh module instance so monkeypatching is isolated.
-            spec = importlib.util.spec_from_file_location("lint_t11", TESTS_DIR / "lint.py")
-            lint_mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(lint_mod)
+        # Inject a rule that emits a raw dict with severity='INFO' — bypassing
+        # make_finding's ValueError gate to simulate a future rule that
+        # hand-constructs findings without the helper's validation.
+        def _bad_rule(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
+            return [{'severity': 'INFO', 'rule_id': 'T12_BAD_SEV', 'title': 'test',
+                      'file': str(path), 'line': 1, 'context': '', 'why': '', 'fix': ''}]
 
-            # Inject a rule that emits a raw dict with severity='INFO' — bypassing
-            # make_finding's ValueError gate to simulate a hypothetical future rule
-            # that hand-constructs findings.
-            def _bad_rule(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
-                return [{'severity': 'INFO', 'rule_id': 'T11_BAD_SEV', 'title': 'test',
-                          'file': str(path), 'line': 1, 'context': '', 'why': '', 'fix': ''}]
+        monkeypatch.setattr(lint_mod, '_collect_per_file_rules', lambda: [_bad_rule])
+        monkeypatch.setattr(lint_mod, '_collect_repo_level_rules', lambda: [])
 
-            # Monkeypatch _collect_per_file_rules to inject our bad rule.
-            monkeypatch.setattr(lint_mod, '_collect_per_file_rules', lambda: [_bad_rule])
-            # Monkeypatch _collect_repo_level_rules to return empty (no repo rules needed).
-            monkeypatch.setattr(lint_mod, '_collect_repo_level_rules', lambda: [])
+        # Point sys.argv at our temp tree with the empty exemptions config.
+        # --strict is intentionally OMITTED: with an empty config there are no
+        # WARN findings, so strict vs non-strict makes no difference — the only
+        # possible non-zero exit is the RuntimeError from the choke-point.
+        monkeypatch.setattr(sys, 'argv', [
+            'lint.py',
+            '--paths', str(tmp_path),
+            '--config', str(empty_cfg),
+        ])
 
-            # Patch sys.argv so lint.main() targets our temp tree.
-            monkeypatch.setattr(sys, 'argv', ['lint.py', '--paths', td])
+        # MUST raise RuntimeError with 'invalid severity' in the message.
+        # A SystemExit of ANY code (0 or non-zero) means the choke-point did
+        # NOT fire — that is the exact failure this test guards against.
+        with pytest.raises(RuntimeError) as exc_info:
+            lint_mod.main()
 
-            # lint.main() must raise RuntimeError because _assert_all_severities_valid
-            # detects 'INFO' severity.  If the call-line at ~505 were deleted while the
-            # function body remained intact, main() would exit normally (sys.exit(0) or
-            # sys.exit(2)) — NOT raise RuntimeError — and this pytest.raises would FAIL.
-            with pytest.raises((RuntimeError, SystemExit)) as exc_info:
-                lint_mod.main()
-
-            # Discriminate: a SystemExit(0) means the call was deleted and bad severity
-            # passed through silently — that is the failure we are guarding against.
-            if isinstance(exc_info.value, SystemExit):
-                assert exc_info.value.code != 0, (
-                    "lint.main() exited 0 despite a finding with severity='INFO'. "
-                    "This means _assert_all_severities_valid was NOT called (the call "
-                    "line at lint.py:~505 may have been deleted while the body remains). "
-                    "The choke-point is broken."
-                )
-                # A non-zero SystemExit could also be the RuntimeError re-raised as SystemExit
-                # by some wrapper — acceptable.  The key invariant is that exit 0 is impossible.
-        finally:
-            import shutil
-            shutil.rmtree(td, ignore_errors=True)
+        assert 'invalid severity' in str(exc_info.value).lower() or \
+               'lint internal error' in str(exc_info.value).lower(), (
+            f"RuntimeError was raised but message did not contain expected choke-point "
+            f"text. Got: {exc_info.value!r}. The choke-point message changed — "
+            f"update this assertion to match the new wording."
+        )
 
 
 # ---------------------------------------------------------------------------

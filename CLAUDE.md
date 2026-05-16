@@ -281,6 +281,22 @@ Two real instances where self-report failed and the mechanical check would have 
 
 The standard grep-to-zero artifact closes both gaps. Every "sweep all" dispatch MUST include the grep command and its empty output in the returned diff summary. If the grep returns hits, those are either in-scope misses (fix them before closing the task) or explicitly waived out-of-scope sites (document the rationale per-site, same as the named-bug-pattern fix-scope protocol).
 
+### Empirical both-ways proof for regression guards and fix PoCs
+
+**Any fix whose value is "fails when the bug regresses" (a regression guard / regression test), and any behavior fix that has a proof-of-concept, MUST be empirically proven both-ways before acceptance** — the guard observed FAILING when the fix is reverted or the bug reintroduced, AND observed PASSING on the correct tree. Theoretical QA reasoning alone is NOT sufficient.
+
+**Why:** T11-1's `main()`-guard test for the dead-gate choke-point was QA-reviewed as sound on two separate passes. Sweep-#6 adversarial empirically proved it passed identically whether the choke-point call was present or deleted — incidental `LINT_UNUSED_EXEMPTION` WARN findings in strict mode satisfied its weak `code != 0` discriminator, masking the choke-point's absence entirely. Theoretical review cannot detect this class of vacuity; only running the test both ways can.
+
+**How to apply:**
+
+1. Write the fix + the regression guard (test or assertion).
+2. Run the guard on the correct tree — it MUST pass. Record the verbatim pytest / Spock output line.
+3. Revert / delete / replace the fix with a minimal no-op mutation (e.g., replace a call with `pass`, delete the guard line, revert the behavior change). Run the guard again — it MUST fail. Record the verbatim failure block.
+4. Restore the fix fully. Run `git diff --stat <fixed-file>` to confirm clean revert.
+5. Report all four observations verbatim in the diff summary. If step 3 does NOT produce a failure, the guard is still vacuous — iterate until it does.
+
+This applies to: lint choke-point call-site guards, Spock regression tests for named bug patterns, PoC mutation proofs in tier-review tasks, and any assertion whose stated purpose is "this test fails if the fix is removed."
+
 ### Per-commit CHANGELOG discipline (prevention layer)
 
 Every `feat:` or `fix:` commit on a release branch MUST include a one-line bullet update to `CHANGELOG.md`'s `[Unreleased]` section in the same diff. This is the prevention layer; the `/cut-release` pre-flight CHANGELOG drift check is the safety net.
