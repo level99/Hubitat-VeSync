@@ -649,10 +649,13 @@ class LevoitCore300SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // T12-2: setAutoMode fallback hardening — non-numeric state.room_size + floor
+    // setAutoMode fallback hardening — non-numeric state.room_size + floor
+    // Guards the nested safeIntArg(state.room_size, 800) fix: confirms that a
+    // non-numeric value in state.room_size does not produce a silent no-op,
+    // and that a negative roomSize is floored to ≥1 before reaching the API.
     // -------------------------------------------------------------------------
 
-    def "T12-2: setAutoMode('efficient') with garbage state.room_size makes the API call with room_size=800 (not a silent no-op)"() {
+    def "setAutoMode('efficient') with garbage state.room_size makes the API call with room_size=800 (not a silent no-op)"() {
         // Pre-fix: state.room_size written raw from VeSync API; if it ever holds a non-numeric
         // String, `(state.room_size ?: 800) as Integer` throws NumberFormatException BEFORE
         // safeIntArg runs — sandbox swallows it, setAutoMode is a silent no-op.
@@ -680,7 +683,7 @@ class LevoitCore300SSpec extends HubitatSpec {
         testLog.errors.isEmpty()
     }
 
-    def "T12-2: setAutoMode('efficient', '-50') then blank setAutoMode('efficient') does NOT send room_size=-50"() {
+    def "setAutoMode('efficient', '-50') then blank setAutoMode('efficient') does NOT send room_size=-50 (floor guard)"() {
         // Pre-fix self-poison: setAutoMode("efficient", "-50") → safeIntArg returns -50 (valid parse
         // of numeric string "-50") → state.room_size = -50 → -50 is truthy in Groovy → next blank
         // 1-arg call passes -50 as roomSize → 2-arg overload sends room_size:-50 (invalid API value).

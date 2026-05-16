@@ -259,10 +259,11 @@ def setAutoMode(mode) {
 def setAutoMode(mode, roomSize) {
     if (!requireNotNull(mode, "setAutoMode")) return
     // BP26: safe integer coercion — Rule Machine passes "" or null for blank numeric slots.
-    // T12-2: nested safeIntArg eliminates the unguarded `(state.room_size ?: 800) as Integer`
-    // cast that could throw NumberFormatException if state.room_size holds a non-numeric String
-    // written raw from the VeSync API response.  safeIntArg's try/catch cannot protect the
-    // fallback expression if it throws before the call — nesting avoids the unguarded cast.
+    // Nested safeIntArg: the inner call guards the fallback expression itself.
+    // An unguarded `(state.room_size ?: 800) as Integer` cast can throw NumberFormatException
+    // if state.room_size holds a non-numeric String written raw from the VeSync API response.
+    // safeIntArg's try/catch cannot protect the fallback expression if it throws before the call
+    // — nesting avoids the unguarded cast entirely.
     // Fallback chain: roomSize → state.room_size (safeIntArg-guarded) → 800 (literal, always safe).
     Integer sz = safeIntArg(roomSize, safeIntArg(state.room_size, 800))
     // Floor: room_size must be ≥1 (negative values from e.g. safeIntArg("-50"→-50 on valid-but-
@@ -364,8 +365,9 @@ private void updateAQIandFilter(String val, filter) {
 
         handleEvent("aqi", aqi);
         // Adds a conventional `airQuality` NUMBER (US-AQI) attribute for Rule Machine / dashboard
-        // ergonomics. The AirQuality capability's required attribute (`airQualityIndex`) was already
-        // emitted above; this is additive convenience, not a capability-contract fix.
+        // ergonomics. The AirQuality capability's required attribute (`airQualityIndex`) is emitted
+        // by the per-driver applyStatus before this method is called; this adds `airQuality` as
+        // additive convenience under the conventional name, not a capability-contract fix.
         // airQualityIndex and aqi are unchanged — backward-compatible.
         handleEvent("airQuality", aqi);
 

@@ -291,7 +291,7 @@ The standard grep-to-zero artifact closes both gaps. Every "sweep all" dispatch 
 
 1. Write the fix + the regression guard (test or assertion).
 2. Run the guard on the correct tree — it MUST pass. Record the verbatim pytest / Spock output line.
-3. Revert / delete / replace the fix with a minimal no-op mutation (e.g., replace a call with `pass`, delete the guard line, revert the behavior change). Run the guard again — it MUST fail. Record the verbatim failure block.
+3. Revert / delete / replace the fix with a minimal no-op mutation (e.g., replace a call with `pass` / delete the assertion (Python lint-rule tests), or comment out / replace with `return` (Groovy Spock specs)). Run the guard again — it MUST fail. Record the verbatim failure block.
 4. Restore the fix fully. Run `git diff --stat <fixed-file>` to confirm clean revert.
 5. Report all four observations verbatim in the diff summary. If step 3 does NOT produce a failure, the guard is still vacuous — iterate until it does.
 

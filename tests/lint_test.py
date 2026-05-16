@@ -2522,12 +2522,12 @@ class TestLintExitCodes:
 
 
 # ---------------------------------------------------------------------------
-# T10-1 — post-collection severity hard-check in lint.py
+# Post-collection severity hard-check in lint.py
 # ---------------------------------------------------------------------------
 
 class TestLintSeverityHardCheck:
     """
-    T10-1 regression guard: lint._assert_all_severities_valid() must raise
+    Regression guard: lint._assert_all_severities_valid() must raise
     RuntimeError when any finding carries a missing or invalid severity.
 
     All tests call lint._assert_all_severities_valid() directly — the real
@@ -2548,7 +2548,7 @@ class TestLintSeverityHardCheck:
         A finding with no severity key fed to _assert_all_severities_valid() MUST raise
         RuntimeError.  This is the shape a raw inline dict
         ``findings.append({"rule_id": "FAKE", "file": "x.groovy"})`` produces —
-        get('severity') returns None, which was silently non-gating pre-T10-1.
+        get('severity') returns None, which was silently non-gating before the hard-check was added.
         """
         lint = self._import_lint()
         bad_finding = {"rule_id": "FAKE_RULE_NO_SEV", "file": "x.groovy", "line": 1}
@@ -2626,7 +2626,7 @@ class TestMakeFindingForFileSeverityGate:
 
 
 # ---------------------------------------------------------------------------
-# RULE25 — BP16 ensureDebugWatchdog call-site (T10-3)
+# RULE25 — BP16 ensureDebugWatchdog call-site
 # ---------------------------------------------------------------------------
 
 class TestRule25DebugWatchdogCallSite:
@@ -2701,7 +2701,7 @@ class TestRule25DebugWatchdogCallSite:
 
 
 # ---------------------------------------------------------------------------
-# RULE31 — BP24-A state.switch dead branch (T10-3)
+# RULE31 — BP24-A state.switch dead branch
 # ---------------------------------------------------------------------------
 
 class TestRule31StateSwitchDeadBranch:
@@ -2777,7 +2777,7 @@ class TestRule31StateSwitchDeadBranch:
 
 
 # ---------------------------------------------------------------------------
-# RULE32 — BP24-B/C auto-on guard missing on SHOULD-ON commands (T10-3)
+# RULE32 — BP24-B/C auto-on guard missing on SHOULD-ON commands
 # ---------------------------------------------------------------------------
 
 class TestRule32AutoOnGuardMissing:
@@ -2849,24 +2849,24 @@ class TestRule32AutoOnGuardMissing:
 
 
 # ---------------------------------------------------------------------------
-# T11-1 — End-to-end call-site regression guard for _assert_all_severities_valid
+# End-to-end call-site regression guard for _assert_all_severities_valid
 # ---------------------------------------------------------------------------
 
 class TestLintMainInvalidSeverityAborts:
     """
-    T12-1 (fixes vacuous T11-1): Prove that the CALL to _assert_all_severities_valid
-    at lint.py:~505 (not just its function body) is what terminates a run carrying a
-    bad severity.
+    Proves that the CALL to _assert_all_severities_valid at lint.py:~505
+    (not just its function body) is what terminates a run carrying a bad severity.
 
     The existing TestLintSeverityHardCheck tests call the function directly —
     they verify the function body is correct but cannot detect if the call line
     were deleted while the body remained.
 
-    T11-1 was empirically vacuous: its `code != 0` discriminator was satisfied by
-    incidental LINT_UNUSED_EXEMPTION WARN findings in strict mode even when the
-    choke-point call was deleted.  T12-1 fixes this by:
-    (a) Using an empty exemptions config so no LINT_UNUSED_EXEMPTION noise fires.
-    (b) Asserting RuntimeError specifically — any SystemExit (code 0 or non-zero)
+    This guard addresses a vacuity that was empirically discovered: an earlier
+    version used a `code != 0` discriminator that was satisfied by incidental
+    LINT_UNUSED_EXEMPTION WARN findings in strict mode even when the choke-point
+    call was deleted.  The fix:
+    (a) Uses an empty exemptions config so no LINT_UNUSED_EXEMPTION noise fires.
+    (b) Asserts RuntimeError specifically — any SystemExit (code 0 or non-zero)
         is a test FAILURE, meaning the choke-point did NOT fire.
 
     Deletion proof: with `pass` replacing the call at lint.py:~505, lint.main()
@@ -2877,12 +2877,12 @@ class TestLintMainInvalidSeverityAborts:
 
     def test_bad_severity_in_rule_aborts_lint_main(self, monkeypatch, tmp_path):
         """
-        T12-1 (replaces T11-1): Prove that the CALL to _assert_all_severities_valid
-        at lint.py:~505 (not just its function body) terminates a run carrying a
-        bad severity — by asserting a RuntimeError with the specific 'invalid severity'
+        Proves that the CALL to _assert_all_severities_valid at lint.py:~505
+        (not just its function body) terminates a run carrying a bad severity
+        — by asserting a RuntimeError with the specific 'invalid severity'
         message, NOT a SystemExit of any code.
 
-        Vacuity fix: the old T11-1 discriminator (`code != 0`) was satisfied by
+        Vacuity fix: the prior discriminator (`code != 0`) was satisfied by
         incidental LINT_UNUSED_EXEMPTION WARN findings in strict mode even when the
         choke-point call was deleted, making the guard empirically false-green.
 
@@ -2953,7 +2953,7 @@ class TestLintMainInvalidSeverityAborts:
 
 
 # ---------------------------------------------------------------------------
-# T11-4 — Severity-asserting tests for 7 previously untested FAIL rules
+# Severity-asserting tests for previously untested FAIL rules
 # ---------------------------------------------------------------------------
 
 class TestRule23DriverAppOnlyApi:
@@ -3022,9 +3022,10 @@ class TestRule24AgentPointerIntegrity:
     #   line 1: (blank)
     #   line 2: (blank)
     #   line 3: See `CONTRIBUTING.md` "..."   ← lineno = 3 (from enumerate(raw_lines, 1))
-    # T11-7 fix: old make_finding_for_file with raw_lines=[ctx] and lineno=3:
+    # Regression guard for the make_finding_for_file context-preservation fix:
+    # old make_finding_for_file with raw_lines=[ctx] and lineno=3:
     #   range(max(0,3-2), min(1,3+1)) = range(1, 1) → empty → context blanked.
-    # New make_finding_for_file stores context directly → non-empty.
+    # Fixed: make_finding_for_file now stores context directly → non-empty.
     # Verified arithmetic: range(1, min(1, 4)) = range(1, 1) = [] (empty). ✓
     BAD = textwrap.dedent("""\
 
@@ -3048,11 +3049,12 @@ class TestRule24AgentPointerIntegrity:
         assert any(f['severity'] == 'FAIL' for f in rule24), (
             f"RULE24_broken_section_pointer must carry severity='FAIL'; got: {rule24}"
         )
-        # T11-7 regression guard: pointer is on line 3 of BAD fixture. Old
-        # make_finding_for_file: range(1, min(1,4))=range(1,1)=[] → context blanked
-        # → assert FAILs on T11-7 revert. New: context preserved directly.
+        # Regression guard for the make_finding_for_file context-preservation fix:
+        # pointer is on line 3 of BAD fixture; old make_finding_for_file:
+        # range(1, min(1,4))=range(1,1)=[] → context blanked.
+        # This assert FAILs if the context-preservation fix is reverted.
         assert any(f['context'] for f in rule24), (
-            "T11-7 regression: context blanked for RULE24_broken_section_pointer at lineno=3 "
+            "Regression: context blanked for RULE24_broken_section_pointer at lineno=3 "
             "(range(1,min(1,4))=[] in old make_finding_for_file → should be non-empty post-fix)"
         )
 
@@ -3170,9 +3172,10 @@ class TestRule20VersionLockstep:
             #   line 2: // padding comment B
             #   line 3: metadata {
             #   line 4: definition(   ← def_lineno = 4
-            # T11-7 fix: old make_finding_for_file with raw_lines=[ctx] and lineno=4:
+            # Regression guard for the make_finding_for_file context-preservation fix:
+            # old make_finding_for_file with raw_lines=[ctx] and lineno=4:
             #   range(max(0,4-2), min(1,4+1)) = range(2, 1) → empty → context blanked.
-            # New make_finding_for_file stores context directly → non-empty.
+            # Fixed: make_finding_for_file now stores context directly → non-empty.
             # Verified arithmetic: range(2, min(1, 5)) = range(2, 1) = [] (empty). ✓
             (drivers_dir / "TestDriver.groovy").write_text(
                 textwrap.dedent("""\
@@ -3194,11 +3197,12 @@ class TestRule20VersionLockstep:
         assert any(f['severity'] == 'FAIL' for f in rule20), (
             f"RULE20 finding must carry severity='FAIL'; got: {rule20}"
         )
-        # T11-7 regression guard: fixture yields def_lineno=4 (definition( at line 4 of
-        # the padded source). Old make_finding_for_file: range(2, min(1,5))=range(2,1)=[]
-        # → context blanked → this assert FAILs on a T11-7 revert. New: context preserved.
+        # Regression guard for the make_finding_for_file context-preservation fix:
+        # fixture yields def_lineno=4 (definition( at line 4 of the padded source).
+        # Old make_finding_for_file: range(2, min(1,5))=range(2,1)=[] → context blanked.
+        # This assert FAILs if the context-preservation fix is reverted.
         assert any(f['context'] for f in rule20), (
-            "T11-7 regression: context blanked for RULE20_version_drift at lineno=4 "
+            "Regression: context blanked for RULE20_version_drift at lineno=4 "
             "(range(2,min(1,5))=[] in old make_finding_for_file → should be non-empty post-fix)"
         )
 
@@ -3232,9 +3236,10 @@ class TestRule21ReadmeDevicesSync:
             #   line 2: // padding comment B
             #   line 3: metadata {
             #   line 4: definition(   ← def_lineno = 4
-            # T11-7 fix: old make_finding_for_file with raw_lines=[ctx] and lineno=4:
+            # Regression guard for the make_finding_for_file context-preservation fix:
+            # old make_finding_for_file with raw_lines=[ctx] and lineno=4:
             #   range(max(0,4-2), min(1,4+1)) = range(2, 1) → empty → context blanked.
-            # New make_finding_for_file stores context directly → non-empty.
+            # Fixed: make_finding_for_file now stores context directly → non-empty.
             (drivers_dir / "LevoitTestXXX999.groovy").write_text(
                 textwrap.dedent("""\
                     // padding comment A
@@ -3266,10 +3271,12 @@ class TestRule21ReadmeDevicesSync:
         assert any(f['rule_id'].startswith('RULE21') for f in rule21), (
             f"Expected a RULE21 FAIL finding; got: {rule21}"
         )
-        # T11-7 regression guard: fixture yields def_lineno=4. Old make_finding_for_file:
-        # range(2, min(1,5))=range(2,1)=[] → context blanked → assert FAILs on T11-7 revert.
+        # Regression guard for the make_finding_for_file context-preservation fix:
+        # fixture yields def_lineno=4; old make_finding_for_file:
+        # range(2, min(1,5))=range(2,1)=[] → context blanked.
+        # This assert FAILs if the context-preservation fix is reverted.
         assert any(f['context'] for f in rule21), (
-            "T11-7 regression: context blanked for RULE21 finding at lineno=4 "
+            "Regression: context blanked for RULE21 finding at lineno=4 "
             "(range(2,min(1,5))=[] in old make_finding_for_file → should be non-empty post-fix)"
         )
 
@@ -3321,8 +3328,9 @@ class TestRule22WhitelistParity:
         assert any(f['rule_id'].startswith('RULE22') for f in rule22), (
             f"Expected a RULE22 FAIL finding; got: {rule22}"
         )
-        # NOTE: no T11-7 regression guard here. RULE22 prefix/literal findings are emitted
-        # with hardcoded lineno=0 (see whitelist_parity.py). At lineno=0 the old
+        # NOTE: no context-preservation regression guard here. RULE22 prefix/literal findings
+        # are emitted with hardcoded lineno=0 (see whitelist_parity.py). At lineno=0 the old
         # make_finding_for_file produced range(0, min(1,1))=range(0,1)=[0] → raw_lines[0]
-        # = the hardcoded context string → context was always preserved even before T11-7.
-        # T11-7 only changed behaviour for lineno>2; lineno=0 was never the broken path.
+        # = the hardcoded context string → context was always preserved, even before the fix.
+        # The context-preservation fix only changed behaviour for lineno>2; lineno=0 was
+        # never the broken path.
