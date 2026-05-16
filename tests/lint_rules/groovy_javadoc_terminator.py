@@ -13,7 +13,7 @@ This bit the codebase twice:
     The `*/` after `LUH-O451S-` terminated the block; the rest parsed as live code;
     Spock failed to compile.
 
-  v2.2 PR #4 BP14 cron-fix Gemini round: `"0 */${minutes} * * * ?"` inside a
+  v2.2 BP14 cron-fix: `"0 */${minutes} * * * ?"` inside a
     setupPollSchedule() Javadoc example. Same failure mode.
 
 Both required tester-surface → dev-diagnose-and-fix → multiple iteration rounds.

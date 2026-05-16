@@ -297,6 +297,20 @@ The standard grep-to-zero artifact closes both gaps. Every "sweep all" dispatch 
 
 This applies to: lint choke-point call-site guards, Spock regression tests for named bug patterns, PoC mutation proofs in tier-review tasks, and any assertion whose stated purpose is "this test fails if the fix is removed."
 
+### Sweep-orchestration: coverage audits committed HEAD, not the working tree
+
+**When a full QA sweep fans out adversarial and coverage sub-agents in parallel, coverage MUST audit committed HEAD (`git show HEAD:<file>` / `git diff <base>..HEAD`), NOT the live working tree.**
+
+**Why:** the adversarial sub-agent's empirical revert-tests mutate source files, run lint/tests against the mutated state, then restore. When coverage runs concurrently and inspects `git status` or the live working tree, it observes the transient mutation as an apparent code regression — a phantom BLOCKING finding that requires a full analysis cycle to diagnose as a false positive.
+
+**Convention:** a dirty working tree during a parallel sweep is the expected signature of a sibling agent's in-flight empirical test, not a code regression. Inspecting the committed state (`git show`, `git diff base..HEAD`) is immune to this class of false positive because committed HEAD is not affected by in-flight working-tree mutations.
+
+**Canonical incident:** Sweep #8 adversarial and coverage ran in parallel. Adversarial reverted `LevoitCorePurifierLib.groovy`'s `setAutoMode` nest to `safeIntArg(roomSize, (state.room_size ?: 800) as Integer)` for its empirical test. Coverage observed the dirty tree, flagged the regression as BLOCKING, and spent a full analysis cycle determining it was adversarial's in-progress test rather than a real regression. Cost: one extra pipeline round. Fix: coverage reads `git show HEAD:Drivers/Levoit/LevoitCorePurifierLib.groovy` rather than the live file.
+
+**How to apply:** in sweep orchestration briefs, explicitly instruct the coverage sub-agent: "Audit committed HEAD only. Use `git show HEAD:<path>` to read driver files and `git diff <base>..HEAD` to read the diff. Do not read the live working tree — a sibling adversarial agent may have mutated it for empirical testing."
+
+See `CONTRIBUTING.md` "Sweep-orchestration: coverage audits committed HEAD" for the one-line companion pointer.
+
 ### Per-commit CHANGELOG discipline (prevention layer)
 
 Every `feat:` or `fix:` commit on a release branch MUST include a one-line bullet update to `CHANGELOG.md`'s `[Unreleased]` section in the same diff. This is the prevention layer; the `/cut-release` pre-flight CHANGELOG drift check is the safety net.

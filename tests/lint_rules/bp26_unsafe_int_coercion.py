@@ -60,6 +60,25 @@ TO_INTEGER_RE = re.compile(r'\b(\w+)\.toInteger\s*\(\s*\)')
 # Matches safeIntArg(x, ...) — confirms the safe alternative is used
 SAFE_INT_ARG_RE = re.compile(r'\bsafeIntArg\s*\(')
 
+# Detects a forbidden coercion expression in the *fallback* position of a safeIntArg() call.
+#
+# Invariant: the fallback argument to safeIntArg() must be either a safe literal/constant
+# or another safeIntArg() call. Any expression containing `as Integer`, `as int`, or
+# `.toInteger()` in the fallback position throws before safeIntArg's try/catch can
+# intercept it — safeIntArg's protection does not extend to its own arguments.
+# Correct nested form: safeIntArg(x, safeIntArg(y, N)) — the inner call is the guard.
+#
+# Pattern: safeIntArg(<first_arg>, <fallback>) where fallback is NOT immediately another
+# safeIntArg( call, and fallback contains a coercion cast.
+# The `(?:[^()]*|\([^)]*\))*` segment permits one level of nested parens in the fallback
+# (e.g. `(state.room_size ?: 800)`) without crossing the outer safeIntArg closing paren.
+SAFEINTARG_COERCION_FALLBACK_RE = re.compile(
+    r'safeIntArg\s*\(\s*\w[\w.]*\s*,'    # safeIntArg(<arg1>,
+    r'\s*(?!safeIntArg\s*\()'             # NOT immediately followed by another safeIntArg(
+    r'(?:[^()]*|\([^)]*\))*'             # fallback body: non-paren chars OR one paren group
+    r'\b(?:as\s+(?:Integer|int)\b|toInteger\s*\(\s*\))',  # coercion present in fallback
+)
+
 
 def _find_method_body_end(source: str, brace_start: int) -> int:
     depth = 0
@@ -138,8 +157,42 @@ def check_rule37_unsafe_int_coercion(
         body = raw_text[brace_start:body_end]
         body_clean = _strip_line_comments(body)
 
-        # If safeIntArg is used in the body, the method is already safe.
+        # If safeIntArg is used in the body, the primary parameter coercion is safe.
+        # However, also check that no coercion expression appears in the *fallback*
+        # position of a safeIntArg() call — such expressions throw before the guard
+        # can intercept them (safeIntArg's try/catch does not protect its arguments).
         if SAFE_INT_ARG_RE.search(body_clean):
+            # Check for forbidden coercion in safeIntArg fallback argument.
+            fb_m = SAFEINTARG_COERCION_FALLBACK_RE.search(body_clean)
+            if fb_m:
+                abs_pos = brace_start + fb_m.start()
+                lineno = _line_of(raw_text, abs_pos)
+                findings.append(make_finding(
+                    severity='FAIL',
+                    rule_id='RULE37_unsafe_int_coercion',
+                    title=(
+                        f'BP26: {method_name}() has a coercion expression '
+                        f'(`as Integer`/`as int`/`.toInteger()`) as a fallback '
+                        f'argument inside safeIntArg() — the coercion throws '
+                        f'before safeIntArg\'s guard can intercept it'
+                    ),
+                    file_rel=file_rel,
+                    lineno=lineno,
+                    raw_lines=raw_lines,
+                    why=(
+                        'safeIntArg\'s try/catch protects its OWN evaluation, not the '
+                        'expressions passed as its arguments. A fallback like '
+                        '`safeIntArg(x, (y ?: N) as Integer)` evaluates the cast '
+                        'before the call, so a non-numeric `y` still throws '
+                        'NumberFormatException that the sandbox swallows silently.'
+                    ),
+                    fix=(
+                        'Nest the fallback in a second safeIntArg() call: '
+                        '`safeIntArg(x, safeIntArg(y, N))`. '
+                        'The inner safeIntArg guards the fallback expression itself. '
+                        'Literal constant fallbacks (e.g. `safeIntArg(x, 800)`) are safe as-is.'
+                    ),
+                ))
             continue
 
         # RULE37 intentionally checks only the FIRST untyped parameter of each

@@ -1668,7 +1668,7 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     // cron) correctly arms persistent polling, self-heals pre-v2.2 installs,
     // and is idempotent once migrated.
     //
-    // Also covers the cron-syntax branching fix (PR #4, Gemini review):
+    // Also covers the cron-syntax branching fix:
     // Quartz seconds-field range is 0-59; "0/N * * * * ?" is invalid for N >= 60.
     // setupPollSchedule() branches:
     //   interval < 60  => "0/${interval} * * * * ?" (seconds-resolution)

@@ -1963,6 +1963,94 @@ class TestRule37BP26UnsafeIntCoercion:
 
 
 # ---------------------------------------------------------------------------
+# RULE37 extension — BP26 coercion-expression in safeIntArg fallback position
+# ---------------------------------------------------------------------------
+
+class TestRule37BP26SafeIntArgFallbackCoercion:
+    """
+    RULE37 extension: a coercion expression (``as Integer`` / ``as int`` /
+    ``.toInteger()``) used as the fallback argument inside a ``safeIntArg()``
+    call is a BP26 violation.
+
+    safeIntArg's try/catch protects its OWN evaluation — not the expressions
+    passed as its arguments.  A fallback like
+    ``safeIntArg(x, (state.y ?: 800) as Integer)`` evaluates the cast BEFORE
+    the call, so a non-numeric ``state.y`` still throws NumberFormatException
+    that the sandbox swallows silently.
+
+    Correct form: ``safeIntArg(x, safeIntArg(state.y, 800))`` — the inner call
+    guards the fallback expression.  Literal fallbacks (``safeIntArg(x, 800)``)
+    are safe as-is.
+
+    Dead-gate severity assertion: the finding MUST carry ``severity='FAIL'``
+    to block ``lint --strict``.  A missing or wrong severity key produces a
+    vacuous guard — identical to the Tier-9 false-negative that prompted adding
+    this class of test.
+    """
+
+    from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion as _rule
+
+    # Good: nested safeIntArg guards the fallback — correct form, must NOT flag.
+    GOOD_NESTED = textwrap.dedent("""\
+        def setAutoMode(mode, roomSize) {
+            if (!requireNotNull(mode, "setAutoMode")) return
+            Integer sz = safeIntArg(roomSize, safeIntArg(state.room_size, 800))
+            sz = Math.max(1, sz)
+        }
+    """)
+
+    # Good: literal fallback — no cast at all, must NOT flag.
+    GOOD_LITERAL = textwrap.dedent("""\
+        def setAutoMode(mode, roomSize) {
+            Integer sz = safeIntArg(roomSize, 800)
+        }
+    """)
+
+    # Bad: coercion-expression as fallback — must flag RULE37 with severity FAIL.
+    BAD_FALLBACK_AS_INTEGER = textwrap.dedent("""\
+        def setAutoMode(mode, roomSize) {
+            Integer sz = safeIntArg(roomSize, (state.room_size ?: 800) as Integer)
+        }
+    """)
+
+    def test_nested_safeintarg_fallback_passes(self):
+        """Nested safeIntArg() as fallback must NOT flag — the inner call is the guard."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_NESTED)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Nested safeIntArg fallback must not flag RULE37, got: {findings}"
+        )
+
+    def test_literal_fallback_passes(self):
+        """Literal constant fallback must NOT flag — no coercion at all."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_LITERAL)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Literal fallback must not flag RULE37, got: {findings}"
+        )
+
+    def test_coercion_expression_fallback_fails(self):
+        """
+        ``safeIntArg(x, (expr) as Integer)`` must flag RULE37 with severity FAIL.
+
+        Regression guard: proves the extension closes the gap left by the original
+        RULE37 implementation (which bailed out on any ``safeIntArg`` presence).
+        This test FAILS on pre-extension code and PASSES on the extended rule,
+        making it a valid empirical both-ways proof checkpoint.
+        """
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_FALLBACK_AS_INTEGER)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for coercion-expression fallback, got: {findings}"
+        )
+        # Dead-gate severity assertion: missing severity key is a vacuous guard.
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE37_unsafe_int_coercion'), (
+            f"RULE37 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # RULE20 version_lockstep — _extract_definition_block parser robustness
 # ---------------------------------------------------------------------------
 

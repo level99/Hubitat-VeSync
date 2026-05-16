@@ -135,7 +135,7 @@ SOFTWARE.
 //                  Non-multiples of 60 (e.g. 90s) fire at floor(90/60)=1 min and emit
 //                  a WARN so the user can correct. Recommended values (30/60/120/300)
 //                  all divide evenly. Maintainer live-verify was on default 30s (< 60),
-//                  so the breakage was not caught before release. (PR #4, Gemini review.)
+//                  so the breakage was not caught before release.
 // 2026-04-27: v2.2+ Hub-reboot poll-chain recovery (Bug Pattern #14).
 //                  - Replaced recursive runIn() chain with schedule()-based cron job.
 //                    schedule() persists across hub reboots; runIn() does not, causing
@@ -272,7 +272,7 @@ import groovy.transform.Field
 // (per pyvesync const.py). Implemented in v2.2 via deviceRegion preference + getApiHost() helper.
 
 // Poll-method routing is handled by deviceMethodFor(child) below.
-// TYPENAME_TO_METHOD and DEFAULT_POLL_METHOD were removed in v2.3 (issue #3 AC #3):
+// TYPENAME_TO_METHOD and DEFAULT_POLL_METHOD were removed in v2.3:
 // substring matching on typeName was fragile and untestable. Routing is now dtype-based
 // via deviceType() + the dtype→method switch in deviceMethodFor().
 
@@ -992,7 +992,7 @@ def Boolean updateDevices()
             // Branch the API method by device type. The VeSync API uses different read methods
             // for each device family; calling the wrong method returns code:-1 with empty result.
             // Routing is dtype-based via deviceMethodFor() (v2.3: replaced the old
-            // TYPENAME_TO_METHOD substring-matching approach that failed issue #3 AC #3).
+            // TYPENAME_TO_METHOD substring-matching approach that was fragile and untestable).
             String method = deviceMethodFor(dev)
             def command = [
                 "method": method,
@@ -1096,7 +1096,7 @@ def Boolean updateDevices()
  * Primary routing is dtype-based: reads the raw model code from the child's stored
  * deviceType dataValue, maps it through deviceType() to a dtype string, then
  * dispatches dtype → method via switch. This eliminates the old TYPENAME_TO_METHOD
- * substring-matching approach (issue #3 AC #3) which could silently mis-route if a
+ * substring-matching approach which could silently mis-route if a
  * driver's metadata name changed or a new driver's name didn't contain the expected
  * substring.
  *

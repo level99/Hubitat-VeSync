@@ -50,9 +50,9 @@ Vulnerable arithmetic-on-null patterns detected (v2.5+ extension):
 
   Rationale: ``(level as Integer)`` coercion on a null param in Groovy/Hubitat sandbox
   yields ``null`` (not 0), so ``if (level < 1)`` on null throws NullPointerException
-  silently.  The v2.5 Tier 3 audit found 6 latent sites of this shape (setMistLevel,
+  silently.  The v2.5 sweep found 6 latent sites of this shape (setMistLevel,
   setTargetHumidity, setLevel across 6 humidifier drivers) that passed the original
-  string-normalization-only RULE27.  All 6 were fixed in Tier 1/3; this extended rule
+  string-normalization-only RULE27.  All 6 were fixed; this extended rule
   prevents the pattern from re-appearing in new drivers.
 
 Scope: all .groovy files under Drivers/Levoit/ — including library files.
