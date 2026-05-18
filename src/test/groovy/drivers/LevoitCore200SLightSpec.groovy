@@ -262,4 +262,40 @@ class LevoitCore200SLightSpec extends HubitatSpec {
         req != null
         req.data.night_light == "dim"
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #26 (D2 variant): comparison-operator implicit coercion on
+    // blank Rule Machine slot — setLevel("") and setLevel("abc") must not throw
+    // -------------------------------------------------------------------------
+
+    def "BP26: setLevel('') does not throw on empty-string input from Rule Machine (Core 200S Light)"() {
+        // Before D2 fix, `level < 10` on a blank-slot "" string threw GroovyCastException
+        // (swallowed silently by the Hubitat sandbox — no log entry, no effect).
+        // After D2 fix: safeIntArg("", 0, 0, 100) returns 0; 0 < 10 → setNightLight("off").
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setLevel called with empty string (Rule Machine blank slot)"
+        driver.setLevel("")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setLevel('abc') does not throw on non-numeric string (Core 200S Light)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setLevel called with non-numeric string"
+        driver.setLevel("abc")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
 }

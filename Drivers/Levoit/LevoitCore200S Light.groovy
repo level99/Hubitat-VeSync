@@ -160,11 +160,15 @@ def setLevel(level, duration) {
 
 def setLevel(level) {
     logDebug "setLevel(${level})"
-    // BP18: null-guard converts null → 0 (null < N throws NPE; null from blank RM param slot).
-    if (level == null) { logWarn "setLevel called with null (likely empty Rule Machine parameter)"; return }
-    if (level < 10) { setNightLight("off") }
-    else if (level > 75) { setNightLight("on") }
-    else setNightLight("dim");
+    // BP18: explicit null guard for the null-from-blank-RM-slot path.
+    if (!requireNotNull(level, "setLevel")) return
+    // BP26: safeIntArg safely converts the level parameter (which may be a non-numeric
+    // string such as "" or "5.7" from Rule Machine) to an integer without throwing.
+    // Range is clamped to [0, 100]; 0 maps to the night-light off path below.
+    Integer pct = safeIntArg(level, 0, 0, 100)
+    if (pct < 10) { setNightLight("off") }
+    else if (pct > 75) { setNightLight("on") }
+    else setNightLight("dim")
 }
 
 def update() {

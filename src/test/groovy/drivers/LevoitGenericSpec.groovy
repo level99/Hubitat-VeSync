@@ -481,4 +481,43 @@ class LevoitGenericSpec extends HubitatSpec {
         evt.size() > 0
         evt.last().value == 50
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #26: safeIntArg regression — non-numeric RM inputs must not throw
+    // -------------------------------------------------------------------------
+
+    def "BP26: setLevel('abc') does not throw on non-numeric input from Rule Machine (Generic)"() {
+        // Before BP26 fix, passing a non-numeric string to setLevel caused an implicit
+        // coercion attempt that could throw, swallowed silently by the Hubitat sandbox.
+        // safeIntArg("abc", 0) returns 0 safely.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setLevel called with non-numeric string"
+        driver.setLevel("abc")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setLevel(null) does not throw and emits level=0 (Generic)"() {
+        // safeIntArg(null, 0) returns 0 — the Generic driver has no power implications for
+        // setLevel(0) so it just emits level=0 rather than routing to off().
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setLevel called with null (Rule Machine blank slot)"
+        driver.setLevel(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "level event is emitted with value 0"
+        def evt = testDevice.allEvents("level")
+        evt.size() > 0
+        evt.last().value == 0
+    }
 }

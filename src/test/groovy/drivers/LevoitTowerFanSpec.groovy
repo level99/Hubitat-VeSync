@@ -1064,4 +1064,55 @@ class LevoitTowerFanSpec extends HubitatSpec {
         and: "no error was logged"
         testLog.errors.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #26: safeIntArg regression — non-numeric RM inputs must not throw
+    // -------------------------------------------------------------------------
+
+    def "BP26: setTimer('abc') does not throw on non-numeric input from Rule Machine (Tower Fan)"() {
+        // Before BP26 fix, `seconds as Integer` on "abc" threw NumberFormatException (swallowed
+        // silently by Hubitat sandbox, leaving the command a no-op with no log entry).
+        // safeIntArg("abc", 0) returns 0, which routes to the cancelTimer / early-return path.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setTimer called with non-numeric string (Rule Machine non-numeric slot)"
+        driver.setTimer("abc")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setTimer('5.7') does not throw on decimal-string input from Rule Machine (Tower Fan)"() {
+        // Dashboard numeric tiles can pass decimal strings; safeIntArg truncates toward zero.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setTimer called with decimal string"
+        driver.setTimer("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setTimer(null) does not throw and does not set a timer (Tower Fan)"() {
+        // requireNotNull at method entry rejects null with a WARN and returns before safeIntArg.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setTimer called with null (Rule Machine blank slot)"
+        driver.setTimer(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no timer API call was made"
+        testParent.allRequests.findAll { it.method == "setTimer" }.isEmpty()
+    }
 }

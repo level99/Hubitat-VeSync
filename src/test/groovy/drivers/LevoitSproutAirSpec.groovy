@@ -647,4 +647,57 @@ class LevoitSproutAirSpec extends HubitatSpec {
         and: "no error logged"
         testLog.errors.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // C3 idempotency gate — setDisplay / setChildLock must not re-call API when
+    // the value already matches the current attribute (Sprout Air D1 fix)
+    // -------------------------------------------------------------------------
+
+    def "C3: setDisplay with already-current value makes no hubBypass call (Sprout Air)"() {
+        // Regression guard: before D1 fix, Sprout Air setDisplay had no C3 gate.
+        // This test FAILS on pre-D1-fix code and PASSES with the gate present.
+        given: "displayOn attribute is already 'on'"
+        testDevice.events.add([name: "displayOn", value: "on"])
+
+        when: "setDisplay called with the same value"
+        driver.setDisplay("on")
+
+        then: "no setDisplay API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setDisplay with different value does make a hubBypass call (Sprout Air)"() {
+        given: "displayOn attribute is 'off'"
+        testDevice.events.add([name: "displayOn", value: "off"])
+
+        when: "setDisplay called with 'on'"
+        driver.setDisplay("on")
+
+        then: "setDisplay API call was made"
+        testParent.allRequests.any { it.method == "setDisplay" }
+    }
+
+    def "C3: setChildLock with already-current value makes no hubBypass call (Sprout Air)"() {
+        given: "childLock attribute is already 'on'"
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when: "setChildLock called with the same value"
+        driver.setChildLock("on")
+
+        then: "no setChildLock API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setChildLock with different value does make a hubBypass call (Sprout Air)"() {
+        given: "childLock attribute is 'off'"
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when: "setChildLock called with 'on'"
+        driver.setChildLock("on")
+
+        then: "setChildLock API call was made"
+        testParent.allRequests.any { it.method == "setChildLock" }
+    }
 }

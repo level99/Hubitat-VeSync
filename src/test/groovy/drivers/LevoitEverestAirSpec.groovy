@@ -915,4 +915,62 @@ class LevoitEverestAirSpec extends HubitatSpec {
         and: "no setLevel API call was made"
         testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // C3 idempotency gate — setDisplay / setChildLock must not re-call API when
+    // the value already matches the current attribute (EverestAir D1 fix)
+    // -------------------------------------------------------------------------
+
+    def "C3: setDisplay with already-current value makes no hubBypass call (EverestAir)"() {
+        // Regression guard: before D1 fix, EverestAir setDisplay had no C3 gate,
+        // so calling setDisplay("on") when the device was already on fired a redundant
+        // cloud call on every Rule Machine "refresh idempotency" evaluation.
+        // This test FAILS on pre-D1-fix code (gate absent → allRequests is non-empty)
+        // and PASSES with the gate present.
+        given: "displayOn attribute is already 'on'"
+        testDevice.events.add([name: "displayOn", value: "on"])
+
+        when: "setDisplay called with the same value"
+        driver.setDisplay("on")
+
+        then: "no setDisplay API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setDisplay with different value does make a hubBypass call (EverestAir)"() {
+        // Confirm the gate is a state-change guard, not a complete no-op.
+        given: "displayOn attribute is 'off'"
+        testDevice.events.add([name: "displayOn", value: "off"])
+
+        when: "setDisplay called with 'on' (different from current)"
+        driver.setDisplay("on")
+
+        then: "setDisplay API call was made"
+        testParent.allRequests.any { it.method == "setDisplay" }
+    }
+
+    def "C3: setChildLock with already-current value makes no hubBypass call (EverestAir)"() {
+        // Regression guard: parallel to the setDisplay C3 test above.
+        given: "childLock attribute is already 'on'"
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when: "setChildLock called with the same value"
+        driver.setChildLock("on")
+
+        then: "no setChildLock API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setChildLock with different value does make a hubBypass call (EverestAir)"() {
+        given: "childLock attribute is 'off'"
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when: "setChildLock called with 'on'"
+        driver.setChildLock("on")
+
+        then: "setChildLock API call was made"
+        testParent.allRequests.any { it.method == "setChildLock" }
+    }
 }

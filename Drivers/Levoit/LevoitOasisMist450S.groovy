@@ -343,6 +343,7 @@ def setMistLevel(level){
 // Valid range: 0-3 (0 = warm mist off; 1-3 = warm intensity levels)
 def setWarmMistLevel(level){
     logDebug "setWarmMistLevel(${level})"
+    if (!requireNotNull(level, "setWarmMistLevel")) return
     Integer lvl = safeIntArg(level, 0)   // BP26: safeIntArg never throws on non-numeric RM input
     if (lvl < 0 || lvl > 3) {
         logError "Invalid warm mist level ${lvl} -- must be 0-3 (0=off, 1-3=warm intensity)"
@@ -506,6 +507,7 @@ def setColor(Map colorMap){
 // hue is 0-100 (Hubitat convention).
 def setHue(hue){
     logDebug "setHue(${hue})"
+    if (!requireNotNull(hue, "setHue")) return
     if (!isRgbVariant()) return
     Integer hue100 = safeIntArg(hue, 0, 0, 100)   // BP26 + I1
     Integer sat100 = (state.nightlightSaturation as Integer) ?: 100
@@ -517,6 +519,7 @@ def setHue(hue){
 // saturation is 0-100 (Hubitat convention).
 def setSaturation(saturation){
     logDebug "setSaturation(${saturation})"
+    if (!requireNotNull(saturation, "setSaturation")) return
     if (!isRgbVariant()) return
     // Convert stored internal hue (0-360) back to Hubitat hue (0-100) for setColor round-trip.
     Integer hueInternal = (state.nightlightHue as Integer) ?: 0  // 0-360

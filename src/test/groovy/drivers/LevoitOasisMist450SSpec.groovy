@@ -2033,4 +2033,63 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         and: "no error logged"
         testLog.errors.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern P1: requireNotNull guards on setWarmMistLevel / setHue / setSaturation
+    // Non-vacuity: removing the requireNotNull guard from each method causes its
+    // spec to fail because safeIntArg(null, ...) returns the fallback silently
+    // with no WARN — the testLog.warns assertion below raises AssertionError.
+    // Restoring the guard emits the WARN and all three assertions pass.
+    // -------------------------------------------------------------------------
+
+    def "P1: setWarmMistLevel(null) does not throw and logs a warn (OasisMist 450S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setWarmMistLevel called with null (Rule Machine blank slot)"
+        driver.setWarmMistLevel(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no API call was made"
+        testParent.allRequests.isEmpty()
+
+        and: "a warning was logged naming the method"
+        testLog.warns.any { it.contains("setWarmMistLevel") }
+    }
+
+    def "P1: setHue(null) does not throw and logs a warn (OasisMist 450S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setHue called with null (Rule Machine blank slot)"
+        driver.setHue(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no API call was made"
+        testParent.allRequests.isEmpty()
+
+        and: "a warning was logged naming the method"
+        testLog.warns.any { it.contains("setHue") }
+    }
+
+    def "P1: setSaturation(null) does not throw and logs a warn (OasisMist 450S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setSaturation called with null (Rule Machine blank slot)"
+        driver.setSaturation(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no API call was made"
+        testParent.allRequests.isEmpty()
+
+        and: "a warning was logged naming the method"
+        testLog.warns.any { it.contains("setSaturation") }
+    }
 }

@@ -271,9 +271,11 @@ def setFanSpeed(speed){
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return
-    // BP25: normalize to lowercase before payload coercion.
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" evaluates ("ON" == "on") as false → sends screenSwitch:0 (off) when intent was on.
     String v = (onOff as String).trim().toLowerCase()
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("displayOn") == v) return
     Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${v})")
     if (httpOk(resp)) {
@@ -289,9 +291,11 @@ def setDisplay(onOff){
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
     if (!requireNotNull(onOff, "setChildLock")) return
-    // BP25: normalize to lowercase before payload coercion.
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" evaluates ("ON" == "on") as false → sends childLockSwitch:0 (unlocked) when intent was locked.
     String v = (onOff as String).trim().toLowerCase()
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("childLock") == v) return
     Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${v})")
     if (httpOk(resp)) {

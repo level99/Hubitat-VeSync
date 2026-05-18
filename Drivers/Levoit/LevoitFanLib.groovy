@@ -189,9 +189,9 @@ def setLevel(val) {
     logDebug "setLevel(${val})"
     Integer pct = safeIntArg(val, 0, 0, 100)
     if (pct == 0) { off(); return }
-    // BP23: auto-on when switch is off.
-    // state.turningOn guard set in on() prevents re-entrance.
-    if (!state.turningOn && device.currentValue("switch") != "on") on()
+    // BP23: auto-on when switch is off (SwitchLevel capability convention).
+    // state.turningOn re-entrance guard is inside ensureSwitchOn().
+    ensureSwitchOn()
     Integer lvl = levelFromPercent(pct)
     // SwitchLevel spec requires emitting the level event immediately
     sendEvent(name:"level", value: pct)

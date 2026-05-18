@@ -57,8 +57,23 @@ AS_INTEGER_RE = re.compile(r'(?:\((\w+)\s+as\s+(?:Integer|int)\)|\b(\w+)\s+as\s+
 # Matches x.toInteger() — group 1 is the receiver
 TO_INTEGER_RE = re.compile(r'\b(\w+)\.toInteger\s*\(\s*\)')
 
+# Matches a relational comparison (<, >, <=, >=) where one operand is a bare identifier
+# and the other is a numeric literal — used to catch implicit coercion via comparison
+# operator on an untyped command parameter.
+# Group 1: identifier on the left of the operator.
+# Group 2: identifier on the right of the operator (for `N < param` form).
+RELATIONAL_RE = re.compile(
+    r'(?:\b(\w+)\s*(?:<|>|<=|>=)\s*\d+\b|\b\d+\s*(?:<|>|<=|>=)\s*(\w+)\b)'
+)
+
 # Matches safeIntArg(x, ...) — confirms the safe alternative is used
 SAFE_INT_ARG_RE = re.compile(r'\bsafeIntArg\s*\(')
+
+# Matches explicit Integer/int typed declaration of the parameter name before any comparison,
+# which makes the comparison safe (the sandbox enforces the type at dispatch time or the
+# local assignment has already coerced safely).
+# Group 1: the type-declared variable name.
+TYPED_LOCAL_RE = re.compile(r'\bInteger\s+(\w+)\s*=')
 
 # Detects a forbidden coercion expression in the *fallback* position of a safeIntArg() call.
 #
@@ -268,6 +283,44 @@ def check_rule37_unsafe_int_coercion(
                         ),
                     ))
                     break
+
+            else:
+                # Search for relational comparison on untyped param (e.g. `if (level < 10)`).
+                # Only flag when the param has NOT been assigned to a typed local (Integer x = ...)
+                # before the comparison — typed locals are already safe.
+                typed_locals = {m.group(1) for m in TYPED_LOCAL_RE.finditer(body_clean)}
+                if param_name not in typed_locals:
+                    for rel_m in RELATIONAL_RE.finditer(body_clean):
+                        matched = rel_m.group(1) or rel_m.group(2)
+                        if matched == param_name:
+                            abs_pos = brace_start + rel_m.start()
+                            lineno = _line_of(raw_text, abs_pos)
+                            findings.append(make_finding(
+                                severity='FAIL',
+                                rule_id='RULE37_unsafe_int_coercion',
+                                title=(
+                                    f'BP26: {method_name}() uses a relational comparison '
+                                    f'(`{param_name} < N` or similar) on untyped command '
+                                    f'parameter — implicit coercion throws on non-numeric input'
+                                ),
+                                file_rel=file_rel,
+                                lineno=lineno,
+                                raw_lines=raw_lines,
+                                why=(
+                                    f'Comparing an untyped command parameter with a numeric '
+                                    f'literal implicitly coerces it to a number. On non-numeric '
+                                    f'input (e.g. "" or "abc" from a blank Rule Machine slot), '
+                                    f'Groovy throws GroovyCastException before the comparison '
+                                    f'executes. The sandbox swallows the exception silently.'
+                                ),
+                                fix=(
+                                    f'Add `Integer pct = safeIntArg({param_name}, 0)` (or an '
+                                    f'appropriate fallback) before the comparison, then compare '
+                                    f'against `pct` instead of `{param_name}`. '
+                                    f'safeIntArg() from LevoitChildBaseLib never throws.'
+                                ),
+                            ))
+                            break
 
     return findings
 

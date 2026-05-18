@@ -929,8 +929,13 @@ def Boolean updateDevices()
         logDebug "BP22: probing updateDevices cycle for network recovery (last probe ${(int)(sinceLastProbe / 1000)}s ago)"
     }
 
-    // Stop if driver is reloading
+    // Stop if driver is reloading.
+    // Clear networkProbeInFlight before returning: the flag was set above (if a probe
+    // interval elapsed), but the try/finally that normally clears it begins AFTER this
+    // guard.  Without the clear, the flag stays true for the rest of the outage,
+    // permanently disarming the per-call circuit-breaker in sendBypassRequest().
     if (state.driverReloading) {
+        state.remove('networkProbeInFlight')
         logDebug "Skipping updateDevices - driver reloading"
         return false
     }

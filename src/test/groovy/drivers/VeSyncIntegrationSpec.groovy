@@ -4081,6 +4081,34 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         httpPostCalled
     }
 
+    def "updateDevices() clears networkProbeInFlight when driverReloading is true (A1 flag-leak fix)"() {
+        // Regression guard: state.networkProbeInFlight is set when a probe interval elapses,
+        // BEFORE the try/finally that clears it.  The driverReloading early-return executes
+        // between the flag-set and the try, so without the explicit clear the flag stays true
+        // for the rest of the outage — permanently disarming the per-call circuit-breaker in
+        // sendBypassRequest().  This test FAILS if state.remove('networkProbeInFlight') is
+        // removed from the driverReloading guard, and PASSES with the fix in place.
+        given: "outage state with expired probe interval"
+        settings.refreshInterval = 30
+        settings.debugOutput = true
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        long outageStart = driver.now() - 600000L
+        long staleProbe  = driver.now() - 360000L   // expired — cycle will arm as probe
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = staleProbe
+
+        and: "driver is flagged as reloading"
+        state.driverReloading = true
+
+        when: "updateDevices() is called — probe interval has elapsed so flag would be set"
+        driver.updateDevices()
+
+        then: "networkProbeInFlight is NOT left set (flag-leak prevented)"
+        !state.networkProbeInFlight
+    }
+
     def "updateDevices() clears networkProbeInFlight in finally block after probe cycle (R16)"() {
         // R16: networkProbeInFlight must be cleared at the end of updateDevices() regardless
         // of whether the probe cycle succeeded or failed. The try/finally guarantee ensures

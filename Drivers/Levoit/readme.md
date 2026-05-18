@@ -146,7 +146,7 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 | timerRemain | seconds | Auto-off timer remaining (0 if no timer set). |
 | pm25 | µg/m³ | Real-time PM2.5 reading. |
 | airQualityIndex | 1-4 | Levoit's categorical air-quality (1=excellent, 4=very bad). Distinct from the driver-computed US AQI (`aqi` attribute). |
-| airQuality | 0-500 | US-formula AQI (same value as `aqi`); an additive convenience attribute under the conventional name — the Hubitat AirQuality capability itself is satisfied by `airQualityIndex` (already present). |
+| airQuality | 0-500 | US-formula AQI (same value as `aqi`). This is an **additional convenience attribute** under the conventional name — it does NOT satisfy the Hubitat AirQuality capability requirement. The AirQuality capability requires the `airQualityIndex` attribute (the row above), which this driver populates with Levoit's native 1–4 categorical scale. Bind either attribute in automations; the capability requirement is met by `airQualityIndex`. |
 | aqi | 0-500 | US-formula AQI |
 | aqiDanger | string | Risk level for tile display |
 | aqiColor | hex | Color for HTML |

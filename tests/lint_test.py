@@ -2051,6 +2051,115 @@ class TestRule37BP26SafeIntArgFallbackCoercion:
 
 
 # ---------------------------------------------------------------------------
+# RULE37 extension — BP26 relational-comparison implicit coercion
+# ---------------------------------------------------------------------------
+
+class TestRule37BP26RelationalComparison:
+    """
+    RULE37 extension: a relational comparison (``<``, ``>``, ``<=``, ``>=``)
+    between an untyped command parameter and a numeric literal is a BP26
+    violation.  Groovy implicitly coerces the parameter to a number for the
+    comparison; on a non-numeric input (e.g. ``""`` from a blank Rule Machine
+    slot) it throws ``GroovyCastException`` before the comparison executes.
+    The sandbox swallows the exception silently.
+
+    This shape is distinct from the explicit ``as Integer`` / ``.toInteger()``
+    forms and requires a separate regex branch in the rule.
+
+    Dead-gate severity assertion: the finding MUST carry ``severity='FAIL'``
+    to block ``lint --strict``.
+
+    Non-vacuity contract: ``test_comparison_on_untyped_param_fails`` FAILS
+    when the RELATIONAL_RE branch is removed from the rule and PASSES with it
+    present.  Removing the ``else`` branch that calls RELATIONAL_RE makes this
+    test raise AssertionError; the branch's presence is what makes this test pass.
+    """
+
+    from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion as _rule
+
+    # BAD: untyped param compared directly with a numeric literal — must flag.
+    BAD_RELATIONAL = textwrap.dedent("""\
+        def setLevel(level) {
+            if (level == null) { logWarn "null"; return }
+            if (level < 10) { setNightLight("off") }
+            else if (level > 75) { setNightLight("on") }
+            else setNightLight("dim")
+        }
+    """)
+
+    # GOOD: param coerced through safeIntArg first — comparison is on the safe local.
+    GOOD_SAFE_LOCAL = textwrap.dedent("""\
+        def setLevel(level) {
+            if (!requireNotNull(level, "setLevel")) return
+            Integer pct = safeIntArg(level, 0, 0, 100)
+            if (pct < 10) { setNightLight("off") }
+            else if (pct > 75) { setNightLight("on") }
+            else setNightLight("dim")
+        }
+    """)
+
+    # GOOD: typed param — Hubitat sandbox enforces type at dispatch, comparison is safe.
+    GOOD_TYPED_PARAM = textwrap.dedent("""\
+        def setLevel(Integer level) {
+            if (level < 10) { setNightLight("off") }
+            else if (level > 75) { setNightLight("on") }
+        }
+    """)
+
+    # GOOD: comparison on state.x — state fields are NOT command parameters; must NOT flag.
+    GOOD_STATE_COMPARISON = textwrap.dedent("""\
+        def setMode(mode) {
+            if (!requireNotNull(mode, "setMode")) return
+            if (state.speed < 3) { logDebug "low" }
+        }
+    """)
+
+    def test_comparison_on_untyped_param_fails(self):
+        """
+        Relational comparison on untyped command param must flag RULE37 with severity FAIL.
+
+        Non-vacuity: this test FAILS when the RELATIONAL_RE branch of the rule is removed
+        and PASSES when the branch is present.  Removing the ``else`` block that iterates
+        RELATIONAL_RE from ``check_rule37_unsafe_int_coercion`` causes the ``assert any(...)``
+        call below to raise AssertionError — the finding list is empty without that branch.
+        """
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_RELATIONAL)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for relational comparison on untyped param, "
+            f"got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE37_unsafe_int_coercion'), (
+            f"RULE37 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_safe_local_after_safeintarg_passes(self):
+        """safeIntArg-guarded comparison on typed local must NOT flag."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_SAFE_LOCAL)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"safeIntArg-guarded comparison must not flag RULE37, got: {findings}"
+        )
+
+    def test_typed_param_comparison_passes(self):
+        """Typed parameter (Integer level) is exempt — sandbox enforces type at dispatch."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_TYPED_PARAM)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Typed param comparison must not flag RULE37, got: {findings}"
+        )
+
+    def test_state_field_comparison_passes(self):
+        """Comparison on state.x (not a param) must NOT flag RULE37."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_STATE_COMPARISON)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"state.field comparison must not flag RULE37, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # RULE20 version_lockstep — _extract_definition_block parser robustness
 # ---------------------------------------------------------------------------
 
