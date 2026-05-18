@@ -993,4 +993,45 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         then: "C3 gate suppressed the call because canon=='on'==currentValue"
         testParent.allRequests.findAll { it.method == "setDryingMode" }.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // BP25-truthy: doSet* shared-helper path (setDisplay / setAutoStop delegators)
+    // These methods delegate to LevoitHumidifierLib doSetDisplayScreenSwitch /
+    // doSetAutoStopSwitch.  The truthy-canon ternary in the shared helpers must
+    // emit "on" (not "true") and send the correct integer payload.
+    // These specs MUST FAIL if value: canon is reverted to value: val in
+    // LevoitHumidifierLib doSetDisplayScreenSwitch or doSetAutoStopSwitch.
+    // -------------------------------------------------------------------------
+
+    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("true")
+
+        then: "API call sent with screenSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setAutoStop('true') sends autoStopSwitch:1 and emits 'on' (doSet* path)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setAutoStop("true")
+
+        then: "API call sent with autoStopSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setAutoStopSwitch" }
+        req != null
+        req.data.autoStopSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("autoStopEnabled") == "on"
+    }
 }

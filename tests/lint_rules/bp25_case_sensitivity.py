@@ -33,12 +33,17 @@ Two sub-checks are performed:
     parameter without a prior toLowerCase() normalization.
 
   RULE33b (extended) — raw-normalized sendEvent:
-    A set* method uses toLowerCase() normalization but emits the raw normalized
-    variable in sendEvent instead of a truthy-derived canonical identifier.
-    The re-blessed canonical pattern derives canon via a ternary
-    ``(v in ["on","true","1","yes"]) ? "on" : "off"`` and emits canon.
+    A set* or doSet* shared-helper method uses toLowerCase() normalization but
+    emits the raw normalized variable in sendEvent instead of a truthy-derived
+    canonical identifier.  The re-blessed canonical pattern derives canon via a
+    ternary ``(v in ["on","true","1","yes"]) ? "on" : "off"`` and emits canon.
     Emitting `v` directly is non-canonical: truthy inputs "true"/"1"/"yes"
     would be stored as-is in the attribute instead of as "on".
+
+    The doSet* coverage is required because the blessed canonical reference
+    (LevoitHumidifierLib doSetDisplayScreenSwitch / doSetAutoStopSwitch) is
+    itself a doSet*-named method; the check must be able to catch a regression
+    in the reference implementation itself.
 
 Detection algorithm (RULE33a):
   For each .groovy file under Drivers/Levoit/:
@@ -53,7 +58,7 @@ Detection algorithm (RULE33a):
 
 Detection algorithm (RULE33b):
   For each .groovy file under Drivers/Levoit/:
-    For each method whose name starts with 'set':
+    For each method whose name starts with 'set' OR 'doSet':
       1. Extract the method body.
       2. Skip if no toLowerCase() call present (RULE33a covers those).
       3. Extract the sendEvent value identifier.
@@ -70,8 +75,12 @@ Detection algorithm (RULE33b):
          identifier (no truthy-canon ternary), passes the binary discriminator,
          AND has no strict enum-rejection gate → RULE33b FAIL.
 
-    Both sub-checks skip: inline delegators, methods with first param name
-    'v'/'sw'/'val', and exempted (file, method) pairs.
+    RULE33a skips methods with first param name 'v'/'sw'/'val' (short normalized
+    aliases indicating upstream normalization has already occurred).  RULE33b
+    does NOT apply this skip: RULE33b's job is detecting raw-normalized-var
+    emission, not raw-parameter comparison; a method named doSetFoo(val) that
+    emits `val` without a canon ternary would still be non-canonical.
+    Both sub-checks skip exempted (file, method) pairs.
 
 False-positive protection:
   - RULE33b skips methods where the sendEvent value is a string literal "on"/"off"
@@ -81,7 +90,9 @@ False-positive protection:
   - RULE33b skips methods that use strict enum-rejection gates (the strict gate
     guarantees the normalized var is already canonical after the gate — these
     are correctly identified by the presence of an in ["on","off"] gate with no
-    truthy variants in the rejection list).
+    truthy variants in the rejection list).  This exempts LevoitFanLib's
+    doSetDisplayScreenSwitch and doSetMuteSwitch (strict-enum fan-line
+    intentional behavioral divergence from LevoitHumidifierLib).
   - RULE33b skips mode/multi-state setters via the binary discriminator: the
     emitted identifier must appear in a binary on/off comparison in the method
     body.  setMode, setNightLight (three-state), setNightlightMode (three-state)
@@ -104,12 +115,24 @@ from lint_rules._helpers import make_finding
 
 DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
 
-# Regex to find 'set*' method definitions. Captures the first parameter only.
+# Regex to find 'set*' method definitions (RULE33a only).
+# Captures the first parameter only.
 # Matches both single-param (setDisplay(onOff)) and multi-param with defaults
 # (setNightlight(onOff, brightness = null, colorTemp = null)).
 # Group 1: method_name, Group 2: first_param_name
 SET_METHOD_RE = re.compile(
     r'^\s*def\s+(set\w+)\s*\(\s*(\w+)\s*(?:[,=)])',
+    re.MULTILINE,
+)
+
+# Regex for RULE33b: matches both 'set*' AND 'doSet*' method definitions.
+# doSet* shared-helper coverage is required so the blessed canonical reference
+# (LevoitHumidifierLib doSetDisplayScreenSwitch / doSetAutoStopSwitch) can be
+# audited for regressions.  The _STRICT_GATE_RE exemption handles LevoitFanLib's
+# strict-enum doSet* helpers (fan-line intentional behavioral divergence).
+# Group 1: method_name, Group 2: first_param_name
+SET_OR_DOSET_METHOD_RE = re.compile(
+    r'^\s*def\s+((?:doSet|set)\w+)\s*\(\s*(\w+)\s*(?:[,=)])',
     re.MULTILINE,
 )
 
@@ -284,8 +307,9 @@ def check_rule33b_raw_normalized_sendevent(
     path, raw_lines, cleaned_lines, raw_text, config, rel_base
 ):
     """
-    RULE33b: Fail if a set* method normalizes with toLowerCase() but emits the
-    raw normalized variable in sendEvent instead of a truthy-derived canonical value.
+    RULE33b: Fail if a set* or doSet* method normalizes with toLowerCase() but
+    emits the raw normalized variable in sendEvent instead of a truthy-derived
+    canonical value.
 
     The re-blessed canonical pattern derives the emitted value via a ternary:
         String canon = (v in [...]) ? "on" : "off"
@@ -293,6 +317,11 @@ def check_rule33b_raw_normalized_sendevent(
 
     Emitting the raw normalized variable `v` is non-canonical: truthy inputs
     "true"/"1"/"yes" would be stored as-is in the attribute instead of as "on".
+
+    doSet* shared-helper methods are included so regressions in the blessed
+    canonical reference (LevoitHumidifierLib doSetDisplayScreenSwitch /
+    doSetAutoStopSwitch) are caught.  LevoitFanLib's strict-enum doSet* helpers
+    are correctly excluded by the _STRICT_GATE_RE guard.
     """
     findings = []
 
@@ -306,7 +335,7 @@ def check_rule33b_raw_normalized_sendevent(
     file_rel = str(path.relative_to(rel_base)).replace('\\', '/')
     exemption_set = _build_exemption_set(config)
 
-    for m in SET_METHOD_RE.finditer(raw_text):
+    for m in SET_OR_DOSET_METHOD_RE.finditer(raw_text):
         method_name = m.group(1)
         param_name = m.group(2)
 

@@ -81,6 +81,21 @@ Scope: a method is an in-scope boolean on/off setter under ONE of two shapes:
     LevoitFanLib and LevoitHumidifierLib is the architectural mitigation; this
     risk is bounded by that established convention.
 
+Bounded residual — raw-truthy-superset emit shape:
+    _is_onoff_emitting() recognizes three shapes: (a) literal "on"/"off" in
+    sendEvent, (b) identifier assigned via .toLowerCase() + binary on/off
+    comparison, (c) identifier assigned via ? "on" : "off" ternary.  A fourth
+    hypothetical shape — a binary on/off setter that validates via a truthy-
+    superset list (e.g., `val in ["on","true","1","yes"]`) but emits the raw
+    normalized var without a canon ternary — is not recognized by any of the
+    three shapes and would not be enumerated by this verifier.  Zero real
+    instances of this shape exist in the codebase as of v2.6 post-sweep (RULE33b
+    in bp25_case_sensitivity.py enforces the canon-ternary requirement on all
+    set*/doSet* methods, which closes the production gap).  This residual is
+    noted for transparency; it is NOT a gap that requires a predicate fix here
+    because manufacturing such a predicate to cover a zero-instance hypothetical
+    would risk over-flagging real drivers.
+
 Explicitly excluded from scope regardless of behavioral predicate match:
   - setAutoMode  -- takes a mode-enum string, not on/off; sendEvent emits
                     "autoPreference", not an on/off attribute. Predicates

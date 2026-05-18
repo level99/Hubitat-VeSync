@@ -8,10 +8,25 @@ verifies that each such site carries a BP24 classification comment.
 
 A NO-ON site is behaviorally identified by ALL of the following:
 
-  (1) The method is a boolean on/off setter (same predicate as check_c3_gate_coverage:
-      normalizes against on/off semantics, makes a direct API call or delegates to
-      a same-file doSet* callee, and emits an on/off attribute via sendEvent OR is
-      an inline pass-through delegator to a shared doSet* helper).
+  (1) The method is a boolean on/off setter — three recognized shapes:
+
+      Standard shape: normalizes against on/off semantics, makes a direct API
+      call or delegates to a same-file doSet* callee, and emits an on/off
+      attribute via sendEvent.
+
+      Non-emitting API setter shape: normalizes against on/off semantics, makes
+      a direct API call, but deliberately emits NO attribute (the attribute
+      reflects hardware runtime state polled separately, not the user preference
+      that this method writes).  Sole present codebase member: LevoitSuperior6000S
+      setDryingMode.  This shape is enumerated by two behavioral discriminators:
+      (a) a `? 1 : 0` binary-coercion ternary must be present (excludes mode/speed
+      setters); (b) the body must NOT call safeIntArg() (excludes duration/level
+      commands like setTimer whose on/off handling is an incidental secondary-param
+      validation, not the method's governing decision).  Both are behavior-derived
+      so future non-emitting preference setters are automatically covered.
+
+      Inline delegator shape: a 1-line pass-through stub delegating to a shared
+      doSet* helper that is itself on/off-semantic.
 
   (2) The method body (and its callee, for split-gate delegators) does NOT call
       ensureSwitchOn() — auto-on is NOT implied by this setter.
@@ -74,6 +89,12 @@ _ONOFF_COMPARISON_RE = re.compile(
     r'|in\s*\[\s*"on"\s*,\s*"off"\s*\]',
     re.IGNORECASE,
 )
+
+# Binary integer-coercion discriminator for the non-emitting API setter shape.
+# A binary on/off setter coerces its on/off decision into a 0 or 1 integer for
+# the API payload: `? 1 : 0` or `? 0 : 1` (order depends on convention).
+# Mode/speed setters map to enums or level integers, not to a binary 0/1 ternary.
+_BINARY_COERCE_RE = re.compile(r'\?\s*1\s*:\s*0|\?\s*0\s*:\s*1')
 
 _DIRECT_API_CALL_RE = re.compile(
     r"hubBypass\(|parent\.sendBypassRequest\("
@@ -257,10 +278,30 @@ def _is_callee_onoff_semantic(callee_body: str) -> bool:
 def is_behavioral_onoff_setter(method_name: str, body: str, source: str) -> bool:
     if method_name in EXCLUDED_METHOD_NAMES:
         return False
+    # Standard shape: normalizes + API call + emits on/off attribute.
     if (bool(_NORMALIZE_RE.search(body))
             and bool(_API_CALL_RE.search(body))
             and _is_onoff_emitting(body)):
         return True
+    # Non-emitting API setter shape: normalizes + direct API call but no sendEvent.
+    # Captures binary on/off preference setters whose attribute reflects hardware
+    # runtime state polled separately (e.g. setDryingMode whose dryingMode attribute
+    # is poll-populated).  Three discriminators together select the genuine members:
+    #   (1) Binary-coercion (_BINARY_COERCE_RE): requires `? 1 : 0` or `? 0 : 1`
+    #       in the body — excludes mode/speed setters that map to enum strings or
+    #       multi-level integers.
+    #   (2) No numeric-primary-arg coercion: excludes methods that coerce their
+    #       primary (first) parameter via safeIntArg() — that signature identifies
+    #       duration/level/numeric commands (setTimer, setMistLevel, etc.) whose
+    #       on/off handling is an incidental secondary-param validation, not the
+    #       method's governing decision.  Binary on/off preference setters take only
+    #       an on/off argument and therefore never call safeIntArg().
+    if (bool(_NORMALIZE_RE.search(body))
+            and bool(_DIRECT_API_CALL_RE.search(body))
+            and not _is_onoff_emitting(body)
+            and "safeIntArg(" not in body):
+        if bool(_BINARY_COERCE_RE.search(body)):
+            return True
     # Split-gate delegator: gate-holder with on/off-semantic callee in same file.
     if bool(_NORMALIZE_RE.search(body)):
         callee_body = _resolve_delegate_callee_body(method_name, body, source)
