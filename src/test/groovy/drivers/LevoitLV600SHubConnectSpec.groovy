@@ -672,6 +672,47 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP25-truthy: doSet* shared-helper path (setDisplay delegator)
+    // LV600SHubConnect.setDisplay delegates to LevoitHumidifierLib
+    // doSetDisplayScreenSwitch.  The truthy-canon ternary in the shared helper
+    // must emit "on" (not "true" or "1") and send screenSwitch:1.
+    // These specs MUST FAIL if value: canon is reverted to value: val in
+    // LevoitHumidifierLib doSetDisplayScreenSwitch.
+    // -------------------------------------------------------------------------
+
+    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("true")
+
+        then: "API call sent with screenSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('1') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("1")
+
+        then: "API call sent with screenSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw '1'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    // -------------------------------------------------------------------------
     // Auto-stop: passive read only (no setter command)
     // -------------------------------------------------------------------------
 

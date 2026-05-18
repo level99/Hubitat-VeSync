@@ -100,6 +100,91 @@ _DIRECT_API_CALL_RE = re.compile(
     r"hubBypass\(|parent\.sendBypassRequest\("
 )
 
+# Regex to extract the first parameter name from a method signature.
+# Handles both untyped params (`def setX(onOff)`) and type-annotated params
+# (`def setX(String onOff)`, `def setX(final String onOff)`) by optionally
+# consuming a leading `final` keyword and/or a leading type token before
+# capturing the actual parameter identifier.
+# The optional groups backtrack when there is only one identifier before the
+# first parameter delimiter, ensuring the common untyped case is handled
+# correctly without requiring a type annotation.
+# Delimiter set [,=):] anchors capture to a genuine parameter boundary:
+#   , — next param     = — default value     ) — end of params     : — named arg
+_FIRST_PARAM_RE = re.compile(
+    r"^\s*def\s+\w+\s*\(\s*"
+    r"(?:final\s+)?"
+    r"(?:[A-Za-z_]\w*\s+)?"
+    r"([A-Za-z_]\w*)\s*[,=):]",
+)
+
+
+def _strip_comments_and_strings(text: str) -> str:
+    """
+    Return text with // line comments and /* */ block comments removed,
+    and string literal contents replaced by empty placeholders.
+
+    This prevents code comments or string literals that contain the text
+    `safeIntArg(` from matching structural body-content tests.
+    """
+    result = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == '/' and i + 1 < n and text[i + 1] == '/':
+            end = text.find('\n', i)
+            if end < 0:
+                break
+            result.append('\n')
+            i = end + 1
+            continue
+        if c == '/' and i + 1 < n and text[i + 1] == '*':
+            end = text.find('*/', i + 2)
+            if end < 0:
+                break
+            newlines = text[i:end + 2].count('\n')
+            result.append('\n' * newlines)
+            i = end + 2
+            continue
+        if c == '"' and text[i:i + 3] == '"""':
+            end = text.find('"""', i + 3)
+            if end < 0:
+                result.append('""""""')
+                break
+            newlines = text[i:end + 3].count('\n')
+            result.append('""' + '\n' * newlines + '""')
+            i = end + 3
+            continue
+        if c == '"':
+            i += 1
+            while i < n:
+                ch = text[i]
+                if ch == '\\':
+                    i += 2
+                    continue
+                if ch == '"':
+                    i += 1
+                    break
+                i += 1
+            result.append('""')
+            continue
+        if c == "'":
+            i += 1
+            while i < n:
+                ch = text[i]
+                if ch == '\\':
+                    i += 2
+                    continue
+                if ch == "'":
+                    i += 1
+                    break
+                i += 1
+            result.append("''")
+            continue
+        result.append(c)
+        i += 1
+    return ''.join(result)
+
 ENSURE_SWITCH_ON_RE = re.compile(r"\bensureSwitchOn\s*\(")
 
 BP24_NO_ON_RE = re.compile(r"BP24:\s*NO-ON")
@@ -290,17 +375,30 @@ def is_behavioral_onoff_setter(method_name: str, body: str, source: str) -> bool
     #   (1) Binary-coercion (_BINARY_COERCE_RE): requires `? 1 : 0` or `? 0 : 1`
     #       in the body — excludes mode/speed setters that map to enum strings or
     #       multi-level integers.
-    #   (2) No numeric-primary-arg coercion: excludes methods that coerce their
-    #       primary (first) parameter via safeIntArg() — that signature identifies
+    #   (2) No primary-parameter numeric coercion: excludes methods whose FIRST
+    #       parameter is coerced via safeIntArg() — that signature identifies
     #       duration/level/numeric commands (setTimer, setMistLevel, etc.) whose
     #       on/off handling is an incidental secondary-param validation, not the
     #       method's governing decision.  Binary on/off preference setters take only
-    #       an on/off argument and therefore never call safeIntArg().
+    #       an on/off argument; their first param is never safeIntArg-coerced.
+    #       Detection is scoped to `safeIntArg(<firstParam>` to avoid false positives
+    #       from: (a) code comments containing the literal text safeIntArg(; (b) a
+    #       genuine on/off setter that calls safeIntArg() on an optional secondary
+    #       numeric parameter — only the first/primary param coercion is the signal.
     if (bool(_NORMALIZE_RE.search(body))
             and bool(_DIRECT_API_CALL_RE.search(body))
-            and not _is_onoff_emitting(body)
-            and "safeIntArg(" not in body):
-        if bool(_BINARY_COERCE_RE.search(body)):
+            and not _is_onoff_emitting(body)):
+        first_param_m = _FIRST_PARAM_RE.match(body.splitlines()[0]) if body.splitlines() else None
+        first_param = first_param_m.group(1) if first_param_m else None
+        body_clean = _strip_comments_and_strings(body)
+        primary_is_safeint = (
+            first_param is not None
+            and bool(re.search(
+                r'\bsafeIntArg\s*\(\s*' + re.escape(first_param) + r'\b',
+                body_clean,
+            ))
+        )
+        if not primary_is_safeint and bool(_BINARY_COERCE_RE.search(body)):
             return True
     # Split-gate delegator: gate-holder with on/off-semantic callee in same file.
     if bool(_NORMALIZE_RE.search(body)):

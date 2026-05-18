@@ -1537,6 +1537,151 @@ class TestRule33CaseSensitivity:
 
 
 # ---------------------------------------------------------------------------
+# RULE33b — BP25 raw-normalized sendEvent (set* and doSet* methods)
+# ---------------------------------------------------------------------------
+
+class TestRule33bRawNormalizedSendEvent:
+    """
+    RULE33b (Bug Pattern #25 sub-check): a set* or doSet* method that normalizes
+    with toLowerCase() but emits the raw normalized variable in sendEvent instead
+    of a truthy-canon-derived identifier must be flagged.
+
+    The re-blessed canonical pattern:
+        String v    = (onOff as String).trim().toLowerCase()
+        String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+        device.sendEvent(name:"attr", value: canon)
+
+    Emitting `v` directly (not `canon`) is non-canonical: truthy inputs
+    "true"/"1"/"yes" would be stored verbatim in the attribute instead of "on".
+    """
+
+    from lint_rules.bp25_case_sensitivity import check_rule33b_raw_normalized_sendevent as _rule
+
+    # (i) bad-path: set* method normalizes then emits raw normalized var → RULE33b
+    BAD_SET_EMITS_RAW = textwrap.dedent("""\
+        def setChildLock(onOff) {
+            if (!requireNotNull(onOff, "setChildLock")) return
+            String v = (onOff as String).trim().toLowerCase()
+            if (device.currentValue("childLock") == v) return true
+            Integer sw = (v == "on") ? 1 : 0
+            hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${v})")
+            device.sendEvent(name:"childLock", value: v)
+        }
+    """)
+
+    # (ii) good-path: set* method uses truthy-canon ternary → 0 findings
+    GOOD_SET_EMITS_CANON = textwrap.dedent("""\
+        def setChildLock(onOff) {
+            if (!requireNotNull(onOff, "setChildLock")) return
+            String v = (onOff as String).trim().toLowerCase()
+            String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+            if (device.currentValue("childLock") == canon) return true
+            Integer sw = (canon == "on") ? 1 : 0
+            hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${canon})")
+            device.sendEvent(name:"childLock", value: canon)
+        }
+    """)
+
+    # (iii) doSet* bad-path: doSet* helper emits raw val → RULE33b flags it
+    # This is the test that FAILS if SET_OR_DOSET_METHOD_RE is narrowed back to
+    # set*-only (i.e. if the doSet prefix anchor is removed from the regex).
+    BAD_DOSET_EMITS_RAW = textwrap.dedent("""\
+        def doSetDisplayScreenSwitch(onOff) {
+            if (!requireNotNull(onOff, "doSetDisplayScreenSwitch")) return
+            String val = (onOff as String).trim().toLowerCase()
+            if (device.currentValue("displayOn") == val) return true
+            Integer sw = (val == "on") ? 1 : 0
+            hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${val})")
+            device.sendEvent(name:"displayOn", value: val)
+        }
+    """)
+
+    # (iii) doSet* good-path: doSet* helper emits canon → 0 findings
+    GOOD_DOSET_EMITS_CANON = textwrap.dedent("""\
+        def doSetDisplayScreenSwitch(onOff) {
+            if (!requireNotNull(onOff, "doSetDisplayScreenSwitch")) return
+            String val = (onOff as String).trim().toLowerCase()
+            String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+            if (device.currentValue("displayOn") == canon) return true
+            Integer sw = (canon == "on") ? 1 : 0
+            hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${canon})")
+            device.sendEvent(name:"displayOn", value: canon)
+        }
+    """)
+
+    # (iv) strict-enum exemption: FanLib-shaped doSet* with in ["on","off"] gate
+    # emitting raw s → NOT flagged (_STRICT_GATE_RE exemption).
+    GOOD_DOSET_STRICT_GATE = textwrap.dedent("""\
+        def doSetDisplayScreenSwitch(onOff) {
+            if (!requireNotNull(onOff, "doSetDisplayScreenSwitch")) return
+            String s = (onOff as String).trim().toLowerCase()
+            if (!(s in ["on","off"])) { logWarn "invalid"; return }
+            Integer sw = (s == "on") ? 1 : 0
+            hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${s})")
+            device.sendEvent(name:"displayOn", value: s)
+        }
+    """)
+
+    def test_set_emits_raw_normalized_fails(self):
+        """set* emitting raw toLowerCase var in sendEvent must flag RULE33b with severity FAIL."""
+        from lint_rules.bp25_case_sensitivity import check_rule33b_raw_normalized_sendevent
+        findings = run_rule(check_rule33b_raw_normalized_sendevent, self.BAD_SET_EMITS_RAW)
+        assert any(f['rule_id'] == 'RULE33b_raw_normalized_sendevent' for f in findings), (
+            f"Expected RULE33b_raw_normalized_sendevent for set* emitting raw v, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE33b_raw_normalized_sendevent'), (
+            f"RULE33b finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_set_emits_canon_passes(self):
+        """set* emitting truthy-canon-derived identifier must NOT flag RULE33b."""
+        from lint_rules.bp25_case_sensitivity import check_rule33b_raw_normalized_sendevent
+        findings = run_rule(check_rule33b_raw_normalized_sendevent, self.GOOD_SET_EMITS_CANON)
+        assert not any(f['rule_id'] == 'RULE33b_raw_normalized_sendevent' for f in findings), (
+            f"Canon-emitting set* must not flag RULE33b, got: {findings}"
+        )
+
+    def test_doset_emits_raw_normalized_fails(self):
+        """
+        doSet* emitting raw val in sendEvent must flag RULE33b.
+
+        Non-vacuity contract: this test FAILS if SET_OR_DOSET_METHOD_RE is
+        narrowed back to set*-only (removing the doSet prefix), because then the
+        doSet*-named method falls outside the rule's scan scope entirely.
+        Restoring the doSet prefix to the regex makes this test pass.
+        """
+        from lint_rules.bp25_case_sensitivity import check_rule33b_raw_normalized_sendevent
+        findings = run_rule(check_rule33b_raw_normalized_sendevent, self.BAD_DOSET_EMITS_RAW)
+        assert any(f['rule_id'] == 'RULE33b_raw_normalized_sendevent' for f in findings), (
+            f"Expected RULE33b_raw_normalized_sendevent for doSet* emitting raw val, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE33b_raw_normalized_sendevent'), (
+            f"RULE33b finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_doset_emits_canon_passes(self):
+        """doSet* emitting truthy-canon-derived identifier must NOT flag RULE33b."""
+        from lint_rules.bp25_case_sensitivity import check_rule33b_raw_normalized_sendevent
+        findings = run_rule(check_rule33b_raw_normalized_sendevent, self.GOOD_DOSET_EMITS_CANON)
+        assert not any(f['rule_id'] == 'RULE33b_raw_normalized_sendevent' for f in findings), (
+            f"Canon-emitting doSet* must not flag RULE33b, got: {findings}"
+        )
+
+    def test_doset_strict_enum_gate_passes(self):
+        """
+        FanLib-shaped doSet* with strict in ["on","off"] gate and no truthy variants
+        must NOT flag RULE33b — the _STRICT_GATE_RE exemption applies.
+        """
+        from lint_rules.bp25_case_sensitivity import check_rule33b_raw_normalized_sendevent
+        findings = run_rule(check_rule33b_raw_normalized_sendevent, self.GOOD_DOSET_STRICT_GATE)
+        assert not any(f['rule_id'] == 'RULE33b_raw_normalized_sendevent' for f in findings), (
+            f"Strict-gate doSet* must not flag RULE33b, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # RULE34 — BP14 poll persistence (VeSyncIntegration only)
 # ---------------------------------------------------------------------------
 
@@ -1984,8 +2129,9 @@ class TestRule37BP26SafeIntArgFallbackCoercion:
 
     Dead-gate severity assertion: the finding MUST carry ``severity='FAIL'``
     to block ``lint --strict``.  A missing or wrong severity key produces a
-    vacuous guard — identical to the Tier-9 false-negative that prompted adding
-    this class of test.
+    vacuous guard: the test passes even when the rule emits findings that would
+    not gate the CI run, making the test appear green while the enforcement is
+    absent.
     """
 
     from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion as _rule

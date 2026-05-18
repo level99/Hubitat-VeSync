@@ -132,7 +132,7 @@ SET_METHOD_RE = re.compile(
 # strict-enum doSet* helpers (fan-line intentional behavioral divergence).
 # Group 1: method_name, Group 2: first_param_name
 SET_OR_DOSET_METHOD_RE = re.compile(
-    r'^\s*def\s+((?:doSet|set)\w+)\s*\(\s*(\w+)\s*(?:[,=)])',
+    r'^\s*def\s+((?:doSet|set)[A-Z]\w*)\s*\(\s*(\w+)\s*(?:[,=)])',
     re.MULTILINE,
 )
 

@@ -175,19 +175,6 @@ def find_safeintarg_command_methods(driver_source: str) -> list[str]:
             "getDevices", "updateDevices", "sendBypassRequest",
             "isNightlightVariant",
         }
-        # Behavior-based skip for doSet* shared helpers: only include a doSet*
-        # method if its body actually calls safeIntArg() — that is, if the body
-        # is already past the outer `if "safeIntArg(" in body:` gate below.
-        # doSet* helpers that do NOT call safeIntArg() have no BP26 coercion to
-        # guard, so spec coverage is not required.  This is derived from the body
-        # content, not from a hardcoded name list, so any future doSet* helper
-        # that gains a safeIntArg() call automatically comes into scope.
-        # (Note: the safeIntArg() gate further below provides the same exclusion
-        # for non-doSet* methods; this guard is a cheap short-circuit for the
-        # doSet* family specifically, preventing confusion with the name-exclusion
-        # pattern previously used for doSetDisplayScreenSwitch/doSetAutoStopSwitch.)
-        if name.startswith("doSet") and "safeIntArg(" not in body:
-            continue
         if name in skip_names:
             continue
 
