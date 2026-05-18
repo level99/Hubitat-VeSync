@@ -75,6 +75,12 @@ Scope: a method is an in-scope boolean on/off setter under ONE of two shapes:
     its own name inside a string literal (e.g., logDebug "handleDisplayOn()")
     as a recursive self-delegation.
 
+    Cross-file on/off-semantic callee risk: a cross-file handle*/doSet* callee
+    would escape the same-file constraint's scope and be misclassified as not
+    found. The doSet* naming convention for shared on/off terminal helpers in
+    LevoitFanLib and LevoitHumidifierLib is the architectural mitigation; this
+    risk is bounded by that established convention.
+
 Explicitly excluded from scope regardless of behavioral predicate match:
   - setAutoMode  -- takes a mode-enum string, not on/off; sendEvent emits
                     "autoPreference", not an on/off attribute. Predicates
@@ -312,7 +318,7 @@ def _is_onoff_emitting(body: str) -> bool:
     Return True when the method body emits an on/off-valued attribute via sendEvent,
     determined behaviorally without enumerating variable names.
 
-    Two recognized shapes:
+    Three recognized shapes:
 
     (a) sendEvent value is the string literal "on" or "off" directly.
 
@@ -325,6 +331,14 @@ def _is_onoff_emitting(body: str) -> bool:
         (e.g. `s` in `doSetMuteSwitch` with `s in ["on","off"]`) from
         mode-enum-normalized identifiers (e.g. `m` in `setMode` with
         `m in ["auto","sleep"]`) — the latter do not satisfy (b2).
+
+    (c) sendEvent value is an identifier X that is assigned via a ternary
+        expression that produces exactly the string literals "on" and "off"
+        (the canonical truthy-coercion pattern):
+            String X = (... ? "on" : "off")
+        This shape is the re-blessed BP25 canonical pattern; the assignment
+        RHS does not contain .toLowerCase() but the ternary guarantees the
+        emitted value is always a canonical on/off string.
     """
     val = _extract_sendEvent_value(body)
     if val is None:
@@ -334,7 +348,7 @@ def _is_onoff_emitting(body: str) -> bool:
     if val in ('"on"', '"off"', "'on'", "'off'"):
         return True
 
-    # (b) Identifier: trace assignment to on/off normalization AND verify on/off context.
+    # (b) and (c): Identifier — trace assignment shape.
     # Match bare identifiers (Groovy variable names) only.
     if re.match(r'^[a-zA-Z_]\w*$', val):
         assign_re = re.compile(
@@ -343,8 +357,8 @@ def _is_onoff_emitting(body: str) -> bool:
         )
         for am in assign_re.finditer(body):
             rhs = am.group(1)
+            # (b) Assignment via .toLowerCase() normalization with on/off comparison.
             if '.toLowerCase()' in rhs or '.toLower()' in rhs:
-                # Verify the identifier appears in an on/off comparison in the body.
                 onoff_context_re = re.compile(
                     r'\b' + re.escape(val) + r'\b'
                     r'.*?(?:==\s*"on"|==\s*"off"|in\s*\["on")',
@@ -352,6 +366,9 @@ def _is_onoff_emitting(body: str) -> bool:
                 )
                 if onoff_context_re.search(body):
                     return True
+            # (c) Assignment via ternary producing "on"/"off" — canonical truthy pattern.
+            if re.search(r'\?\s*"on"\s*:\s*"off"', rhs):
+                return True
 
     return False
 

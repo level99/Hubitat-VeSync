@@ -17,7 +17,8 @@ import support.TestParent
  *   Bug Pattern #12 — pref-seed fires when descriptionTextEnable is null, preserves false
  *   Happy path      — full applyStatus from LAP-V201S.yaml emits expected events (canonical values)
  *   Bug Pattern #25 — setChildLock/setDisplay('ON') uppercase sends correct payload (1 not 0),
- *                      C3 gate works correctly with uppercase input, emitted event is lowercase
+ *                      C3 gate works correctly with uppercase input, emitted event is lowercase;
+ *                      truthy inputs ('true','1') canonicalized to 'on' (not stored verbatim)
  */
 class LevoitVital200SSpec extends HubitatSpec {
 
@@ -995,5 +996,102 @@ class LevoitVital200SSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "addTimerV2" }
         req != null
         req.data.tmgEvt?.clkSec == 300
+    }
+
+    // -----------------------------------------------------------------------
+    // BP25-truthy: truthy-input assertions — regression guards for canon ternary.
+    // "ON" tests above prove toLowerCase() normalization.  These prove the canon
+    // ternary: reverting sendEvent(canon) → sendEvent(val) would store "true" or
+    // "1" verbatim, failing these assertions.
+    // -----------------------------------------------------------------------
+
+    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits childLock='on' (Vital 200S)"() {
+        // Pre-canon: v="true"; sendEvent(value:"true"). Post-canon: canon="on"; sendEvent(value:"on").
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when:
+        driver.setChildLock("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits childLock='on' (Vital 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when:
+        driver.setChildLock("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits display='on' (Vital 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "off"])
+
+        when:
+        driver.setDisplay("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('1') sends screenSwitch:1 and emits display='on' (Vital 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "off"])
+
+        when:
+        driver.setDisplay("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25-truthy: setLightDetection('true') sends lightDetectionSwitch:1 and emits lightDetection='on' (Vital 200S)"() {
+        // setLightDetection is a Vital200S per-driver method, not in VitalPurifierLib.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setLightDetection("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 1
+        lastEventValue("lightDetection") == "on"
+    }
+
+    def "BP25-truthy: setLightDetection('1') sends lightDetectionSwitch:1 and emits lightDetection='on' (Vital 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setLightDetection("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 1
+        lastEventValue("lightDetection") == "on"
     }
 }

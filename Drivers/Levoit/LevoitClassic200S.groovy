@@ -177,7 +177,7 @@ def off(){
 // Payload: {mode: <value>} -- same as Classic 300S, NOT {workMode: <value>} (V2-class devices)
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     // CROSS-CHECK: only auto and manual are valid for Classic 200S (no sleep per device_map.py)
     // Validate BEFORE ensureSwitchOn() so invalid input does not auto-turn on an off device.
@@ -253,17 +253,20 @@ def setHumidity(percent){
 //   and Classic200S.yaml fixture (turn_on_display/turn_off_display use setIndicatorLightSwitch).
 //   Refutation: community user reports setIndicatorLightSwitch rejected (inner code -1) and
 //     setDisplay with {state: bool} works --> swap to setDisplay; file pyvesync issue.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return false
     String val = (onOff as String).trim().toLowerCase()
-    if (device.currentValue("displayOn") == val) return  // C3 state-change gate
-    Boolean v = (val == "on")
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("displayOn") == canon) return  // C3 state-change gate
+    Boolean v = (canon == "on")
     // Classic 200S: setIndicatorLightSwitch with {enabled, id} -- NOT setDisplay with {state}
-    def resp = hubBypass("setIndicatorLightSwitch", [enabled: v, id: 0], "setIndicatorLightSwitch(${val})")
+    def resp = hubBypass("setIndicatorLightSwitch", [enabled: v, id: 0], "setIndicatorLightSwitch(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: val)
-        logInfo "Display: ${val}"
+        device.sendEvent(name:"displayOn", value: canon)
+        logInfo "Display: ${canon}"
     } else {
         logError "Display write failed"
         recordError("Display write failed", [method:"setIndicatorLightSwitch"])
@@ -272,6 +275,7 @@ def setDisplay(onOff){
 
 // ---------- Auto-stop ----------
 // setAutomaticStop payload: {enabled: bool} -- same as Classic 300S / Dual 200S (VeSyncHumid200300S base)
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
     if (!requireNotNull(onOff, "setAutoStop")) return false
@@ -279,11 +283,13 @@ def setAutoStop(onOff){
     // "ON" from Rule Machine bypasses the gate and evaluates ("ON"=="on") as false
     // → sets enabled:false (disables auto-stop) when the intent was to enable it.
     String v = (onOff as String).trim().toLowerCase()
-    if (device.currentValue("autoStopEnabled") == v) return  // C3 state-change gate
-    def resp = hubBypass("setAutomaticStop", [enabled: (v == "on")], "setAutomaticStop(${v})")
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("autoStopEnabled") == canon) return  // C3 state-change gate
+    def resp = hubBypass("setAutomaticStop", [enabled: (canon == "on")], "setAutomaticStop(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: v)
-        logInfo "Auto-stop: ${v}"
+        device.sendEvent(name:"autoStopEnabled", value: canon)
+        logInfo "Auto-stop: ${canon}"
     } else {
         logError "Auto-stop write failed"
         recordError("Auto-stop write failed", [method:"setAutomaticStop"])

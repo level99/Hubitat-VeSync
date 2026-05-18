@@ -175,7 +175,7 @@ def off(){
 // No firmware-variant issue documented for 1000S (canonical pyvesync fixture uses 'auto').
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     def resp = hubBypass("setHumidityMode", [workMode: m], "setHumidityMode(${m})")
@@ -230,7 +230,9 @@ def setHumidity(percent){
 }
 
 // V2-line shared body via lib; delegators preserve method-presence semantics.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 
 // ---------- Nightlight (WEUR only -- runtime-gated) ----------
@@ -264,6 +266,7 @@ private boolean isNightlightVariant(){
 // No C3 idempotency gate: two calls with the same on/off value but different brightness
 // arguments send different payloads to the device. Comparing only the nightlightOn attribute
 // would incorrectly suppress a legitimate brightness change that accompanies the same state.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setNightlight(onOff, brightness = null){
     logDebug "setNightlight(${onOff}, ${brightness})"
     if (!requireNotNull(onOff, "setNightlight")) return

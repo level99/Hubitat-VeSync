@@ -154,7 +154,7 @@ metadata {
 // Both routes funnel through the same sendLevel() internal helper (provided by LevoitFanLib).
 def setSpeed(spd){
     logDebug "setSpeed(${spd})"
-    if (spd == null) { logWarn "setSpeed called with null spd (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(spd, "setSpeed")) return
     // Short-circuit power commands before the auto-on guard.
     // setSpeed("off") must NOT trigger ensureSwitchOn() — the intent is explicitly to turn off.
     // setSpeed("on") short-circuits here too for symmetry (on() does everything needed).
@@ -210,7 +210,7 @@ def setSpeed(spd){
 //     correct API literal --> remove the reverse-mapping and send "sleep" directly.
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["normal","turbo","auto","sleep"])) {
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|auto|sleep"
@@ -231,12 +231,15 @@ def setMode(mode){
 
 // ---------- Feature setters ----------
 // Public delegators for methods whose bodies live in LevoitFanLib.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setMute(o)    { doSetMuteSwitch(o) }
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(o) { doSetDisplayScreenSwitch(o) }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setOscillation(onOff){
     logDebug "setOscillation(${onOff})"
-    if (onOff == null) { logWarn "setOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(onOff, "setOscillation")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setOscillation: invalid value '${s}'"; recordError("setOscillation invalid: ${s}", [method:"setOscillationSwitch"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.

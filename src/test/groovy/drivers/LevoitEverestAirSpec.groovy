@@ -45,7 +45,8 @@ import support.TestParent
  *   BP18              -- setDisplay/setChildLock/setLightDetection(null) rejected with logWarn
  *                        (requireNotNull added as part of BP25 fix sweep)
  *   Bug Pattern #25   -- setDisplay/setChildLock/setLightDetection('ON') uppercase sends correct
- *                        integer payload (1 not 0) and emits lowercase event value
+ *                        integer payload (1 not 0) and emits lowercase event value;
+ *                        truthy inputs ('true','1') canonicalized to 'on' (not stored verbatim)
  */
 class LevoitEverestAirSpec extends HubitatSpec {
 
@@ -810,6 +811,87 @@ class LevoitEverestAirSpec extends HubitatSpec {
         req != null
         req.data.lightDetectionSwitch == 0
         lastEventValue("lightDetection") == "off"
+    }
+
+    // -------------------------------------------------------------------------
+    // BP25-truthy: truthy-input assertions — regression guards for canon ternary.
+    // "ON" uppercase tests above prove toLowerCase() normalization. These prove
+    // the canon ternary: reverting sendEvent(canon) → sendEvent(val) would store
+    // "true" or "1" verbatim in the attribute, failing these assertions.
+    // -------------------------------------------------------------------------
+
+    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits displayOn='on' (truthy-canon)"() {
+        // Pre-canon: v="true"; sendEvent(value:"true") stored "true" verbatim — consumers fail.
+        // Post-canon: canon = ("true" in [...]) ? "on" : "off" = "on"; sendEvent(value:"on").
+        when:
+        driver.setDisplay("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('1') sends screenSwitch:1 and emits displayOn='on' (truthy-canon)"() {
+        when:
+        driver.setDisplay("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits childLock='on' (truthy-canon)"() {
+        // Pre-canon: v="true"; sendEvent(value:"true") — consumers comparing to "on" would fail.
+        // Post-canon: canon="on"; sendEvent(value:"on") — correct.
+        when:
+        driver.setChildLock("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits childLock='on' (truthy-canon)"() {
+        when:
+        driver.setChildLock("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setLightDetection('true') sends lightDetectionSwitch:1 and emits lightDetection='on' (truthy-canon)"() {
+        // Pre-canon: v="true"; sendEvent(value:"true") — consumers comparing to "on" would fail.
+        // Post-canon: canon="on"; sendEvent(value:"on") — correct.
+        when:
+        driver.setLightDetection("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 1
+        lastEventValue("lightDetection") == "on"
+    }
+
+    def "BP25-truthy: setLightDetection('1') sends lightDetectionSwitch:1 and emits lightDetection='on' (truthy-canon)"() {
+        when:
+        driver.setLightDetection("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 1
+        lastEventValue("lightDetection") == "on"
     }
 
     // -------------------------------------------------------------------------

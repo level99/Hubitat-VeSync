@@ -190,7 +190,7 @@ def off(){
 //   Source: pyvesync LUH-A603S-WUS.yaml set_auto_mode: {workMode: 'humidity'}
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) {
         logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"
@@ -292,6 +292,7 @@ def setHumidity(percent){
 // AUTO_STOP capability not present on LV600SHC per pyvesync feature flags;
 // LevoitLV600SHubConnectSpec.groovy:683 regression-guards method absence.
 // CROSS-CHECK [pyvesync LUH-A603S-WUS.yaml turn_on_display]: {screenSwitch: 0|1} integer.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
 
 // ---------- applyStatus ----------

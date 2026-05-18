@@ -271,7 +271,13 @@ private Integer levelFromPercent(Integer pct) {
 // This keeps the public method name stable while the body is shared.
 // doSetDisplayScreenSwitch uses the same name as LevoitHumidifierLib's helper — intentional.
 // No conflict arises because a driver only #includes one of the two libs.
+// Behavioral divergence from LevoitHumidifierLib's helper of the same name: this version
+// applies a strict enum-rejection gate (any value outside "on"/"off" is an error). The fan
+// line uses strict-enum validation on all feature-toggle setters; the humidifier version omits
+// that gate and relies only on truthy coercion — a permissive legacy-input choice preserved for
+// back-compat with that driver family.
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def doSetMuteSwitch(onOff) {
     logDebug "setMute(${onOff})"
     if (!requireNotNull(onOff, "setMute")) return
@@ -289,6 +295,7 @@ def doSetMuteSwitch(onOff) {
     }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def doSetDisplayScreenSwitch(onOff) {
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return

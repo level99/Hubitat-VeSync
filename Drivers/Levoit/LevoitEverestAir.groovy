@@ -220,7 +220,7 @@ def toggle(){
 // This is the canonical convention for turbo-as-mode going forward in this codebase.
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual","turbo"])) {
         logError "Invalid mode: ${m} -- must be: auto, sleep, manual, turbo"
@@ -268,19 +268,22 @@ def setFanSpeed(speed){
 
 // ---------- Display ----------
 // VeSyncAirBaseV2 toggle_display: setDisplay {screenSwitch: int}
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" evaluates ("ON" == "on") as false → sends screenSwitch:0 (off) when intent was on.
     String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
-    if (device.currentValue("displayOn") == v) return
-    Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${v})")
+    if (device.currentValue("displayOn") == canon) return
+    Integer sw = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: v)
-        logInfo "Display: ${v}"
+        device.sendEvent(name:"displayOn", value: canon)
+        logInfo "Display: ${canon}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
@@ -288,19 +291,22 @@ def setDisplay(onOff){
 
 // ---------- Child lock ----------
 // VeSyncAirBaseV2 toggle_child_lock: setChildLock {childLockSwitch: int}
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
     if (!requireNotNull(onOff, "setChildLock")) return
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" evaluates ("ON" == "on") as false → sends childLockSwitch:0 (unlocked) when intent was locked.
     String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
-    if (device.currentValue("childLock") == v) return
-    Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${v})")
+    if (device.currentValue("childLock") == canon) return
+    Integer sw = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: v)
-        logInfo "Child lock: ${v}"
+        device.sendEvent(name:"childLock", value: canon)
+        logInfo "Child lock: ${canon}"
     } else {
         logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }
@@ -311,19 +317,22 @@ def setChildLock(onOff){
 // Same API as Vital 200S: setLightDetection {lightDetectionSwitch: int}
 // lightDetection attribute: whether the feature is ON/OFF (user setting).
 // lightDetected attribute: whether ambient light is currently detected (passive read from status).
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setLightDetection(onOff){
     logDebug "setLightDetection(${onOff})"
     if (!requireNotNull(onOff, "setLightDetection")) return
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" evaluates ("ON" == "on") as false → sends lightDetectionSwitch:0 (off) when intent was on.
     String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
-    if (device.currentValue("lightDetection") == v) return
-    Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
-    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: sw], "setLightDetection(${v})")
+    if (device.currentValue("lightDetection") == canon) return
+    Integer sw = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: sw], "setLightDetection(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"lightDetection", value: v)
-        logInfo "Light detection: ${v}"
+        device.sendEvent(name:"lightDetection", value: canon)
+        logInfo "Light detection: ${canon}"
     } else {
         logError "Light detection write failed"; recordError("Light detection write failed", [method:"setLightDetection"])
     }

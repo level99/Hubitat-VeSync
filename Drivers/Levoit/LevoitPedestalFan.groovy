@@ -240,7 +240,7 @@ metadata {
 // no "auto" mode; "eco" is the closest semantic equivalent.
 def setSpeed(spd){
     logDebug "setSpeed(${spd})"
-    if (spd == null) { logWarn "setSpeed called with null spd (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(spd, "setSpeed")) return
     // Short-circuit power commands before the auto-on guard.
     // setSpeed("off") must NOT trigger ensureSwitchOn() — the intent is explicitly to turn off.
     // setSpeed("on") short-circuits here too for symmetry (on() does everything needed).
@@ -294,7 +294,7 @@ def setSpeed(spd){
 //     add "auto" as an alias or replace "eco" with "auto".
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["normal","turbo","eco","sleep"])) {
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|eco|sleep"
@@ -315,7 +315,9 @@ def setMode(mode){
 
 // ---------- Feature setters ----------
 // Public delegators for methods whose bodies live in LevoitFanLib.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setMute(o)    { doSetMuteSwitch(o) }
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(o) { doSetDisplayScreenSwitch(o) }
 
 // ---------- Oscillation ----------
@@ -336,9 +338,10 @@ def setDisplay(o) { doSetDisplayScreenSwitch(o) }
 //     works --> swap method name and revise semantics to single-axis.
 
 // Toggle horizontal oscillation on or off (without changing range)
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setHorizontalOscillation(onOff){
     logDebug "setHorizontalOscillation(${onOff})"
-    if (onOff == null) { logWarn "setHorizontalOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(onOff, "setHorizontalOscillation")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setHorizontalOscillation: invalid value '${s}'"; recordError("setHorizontalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
@@ -356,9 +359,10 @@ def setHorizontalOscillation(onOff){
 }
 
 // Toggle vertical oscillation on or off (without changing range)
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setVerticalOscillation(onOff){
     logDebug "setVerticalOscillation(${onOff})"
-    if (onOff == null) { logWarn "setVerticalOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(onOff, "setVerticalOscillation")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setVerticalOscillation: invalid value '${s}'"; recordError("setVerticalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
@@ -443,12 +447,10 @@ def setVerticalRange(top, bottom){
 //     #4: method "setLock" + payload {lock: v}
 //   Source: live poll response (device 1132, 2026-04-30); pyvesync gap confirmed (no
 //     set_child_lock() method in VeSyncPedestalFan as of 2026-04-30).
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    if (onOff == null) {
-        logWarn "setChildLock called with null (likely empty Rule Machine action parameter); ignoring"
-        return
-    }
+    if (!requireNotNull(onOff, "setChildLock")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) {
         logError "setChildLock: invalid value '${s}' -- must be on|off"
@@ -513,9 +515,10 @@ def setChildLock(onOff){
 //   Source: live poll smartCleaningReminderState:1 (device 1132, 2026-04-30).
 //   Refutation: inner code -1 --> try payload field "smartCleaningReminder" (without "State"
 //     suffix) or try method "setSmartCleaning"; update CROSS-CHECK when confirmed.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setSmartCleaningReminder(onOff){
     logDebug "setSmartCleaningReminder(${onOff})"
-    if (onOff == null) { logWarn "setSmartCleaningReminder called with null; ignoring"; return }
+    if (!requireNotNull(onOff, "setSmartCleaningReminder")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) {
         logError "setSmartCleaningReminder: invalid value '${s}'"

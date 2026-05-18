@@ -165,31 +165,42 @@ private boolean httpOk(resp) {
 // implementations: different API methods (setAutomaticStop, setIndicatorLightSwitch) and
 // different payload shapes ({enabled: bool}, {state: bool}).
 
+// Intentionally omits the strict "on"/"off"-only gate that LevoitFanLib's helper of the same
+// name uses. Permissive truthy-coercion behavior is preserved for back-compat with this
+// driver family; truthy-variant inputs ("true", "1", "yes") are accepted and map to "on".
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def doSetDisplayScreenSwitch(onOff) {
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return false
     String val = (onOff as String).trim().toLowerCase()
-    if (device.currentValue("displayOn") == val) return true
-    Integer v = (val in ["on","true","1","yes"]) ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${val})")
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off",
+    // never the raw normalized input ("true", "1", "yes"). The C3 gate compares canonical
+    // vs canonical so truthy-variant input does not defeat same-state suppression.
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("displayOn") == canon) return true
+    Integer v = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: val)
-        logInfo "Display: ${val}"
+        device.sendEvent(name:"displayOn", value: canon)
+        logInfo "Display: ${canon}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def doSetAutoStopSwitch(onOff) {
     logDebug "setAutoStop(${onOff})"
     if (!requireNotNull(onOff, "setAutoStop")) return false
     String val = (onOff as String).trim().toLowerCase()
-    if (device.currentValue("autoStopEnabled") == val) return true
-    Integer v = (val in ["on","true","1","yes"]) ? 1 : 0
-    def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${val})")
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("autoStopEnabled") == canon) return true
+    Integer v = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: val)
-        logInfo "Auto-stop: ${val}"
+        device.sendEvent(name:"autoStopEnabled", value: canon)
+        logInfo "Auto-stop: ${canon}"
     } else {
         logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"])
     }

@@ -582,6 +582,80 @@ class LevoitSproutAirSpec extends HubitatSpec {
         req.data.childLockSwitch == 0
     }
 
+    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits 'on' (truthy-canon)"() {
+        // Pre-fix: v = "true".toLowerCase() = "true"; sendEvent(value:"true") stored truthy variant.
+        // Post-fix: canon = ("true" in [...]) ? "on" : "off" = "on"; sendEvent(value:"on").
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("true")
+
+        then: "API call sent with screenSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('1') sends screenSwitch:1 and emits 'on' (truthy-canon)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits 'on' (truthy-canon)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits 'on' (truthy-canon)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: C3 gate suppresses setDisplay when attribute already 'on' and input is 'true'"() {
+        // Regression guard: C3 gate uses canon (not raw 'true'), so 'true' input with
+        // attribute already 'on' correctly triggers gate suppression.
+        given:
+        testDevice.events.add([name: "displayOn", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("true")
+
+        then: "C3 gate suppressed the call because canon=='on'==currentValue"
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+    }
+
     // -------------------------------------------------------------------------
     // Tier-3 regression tests (v2.5 batch)
     // -------------------------------------------------------------------------

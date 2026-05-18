@@ -891,19 +891,28 @@ Vital 100S/200S `cycleSpeed` already has the correct guard (community-fork-era c
 
 **Root cause:** VeSync attribute values are stored and compared as lowercase (`"on"` / `"off"`). Rule Machine passes string command arguments as-typed by the user; dashboard tiles may pass `"ON"` / `"OFF"` from capability string normalization. When input arrives in any case other than lowercase, two bugs fire simultaneously: (a) C3 idempotency gate evaluates `"on" == "ON"` as `false` — bypass fires and a redundant cloud call is made even when state matches; (b) payload coercion evaluates `"ON" == "on"` as `false` — the OPPOSITE command value is sent (e.g., `childLockSwitch:0` when user requested lock, `enabled:false` when user requested enable). Both sub-bugs compound on every uppercase invocation; the device silently receives the wrong command.
 
-**Detection:** grep for `onOff == "on"` or `value == "on"` or `(onOff == "off")` patterns in setter methods. Each match that does not have a preceding `String v = (... as String).toLowerCase()` on the raw parameter is a BP25 site. Methods in `LevoitHumidifierLib.groovy` are already correct (canonical pattern); audit any driver or lib NOT in that family.
+**Detection (RULE33a):** grep for `onOff == "on"` or `value == "on"` or `(onOff == "off")` patterns in setter methods. Each match that does not have a preceding `String v = (... as String).toLowerCase()` on the raw parameter is a RULE33a site. `LevoitHumidifierLib.groovy` `doSetDisplayScreenSwitch` / `doSetAutoStopSwitch` are the canonical reference; audit any driver or lib that diverges from the truthy-canon ternary pattern.
+
+**Detection (RULE33b):** grep for `set\w+` methods that call `toLowerCase()` but whose `sendEvent(name:"attr", value: X)` has `X` assigned via `.toLowerCase()` without a `? "on" : "off"` ternary assignment. These emit raw-normalized values that store `"true"` / `"1"` / `"yes"` as-is in the attribute. RULE33b in `tests/lint_rules/bp25_case_sensitivity.py` flags these automatically; exempts methods with a strict enum-rejection gate (`in ["on","off"]`).
 
 **Canonical fix pattern** (from `LevoitHumidifierLib.groovy`'s `doSetDisplayScreenSwitch`):
 ```groovy
 def setSomething(onOff) {
     if (!requireNotNull(onOff, "setSomething")) return
-    String v = (onOff as String).toLowerCase()   // BP25 fix: normalize before gate AND coercion
-    if (device.currentValue("attr") == v) return  // C3 gate uses normalized v
-    Integer sw = (v == "on") ? 1 : 0              // payload uses normalized v
+    String val   = (onOff as String).trim().toLowerCase()              // normalize FIRST
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"    // truthy-coerce to canonical
+    if (device.currentValue("attr") == canon) return                   // C3 gate uses canon
+    Integer v = (canon == "on") ? 1 : 0                               // payload uses canon
     ...
-    device.sendEvent(name:"attr", value: v)        // event uses normalized v
+    device.sendEvent(name:"attr", value: canon)                        // event emits canon
 }
 ```
+
+**Why canon, not val:** emitting `val` directly stores truthy inputs (`"true"`, `"1"`, `"yes"`) as-is in the attribute. Consumers that read `device.currentValue("attr")` and compare against `"on"` would fail. The `canon` derivation normalizes ALL truthy forms to `"on"` before storage. RULE33b (`tests/lint_rules/bp25_case_sensitivity.py`) enforces this; methods that normalize with `toLowerCase()` but emit the raw-normalized variable in `sendEvent` (without a `? "on" : "off"` assignment) are flagged as FAIL.
+
+**Two behavioral exceptions:**
+- `LevoitFanLib` (`doSetMuteSwitch`, `doSetDisplayScreenSwitch`) and fan-line per-driver setters use a strict enum-rejection gate (`if (!(s in ["on","off"])) return`) that rejects truthy variants outright. After the gate, `s` is bounded to "on"/"off" so emitting `s` is canonical. RULE33b skips these via `_STRICT_GATE_RE` exemption.
+- Multi-state enum setters (`setNightLight` on Classic 300S — three states "off"/"dim"/"bright") are not boolean on/off setters; BP25 does not apply.
 
 **Known sites in v2.5 (all fixed in same diff as catalog entry):**
 | Driver / Library | Method | Sub-bug |
@@ -919,11 +928,13 @@ def setSomething(onOff) {
 | `LevoitEverestAir.groovy` | `setChildLock` | payload inversion (no C3 gate) + missing requireNotNull |
 | `LevoitEverestAir.groovy` | `setLightDetection` | payload inversion (no C3 gate) + missing requireNotNull |
 
-**Out of scope (already correct):** All HumidifierLib-based drivers implement `doSetDisplayScreenSwitch` with the canonical `toLowerCase()` pattern; LevoitSuperior6000S `setAutoStopSwitch`; LevoitOasisMist450S/LV600S/LV600SHubConnect/OasisMist1000S/SproutHumidifier display/childLock methods.
+**Out of scope (already correct):** `LevoitHumidifierLib` `doSetDisplayScreenSwitch` + `doSetAutoStopSwitch` already use the canonical truthy-coercion pattern; fan-line setters use a strict enum-rejection gate (truthy variants rejected at the gate; RULE33b skips via `_STRICT_GATE_RE`).
 
-**Regression guard:** Spock spec for each site must include an `"ON"` (uppercase) test case confirming (a) the API call is made when state differs, (b) the payload carries the correct integer value (1 for "ON", 0 for "OFF"), and (c) the emitted event value is lowercase `"on"` / `"off"`.
+**Regression guard:** Spock spec for each site must include: (a) `"ON"` (uppercase) test case confirming the API call is made when state differs and the emitted event value is `"on"`; (b) truthy-input test cases (`"true"`, `"1"`) confirming the API payload is `1` and the emitted event value is `"on"` (not `"true"` or `"1"`); (c) C3 suppression test confirming no API call when the attribute already matches the canonical derived value.
 
-**Shipped:** v2.5.x (2026-05-14) across 10 sites in 5 files.
+**Lint enforcement:** RULE33a (original) flags raw parameter comparison without prior `toLowerCase()`. RULE33b flags methods that normalize with `toLowerCase()` but emit the raw-normalized variable in `sendEvent` without a truthy-canon ternary assignment. Both run on every `tests/lint.py --strict` pass.
+
+**Shipped:** v2.5.x (2026-05-14) across 10 sites in 5 files. Truthy-coercion re-bless (RULE33b + canon ternary) shipped v2.6.
 
 ---
 

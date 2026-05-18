@@ -319,6 +319,7 @@ def setRoomSize(sz) {
     if (httpOk(resp)) { state.roomSize = roomSz; device.sendEvent(name:"roomSize", value: roomSz) }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff) {
     logDebug "setChildLock(${onOff})"
     if (!requireNotNull(onOff, "setChildLock")) return
@@ -327,26 +328,31 @@ def setChildLock(onOff) {
     // coercion evaluates ("ON" == "on") as false → sends childLockSwitch:0 (unlock) when
     // the caller intended to lock. Both the gate and the coercion must see the same form.
     String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
-    if (device.currentValue("childLock") == v) return
-    def resp = hubBypass("setChildLock", [childLockSwitch: v == "on" ? 1 : 0], "setChildLock")
+    if (device.currentValue("childLock") == canon) return
+    def resp = hubBypass("setChildLock", [childLockSwitch: canon == "on" ? 1 : 0], "setChildLock")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: v)
-        logInfo "Child lock: ${v}"
+        device.sendEvent(name:"childLock", value: canon)
+        logInfo "Child lock: ${canon}"
     }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff) {
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return
     // BP25: normalize to lowercase before C3 gate and payload coercion (same rationale as setChildLock).
     String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
-    if (device.currentValue("display") == v) return
-    def resp = hubBypass("setDisplay", [screenSwitch: v == "on" ? 1 : 0], "setDisplay")
+    if (device.currentValue("display") == canon) return
+    def resp = hubBypass("setDisplay", [screenSwitch: canon == "on" ? 1 : 0], "setDisplay")
     if (httpOk(resp)) {
-        device.sendEvent(name:"display", value: v)
-        logInfo "Display: ${v}"
+        device.sendEvent(name:"display", value: canon)
+        logInfo "Display: ${canon}"
     }
 }
 

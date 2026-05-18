@@ -140,7 +140,7 @@ def off(){
 // ---------- Mode ----------
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }  // no recordError — not an error, just a guard
+    if (!requireNotNull(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","manual","sleep"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     // autoPro is the canonical API value for "auto" on Superior 6000S
@@ -220,22 +220,28 @@ def setTargetHumidity(percent){
 
 // ---------- Feature setters ----------
 // V2-line shared bodies via lib; delegators preserve method-presence semantics.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
     if (!requireNotNull(onOff, "setChildLock")) return false
+    // BP25: derive canonical on/off for sendEvent and C3 gate — never emit raw "true"/"1"/"yes".
     String val = (onOff as String).trim().toLowerCase()
-    if (device.currentValue("childLock") == val) return true
-    Integer v = (val in ["on","true","1","yes"]) ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${val})")
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("childLock") == canon) return true
+    Integer v = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: val)
-        logInfo "Child lock: ${val}"
+        device.sendEvent(name:"childLock", value: canon)
+        logInfo "Child lock: ${canon}"
     } else { logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"]) }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
     if (!requireNotNull(onOff, "setDryingMode")) return false

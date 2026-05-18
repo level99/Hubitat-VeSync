@@ -748,4 +748,65 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         and: "a setVirtualLevel API call was made (mist level set)"
         !testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // BP25-truthy: setChildLock truthy-variant canonical emission
+    // -------------------------------------------------------------------------
+
+    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits 'on'"() {
+        // Pre-fix: val = "true"; sendEvent(value:"true"). Post-fix: canon="on"; sendEvent(value:"on").
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("true")
+
+        then: "API call sent with childLockSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('ON') sends childLockSwitch:1 and emits 'on'"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("ON")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits 'on'"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: C3 gate suppresses setChildLock when childLock='on' and input is 'true'"() {
+        given:
+        testDevice.events.add([name: "childLock", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("true")
+
+        then: "C3 gate suppressed the call because canon=='on'==currentValue"
+        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
+    }
 }

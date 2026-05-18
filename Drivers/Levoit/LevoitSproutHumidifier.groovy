@@ -189,7 +189,7 @@ def off(){
 // In reverse: workMode='autoPro' from API response maps back to user-facing 'auto'.
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     // Wire-value mapping: auto -> 'autoPro' (device_map.py mist_modes for Sprout)
@@ -245,25 +245,30 @@ def setHumidity(percent){
 }
 
 // V2-line shared body via lib; delegator preserves method-presence semantics.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
 
 // ---------- Child lock ----------
 // VeSyncSproutHumid toggle_child_lock: {childLockSwitch: int}
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
     if (!requireNotNull(onOff, "setChildLock")) return false
+    // BP25: derive canonical on/off for sendEvent and C3 gate — never emit raw "true"/"1"/"yes".
     String val = (onOff as String).trim().toLowerCase()
-    if (device.currentValue("childLock") == val) return true
-    Integer v = (val in ["on","true","1","yes"]) ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${val})")
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("childLock") == canon) return true
+    Integer v = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: val)
-        logInfo "Child lock: ${val}"
+        device.sendEvent(name:"childLock", value: canon)
+        logInfo "Child lock: ${canon}"
     } else {
         logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 
 // ---------- Drying mode ----------
@@ -271,18 +276,21 @@ def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 // Drying mode runs the fan without mist after humidification to dry out the internals.
 // The dryingEnabled attribute reflects the user-controlled preference flag (autoDryingSwitch),
 // not hardware runtime state, so a C3 idempotency gate is valid here.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
     if (!requireNotNull(onOff, "setDryingMode")) return false
-    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    // BP25: normalize to lowercase, then derive canonical on/off for sendEvent and C3 gate.
+    // Attribute always emits "on" or "off"; the C3 gate compares canonical vs canonical.
     String v = (onOff as String).trim().toLowerCase()
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
-    if (device.currentValue("dryingEnabled") == v) return true
-    Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
-    def resp = hubBypass("setDryingMode", [autoDryingSwitch: sw], "setDryingMode(${v})")
+    if (device.currentValue("dryingEnabled") == canon) return true
+    Integer sw = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setDryingMode", [autoDryingSwitch: sw], "setDryingMode(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"dryingEnabled", value: v)
-        logInfo "Drying mode: ${v}"
+        device.sendEvent(name:"dryingEnabled", value: canon)
+        logInfo "Drying mode: ${canon}"
     } else {
         logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"])
     }
@@ -300,6 +308,7 @@ def setDryingMode(onOff){
 // to the on/off switch. Two calls with the same on/off value but different brightness or
 // color-temperature arguments send different payloads, so comparing only nightlightOn
 // would incorrectly suppress legitimate brightness or color-temperature updates.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setNightlight(onOff, brightness = null, colorTemp = null){
     logDebug "setNightlight(${onOff}, ${brightness}, ${colorTemp})"
     if (!requireNotNull(onOff, "setNightlight")) return

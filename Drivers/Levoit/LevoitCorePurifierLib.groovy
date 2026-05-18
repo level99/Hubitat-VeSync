@@ -55,17 +55,19 @@ def toggle() {
 		on()
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(displayOn) {
     logDebug "setDisplay(${displayOn})"
     // BP18: null-guard — Rule Machine passes null for blank parameter slots.
     if (!requireNotNull(displayOn, "setDisplay")) return false
-    // BP25: normalize to lowercase before C3 gate so "ON"/"OFF" strings from Rule Machine
-    // are treated the same as "on"/"off". Without this, "ON" bypasses the gate AND the
-    // downstream payload coercion evaluates ("ON" == "on") as false → sends wrong boolean.
+    // BP25: normalize to lowercase, then derive canonical on/off for C3 gate and callee.
+    // Passing canon (not raw v) to handleDisplayOn ensures the attribute emits "on"/"off",
+    // never "true"/"1"/"yes". The C3 gate compares canonical vs canonical.
     String v = (displayOn as String).trim().toLowerCase()
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
-    if (device.currentValue("display") == v) return
-    handleDisplayOn(v)
+    if (device.currentValue("display") == canon) return
+    handleDisplayOn(canon)
 }
 
 def handlePower(on) {
@@ -146,25 +148,28 @@ def handleDisplayOn(displayOn)
     return result
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(value) {
     // Core-line API uses child_lock (boolean); Vital-line API uses childLockSwitch (integer). Intentional divergence per pyvesync class hierarchy.
     logDebug "setChildLock(${value})"
     // BP18: null-guard — Rule Machine passes null for blank parameter slots.
     if (!requireNotNull(value, "setChildLock")) return false
-    // BP25: normalize to lowercase before C3 gate and payload coercion.
-    // "ON" from Rule Machine bypasses the gate and inverts the payload without this guard.
+    // BP25: normalize to lowercase, then derive canonical on/off for sendEvent and C3 gate.
+    // Attribute always emits "on" or "off"; the C3 gate compares canonical vs canonical so
+    // truthy-variant input ("TRUE", "1", "yes") does not defeat same-state suppression.
     String v = (value as String).trim().toLowerCase()
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
-    if (device.currentValue("childLock") == v) return
+    if (device.currentValue("childLock") == canon) return
     def result = false
     parent.sendBypassRequest(device, [
-                data: [ child_lock: (v == "on") ],
+                data: [ child_lock: (canon == "on") ],
                 "method": "setChildLock",
                 "source": "APP"
             ]) { resp ->
         if (checkHttpResponse("setChildLock", resp)) {
-            device.sendEvent(name: "childLock", value: v)
-            logInfo "Child lock (Display Lock): ${v}"
+            device.sendEvent(name: "childLock", value: canon)
+            logInfo "Child lock (Display Lock): ${canon}"
             result = true
         }
     }

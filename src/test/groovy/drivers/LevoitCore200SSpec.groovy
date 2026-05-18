@@ -854,4 +854,81 @@ class LevoitCore200SSpec extends HubitatSpec {
         req != null
         req.data.total == 5
     }
+
+    // -----------------------------------------------------------------------
+    // BP25-truthy: CorePurifierLib setChildLock and setDisplay truthy-canon emission
+    // -----------------------------------------------------------------------
+
+    def "BP25-truthy: setChildLock('true') sends child_lock:true and emits 'on' (Core 200S)"() {
+        // Pre-fix: v = "true"; sendEvent(value:"true"). Post-fix: canon="on"; sendEvent(value:"on").
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("true")
+
+        then: "API call sent with child_lock:true"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.child_lock == true
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('true') sends state:true and emits 'on' (Core 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("true")
+
+        then: "API call sent with state:true"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.state == true
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('1') sends child_lock:true and emits 'on' (Core 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.child_lock == true
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('1') sends state:true and emits 'on' (Core 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.state == true
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25-truthy: C3 gate suppresses setChildLock when childLock='on' and input is 'true'"() {
+        given:
+        testDevice.events.add([name: "childLock", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("true")
+
+        then: "C3 gate suppressed the call because canon=='on'==currentValue"
+        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
+    }
 }

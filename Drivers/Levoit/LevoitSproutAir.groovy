@@ -194,7 +194,7 @@ def toggle(){
 // This driver mirrors that: setMode("manual") calls setFanSpeed(1) instead.
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setPurifierMode"]); return }
     if (m == "manual") {
@@ -238,18 +238,22 @@ def setFanSpeed(speed){
 
 // ---------- Display ----------
 // VeSyncAirBaseV2 toggle_display: {screenSwitch: int}
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return
-    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    // BP25: normalize to lowercase, then derive a canonical on/off string from the truthy test.
+    // sendEvent always emits "on" or "off" — never the raw input ("true", "1", "yes").
+    // The C3 gate compares canonical vs canonical so truthy-variant input cannot defeat it.
     String v = (onOff as String).trim().toLowerCase()
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
-    if (device.currentValue("displayOn") == v) return
-    Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${v})")
+    if (device.currentValue("displayOn") == canon) return
+    Integer sw = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: v)
-        logInfo "Display: ${v}"
+        device.sendEvent(name:"displayOn", value: canon)
+        logInfo "Display: ${canon}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
@@ -257,18 +261,20 @@ def setDisplay(onOff){
 
 // ---------- Child lock ----------
 // VeSyncAirBaseV2 toggle_child_lock: {childLockSwitch: int}
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
     if (!requireNotNull(onOff, "setChildLock")) return
-    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    // BP25: normalize to lowercase, then derive canonical on/off for sendEvent and C3 gate.
     String v = (onOff as String).trim().toLowerCase()
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
-    if (device.currentValue("childLock") == v) return
-    Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${v})")
+    if (device.currentValue("childLock") == canon) return
+    Integer sw = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: v)
-        logInfo "Child lock: ${v}"
+        device.sendEvent(name:"childLock", value: canon)
+        logInfo "Child lock: ${canon}"
     } else {
         logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }
@@ -287,7 +293,7 @@ def setChildLock(onOff){
 // but this method is not classified as an on/off setter in the C3 gate scope.
 def setNightlightMode(nlMode){
     logDebug "setNightlightMode(${nlMode})"
-    if (nlMode == null) { logWarn "setNightlightMode called with null nlMode (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(nlMode, "setNightlightMode")) return
     String m = (nlMode as String).trim().toLowerCase()
     if (!(m in ["on","off","dim"])) { logError "Invalid nightlight mode: ${m} -- must be: on, off, dim"; recordError("Invalid nightlight mode: ${m}", [method:"setNightLight"]); return }
     def resp = hubBypass("setNightLight", [night_light: m], "setNightLight(${m})")

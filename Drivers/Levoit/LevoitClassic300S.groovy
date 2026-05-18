@@ -124,7 +124,7 @@ def off(){
 // ---------- Mode ----------
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     // Validate BEFORE ensureSwitchOn() so invalid input does not auto-turn on an off device.
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
@@ -190,16 +190,19 @@ def setHumidity(percent){
 
 // ---------- Display ----------
 // setDisplay payload: {state: bool} — NOT {screenSwitch: int} (Superior 6000S difference)
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
     if (!requireNotNull(onOff, "setDisplay")) return false
     String val = (onOff as String).trim().toLowerCase()
-    if (device.currentValue("displayOn") == val) return  // C3 state-change gate
-    Boolean v = (val == "on")
-    def resp = hubBypass("setDisplay", [state: v], "setDisplay(${val})")
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("displayOn") == canon) return  // C3 state-change gate
+    Boolean v = (canon == "on")
+    def resp = hubBypass("setDisplay", [state: v], "setDisplay(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: val)
-        logInfo "Display: ${val}"
+        device.sendEvent(name:"displayOn", value: canon)
+        logInfo "Display: ${canon}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
@@ -207,6 +210,7 @@ def setDisplay(onOff){
 
 // ---------- Auto-stop ----------
 // setAutomaticStop payload: {enabled: bool} — NOT {autoStopSwitch: int} (Superior 6000S difference)
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
     if (!requireNotNull(onOff, "setAutoStop")) return false
@@ -214,11 +218,13 @@ def setAutoStop(onOff){
     // "ON" from Rule Machine bypasses the gate and evaluates ("ON"=="on") as false
     // → sets enabled:false (disables auto-stop) when the intent was to enable it.
     String v = (onOff as String).trim().toLowerCase()
-    if (device.currentValue("autoStopEnabled") == v) return  // C3 state-change gate
-    def resp = hubBypass("setAutomaticStop", [enabled: (v == "on")], "setAutomaticStop(${v})")
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("autoStopEnabled") == canon) return  // C3 state-change gate
+    def resp = hubBypass("setAutomaticStop", [enabled: (canon == "on")], "setAutomaticStop(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: v)
-        logInfo "Auto-stop: ${v}"
+        device.sendEvent(name:"autoStopEnabled", value: canon)
+        logInfo "Auto-stop: ${canon}"
     } else {
         logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
     }
@@ -243,7 +249,7 @@ def setAutoStop(onOff){
 // a boolean on/off toggle. It is not classified as an on/off setter in the C3 gate scope.
 def setNightLight(level){
     logDebug "setNightLight(${level})"
-    if (level == null) { logWarn "setNightLight called with null level (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNotNull(level, "setNightLight")) return
     String lvlStr = (level as String).trim().toLowerCase()
     // Night-light is discrete 3-step only (HA finding #9 -- physical device constraint)
     Map nlNameToInt = [off: 0, dim: 50, bright: 100]

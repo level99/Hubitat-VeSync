@@ -920,4 +920,77 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         then: "event value is lowercase 'on'"
         lastEventValue("dryingEnabled") == "on"
     }
+
+    def "BP25-truthy: setDryingMode('true') sends autoDryingSwitch:1 and emits 'on'"() {
+        // Pre-fix: v = "true"; sendEvent(value:"true"). Post-fix: canon="on"; sendEvent(value:"on").
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "dryingEnabled", value: "off"])
+
+        when:
+        driver.setDryingMode("true")
+
+        then: "API call sent with autoDryingSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setDryingMode" }
+        req != null
+        req.data.autoDryingSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("dryingEnabled") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits 'on'"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits 'on'"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setDryingMode('1') sends autoDryingSwitch:1 and emits 'on'"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "dryingEnabled", value: "off"])
+
+        when:
+        driver.setDryingMode("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDryingMode" }
+        req != null
+        req.data.autoDryingSwitch == 1
+        lastEventValue("dryingEnabled") == "on"
+    }
+
+    def "BP25-truthy: C3 gate suppresses setDryingMode when dryingEnabled='on' and input is 'true'"() {
+        given:
+        testDevice.events.add([name: "dryingEnabled", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDryingMode("true")
+
+        then: "C3 gate suppressed the call because canon=='on'==currentValue"
+        testParent.allRequests.findAll { it.method == "setDryingMode" }.isEmpty()
+    }
 }

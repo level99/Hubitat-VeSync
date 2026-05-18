@@ -108,15 +108,18 @@ metadata {
 // ---------- V200S-only setter ----------
 // setLightDetection is present on V200S but NOT V100S (LIGHT_DETECT feature flag distinction).
 // Not extracted to the shared library because it is per-driver-only.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setLightDetection(onOff) {
     logDebug "setLightDetection(${onOff})"
     if (!requireNotNull(onOff, "setLightDetection")) return
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
-    if (device.currentValue("lightDetection") == v) return
-    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: (v in ["on","true","1","yes"]) ? 1 : 0], "setLightDetection(${v})")
-    if (httpOk(resp)) device.sendEvent(name:"lightDetection", value: v)
+    if (device.currentValue("lightDetection") == canon) return
+    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: (canon == "on") ? 1 : 0], "setLightDetection(${canon})")
+    if (httpOk(resp)) device.sendEvent(name:"lightDetection", value: canon)
 }
 
 def applyStatus(status) {

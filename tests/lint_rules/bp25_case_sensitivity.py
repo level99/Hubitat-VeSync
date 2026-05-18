@@ -1,6 +1,5 @@
 """
-bp25_case_sensitivity.py — RULE33: flag on/off setter methods that compare raw
-caller input against "on"/"off" without a prior toLowerCase() normalization.
+bp25_case_sensitivity.py — RULE33: two sub-checks for Bug Pattern #25.
 
 Bug Pattern #25 — C3 gate case-sensitivity.
 
@@ -18,15 +17,30 @@ coercion, two bugs fire simultaneously:
       receives the wrong command (e.g., childLockSwitch:0 to lock, enabled:false
       to enable auto-stop).
 
-Canonical fix pattern (from LevoitHumidifierLib.groovy doSetDisplayScreenSwitch):
+Canonical fix pattern (re-blessed):
 
-    String v = (onOff as String).toLowerCase()   // normalize FIRST
-    if (device.currentValue("attr") == v) return  // C3 gate uses v
-    Integer sw = (v == "on") ? 1 : 0              // payload uses v
+    String v    = (onOff as String).trim().toLowerCase()  // normalize FIRST
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"  // truthy-coerce
+    if (device.currentValue("attr") == canon) return       // C3 gate uses canon
+    Integer sw = (canon == "on") ? 1 : 0                   // payload uses canon
     ...
-    device.sendEvent(name:"attr", value: v)        // event uses v
+    device.sendEvent(name:"attr", value: canon)             // event emits canon
 
-Detection algorithm:
+Two sub-checks are performed:
+
+  RULE33a (original) — raw comparison:
+    A set* method performs a == "on"/"off" comparison against the raw first
+    parameter without a prior toLowerCase() normalization.
+
+  RULE33b (extended) — raw-normalized sendEvent:
+    A set* method uses toLowerCase() normalization but emits the raw normalized
+    variable in sendEvent instead of a truthy-derived canonical identifier.
+    The re-blessed canonical pattern derives canon via a ternary
+    ``(v in ["on","true","1","yes"]) ? "on" : "off"`` and emits canon.
+    Emitting `v` directly is non-canonical: truthy inputs "true"/"1"/"yes"
+    would be stored as-is in the attribute instead of as "on".
+
+Detection algorithm (RULE33a):
   For each .groovy file under Drivers/Levoit/:
     For each method whose name starts with 'set' and whose first parameter
     name looks like an on/off selector (any name works; the rule checks whether
@@ -35,25 +49,52 @@ Detection algorithm:
       2. Scan for a == "on" or == "off" comparison involving the first param.
       3. If comparison present: check whether a toLowerCase() call appears
          BEFORE the first such comparison.
-      4. If no toLowerCase() before the comparison → RULE33 FAIL.
+      4. If no toLowerCase() before the comparison → RULE33a FAIL.
 
-    Both single-parameter methods (setDisplay(onOff)) and multi-parameter
-    methods with optional defaults (setNightlight(onOff, brightness = null))
-    are scanned. Only the first parameter is checked — subsequent parameters
-    are numeric/enum types that don't need on/off normalization.
+Detection algorithm (RULE33b):
+  For each .groovy file under Drivers/Levoit/:
+    For each method whose name starts with 'set':
+      1. Extract the method body.
+      2. Skip if no toLowerCase() call present (RULE33a covers those).
+      3. Extract the sendEvent value identifier.
+      4. If the identifier X is assigned via .toLowerCase() on its RHS (raw
+         normalized, not canon-derived), check whether a truthy-coercion
+         assignment of the form ``? "on" : "off"`` exists in the body for X
+         or for any other identifier used in sendEvent.
+      5. Binary on/off discriminator: require X appears in a binary on/off
+         comparison (``== "on"``, ``== "off"``, or ``in ["on","off"]`` exactly)
+         in the method body.  Mode/multi-state setters (setMode with
+         ``m in ["auto","sleep"]``, setNightlightMode with
+         ``m in ["on","off","dim"]``) fail this test and are excluded.
+      6. If the method normalizes to lowercase, emits a raw normalized
+         identifier (no truthy-canon ternary), passes the binary discriminator,
+         AND has no strict enum-rejection gate → RULE33b FAIL.
+
+    Both sub-checks skip: inline delegators, methods with first param name
+    'v'/'sw'/'val', and exempted (file, method) pairs.
 
 False-positive protection:
-  - Methods whose first parameter name is 'v', 'sw', or 'val' are SKIP —
-    they're already normalized aliases, not raw input.
-  - The LevoitHumidifierLib methods are already correct; this rule only fires
-    on remaining unfixed sites.
-  - Library files are included (same as RULE32).
+  - RULE33b skips methods where the sendEvent value is a string literal "on"/"off"
+    (already canonical by construction).
+  - RULE33b skips methods where the sendEvent value identifier is assigned via
+    a ternary that produces "on"/"off" (already canonical).
+  - RULE33b skips methods that use strict enum-rejection gates (the strict gate
+    guarantees the normalized var is already canonical after the gate — these
+    are correctly identified by the presence of an in ["on","off"] gate with no
+    truthy variants in the rejection list).
+  - RULE33b skips mode/multi-state setters via the binary discriminator: the
+    emitted identifier must appear in a binary on/off comparison in the method
+    body.  setMode, setNightLight (three-state), setNightlightMode (three-state)
+    are correctly excluded because their identifiers only appear in multi-value
+    mode-enum lists, not in on/off comparisons.
+  - Library files are included (same as RULE33a).
 
 Exemptions:
   Add ``bp25_case_sensitivity_exemptions`` list to lint_config.yaml:
     - file: Drivers/Levoit/SomeDriver.groovy
       method: setSomething
-      rationale: "reason the comparison is safe without toLowerCase()"
+      rationale: "reason"
+  Exemptions apply to both sub-checks.
 """
 
 import re
@@ -226,4 +267,153 @@ def check_rule33_case_sensitivity(
     return findings
 
 
-ALL_RULES = [check_rule33_case_sensitivity]
+# Additional regexes for RULE33b.
+
+# Identifies a sendEvent value identifier.
+_SENDEVENT_VALUE_RE = re.compile(r'sendEvent\s*\([^)]*\bvalue\s*:\s*([^\s,)\]]+)')
+
+# Truthy-coercion ternary: ? "on" : "off" (the canonical canon-derivation pattern).
+_TRUTHY_TERNARY_RE = re.compile(r'\?\s*"on"\s*:\s*"off"')
+
+# Strict enum-rejection gate that guarantees a raw-normalized var is already canonical:
+# in ["on","off"] with no truthy-variant entries.
+_STRICT_GATE_RE = re.compile(r'in\s*\[\s*"on"\s*,\s*"off"\s*\]')
+
+
+def check_rule33b_raw_normalized_sendevent(
+    path, raw_lines, cleaned_lines, raw_text, config, rel_base
+):
+    """
+    RULE33b: Fail if a set* method normalizes with toLowerCase() but emits the
+    raw normalized variable in sendEvent instead of a truthy-derived canonical value.
+
+    The re-blessed canonical pattern derives the emitted value via a ternary:
+        String canon = (v in [...]) ? "on" : "off"
+    and emits: device.sendEvent(name:"attr", value: canon)
+
+    Emitting the raw normalized variable `v` is non-canonical: truthy inputs
+    "true"/"1"/"yes" would be stored as-is in the attribute instead of as "on".
+    """
+    findings = []
+
+    if path.suffix != '.groovy':
+        return findings
+
+    path_str = str(path).replace('\\', '/')
+    if DRIVER_DIR_FRAGMENT not in path_str:
+        return findings
+
+    file_rel = str(path.relative_to(rel_base)).replace('\\', '/')
+    exemption_set = _build_exemption_set(config)
+
+    for m in SET_METHOD_RE.finditer(raw_text):
+        method_name = m.group(1)
+        param_name = m.group(2)
+
+        if (file_rel, method_name) in exemption_set:
+            continue
+
+        brace_start = raw_text.find('{', m.end() - 1)
+        if brace_start == -1:
+            continue
+        body_end = _find_method_body_end(raw_text, brace_start)
+        if body_end == -1:
+            continue
+
+        body = raw_text[brace_start:body_end]
+        body_clean = _strip_line_comments(body)
+
+        # Only applies to methods that already use toLowerCase() (RULE33a covers the rest).
+        if not TO_LOWER_RE.search(body_clean):
+            continue
+
+        # Extract the sendEvent value identifier.
+        se_match = _SENDEVENT_VALUE_RE.search(body_clean)
+        if not se_match:
+            continue
+
+        se_val = se_match.group(1).strip()
+
+        # Skip if emitting a string literal "on"/"off" directly — already canonical.
+        if se_val in ('"on"', '"off"', "'on'", "'off'"):
+            continue
+
+        # Only inspect bare identifiers.
+        if not re.match(r'^[a-zA-Z_]\w*$', se_val):
+            continue
+
+        # Check if the identifier is assigned via a truthy-coercion ternary (? "on" : "off").
+        assign_re = re.compile(
+            r'\b' + re.escape(se_val) + r'\s*=\s*([^\n;{]+)',
+            re.IGNORECASE,
+        )
+        has_truthy_canon = False
+        is_lowercase_assigned = False
+        for am in assign_re.finditer(body_clean):
+            rhs = am.group(1)
+            if _TRUTHY_TERNARY_RE.search(rhs):
+                has_truthy_canon = True
+                break
+            if '.toLowerCase()' in rhs or '.toLower()' in rhs:
+                is_lowercase_assigned = True
+
+        if has_truthy_canon:
+            # Identifier is derived from a truthy-canon ternary — correct canonical pattern.
+            continue
+
+        if not is_lowercase_assigned:
+            # Identifier is not a toLowerCase-normalized var at all — RULE33a domain.
+            continue
+
+        # The emitted identifier is a raw-normalized var (toLowerCase only, no canon ternary).
+        # Check whether a strict enum-rejection gate is present; if so, the var is
+        # already bounded to "on"/"off" by construction and emitting it is safe.
+        if _STRICT_GATE_RE.search(body_clean):
+            continue
+
+        # Binary on/off discriminator: the emitted identifier must appear in a
+        # binary on/off comparison (== "on", == "off", or in ["on","off"] exactly)
+        # somewhere in the method body.  Mode/multi-state setters (setMode with
+        # m in ["auto","sleep"], setNightLight with lvlStr in ["off","dim","bright"],
+        # setNightlightMode with m in ["on","off","dim"]) do NOT satisfy this test
+        # because their identifier only appears in multi-value or non-on/off lists.
+        # Emitting a mode-enum value in sendEvent is correct; BP25 does not apply.
+        binary_ctx_re = re.compile(
+            r'\b' + re.escape(se_val) + r'\b'
+            r'.*?(?:==\s*"on"|==\s*"off"|in\s*\[\s*"on"\s*,\s*"off"\s*\])',
+            re.DOTALL,
+        )
+        if not binary_ctx_re.search(body_clean):
+            continue
+
+        # BP25 sub-check b: raw-normalized sendEvent without truthy-canon derivation.
+        se_line = _line_of(raw_text, brace_start + se_match.start())
+
+        findings.append(make_finding(
+            severity='FAIL',
+            rule_id='RULE33b_raw_normalized_sendevent',
+            title=(
+                f'BP25: {method_name}() emits raw normalized `{se_val}` in sendEvent '
+                f'instead of a truthy-derived canonical value'
+            ),
+            file_rel=file_rel,
+            lineno=se_line,
+            raw_lines=raw_lines,
+            why=(
+                f'`{se_val}` is normalized via toLowerCase() but truthy inputs '
+                f'"true"/"1"/"yes" would be stored as-is in the attribute instead '
+                f'of as "on". The canonical pattern derives a truthy-coerced value: '
+                f'`String canon = (v in ["on","true","1","yes"]) ? "on" : "off"` '
+                f'and emits canon.'
+            ),
+            fix=(
+                f'Add `String canon = ({se_val} in ["on","true","1","yes"]) ? "on" : "off"` '
+                f'after the toLowerCase() normalization, then use `canon` in sendEvent '
+                f'and payload coercion.'
+            ),
+        ))
+
+    return findings
+
+
+ALL_RULES = [check_rule33_case_sensitivity, check_rule33b_raw_normalized_sendevent]
