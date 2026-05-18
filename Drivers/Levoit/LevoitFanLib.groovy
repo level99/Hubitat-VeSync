@@ -277,6 +277,8 @@ def doSetMuteSwitch(onOff) {
     if (!requireNotNull(onOff, "setMute")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setMute: invalid value '${s}'"; recordError("setMute invalid: ${s}", [method:"setMuteSwitch"]); return }
+    // C3 idempotency gate: suppress redundant API call when attribute already matches.
+    if (device.currentValue("mute") == s) return
     int v = (s in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setMuteSwitch", [muteSwitch: v], "setMuteSwitch(${s})")
     if (httpOk(resp)) {
@@ -292,6 +294,8 @@ def doSetDisplayScreenSwitch(onOff) {
     if (!requireNotNull(onOff, "setDisplay")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setDisplay: invalid value '${s}'"; recordError("setDisplay invalid: ${s}", [method:"setDisplay"]); return }
+    // C3 idempotency gate: suppress redundant API call when attribute already matches.
+    if (device.currentValue("displayOn") == s) return
     int v = (s in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${s})")
     if (httpOk(resp)) {

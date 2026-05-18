@@ -810,4 +810,48 @@ class LevoitCore200SSpec extends HubitatSpec {
         and: "a setLevel (speed) API call was made with level corresponding to speed 1"
         !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
+
+    // -----------------------------------------------------------------------
+    // BP26: LevoitCorePurifierLib.setTimer — numeric coercion (Core 200S)
+    // Both-ways: revert safeIntArg in setTimer → this spec FAILs; restore → PASSes.
+    // -----------------------------------------------------------------------
+
+    @Unroll
+    def "BP26: setTimer('#badInput') does not throw and does not make an addTimer API call (Core 200S fallback=0 → cancelTimer)"() {
+        // safeIntArg maps "abc" and "" to 0; the 0 path routes to cancelTimer, not addTimer.
+        // Pre-fix: (seconds as Integer) on non-numeric input threw NumberFormatException (sandbox-swallowed).
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTimer(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no addTimer API call — 0 coercion routes to cancelTimer path"
+        testParent.allRequests.findAll { it.method == "addTimer" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setTimer('5.7') does not throw and makes an addTimer API call with truncated value (5 seconds)"() {
+        // safeIntArg("5.7") → 5. 5 > 0 → addTimer called with total=5.
+        // This test fails if safeIntArg is removed from LevoitCorePurifierLib.setTimer
+        // (bare `seconds as Integer` throws on "5.7" before the guard fires).
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTimer("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "an addTimer API call was made with total=5 (truncated from 5.7)"
+        def req = testParent.allRequests.find { it.method == "addTimer" }
+        req != null
+        req.data.total == 5
+    }
 }

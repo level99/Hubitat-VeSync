@@ -750,4 +750,54 @@ class LevoitCore300SSpec extends HubitatSpec {
         and: "no error logged"
         testLog.errors.isEmpty()
     }
+
+    // -----------------------------------------------------------------------
+    // BP26: LevoitCorePurifierLib.setAutoMode — numeric coercion on roomSize
+    // Both-ways: revert safeIntArg in setAutoMode → this spec FAILs; restore → PASSes.
+    // -----------------------------------------------------------------------
+
+    @Unroll
+    def "BP26: setAutoMode('efficient', '#badRoomSize') does not throw and makes the API call (Core 300S)"() {
+        // safeIntArg maps non-numeric roomSize to 0, then Math.max(1, 0) → 1.
+        // Pre-fix: (roomSize as Integer) threw NumberFormatException on non-numeric input
+        // before the guard fired — the sandbox swallowed it silently (no API call, no log).
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setAutoMode("efficient", badRoomSize)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setAutoPreference API call was made (not a silent no-op)"
+        def req = testParent.allRequests.find { it.method == "setAutoPreference" }
+        req != null
+
+        and: "room_size sent is >= 1 (non-numeric fell back to 0, then floor to 1)"
+        req.data.room_size >= 1
+
+        where:
+        badRoomSize << ["abc", "", true]
+    }
+
+    def "BP26: setAutoMode('efficient', '5.7') does not throw and makes the API call with truncated value (Core 300S)"() {
+        // safeIntArg("5.7") → 5. Math.max(1, 5) → 5. API call made with room_size=5.
+        // This test fails if safeIntArg is removed from LevoitCorePurifierLib.setAutoMode.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setAutoMode("efficient", "5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setAutoPreference API call was made"
+        def req = testParent.allRequests.find { it.method == "setAutoPreference" }
+        req != null
+
+        and: "room_size is 5 (truncated from 5.7)"
+        req.data.room_size == 5
+    }
 }

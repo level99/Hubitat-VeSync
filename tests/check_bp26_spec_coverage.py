@@ -2,13 +2,19 @@
 """
 BP26 safeIntArg spec coverage check.
 
-Enumerates every command method in Drivers/Levoit/*.groovy whose body calls
-safeIntArg() on a command parameter, then verifies that the corresponding
-*Spec.groovy file in src/test/groovy/drivers/ contains a BP26 coercion-throw
-regression spec for that method.
+Enumerates every command method in Drivers/Levoit/*.groovy (including library
+files) whose body calls safeIntArg() on a command parameter, then verifies
+that at least one corresponding *Spec.groovy file in
+src/test/groovy/drivers/ contains a BP26 coercion-throw regression spec for
+that method.
 
 A "BP26 spec" is defined as a test method whose name contains both "BP26"
 and the command method name (case-insensitive).
+
+For library files (*Lib.groovy): a method is covered if at least one of the
+Spock specs for a driver that #includes the library contains a BP26 spec
+naming that method.  Every including driver's spec is checked; any single hit
+satisfies the requirement.
 
 Exits 0 and produces no output when all safeIntArg-using command methods have
 coverage.  Exits 1 and lists uncovered sites otherwise.
@@ -42,6 +48,82 @@ def driver_name_to_spec_file(driver_file: Path) -> Path:
     return SPEC_DIR / f"{stem}Spec.groovy"
 
 
+def _find_struct_braces(source: str, start: int) -> list[tuple[int, str]]:
+    """
+    Scan from `start` in source and yield (position, '{' or '}') for every
+    brace that is NOT inside a string literal or comment.
+
+    Handled non-structural regions:
+      - // line comments (to end of line)
+      - /* */ block comments
+      - triple-quoted strings  \"\"\"...\"\"\"
+      - double-quoted strings  \"...\" (GString ${...} braces skipped)
+      - single-quoted strings  '...'
+    """
+    results: list[tuple[int, str]] = []
+    i = start
+    n = len(source)
+    while i < n:
+        c = source[i]
+        if c == '/' and i + 1 < n and source[i + 1] == '/':
+            i = source.find('\n', i)
+            if i < 0:
+                break
+            i += 1
+            continue
+        if c == '/' and i + 1 < n and source[i + 1] == '*':
+            end = source.find('*/', i + 2)
+            if end < 0:
+                break
+            i = end + 2
+            continue
+        if c == '"' and source[i:i+3] == '"""':
+            end = source.find('"""', i + 3)
+            if end < 0:
+                break
+            i = end + 3
+            continue
+        if c == '"':
+            i += 1
+            depth_gs = 0
+            while i < n:
+                ch = source[i]
+                if ch == '\\':
+                    i += 2
+                    continue
+                if ch == '"' and depth_gs == 0:
+                    i += 1
+                    break
+                if ch == '$' and i + 1 < n and source[i + 1] == '{':
+                    depth_gs += 1
+                    i += 2
+                    continue
+                if ch == '}' and depth_gs > 0:
+                    depth_gs -= 1
+                    i += 1
+                    continue
+                i += 1
+            continue
+        if c == "'":
+            i += 1
+            while i < n:
+                ch = source[i]
+                if ch == '\\':
+                    i += 2
+                    continue
+                if ch == "'":
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == '{':
+            results.append((i, '{'))
+        elif c == '}':
+            results.append((i, '}'))
+        i += 1
+    return results
+
+
 def find_safeintarg_command_methods(driver_source: str) -> list[str]:
     """
     Return names of top-level command methods (def <name>(...)) whose bodies
@@ -50,27 +132,39 @@ def find_safeintarg_command_methods(driver_source: str) -> list[str]:
     Strategy: split source into method blocks by scanning for top-level
     'def <name>(' tokens, then check each block for safeIntArg.
     """
-    # Find all top-level method definitions.
-    # A top-level def has no leading whitespace (or only class-level indentation
-    # consistent with the Hubitat driver flat structure).
-    # Pattern: start-of-line, optional spaces <=4, 'def ', then method name.
     method_pattern = re.compile(r"^(?:    )?def\s+(\w+)\s*\(", re.MULTILINE)
 
     results = []
-    lines = driver_source.splitlines(keepends=True)
-    full = "".join(lines)
+    full = driver_source
 
-    # Find all method start positions and names.
     method_starts = [(m.start(), m.group(1)) for m in method_pattern.finditer(full)]
     method_starts.append((len(full), None))  # sentinel
 
     for i, (start, name) in enumerate(method_starts[:-1]):
-        end = method_starts[i + 1][0]
-        body = full[start:end]
+        # Bound the method body by brace-depth matching so the body slice ends
+        # at the method's own closing brace, not at the next def token. Braces
+        # inside string literals and comments are skipped to avoid false matches
+        # (e.g. a string containing "}").
+        try:
+            brace_start = full.index("{", start)
+        except ValueError:
+            body_end = method_starts[i + 1][0]
+            body = full[start:body_end]
+            # fall through to safeIntArg check below
+        else:
+            braces = _find_struct_braces(full, brace_start)
+            depth = 0
+            body_end = method_starts[i + 1][0]
+            for pos, kind in braces:
+                if kind == '{':
+                    depth += 1
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        body_end = pos + 1
+                        break
+            body = full[start:body_end]
 
-        # Skip private/lifecycle/applyStatus methods that aren't user commands.
-        # We only care about public command methods that users can call.
-        # Filter out well-known non-command helpers.
         skip_names = {
             "installed", "updated", "initialize", "refresh", "logDebugOff",
             "ensureDebugWatchdog", "applyStatus", "on", "off", "toggle",
@@ -85,8 +179,6 @@ def find_safeintarg_command_methods(driver_source: str) -> list[str]:
         if name in skip_names:
             continue
 
-        # Must be a public def (not 'private').
-        # Check the characters just before 'def' in the full source.
         before = full[max(0, start - 20):start]
         if "private" in before:
             continue
@@ -102,16 +194,50 @@ def has_bp26_spec(spec_source: str, method_name: str) -> bool:
     Return True if spec_source contains a BP26 test for method_name.
     A match requires both 'BP26' and the method name to appear in the
     same test method name (def "...") line.
+
+    Word-boundary delimiters ensure that a spec for 'setTimer' does not
+    falsely satisfy coverage for 'setTimerRemaining' (or vice versa).
+    The boundaries use look-ahead/look-behind for non-word characters
+    since Groovy test name strings may not be pure identifiers.
     """
+    esc = re.escape(method_name)
+    # Word-boundary: preceded/followed by non-word char or string start/end
+    wb_name = r'(?<![A-Za-z0-9_])' + esc + r'(?![A-Za-z0-9_])'
     pattern = re.compile(
-        r'def\s+"[^"]*BP26[^"]*' + re.escape(method_name) + r'[^"]*"',
+        r'def\s+"[^"]*BP26[^"]*' + wb_name + r'[^"]*"',
         re.IGNORECASE,
     )
     pattern2 = re.compile(
-        r'def\s+"[^"]*' + re.escape(method_name) + r'[^"]*BP26[^"]*"',
+        r'def\s+"[^"]*' + wb_name + r'[^"]*BP26[^"]*"',
         re.IGNORECASE,
     )
     return bool(pattern.search(spec_source) or pattern2.search(spec_source))
+
+
+def lib_name_from_include(lib_file: Path) -> str | None:
+    """
+    Extract the library 'name:' value from a *Lib.groovy file.
+    e.g. library(name: "LevoitCorePurifier", ...) -> "LevoitCorePurifier"
+    """
+    source = lib_file.read_text(encoding="utf-8")
+    m = re.search(r'library\s*\(.*?name\s*:\s*"([^"]+)"', source, re.DOTALL)
+    return m.group(1) if m else None
+
+
+def find_including_drivers(lib_name: str) -> list[Path]:
+    """
+    Return driver files (non-Lib) that #include level99.<lib_name>.
+    """
+    include_pattern = re.compile(
+        r"#include\s+level99\." + re.escape(lib_name) + r"\b"
+    )
+    result = []
+    for f in sorted(DRIVERS_DIR.glob("*.groovy")):
+        if "Lib.groovy" in f.name or "Virtual" in f.name:
+            continue
+        if include_pattern.search(f.read_text(encoding="utf-8")):
+            result.append(f)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -122,27 +248,74 @@ def main() -> int:
     uncovered: list[str] = []
 
     for driver_file in sorted(DRIVERS_DIR.glob("*.groovy")):
-        # Skip library files — they don't have a corresponding spec of their own
-        # for individual methods; they are covered via the driver specs.
-        if "Lib.groovy" in driver_file.name or "Virtual" in driver_file.name:
+        # Virtual dev-tool files have no spec and are intentionally excluded.
+        if "Virtual" in driver_file.name:
             continue
 
+        is_lib = "Lib.groovy" in driver_file.name
         driver_source = driver_file.read_text(encoding="utf-8")
         command_methods = find_safeintarg_command_methods(driver_source)
 
         if not command_methods:
             continue
 
-        spec_file = driver_name_to_spec_file(driver_file)
-        if not spec_file.exists():
-            for m in command_methods:
-                uncovered.append(f"{driver_file.name}:{m}  (no spec file {spec_file.name})")
-            continue
+        if is_lib:
+            # For a library file, resolve the including drivers and require
+            # that at least one of their spec files contains a BP26 spec for
+            # each safeIntArg command method.
+            lib_name = lib_name_from_include(driver_file)
+            if not lib_name:
+                # Cannot determine library name — conservatively flag all methods.
+                for m in command_methods:
+                    uncovered.append(
+                        f"{driver_file.name}:{m}  (could not parse library name)"
+                    )
+                continue
 
-        spec_source = spec_file.read_text(encoding="utf-8")
-        for m in command_methods:
-            if not has_bp26_spec(spec_source, m):
-                uncovered.append(f"{driver_file.name}:{m}  (no BP26 spec in {spec_file.name})")
+            including_drivers = find_including_drivers(lib_name)
+            if not including_drivers:
+                for m in command_methods:
+                    uncovered.append(
+                        f"{driver_file.name}:{m}  (no driver #includes {lib_name})"
+                    )
+                continue
+
+            for method in command_methods:
+                # Collect all spec files for including drivers.
+                covered = False
+                missing_specs = []
+                for drv in including_drivers:
+                    spec_file = driver_name_to_spec_file(drv)
+                    if not spec_file.exists():
+                        missing_specs.append(spec_file.name)
+                        continue
+                    if has_bp26_spec(spec_file.read_text(encoding="utf-8"), method):
+                        covered = True
+                        break
+                if not covered:
+                    including_names = ", ".join(d.name for d in including_drivers)
+                    uncovered.append(
+                        f"{driver_file.name}:{method}"
+                        f"  (no BP26 spec in any including-driver spec:"
+                        f" {including_names})"
+                    )
+        else:
+            spec_file = driver_name_to_spec_file(driver_file)
+            if not spec_file.exists():
+                for m in command_methods:
+                    uncovered.append(
+                        f"{driver_file.name}:{m}"
+                        f"  (no spec file {spec_file.name})"
+                    )
+                continue
+
+            spec_source = spec_file.read_text(encoding="utf-8")
+            for m in command_methods:
+                if not has_bp26_spec(spec_source, m):
+                    uncovered.append(
+                        f"{driver_file.name}:{m}"
+                        f"  (no BP26 spec in {spec_file.name})"
+                    )
 
     if uncovered:
         print("MISSING BP26 coercion-throw specs:")

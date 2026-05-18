@@ -341,6 +341,8 @@ def setHorizontalOscillation(onOff){
     if (onOff == null) { logWarn "setHorizontalOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setHorizontalOscillation: invalid value '${s}'"; recordError("setHorizontalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("horizontalOscillation") == s) return
     Integer v = (s in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setOscillationStatus",
         [horizontalOscillationState: v, actType: "default"],
@@ -359,6 +361,8 @@ def setVerticalOscillation(onOff){
     if (onOff == null) { logWarn "setVerticalOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setVerticalOscillation: invalid value '${s}'"; recordError("setVerticalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("verticalOscillation") == s) return
     Integer v = (s in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setOscillationStatus",
         [verticalOscillationState: v, actType: "default"],
@@ -518,6 +522,8 @@ def setSmartCleaningReminder(onOff){
         recordError("setSmartCleaningReminder invalid: ${s}", [method:"setSmartCleaningReminder"])
         return
     }
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("smartCleaningReminder") == s) return
     int v = (s in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setSmartCleaningReminder", [smartCleaningReminderState: v],
                          "setSmartCleaningReminder(${s})")

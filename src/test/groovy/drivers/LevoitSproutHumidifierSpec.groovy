@@ -874,4 +874,50 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         req.data.colorTemperature == 2750
         req.data.nightLightSwitch == 1
     }
+
+    // -------------------------------------------------------------------------
+    // C3 idempotency gate: setDryingMode suppresses redundant API calls
+    // Both-ways: remove the C3 gate in setDryingMode → these specs FAIL; restore → PASS.
+    // -------------------------------------------------------------------------
+
+    def "C3: setDryingMode('on') is a no-op when dryingEnabled is already 'on'"() {
+        // The C3 gate prevents a redundant cloud call when the attribute already matches.
+        given: "dryingEnabled attribute is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "dryingEnabled", value: "on"])
+
+        when: "setDryingMode called with the same value"
+        driver.setDryingMode("on")
+
+        then: "no setDryingMode API call was made"
+        testParent.allRequests.findAll { it.method == "setDryingMode" }.isEmpty()
+    }
+
+    def "C3: setDryingMode('on') makes an API call when dryingEnabled is 'off'"() {
+        // The C3 gate must NOT suppress the call when the value differs.
+        given: "dryingEnabled attribute is 'off'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "dryingEnabled", value: "off"])
+
+        when: "setDryingMode called with 'on'"
+        driver.setDryingMode("on")
+
+        then: "a setDryingMode API call was made"
+        def req = testParent.allRequests.find { it.method == "setDryingMode" }
+        req != null
+        req.data.autoDryingSwitch == 1
+    }
+
+    def "C3: setDryingMode normalizes 'ON' to 'on' before emitting the event"() {
+        // BP25 fix: the event value must be the normalized lowercase string, not the raw parameter.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "dryingEnabled", value: "off"])
+
+        when:
+        driver.setDryingMode("ON")
+
+        then: "event value is lowercase 'on'"
+        lastEventValue("dryingEnabled") == "on"
+    }
 }

@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestParent
 
@@ -1434,6 +1435,147 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         req.data.right == 80
     }
 
+    // -------------------------------------------------------------------------
+    // C3 idempotency gates: oscillation + smartCleaningReminder
+    // Both-ways: remove a C3 gate → the matching spec FAILs; restore → PASS.
+    // -------------------------------------------------------------------------
+
+    def "C3: setHorizontalOscillation('on') is a no-op when horizontalOscillation is already 'on'"() {
+        given: "horizontalOscillation attribute is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "horizontalOscillation", value: "on"])
+
+        when:
+        driver.setHorizontalOscillation("on")
+
+        then: "no setOscillationStatus API call was made"
+        testParent.allRequests.findAll { it.method == "setOscillationStatus" }.isEmpty()
+    }
+
+    def "C3: setHorizontalOscillation('on') makes an API call when horizontalOscillation is 'off'"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "horizontalOscillation", value: "off"])
+
+        when:
+        driver.setHorizontalOscillation("on")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
+        req != null
+        req.data.horizontalOscillationState == 1
+    }
+
+    def "C3: setVerticalOscillation('off') is a no-op when verticalOscillation is already 'off'"() {
+        given: "verticalOscillation attribute is already 'off'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "verticalOscillation", value: "off"])
+
+        when:
+        driver.setVerticalOscillation("off")
+
+        then: "no setOscillationStatus API call was made"
+        testParent.allRequests.findAll { it.method == "setOscillationStatus" }.isEmpty()
+    }
+
+    def "C3: setVerticalOscillation('on') makes an API call when verticalOscillation is 'off'"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "verticalOscillation", value: "off"])
+
+        when:
+        driver.setVerticalOscillation("on")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
+        req != null
+        req.data.verticalOscillationState == 1
+    }
+
+    def "C3: setSmartCleaningReminder('on') is a no-op when smartCleaningReminder is already 'on'"() {
+        given: "smartCleaningReminder attribute is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "smartCleaningReminder", value: "on"])
+
+        when:
+        driver.setSmartCleaningReminder("on")
+
+        then: "no setSmartCleaningReminder API call was made"
+        testParent.allRequests.findAll { it.method == "setSmartCleaningReminder" }.isEmpty()
+    }
+
+    def "C3: setSmartCleaningReminder('on') makes an API call when smartCleaningReminder is 'off'"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "smartCleaningReminder", value: "off"])
+
+        when:
+        driver.setSmartCleaningReminder("on")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setSmartCleaningReminder" }
+        req != null
+        req.data.smartCleaningReminderState == 1
+    }
+
+    // ---- C3 idempotency gate: setMute (via doSetMuteSwitch in LevoitFanLib) ----
+    // Both-ways: remove the C3 gate in doSetMuteSwitch → these specs FAIL; restore → PASS.
+
+    def "C3: setMute('on') is a no-op when mute is already 'on' (LevoitFanLib doSetMuteSwitch)"() {
+        given: "mute attribute is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "mute", value: "on"])
+
+        when:
+        driver.setMute("on")
+
+        then: "no setMuteSwitch API call was made"
+        testParent.allRequests.findAll { it.method == "setMuteSwitch" }.isEmpty()
+    }
+
+    def "C3: setMute('on') makes an API call when mute is 'off' (LevoitFanLib doSetMuteSwitch)"() {
+        given: "mute attribute is 'off'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "mute", value: "off"])
+
+        when:
+        driver.setMute("on")
+
+        then: "a setMuteSwitch API call was made"
+        def req = testParent.allRequests.find { it.method == "setMuteSwitch" }
+        req != null
+        req.data.muteSwitch == 1
+    }
+
+    // ---- C3 idempotency gate: setDisplay (via doSetDisplayScreenSwitch in LevoitFanLib) ----
+    // Both-ways: remove the C3 gate in doSetDisplayScreenSwitch → these specs FAIL; restore → PASS.
+
+    def "C3: setDisplay('off') is a no-op when displayOn is already 'off' (LevoitFanLib doSetDisplayScreenSwitch)"() {
+        given: "displayOn attribute is already 'off'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "displayOn", value: "off"])
+
+        when:
+        driver.setDisplay("off")
+
+        then: "no setDisplay API call was made"
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+    }
+
+    def "C3: setDisplay('on') makes an API call when displayOn is 'off' (LevoitFanLib doSetDisplayScreenSwitch)"() {
+        given: "displayOn attribute is 'off'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "displayOn", value: "off"])
+
+        when:
+        driver.setDisplay("on")
+
+        then: "a setDisplay API call was made"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+    }
+
     def "BP26: setHorizontalRange('#badLeft', '#badRight') does not throw (safeIntArg coerces garbage to 0, API call made with 0)"() {
         // Non-numeric inputs must not throw NumberFormatException; safeIntArg coerces as follows:
         //   "abc" → fallback 0 → clamped 0 → API call with left=0, right=0
@@ -1510,5 +1652,48 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         req != null
         req.data.top    == 5
         req.data.bottom == 5
+    }
+
+    // -------------------------------------------------------------------------
+    // BP26: LevoitFanLib.setLevel — numeric coercion (Pedestal Fan includes LevoitFan)
+    // Both-ways: revert safeIntArg in LevoitFanLib.setLevel → these specs FAIL; restore → PASS.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "BP26: setLevel('#badInput') does not throw and routes to off() (Pedestal Fan fallback=0)"() {
+        // safeIntArg maps "abc", "", true to 0. 0 → off() path. No setLevel API call.
+        // This test fails if safeIntArg is removed from LevoitFanLib.setLevel.
+        given: "device is on so the auto-on guard does not confuse the assertion"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setLevel API call — 0 coercion routes to off()"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setLevel('5.7') does not throw and makes a setLevel API call with truncated value (Pedestal Fan)"() {
+        // safeIntArg("5.7") → 5. levelFromPercent(5) → 1. setLevel API called with manualSpeedLevel=1.
+        // This test fails if safeIntArg is removed from LevoitFanLib.setLevel.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setLevel API call was made"
+        !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
 }

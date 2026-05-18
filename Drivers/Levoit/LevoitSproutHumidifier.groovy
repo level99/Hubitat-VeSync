@@ -269,14 +269,20 @@ def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 // ---------- Drying mode ----------
 // VeSyncSproutHumid toggle_drying_mode: {autoDryingSwitch: int}
 // Drying mode runs the fan without mist after humidification to dry out the internals.
+// The dryingEnabled attribute reflects the user-controlled preference flag (autoDryingSwitch),
+// not hardware runtime state, so a C3 idempotency gate is valid here.
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
     if (!requireNotNull(onOff, "setDryingMode")) return false
-    Integer v = ((onOff as String).trim().toLowerCase() in ["on","true","1","yes"]) ? 1 : 0
-    def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    String v = (onOff as String).trim().toLowerCase()
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("dryingEnabled") == v) return true
+    Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
+    def resp = hubBypass("setDryingMode", [autoDryingSwitch: sw], "setDryingMode(${v})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"dryingEnabled", value: onOff)
-        logInfo "Drying mode: ${onOff}"
+        device.sendEvent(name:"dryingEnabled", value: v)
+        logInfo "Drying mode: ${v}"
     } else {
         logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"])
     }
