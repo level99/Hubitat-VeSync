@@ -289,6 +289,11 @@ def setDryingMode(onOff){
 // nightLightSwitch=1 when on, 0 when off.
 // brightness=0 with nightLightSwitch=0 means off.
 // NOTE: colorTemperature is optional — defaults to prior state (or 3500 if unknown).
+//
+// No C3 idempotency gate: the payload carries brightness and colorTemperature in addition
+// to the on/off switch. Two calls with the same on/off value but different brightness or
+// color-temperature arguments send different payloads, so comparing only nightlightOn
+// would incorrectly suppress legitimate brightness or color-temperature updates.
 def setNightlight(onOff, brightness = null, colorTemp = null){
     logDebug "setNightlight(${onOff}, ${brightness}, ${colorTemp})"
     if (!requireNotNull(onOff, "setNightlight")) return

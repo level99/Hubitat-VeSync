@@ -238,6 +238,9 @@ def setAutoStop(onOff){
 //     device --> broaden to continuous range or add the intermediate values to the enum.
 // Accepts enum "off" | "dim" | "bright". Rejects anything outside the 3-step table.
 // Request payload: {night_light_brightness: 0|50|100}
+//
+// No C3 idempotency gate: this is a three-state enum setter ("off"/"dim"/"bright"), not
+// a boolean on/off toggle. It is not classified as an on/off setter in the C3 gate scope.
 def setNightLight(level){
     logDebug "setNightLight(${level})"
     if (level == null) { logWarn "setNightLight called with null level (likely empty Rule Machine action parameter); ignoring"; return }

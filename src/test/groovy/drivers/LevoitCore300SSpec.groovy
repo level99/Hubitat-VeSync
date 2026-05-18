@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 
 /**
@@ -611,6 +612,47 @@ class LevoitCore300SSpec extends HubitatSpec {
 
         then: "no API call was made"
         testParent.allRequests.find { it.method == "setDisplay" } == null
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #26: safeIntArg regression — setLevel non-numeric RM inputs
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "BP26: setLevel('#badInput') does not throw and does not make a setLevel API call (Core 300S fallback=0 → off)"() {
+        // safeIntArg coerces "abc"/""/true to 0; pct==0 routes to off(), no speed API call.
+        // Pre-fix: (value as Integer) on any of these threw before the guard could fire.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no speed setLevel API call — 0 coercion routes to off()"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setLevel('5.7') does not throw and makes a setLevel API call (Core 300S)"() {
+        // safeIntArg("5.7") → 5 (truncation). 5% < 33% → speed band 1.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a speed setLevel API call was made"
+        !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
 
     // -------------------------------------------------------------------------

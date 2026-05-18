@@ -111,6 +111,11 @@ def off() {
 	setNightLight("off")
 }
 
+// No C3 idempotency gate: this is a three-state enum setter ("on"/"off"/"dim"), not a
+// boolean on/off toggle. It is not classified as an on/off setter in the C3 gate scope.
+// Additionally, this driver uses parent.sendBypassRequest directly (not hubBypass) and
+// does not read back device.currentValue("switch") — C3 would require a different
+// attribute lookup that is not consistent with this driver's call pattern.
 def setNightLight(mode)
 {
     logDebug "setNightLight(${mode})"

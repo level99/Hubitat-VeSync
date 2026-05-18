@@ -451,6 +451,8 @@ def setChildLock(onOff){
         recordError("setChildLock invalid: ${s}", [method:"setChildLock"])
         return
     }
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("childLock") == s) return
     int v = (s in ["on","true","1","yes"]) ? 1 : 0
     // [PREVIEW v2.4] iteration #1: method setChildLock + payload {childLock} (symmetric to read field)
     def resp = hubBypass("setChildLock", [childLock: v], "setChildLock(${s})")

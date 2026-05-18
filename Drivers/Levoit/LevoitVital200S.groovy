@@ -111,8 +111,10 @@ metadata {
 def setLightDetection(onOff) {
     logDebug "setLightDetection(${onOff})"
     if (!requireNotNull(onOff, "setLightDetection")) return
-    // BP25: normalize to lowercase before payload coercion.
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
     String v = (onOff as String).trim().toLowerCase()
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("lightDetection") == v) return
     def resp = hubBypass("setLightDetection", [lightDetectionSwitch: (v in ["on","true","1","yes"]) ? 1 : 0], "setLightDetection(${v})")
     if (httpOk(resp)) device.sendEvent(name:"lightDetection", value: v)
 }

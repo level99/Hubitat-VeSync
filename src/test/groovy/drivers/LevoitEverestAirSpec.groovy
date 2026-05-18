@@ -742,8 +742,9 @@ class LevoitEverestAirSpec extends HubitatSpec {
 
     // -------------------------------------------------------------------------
     // Bug Pattern #25: case-sensitivity — uppercase "ON"/"OFF" input inverts payload
-    // EverestAir has no C3 gate, so the test shape is: payload must carry correct
-    // integer value (1 for "ON", 0 for "OFF") and the event value must be lowercase.
+    // setDisplay and setChildLock have a C3 gate (added below); setLightDetection also
+    // has a C3 gate. Test shape: seed current attribute != input so the gate does not
+    // suppress; then verify payload carries the correct integer value and event is lowercase.
     // -------------------------------------------------------------------------
 
     def "BP25: setDisplay('ON') sends screenSwitch:1 (not 0) and emits displayOn='on'"() {
@@ -972,5 +973,73 @@ class LevoitEverestAirSpec extends HubitatSpec {
 
         then: "setChildLock API call was made"
         testParent.allRequests.any { it.method == "setChildLock" }
+    }
+
+    // -------------------------------------------------------------------------
+    // C3 idempotency gate — setLightDetection must not re-call API when the value
+    // already matches the current lightDetection attribute (EverestAir)
+    // -------------------------------------------------------------------------
+
+    def "C3: setLightDetection with already-current value makes no hubBypass call (EverestAir)"() {
+        // Regression guard: before this fix, EverestAir setLightDetection had no C3 gate,
+        // so calling setLightDetection("on") when light detection was already on fired a
+        // redundant cloud call on every Rule Machine evaluation.
+        // This test FAILS on pre-fix code (gate absent → allRequests is non-empty)
+        // and PASSES with the gate present.
+        given: "lightDetection attribute is already 'on'"
+        testDevice.events.add([name: "lightDetection", value: "on"])
+
+        when: "setLightDetection called with the same value"
+        driver.setLightDetection("on")
+
+        then: "no setLightDetection API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setLightDetection" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setLightDetection with different value does make a hubBypass call (EverestAir)"() {
+        // Confirm the gate is a state-change guard, not a complete no-op.
+        given: "lightDetection attribute is 'off'"
+        testDevice.events.add([name: "lightDetection", value: "off"])
+
+        when: "setLightDetection called with 'on' (different from current)"
+        driver.setLightDetection("on")
+
+        then: "setLightDetection API call was made"
+        testParent.allRequests.any { it.method == "setLightDetection" }
+    }
+
+    // -------------------------------------------------------------------------
+    // BP26: safeIntArg regression — setTimer non-numeric RM inputs must not throw
+    // -------------------------------------------------------------------------
+
+    def "BP26: setTimer('') does not throw on empty-string input from Rule Machine (EverestAir)"() {
+        // safeIntArg("", 0) returns 0; secs<=0 routes to cancelTimer(), no addTimerV2 call.
+        // Pre-fix: (seconds as Integer) on "" threw NumberFormatException (sandbox swallowed).
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTimer("")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no addTimerV2 API call"
+        testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
+    }
+
+    def "BP26: setTimer('abc') does not throw on non-numeric input from Rule Machine (EverestAir)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTimer("abc")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no addTimerV2 API call"
+        testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
     }
 }

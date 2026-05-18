@@ -280,6 +280,11 @@ def setChildLock(onOff){
 // Purifier nightlight: setNightLight with string enum {'on', 'off', 'dim'}.
 // Humidifier nightlight: setLightStatus with {brightness, colorTemperature, nightLightSwitch}.
 // These are different inherited methods from different base classes.
+//
+// No C3 idempotency gate: this is a three-state enum setter ("on"/"off"/"dim"), not a
+// boolean on/off toggle. The nightlightOn attribute stores all three states, so same-state
+// suppression would require comparing the full enum value — which is valid in principle
+// but this method is not classified as an on/off setter in the C3 gate scope.
 def setNightlightMode(nlMode){
     logDebug "setNightlightMode(${nlMode})"
     if (nlMode == null) { logWarn "setNightlightMode called with null nlMode (likely empty Rule Machine action parameter); ignoring"; return }

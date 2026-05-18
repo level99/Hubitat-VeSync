@@ -778,6 +778,34 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setChildLock") && it.contains("null") }
     }
 
+    def "C3: setChildLock with already-current value makes no hubBypass call (Pedestal Fan)"() {
+        // Regression guard: before this fix, Pedestal Fan setChildLock had no C3 gate,
+        // so calling setChildLock("on") when child-lock was already on fired a redundant
+        // cloud call. This test FAILS on pre-fix code (gate absent → allRequests non-empty)
+        // and PASSES with the gate present.
+        given: "childLock attribute is already 'on'"
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when: "setChildLock called with the same value"
+        driver.setChildLock("on")
+
+        then: "no setChildLock API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setChildLock with different value does make a hubBypass call (Pedestal Fan)"() {
+        // Confirm the gate is a state-change guard, not a complete no-op.
+        given: "childLock attribute is 'off'"
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when: "setChildLock called with 'on' (different from current)"
+        driver.setChildLock("on")
+
+        then: "setChildLock API call was made"
+        testParent.allRequests.any { it.method == "setChildLock" }
+    }
+
     def "applyStatus with childLock=1 emits childLock='on' attribute"() {
         given: "fixture with childLock=1"
         def fixture = loadYamlFixture("LPF-R432S.yaml")
@@ -1440,5 +1468,47 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         req != null
         req.data.left  == 5
         req.data.right == 5
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setVerticalRange with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setVerticalRange('#badTop', '#badBottom') does not throw (safeIntArg coerces garbage to 0, API call made with 0)"() {
+        // Non-numeric inputs must not throw NumberFormatException; safeIntArg coerces as follows:
+        //   "abc" → fallback 0 → clamped 0 → API call with top=0, bottom=0
+        //   ""    → fallback 0 → clamped 0 → API call with top=0, bottom=0
+        //   true  → "true" not numeric → fallback 0 → clamped 0 → API call with top=0, bottom=0
+        // In all cases an API call IS made (0 is a valid range value); the critical guarantee
+        // is no exception is thrown and swallowed by the sandbox.
+        // setVerticalRange passes through requireNotNull before safeIntArg; null would WARN/return.
+        // These tests use non-null non-numeric inputs so they reach the safeIntArg path.
+        when:
+        driver.setVerticalRange(badTop, badBottom)
+
+        then:
+        noExceptionThrown()
+
+        where:
+        badTop | badBottom
+        "abc"  | "abc"
+        ""     | ""
+        true   | true
+    }
+
+    def "BP26: setVerticalRange('5.7', '5.7') does not throw and makes setOscillationStatus API call with truncated value (5)"() {
+        // safeIntArg("5.7") → BigDecimal("5.7").intValue() = 5 (truncation, not rounding).
+        // Math.max(0, Math.min(100, 5)) = 5 (within valid range, no clamping applied).
+        // An API call IS made with top=5, bottom=5.
+        when:
+        driver.setVerticalRange("5.7", "5.7")
+
+        then:
+        noExceptionThrown()
+        and:
+        def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
+        req != null
+        req.data.top    == 5
+        req.data.bottom == 5
     }
 }

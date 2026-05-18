@@ -435,6 +435,10 @@ def setNightlightSwitch(value){
     if (!requireNotNull(value, "setNightlightSwitch")) return
     if (!isRgbVariant()) return
     // BP25: normalize to lowercase so Rule Machine "ON"/"OFF" routes correctly.
+    // No C3 idempotency gate: setNightlightSwitch preserves the last-known color and
+    // brightness from state. Two calls with the same on/off value may differ in the
+    // color/brightness payload actually sent (e.g. state changed between calls), so
+    // comparing only the on/off attribute would incorrectly suppress legitimate writes.
     String action = ((value as String).trim().toLowerCase() == "on") ? "on" : "off"
     // Keep last color + brightness when toggling -- pull from state or use defaults
     Integer brightness = (state.nightlightBrightness as Integer) ?: 100

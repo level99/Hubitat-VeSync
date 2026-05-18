@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 
 /**
@@ -614,6 +615,42 @@ class LevoitCore600SSpec extends HubitatSpec {
 
         then: "no API call was made"
         testParent.allRequests.find { it.method == "setDisplay" } == null
+    }
+
+    @Unroll
+    def "BP26: setLevel('#badInput') does not throw and does not make a setLevel API call (Core 600S fallback=0 → off)"() {
+        // safeIntArg coerces "abc"/""/true to 0; pct==0 routes to off(), no speed API call.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no speed setLevel API call"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setLevel('5.7') does not throw and makes a setLevel API call (Core 600S)"() {
+        // safeIntArg("5.7") → 5 (truncation). 5% < 25% → speed band 1.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a speed setLevel API call was made"
+        !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
 
     def "BP26: setTimer('') does not throw on empty-string input from Rule Machine (Core 600S)"() {

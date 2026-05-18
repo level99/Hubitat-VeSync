@@ -920,6 +920,42 @@ class LevoitVital200SSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setLightDetection") }
     }
 
+    // -------------------------------------------------------------------------
+    // C3 idempotency gate — setLightDetection must not re-call API when the value
+    // already matches the current lightDetection attribute (Vital 200S)
+    // -------------------------------------------------------------------------
+
+    def "C3: setLightDetection with already-current value makes no hubBypass call (Vital 200S)"() {
+        // Regression guard: before this fix, setLightDetection had no C3 gate, so calling
+        // setLightDetection("on") when light detection was already on fired a redundant cloud
+        // call on every Rule Machine evaluation.
+        // This test FAILS on pre-fix code (gate absent → allRequests is non-empty)
+        // and PASSES with the gate present.
+        given: "lightDetection attribute is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "lightDetection", value: "on"])
+
+        when: "setLightDetection called with the same value"
+        driver.setLightDetection("on")
+
+        then: "no setLightDetection API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setLightDetection" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setLightDetection with different value does make a hubBypass call (Vital 200S)"() {
+        // Confirm the gate is a state-change guard, not a complete no-op.
+        given: "lightDetection attribute is 'off'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "lightDetection", value: "off"])
+
+        when: "setLightDetection called with 'on' (different from current)"
+        driver.setLightDetection("on")
+
+        then: "setLightDetection API call was made"
+        testParent.allRequests.any { it.method == "setLightDetection" }
+    }
+
     // -----------------------------------------------------------------------
     // BP26 + BP18: setTimer (VitalPurifierLib) — numeric coercion + null-guard
     // -----------------------------------------------------------------------

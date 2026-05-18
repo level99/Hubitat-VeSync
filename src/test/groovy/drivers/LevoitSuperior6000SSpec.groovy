@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestParent
 
@@ -623,6 +624,48 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
     }
 
     // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setMistLevel with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setMistLevel('#badInput') does not throw and does not make a setVirtualLevel API call (Superior 6000S)"() {
+        // safeIntArg() maps non-numeric inputs to 0; 0 triggers the lvl<=0 guard → off() path.
+        // Superior 6000S uses setVirtualLevel with {levelIdx, virtualLevel, levelType:'mist'}.
+        given: "device is on so the auto-on guard doesn't confuse the assertion"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setVirtualLevel (mist) API call"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setMistLevel('5.7') does not throw and makes a setVirtualLevel API call with truncated value (5) (Superior 6000S)"() {
+        // safeIntArg("5.7") → 5 (truncation). Math.max(1, Math.min(9, 5)) = 5 → cloud call made.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setVirtualLevel API call was made with virtualLevel=5 (truncated from 5.7)"
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
+        req != null
+        req.data.virtualLevel == 5
+    }
+
+    // -----------------------------------------------------------------------
     // BP26: safe numeric coercion — setTargetHumidity with non-numeric inputs
     // -----------------------------------------------------------------------
 
@@ -663,5 +706,46 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
         req != null
         req.data.targetHumidity == 30
+    }
+
+    // -------------------------------------------------------------------------
+    // BP26: safeIntArg regression — setLevel non-numeric RM inputs must not throw
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "BP26: setLevel('#badInput') does not throw and routes to off() on Superior 6000S (fallback=0)"() {
+        // safeIntArg coerces "abc"/""/true to 0; pct==0 routes to off(), no setVirtualLevel call.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setVirtualLevel API call — 0 routes to off()"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setLevel('5.7') does not throw and makes a setVirtualLevel API call (Superior 6000S)"() {
+        // safeIntArg("5.7") → 5; levelFromPercent(5) → mist level 1 (5% of 0-100 maps to level 1 of 1-9).
+        // setLevel delegates to setMistLevel after percent→level mapping.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setVirtualLevel API call was made (mist level set)"
+        !testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
     }
 }

@@ -260,6 +260,10 @@ private boolean isNightlightVariant(){
 //   setNightlight("on",  70)     → setLightStatus {brightness: 70, nightLightSwitch: 1}
 //   setNightlight("off", 0)      → setLightStatus {brightness: 0,  nightLightSwitch: 0}
 // On non-WEUR variants: no-ops with INFO log.
+//
+// No C3 idempotency gate: two calls with the same on/off value but different brightness
+// arguments send different payloads to the device. Comparing only the nightlightOn attribute
+// would incorrectly suppress a legitimate brightness change that accompanies the same state.
 def setNightlight(onOff, brightness = null){
     logDebug "setNightlight(${onOff}, ${brightness})"
     if (!requireNotNull(onOff, "setNightlight")) return

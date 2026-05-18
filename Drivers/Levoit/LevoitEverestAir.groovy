@@ -314,9 +314,11 @@ def setChildLock(onOff){
 def setLightDetection(onOff){
     logDebug "setLightDetection(${onOff})"
     if (!requireNotNull(onOff, "setLightDetection")) return
-    // BP25: normalize to lowercase before payload coercion.
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" evaluates ("ON" == "on") as false → sends lightDetectionSwitch:0 (off) when intent was on.
     String v = (onOff as String).trim().toLowerCase()
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("lightDetection") == v) return
     Integer sw = (v in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setLightDetection", [lightDetectionSwitch: sw], "setLightDetection(${v})")
     if (httpOk(resp)) {

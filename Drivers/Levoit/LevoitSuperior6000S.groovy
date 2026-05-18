@@ -239,6 +239,10 @@ def setChildLock(onOff){
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
     if (!requireNotNull(onOff, "setDryingMode")) return false
+    // No C3 idempotency gate: the dryingMode attribute reflects the hardware's current drying
+    // state (active/complete/idle/off), not the autoDryingSwitch user preference that this
+    // method writes. Comparing against dryingMode would incorrectly suppress the write when
+    // the device is mid-cycle (state="active", user-pref="on").
     Integer v = ((onOff as String).trim().toLowerCase() in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
     if (httpOk(resp)) logInfo "Drying mode auto-switch set: ${onOff}"
