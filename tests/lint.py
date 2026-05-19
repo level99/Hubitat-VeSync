@@ -171,6 +171,7 @@ def _collect_per_file_rules():
         bp14_poll_persistence, bp17_poll_health, bp22_network_breaker,
         bp26_unsafe_int_coercion,
         process_token_scrub,
+        changelog_tmi,
     )
     rules = []
     for module in [
@@ -183,6 +184,7 @@ def _collect_per_file_rules():
         bp14_poll_persistence, bp17_poll_health, bp22_network_breaker,
         bp26_unsafe_int_coercion,
         process_token_scrub,
+        changelog_tmi,
     ]:
         rules.extend(module.ALL_RULES)
     return rules
@@ -430,6 +432,7 @@ def main():
             repo_root / 'levoitManifest.json',
             repo_root / 'README.md',
             repo_root / 'CLAUDE.md',
+            repo_root / 'CHANGELOG.md',
             repo_root / 'TODO.md',
             repo_root / '.claude',
             repo_root / '.gemini',

@@ -54,27 +54,30 @@ from lint_rules._helpers import make_finding
 
 DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
 
-# Matches def set*(param) or def cycle*(param) — captures method name and first param.
-# Untyped first param only (no type keyword before the name).
-# Group 1: method_name, Group 2: first_param_name (no type keyword immediately before it)
+# Matches def set*(param), def doSet*(param), or def cycle*(param) — captures method name
+# and first param.  Untyped first param only (no type keyword before the name).
+# Group 1: method_name, Group 2: first_param_name (no type keyword immediately before it).
+# doSet* shared-helper definitions receive the same user-supplied input as set* callers
+# (the caller normalises and delegates — the helper still does the integer coercion) and
+# must be covered by the same rule.
 SET_METHOD_RE = re.compile(
-    r'^\s*def\s+((?:set|cycle)\w+)\s*\(\s*(\w+)\s*(?:[,=)])',
+    r'^\s*def\s+((?:doSet|set|cycle)[A-Z]\w*)\s*\(\s*(\w+)\s*(?:[,=)])',
     re.MULTILINE,
 )
 
-# Matches def set*(Map mapParam ...) — Map-typed first parameter.
+# Matches def set*(Map mapParam ...) or def doSet*(Map mapParam ...) — Map-typed first param.
 # Group 1: method_name, Group 2: Map-param variable name.
 SET_MAP_METHOD_RE = re.compile(
-    r'^\s*def\s+((?:set|cycle)\w+)\s*\(\s*Map\s+(\w+)',
+    r'^\s*def\s+((?:doSet|set|cycle)[A-Z]\w*)\s*\(\s*Map\s+(\w+)',
     re.MULTILINE,
 )
 
-# Matches def set*(colorMap) — untyped first param that looks like a Map variable
-# (name contains "map", "color", "Map", or "Color", case-insensitive).
+# Matches def set*(colorMap) or def doSet*(colorMap) — untyped first param that looks like
+# a Map variable (name contains "map", "color", "Map", or "Color", case-insensitive).
 # This covers ``def setColor(colorMap)`` which Hubitat drivers commonly declare without
 # the ``Map`` keyword.  Group 1: method_name, Group 2: param_name.
 SET_UNTYPED_MAP_PARAM_RE = re.compile(
-    r'^\s*def\s+((?:set|cycle)\w+)\s*\(\s*(\w*[Mm]ap\w*|\w*[Cc]olor\w*)\s*(?:[,=)])',
+    r'^\s*def\s+((?:doSet|set|cycle)[A-Z]\w*)\s*\(\s*(\w*[Mm]ap\w*|\w*[Cc]olor\w*)\s*(?:[,=)])',
     re.MULTILINE,
 )
 
@@ -125,8 +128,16 @@ RELATIONAL_RE = re.compile(
     r'(?:\b(\w+)\s*(?:<|>|<=|>=)\s*\d+\b|\b\d+\s*(?:<|>|<=|>=)\s*(\w+)\b)'
 )
 
-# Matches safeIntArg(x, ...) — confirms the safe alternative is used
+# Matches safeIntArg(x, ...) — confirms the safe alternative is used somewhere in the body
 SAFE_INT_ARG_RE = re.compile(r'\bsafeIntArg\s*\(')
+
+# Extracts the first argument of a safeIntArg(receiver, fallback) call — the receiver
+# expression that is already guarded.  Matches the token between the opening paren and
+# the first comma, accepting optional-chain dot forms (``m?.hue``, ``m.a.b``,
+# ``m['key']``).  Group 1 is the receiver string (stripped of whitespace).
+SAFE_INT_ARG_RECEIVER_RE = re.compile(
+    r'\bsafeIntArg\s*\(\s*([\w\[\]\'".\?]+)\s*,'
+)
 
 # Matches explicit Integer/int typed declaration of the parameter name before any comparison,
 # which makes the comparison safe (the sandbox enforces the type at dispatch time or the
@@ -440,9 +451,22 @@ def check_rule37_unsafe_int_coercion(
         body = raw_text[brace_start:body_end]
         body_clean = _strip_line_comments(body)
 
-        # If the whole body already uses safeIntArg, the method is safe.
-        # Still check for coercion-in-fallback (same invariant as the untyped-param path).
+        # Partial-guard check: safeIntArg() in the body means SOME Map fields are
+        # already guarded, but not necessarily ALL of them.  A method like:
+        #   def setX(Map m){ safeIntArg(m.a, 0); Integer y = m.b as Integer }
+        # has m.a safe but m.b still throws.  We must NOT skip the whole method;
+        # instead, collect the set of receiver expressions already passed as the
+        # first argument to a safeIntArg() call and treat only those as exempt.
+        #
+        # Exception: still check for coercion-in-fallback (same invariant as the
+        # untyped-param path) — that bug is independent of partial vs full guard.
+        safeintarg_protected: set[str] = set()
         if SAFE_INT_ARG_RE.search(body_clean):
+            # Collect receivers already protected.
+            for sir_m in SAFE_INT_ARG_RECEIVER_RE.finditer(body_clean):
+                safeintarg_protected.add(sir_m.group(1).strip())
+            # Check for forbidden coercion-in-fallback (still applies regardless of
+            # how many fields are protected by safeIntArg).
             fb_m = SAFEINTARG_COERCION_FALLBACK_RE.search(body_clean)
             if fb_m:
                 abs_pos = brace_start + fb_m.start()
@@ -463,7 +487,10 @@ def check_rule37_unsafe_int_coercion(
                     ),
                     fix='Nest the fallback in a second safeIntArg() call.',
                 ))
-            continue
+            # If every reachable Map-field access appears in safeintarg_protected,
+            # the method may be fully guarded — but we still scan to catch any
+            # Map-field coercion whose receiver is NOT in the protected set.
+            # The scan below only flags receivers that are NOT in safeintarg_protected.
 
         # Collect alias names assigned from mapParam fields in this body.
         # e.g. ``def h = colorMap.hue`` or ``def hue = colorMap?.hue`` or
@@ -486,9 +513,12 @@ def check_rule37_unsafe_int_coercion(
                 continue
             base = _base_of(receiver)
             if base == map_param or base in alias_to_receiver:
+                label = alias_to_receiver[base] if base in alias_to_receiver else receiver
+                # Skip if this specific receiver is already guarded by safeIntArg().
+                if receiver in safeintarg_protected or label in safeintarg_protected:
+                    continue
                 abs_pos = brace_start + cast_m.start()
                 lineno = _line_of(raw_text, abs_pos)
-                label = alias_to_receiver[base] if base in alias_to_receiver else receiver
                 findings.append(make_finding(
                     severity='FAIL',
                     rule_id='RULE37_unsafe_int_coercion',
@@ -520,6 +550,8 @@ def check_rule37_unsafe_int_coercion(
             receiver = ti_m.group(1)
             base = _base_of(receiver)
             if base == map_param or base in alias_to_receiver:
+                if receiver in safeintarg_protected:
+                    continue
                 abs_pos = brace_start + ti_m.start()
                 lineno = _line_of(raw_text, abs_pos)
                 findings.append(make_finding(
@@ -553,6 +585,8 @@ def check_rule37_unsafe_int_coercion(
             alias = cast_m.group(1) or cast_m.group(2)
             if alias and alias in alias_to_receiver:
                 original_receiver = alias_to_receiver[alias]
+                if original_receiver in safeintarg_protected or alias in safeintarg_protected:
+                    continue
                 abs_pos = brace_start + cast_m.start()
                 lineno = _line_of(raw_text, abs_pos)
                 findings.append(make_finding(
@@ -586,6 +620,8 @@ def check_rule37_unsafe_int_coercion(
             alias = ti_m.group(1)
             if alias in alias_to_receiver:
                 original_receiver = alias_to_receiver[alias]
+                if original_receiver in safeintarg_protected or alias in safeintarg_protected:
+                    continue
                 abs_pos = brace_start + ti_m.start()
                 lineno = _line_of(raw_text, abs_pos)
                 findings.append(make_finding(
@@ -618,6 +654,8 @@ def check_rule37_unsafe_int_coercion(
             receiver = pi_m.group(1)
             base = _base_of(receiver)
             if base == map_param or base in alias_to_receiver:
+                if receiver in safeintarg_protected:
+                    continue
                 abs_pos = brace_start + pi_m.start()
                 lineno = _line_of(raw_text, abs_pos)
                 findings.append(make_finding(

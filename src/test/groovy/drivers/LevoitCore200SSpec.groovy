@@ -721,6 +721,38 @@ class LevoitCore200SSpec extends HubitatSpec {
         !testLog.warns.any { it.contains("cannot apply speed") }
     }
 
+    def "re-entrancy guard: setSpeed from on() does not issue setPurifierMode (Core 200S)"() {
+        // Regression guard for the `if (!state.turningOn) { handleMode("manual"); ... }`
+        // wrapper in setSpeed's recover-else branch.
+        //
+        // When on() calls setSpeed() internally (as part of its startup sequence),
+        // state.turningOn is already set.  The guard must suppress the setPurifierMode
+        // call — otherwise on() and setSpeed race each other with two concurrent cloud
+        // calls that can clobber each other.  The speed command itself (handleSpeed /
+        // setLevel) must STILL fire even when state.turningOn is set.
+        //
+        // Goes RED if the `if (!state.turningOn)` wrapper is removed:
+        //   without the guard, setPurifierMode IS issued, failing the assertion below.
+        //
+        // Both-ways: orchestrator-owned.
+        given: "state.turningOn is set (we are inside on()'s startup path) and mode is null"
+        settings.descriptionTextEnable = false
+        state.turningOn = true
+        state.mode = null  // null mode triggers the recover-else branch
+
+        when: "setSpeed is called (as on() would call it internally)"
+        driver.setSpeed("high")
+
+        then: "no setPurifierMode request was issued — re-entrancy guard suppressed it"
+        testParent.allRequests.findAll { it.method == "setPurifierMode" }.isEmpty()
+
+        and: "a setLevel (speed) API call WAS made — speed is still applied"
+        !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        and: "no exception was thrown"
+        noExceptionThrown()
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #25: C3 gate case-sensitivity — uppercase "ON"/"OFF" input
     // -------------------------------------------------------------------------

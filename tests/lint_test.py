@@ -5465,3 +5465,525 @@ class TestRule37BP26MapFieldCoercion:
         assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
             f"safeIntArg bracket access must not flag RULE37, got: {findings}"
         )
+
+    # -----------------------------------------------------------------------
+    # Item 1: partially-guarded method — safeIntArg on m.a but raw cast on m.b
+    # -----------------------------------------------------------------------
+
+    BAD_PARTIALLY_GUARDED = textwrap.dedent("""\
+        def setX(Map m){
+            Integer a = safeIntArg(m.a, 0)
+            Integer b = m.b as Integer
+            hubBypass("setX", [a: a, b: b])
+        }
+    """)
+
+    GOOD_FULLY_GUARDED = textwrap.dedent("""\
+        def setX(Map m){
+            Integer a = safeIntArg(m.a, 0)
+            Integer b = safeIntArg(m.b, 0)
+            hubBypass("setX", [a: a, b: b])
+        }
+    """)
+
+    def test_partially_guarded_map_method_flags_unguarded_field(self):
+        """
+        A set*(Map) body that guards m.a via safeIntArg but raw-casts m.b must
+        STILL FLAG RULE37 for the m.b cast — the whole-method safeIntArg exemption
+        must not suppress detection of unguarded fields.
+
+        Non-vacuity: reverting the partial-guard fix (restoring the old
+        ``if SAFE_INT_ARG_RE.search(body_clean): ... continue`` in the Map-field
+        pass) causes this test to FAIL because the rule returns [] for the
+        BAD_PARTIALLY_GUARDED source (whole-method skipped).
+        """
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_PARTIALLY_GUARDED)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37 for partially-guarded Map method (m.b unguarded), got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE37_unsafe_int_coercion'), (
+            f"RULE37 finding for partially-guarded method must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_fully_guarded_map_method_passes(self):
+        """
+        A set*(Map) body where ALL Map-field coercions go through safeIntArg must
+        NOT flag — all fields are already safe.
+
+        Non-vacuity: over-firing here would block all fully-safe setX(Map) from
+        passing lint, which is the wrong behavior.
+        """
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_FULLY_GUARDED)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Fully-guarded Map method must not flag RULE37, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE37 extension — BP26 doSet* shared-helper coverage
+# ---------------------------------------------------------------------------
+
+class TestRule37BP26DoSetMethod:
+    """
+    RULE37 Item-3a extension: doSet* shared-helper definitions receive the same
+    user-supplied numeric inputs as set* callers (the public set* normalises on/off,
+    then delegates; the doSet* helper still coerces the integer payload).
+    Bare ``param as Integer`` / ``.toInteger()`` in a doSet* body must be flagged.
+
+    Non-vacuity contracts:
+      - test_doset_method_as_integer_fails: reverting SET_METHOD_RE to exclude
+        ``doSet`` (e.g. ``(?:set|cycle)`` only) causes this test to FAIL because
+        the rule returns [] for the BAD_DOSET source (method not matched).
+      - test_doset_method_safeintarg_passes: must NOT flag when safeIntArg() is
+        used — confirms the extension does not over-fire on already-safe helpers.
+    """
+
+    from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion as _rule
+
+    BAD_DOSET = textwrap.dedent("""\
+        def doSetX(numericParam) {
+            Integer v = numericParam as Integer
+            hubBypass("setX", [val: v])
+        }
+    """)
+
+    GOOD_DOSET = textwrap.dedent("""\
+        def doSetX(numericParam) {
+            Integer v = safeIntArg(numericParam, 0)
+            hubBypass("setX", [val: v])
+        }
+    """)
+
+    def test_doset_method_as_integer_fails(self):
+        """
+        ``param as Integer`` inside doSetX(param) must flag RULE37 FAIL.
+
+        Non-vacuity: reverting SET_METHOD_RE to ``(?:set|cycle)`` only (removing
+        ``doSet``) returns [] here, making this test FAIL.
+        """
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_DOSET)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for doSetX bare 'as Integer', got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE37_unsafe_int_coercion'), (
+            f"RULE37 doSet* finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_doset_method_safeintarg_passes(self):
+        """
+        safeIntArg-guarded doSetX body must NOT flag -- correct form.
+
+        Non-vacuity: over-firing here would block all safe doSet* helpers from
+        passing lint.
+        """
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_DOSET)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"safeIntArg-guarded doSet* must not flag RULE37, got: {findings}"
+        )
+
+    def test_dosettle_not_matched_as_setter(self):
+        """
+        doSettle(x) must NOT flag RULE37 -- lowercase letter after 'doSet' prefix
+        means the [A-Z] anchor correctly excludes it from the setter regex.
+
+        Non-vacuity: removing the [A-Z] anchor (reverting to ``doSet\\w+``) causes
+        this test to FAIL because doSettle would be matched as a setter.
+        """
+        src = textwrap.dedent("""\
+            def doSettle(x) {
+                Integer v = x as Integer
+            }
+        """)
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, src)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"doSettle() has lowercase 't' after doSet -- must not match as setter, got: {findings}"
+        )
+
+    def test_settings_not_matched_as_setter(self):
+        """
+        settings(x) must NOT flag RULE37 -- lowercase letter after 'set' prefix
+        means the [A-Z] anchor correctly excludes it from the setter regex.
+
+        Non-vacuity: removing the [A-Z] anchor (reverting to ``set\\w+``) causes
+        this test to FAIL because settings would be matched as a setter.
+        """
+        src = textwrap.dedent("""\
+            def settings(x) {
+                Integer v = x as Integer
+            }
+        """)
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, src)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"settings() has lowercase 's' after 'set' -- must not match as setter, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE39 -- CHANGELOG user-facing TMI lint
+# ---------------------------------------------------------------------------
+
+from lint_rules.changelog_tmi import check_rule39_changelog_tmi
+
+
+class TestRule39ChangelogTmi:
+    """
+    RULE39: implementation-detail jargon must not appear in CHANGELOG.md
+    user-facing version-section bullets (### Fixed / ### Changed / ### Added).
+
+    Covers four jargon categories:
+      (i)   Exception class names (NullPointerException, etc.)
+      (ii)  Internal method names not in the public-command allowlist
+      (iii) Tracker references (issue #N, PR #N)
+      (iv)  Bare catalog labels (BP<N>, RULE<N>)
+
+    Non-vacuity contracts:
+      - must-catch tests FAIL if the rule predicate is disabled or narrowed.
+      - must-not-catch tests FAIL if the rule over-fires on clean content.
+      - The ### Internal exclusion test confirms the scope boundary.
+      - The preamble exclusion test confirms the preamble is out of scope.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    @staticmethod
+    def _run(src: str) -> list:
+        """Invoke RULE39 against src as if it were CHANGELOG.md."""
+        path = REPO_ROOT / 'CHANGELOG.md'
+        raw_lines = src.splitlines()
+        from lint_rules.groovy_lite import clean_source
+        _, cleaned_lines = clean_source(src)
+        return check_rule39_changelog_tmi(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+
+    @staticmethod
+    def _run_nonchangelog(src: str) -> list:
+        """Invoke RULE39 against src as a non-CHANGELOG file -- must return []."""
+        path = REPO_ROOT / 'Drivers' / 'Levoit' / 'SomeDriver.groovy'
+        raw_lines = src.splitlines()
+        from lint_rules.groovy_lite import clean_source
+        _, cleaned_lines = clean_source(src)
+        return check_rule39_changelog_tmi(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-catch: category (i) -- exception-class jargon
+    # -----------------------------------------------------------------------
+
+    def test_catches_exception_class_name(self):
+        """
+        NullPointerException in a user-facing Fixed bullet must flag RULE39.
+
+        Non-vacuity: removing the _EXCEPTION_CLASS_RE scan loop returns [] here,
+        making this test FAIL.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **Command silently fails.** A NullPointerException in the polling loop caused no output.
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE39_changelog_tmi' for f in findings), (
+            f"Expected RULE39_changelog_tmi for exception class name, got: {findings}"
+        )
+        assert any('NullPointerException' in f['title'] for f in findings
+                   if f['rule_id'] == 'RULE39_changelog_tmi'), (
+            f"Finding should name the matched exception class, got: {findings}"
+        )
+
+    def test_catches_groovy_cast_exception(self):
+        """GroovyCastException in a user-facing bullet must flag RULE39."""
+        src = textwrap.dedent("""\
+            ## [2.5] - 2026-05-04
+
+            ### Fixed
+
+            - **Blank parameter silently fails.** GroovyCastException thrown on empty Rule Machine slot.
+        """)
+        findings = self._run(src)
+        assert any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'GroovyCastException' in f['title']
+            for f in findings
+        ), f"Expected GroovyCastException finding, got: {findings}"
+
+    # -----------------------------------------------------------------------
+    # Must-catch: category (ii) -- internal method-name jargon
+    # -----------------------------------------------------------------------
+
+    def test_catches_internal_method_name(self):
+        """
+        updateDevices() in a user-facing Fixed bullet must flag RULE39.
+
+        Non-vacuity: removing the _METHOD_CALL_RE scan loop returns [] here.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **Polling resumes after reboot.** Fixed a bug in updateDevices() that skipped re-registration.
+        """)
+        findings = self._run(src)
+        assert any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'updateDevices()' in f['title']
+            for f in findings
+        ), f"Expected updateDevices() finding, got: {findings}"
+
+    def test_catches_sendbypassrequest_method(self):
+        """sendBypassRequest() is an internal method and must flag."""
+        src = textwrap.dedent("""\
+            ## [2.4] - 2026-05-01
+
+            ### Fixed
+
+            - **API call silently dropped.** sendBypassRequest() now retries on transient 500.
+        """)
+        findings = self._run(src)
+        assert any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'sendBypassRequest()' in f['title']
+            for f in findings
+        ), f"Expected sendBypassRequest() finding, got: {findings}"
+
+    # -----------------------------------------------------------------------
+    # Must-catch: category (iii) -- tracker references
+    # -----------------------------------------------------------------------
+
+    def test_catches_issue_hash_n(self):
+        """
+        issue #N in a user-facing bullet must flag RULE39.
+
+        Non-vacuity: removing the _TRACKER_REF_RE scan loop returns [] here.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Changed
+
+            - **Poll routing refactored** (issue #3 AC #3). Substring matching replaced.
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE39_changelog_tmi' for f in findings), (
+            f"Expected RULE39_changelog_tmi for issue #N, got: {findings}"
+        )
+
+    def test_catches_pr_hash_n(self):
+        """PR #N in a user-facing bullet must flag RULE39."""
+        src = textwrap.dedent("""\
+            ## [2.3] - 2026-04-28
+
+            ### Added
+
+            - **OasisMist 1000S support.** Based on PR #502 (OPEN/CHANGES_REQUESTED).
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE39_changelog_tmi' for f in findings), (
+            f"Expected RULE39_changelog_tmi for PR #N, got: {findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-catch: category (iv) -- bare catalog labels
+    # -----------------------------------------------------------------------
+
+    def test_catches_bp_label(self):
+        """
+        BP22 in a user-facing bullet must flag RULE39.
+
+        Non-vacuity: removing the _CATALOG_LABEL_RE scan loop returns [] here.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **Network outage no longer spams ERROR log (BP22).** One-time WARN is logged instead.
+        """)
+        findings = self._run(src)
+        assert any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'BP22' in f['title']
+            for f in findings
+        ), f"Expected BP22 catalog label finding, got: {findings}"
+
+    def test_catches_rule_label(self):
+        """RULE37 in a user-facing bullet must flag RULE39."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **Blank number input now falls back safely.** Enforced by RULE37 going forward.
+        """)
+        findings = self._run(src)
+        assert any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'RULE37' in f['title']
+            for f in findings
+        ), f"Expected RULE37 catalog label finding, got: {findings}"
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch: public command allowlist
+    # -----------------------------------------------------------------------
+
+    def test_setlevel_is_allowed(self):
+        """
+        setLevel() is a public driver command and must NOT flag RULE39.
+
+        Non-vacuity: removing 'setLevel' from _PUBLIC_COMMANDS causes this test
+        to FAIL (the rule would flag it as an internal method name).
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **setLevel(null) from Rule Machine no longer silently fails.**
+        """)
+        findings = self._run(src)
+        assert not any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'setLevel()' in f['title']
+            for f in findings
+        ), f"setLevel() is a public command and must not flag, got: {findings}"
+
+    def test_setmistlevel_is_allowed(self):
+        """setMistLevel() is a public driver command and must NOT flag RULE39."""
+        src = textwrap.dedent("""\
+            ## [2.5] - 2026-05-04
+
+            ### Fixed
+
+            - **setMistLevel(0) now turns the device off.**
+        """)
+        findings = self._run(src)
+        assert not any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'setMistLevel()' in f['title']
+            for f in findings
+        ), f"setMistLevel() is a public command and must not flag, got: {findings}"
+
+    def test_clean_bullet_passes(self):
+        """A plain-language user-facing bullet with no jargon must not flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **Polling resumes after a hub reboot.** The poll schedule now persists across reboots.
+            - **Network outage no longer spams the error log.** One warning is logged when the outage begins.
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE39_changelog_tmi' for f in findings), (
+            f"Clean bullets must not flag RULE39, got: {findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch: ### Internal exclusion
+    # -----------------------------------------------------------------------
+
+    def test_internal_section_excluded(self):
+        """
+        Exception class names and method names in ### Internal bullets must NOT flag.
+
+        Non-vacuity: removing the _INTERNAL_HEADER exclusion causes this test
+        to FAIL (both internal items would be flagged).
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Internal
+
+            - Lint rule RULE37 catches NullPointerException-class coercions. sendBypassRequest() retries on 500.
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE39_changelog_tmi' for f in findings), (
+            f"### Internal bullets must not trigger RULE39, got: {findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch: preamble exclusion
+    # -----------------------------------------------------------------------
+
+    def test_preamble_excluded(self):
+        """
+        Content before the first ## [ line must not flag, even if it contains jargon.
+
+        Non-vacuity: removing the in_version_section guard causes this test
+        to FAIL (the preamble line would be flagged).
+        """
+        src = textwrap.dedent("""\
+            # Changelog
+
+            This tracks NullPointerException fixes and RULE37 enforcement.
+
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **Plain-language bullet.** No jargon here.
+        """)
+        findings = self._run(src)
+        # Should not flag the preamble line
+        flagged_lines = [f['line'] for f in findings if f['rule_id'] == 'RULE39_changelog_tmi']
+        preamble_line = 3  # "This tracks NullPointerException fixes..."
+        assert preamble_line not in flagged_lines, (
+            f"Preamble line {preamble_line} must not flag RULE39, got findings at lines: {flagged_lines}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch: non-CHANGELOG file
+    # -----------------------------------------------------------------------
+
+    def test_non_changelog_file_not_checked(self):
+        """
+        RULE39 must return [] for any file that is not named CHANGELOG.md.
+
+        Non-vacuity: removing the path.name != 'CHANGELOG.md' gate causes this
+        test to FAIL when exception class names appear in non-changelog files.
+        """
+        src = "- **NullPointerException fix (BP22, RULE37).** issue #3 sendBypassRequest()\n"
+        findings = self._run_nonchangelog(src)
+        assert findings == [], (
+            f"RULE39 must not fire on non-CHANGELOG files, got: {findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch: additional public-command allowlist entries (NIT 2)
+    # -----------------------------------------------------------------------
+
+    def test_configure_is_allowed(self):
+        """
+        configure() is a Hubitat Configuration-capability command and must NOT
+        flag RULE39.
+
+        Non-vacuity: removing 'configure' from _PUBLIC_COMMANDS causes this test
+        to FAIL (the rule would flag it as an internal method name).
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **configure() no longer throws on first run.** The command now initialises state before polling.
+        """)
+        findings = self._run(src)
+        assert not any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'configure()' in f['title']
+            for f in findings
+        ), f"configure() is a public command and must not flag, got: {findings}"

@@ -869,4 +869,32 @@ class LevoitCore300SSpec extends HubitatSpec {
         and: "no 'cannot apply speed' warning was emitted (recover path replaces warn+drop)"
         !testLog.warns.any { it.contains("cannot apply speed") }
     }
+
+    def "re-entrancy guard: setSpeed from on() does not issue setPurifierMode (Core 300S)"() {
+        // Regression guard for the `if (!state.turningOn) { handleMode("manual"); ... }`
+        // wrapper in setSpeed's recover-else branch.
+        //
+        // When on() calls setSpeed() internally, state.turningOn is already set.
+        // The guard suppresses the setPurifierMode call to prevent a race.
+        // The speed command (setLevel) must still fire.
+        //
+        // Goes RED if the `if (!state.turningOn)` wrapper is removed.
+        // Both-ways: orchestrator-owned.
+        given: "state.turningOn is set and state.mode is null"
+        settings.descriptionTextEnable = false
+        state.turningOn = true
+        state.mode = null
+
+        when: "setSpeed is called (as on() would call it internally)"
+        driver.setSpeed("high")
+
+        then: "no setPurifierMode request was issued — re-entrancy guard suppressed it"
+        testParent.allRequests.findAll { it.method == "setPurifierMode" }.isEmpty()
+
+        and: "a setLevel (speed) API call WAS made — speed is still applied"
+        !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        and: "no exception was thrown"
+        noExceptionThrown()
+    }
 }

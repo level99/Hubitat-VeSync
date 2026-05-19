@@ -970,7 +970,10 @@ Fallback semantics: use `0` where 0 maps to an off/reject downstream guard (e.g.
 
 **Regression guard:** Spock spec must cover: `setX("abc")`, `setX("")`, `setX("5.7")`, `setX(true)` — each asserts `noExceptionThrown()` AND no API call was made (bad arg rejected cleanly by downstream guard). Required for the 5 representative drivers listed in ITEM 11 of the v2.6 sweep; backfill for others on next per-driver touch.
 
-**Lint enforcement:** RULE37 (`tests/lint_rules/bp26_unsafe_int_coercion.py`) flags bare `as Integer` / `as int` / `.toInteger()` in command-param coercion paths of set*/cycle* methods. Requires `safeIntArg` or an explicit type annotation on the param (typed params never receive non-numeric values from the sandbox).
+**Lint enforcement:** RULE37 (`tests/lint_rules/bp26_unsafe_int_coercion.py`) flags bare `as Integer` / `as int` / `.toInteger()` in command-param coercion paths of `set*` / `doSet*` / `cycle*` methods. Two passes:
+
+- **Pass 1 (scalar params):** scalar typed params (`Integer level`, `Number n`) are safe — the Hubitat sandbox enforces the declared type at dispatch, so non-numeric inputs never reach the body. Scalar UNtyped params are unsafe. `doSet*` shared-helper definitions are in scope (they receive the same user-supplied input the public `set*` delegates through unchanged).
+- **Pass 2 (Map-field coercions):** `set*(Map mapParam)` / `set*(colorMap)` (untyped Map-looking param) — Map field values are always `String` at runtime. Canonical case: `setColor(Map colorMap)` on OasisMist 450S. **Partially-guarded methods are still flagged:** `safeIntArg` on one Map field does NOT exempt the whole method — any unguarded field in the same body is still flagged.
 
 **Shipped:** v2.6 (2026-05-14) — ~20 sites across 14 driver/lib files.
 
