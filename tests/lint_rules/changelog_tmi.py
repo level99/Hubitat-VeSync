@@ -26,41 +26,67 @@ Four jargon categories (authoritative predicate):
        Allowlist: none -- user-facing text never needs exception class names.
        Plain-English phrase like "an internal error" is always sufficient.
 
-  (ii) Internal method-name jargon: a word matching ``\\w+\\(\\)`` that is a
-       recognisable internal implementation identifier.  An "internal identifier"
-       is one that is NOT in the public driver command allowlist.  The allowlist
+  (ii) Internal method-name jargon: detected via two complementary predicates.
+
+       Method-call shape ``foo()`` (parens required) -- any ``\\w+()`` pattern
+       where the name is NOT in the public driver command allowlist.  The allowlist
        covers commands that a user would legitimately call from Rule Machine or a
        dashboard (e.g. ``setLevel()``, ``setMistLevel()``, ``setMode()``,
        ``cycleSpeed()``, ``on()``, ``off()``, ``refresh()``, ``toggle()``,
-       ``captureDiagnostics()``, ``setDisplay()``, ``setChildLock()``,
-       ``setAutoStop()``, ``setDryingMode()``, ``setTimer()``, ``cancelTimer()``,
-       ``resetFilter()``, ``setAutoMode()``, ``setSpeed()``, ``setAutoPreference()``,
-       ``setRoomSize()``, ``setNightLight()``, ``setNightlight()``,
-       ``setNightlightMode()``, ``setNightlightSwitch()``, ``setHue()``,
-       ``setSaturation()``, ``setColor()``, ``setWarmMistLevel()``,
+       ``captureDiagnostics()``, ``forceReinitialize()``, ``resetAllChildren()``,
+       ``resyncEquipment()``, ``probeNightLight()``, ``setDisplay()``,
+       ``setChildLock()``, ``setAutoStop()``, ``setDryingMode()``, ``setTimer()``,
+       ``cancelTimer()``, ``resetFilter()``, ``setAutoMode()``, ``setSpeed()``,
+       ``setAutoPreference()``, ``setRoomSize()``, ``setNightLight()``,
+       ``setNightlight()``, ``setNightlightMode()``, ``setNightlightSwitch()``,
+       ``setHue()``, ``setSaturation()``, ``setColor()``, ``setWarmMistLevel()``,
        ``setHumidity()``, ``setTargetHumidity()``, ``setFanSpeed()``,
        ``setOscillation()``, ``setHorizontalOscillation()``,
        ``setVerticalOscillation()``, ``setMute()``, ``setLightDetection()``,
        ``setPetMode()``, ``setSmartCleaningReminder()``,
        ``setHorizontalRange()``, ``setVerticalRange()``,
        ``setHorizontalOscillationRange()``, ``setVerticalOscillationRange()``).
-       Internal identifiers include: polling helpers (``updateDevices()``,
-       ``sendBypassRequest()``, ``applyStatus()``, ``ensurePollWatchdog()``,
-       ``ensurePollHealth()``, ``deviceMethodFor()``), library internals
-       (``safeIntArg()``, ``ensureSwitchOn()``, ``requireNotNull()``,
-       ``logDebugOff()``, ``ensureDebugWatchdog()``, ``doSetDisplayScreenSwitch()``),
-       Rule Machine setup helpers (``initialize()``, ``updated()``).
+       Internal identifiers caught via this path include: polling helpers
+       (``updateDevices()``, ``sendBypassRequest()``, ``applyStatus()``,
+       ``ensurePollWatchdog()``, ``ensurePollHealth()``, ``deviceMethodFor()``),
+       library internals (``safeIntArg()``, ``ensureSwitchOn()``,
+       ``requireNotNull()``, ``logDebugOff()``, ``ensureDebugWatchdog()``,
+       ``doSetDisplayScreenSwitch()``), Rule Machine setup helpers
+       (``initialize()``, ``updated()``).
+
+       Bare-name shape (no parens) -- a word-boundary match against
+       ``_INTERNAL_JARGON_NAMES``, a small curated frozenset of compound
+       camelCase names with NO plausible plain-English usage in user-facing
+       release-notes prose.  Examples: ``applyStatus``, ``sendBypassRequest``,
+       ``ensurePollHealth``.  Plain English words like ``update``, ``configure``,
+       ``clear``, ``setup`` are deliberately NOT in this set -- they have natural
+       English meaning and the parens-required shape above is sufficient to catch
+       their call-site forms.  Reactively grow the set when a new bare-name
+       instance is found in a live CHANGELOG sweep.
+
+  Internal-name detection -- hybrid approach:
+    - Method-call shape ``foo()`` always flagged via ``_METHOD_CALL_RE``
+      (catches any name with parens; set membership determines allowlist vs jargon).
+    - Bare-name shape ``foo`` only flagged if ``foo in _INTERNAL_JARGON_NAMES``
+      (small curated set; grows reactively on real instances).
+    - Plain English words deliberately not in the bare-name set (no plausible
+      user-facing release-notes false-positive -- but if a real instance lands,
+      evaluate per-case before adding to the set).
 
   (iii) Tracker-reference jargon: ``issue #N``, ``PR #N``, ``Issue #N``,
         ``PR#N``, ``issue#N`` where N is one or more digits.  These are pipeline
         cross-references, not user-meaningful information.
 
-  (iv) Bare catalog-label jargon: ``BP`` followed by one or more digits
-       (e.g. ``BP23``, ``BP1``), or ``RULE`` followed by one or more digits
-       (e.g. ``RULE37``, ``RULE22``), when they appear as standalone tokens
-       (word-boundary anchored).  Parenthetical references like ``(BP22)`` or
-       ``(RULE37)`` are equally jargon -- the boundary anchor catches them.
+  (iv) Bare catalog-label jargon: ``BP`` optionally followed by ``#`` then one
+       or more digits (e.g. ``BP23``, ``BP1``, ``BP#1``, ``BP#26``), or ``RULE``
+       optionally followed by ``#`` then one or more digits (e.g. ``RULE37``,
+       ``RULE22``, ``RULE#37``, ``RULE#39``), when they appear as standalone
+       tokens (word-boundary anchored).  Parenthetical references like ``(BP22)``,
+       ``(BP#22)``, ``(RULE37)``, or ``(RULE#37)`` are equally jargon -- the
+       boundary anchor catches them.
        Note: ``BREAKING`` is not a catalog label and is explicitly allowed.
+       Non-matching forms: ``BP`` with no following digits (``BPx``, ``BP123BC``),
+       ``RULE`` with no following digits (``RULEa1``, ``RULEx``).
 """
 
 import re
@@ -182,10 +208,44 @@ _PUBLIC_COMMANDS = frozenset({
     'setHorizontalOscillationRange', 'setVerticalOscillationRange',
     # Diagnostics
     'captureDiagnostics',
+    # Parent-driver lifecycle / management commands (user-callable from device UI)
+    'forceReinitialize', 'resetAllChildren', 'resyncEquipment', 'probeNightLight',
 })
 
 # Matches identifier() patterns -- captures the name (without parens)
 _METHOD_CALL_RE = re.compile(r'\b([a-zA-Z_]\w*)\(\)')
+
+# Bare-name internal jargon -- compound camelCase names with NO plausible
+# plain-English usage in user-facing release-notes prose.  Matched word-boundary
+# anchored WITHOUT requiring trailing parens.
+#
+# Selection criteria: a name belongs here only if it is a compound camelCase
+# identifier that any release-notes reader would recognise as a Groovy method
+# name, not an English word.  Plain words like ``update``, ``configure``,
+# ``clear``, ``setup`` are EXCLUDED; their call-site forms (with parens) are
+# already caught by _METHOD_CALL_RE.  Grow this set reactively when a bare-name
+# instance is found in a live CHANGELOG sweep.
+_INTERNAL_JARGON_NAMES = frozenset({
+    'applyStatus',
+    'sendBypassRequest',
+    'ensurePollHealth',
+    'ensurePollWatchdog',
+    'peelEnvelope',
+    'seedPrefs',
+    'hubBypass',
+    'safeIntArg',
+    'ensureSwitchOn',
+    'ensureDebugWatchdog',
+    'mapIntegerStringToSpeed',
+    'requireNotNull',
+    'handleEvent',
+})
+
+# Pre-built pattern for bare internal-jargon names (word-boundary anchored).
+# Constructed from _INTERNAL_JARGON_NAMES at module load; no parens required.
+_INTERNAL_JARGON_RE = re.compile(
+    r'\b(' + '|'.join(re.escape(n) for n in sorted(_INTERNAL_JARGON_NAMES)) + r')\b'
+)
 
 
 # ---------------------------------------------------------------------------
@@ -223,8 +283,18 @@ def _is_external_tracker_ref(line: str) -> bool:
 # ---------------------------------------------------------------------------
 
 # Matches BP<digits> or RULE<digits> as standalone tokens (word-boundary anchored).
+# Optional '#' between prefix and digits covers both ``BP1`` and ``BP#1`` forms.
 # Does NOT match BREAKING (which starts differently).
-_CATALOG_LABEL_RE = re.compile(r'\b(BP\d+|RULE\d+)\b')
+# Does NOT match non-digit suffixes: ``BPx``, ``BP123BC``, ``RULEa1``, ``RULEx``
+# are not catalog labels and are not flagged.
+# Sanity check (verified at module load via assertion below):
+#   re.findall(_CATALOG_LABEL_RE, 'BP#1 BP1 RULE#37 RULE37 BP123BC RULEa1')
+#   -> ['BP#1', 'BP1', 'RULE#37', 'RULE37']  (not the non-digit-suffix forms)
+_CATALOG_LABEL_RE = re.compile(r'\b(BP#?\d+|RULE#?\d+)\b')
+
+assert re.findall(_CATALOG_LABEL_RE, 'BP#1 BP1 RULE#37 RULE37 BP123BC RULEa1') == [
+    'BP#1', 'BP1', 'RULE#37', 'RULE37'
+], "_CATALOG_LABEL_RE sanity check failed -- pattern is too broad or too narrow"
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +356,7 @@ def check_rule39_changelog_tmi(
                 ),
             ))
 
-        # (ii) Internal method-name jargon
+        # (ii) Internal method-name jargon -- method-call shape (parens required)
         for m in _METHOD_CALL_RE.finditer(line):
             name = m.group(1)
             if name not in _PUBLIC_COMMANDS:
@@ -309,6 +379,33 @@ def check_rule39_changelog_tmi(
                         'tests/lint_rules/changelog_tmi.py.'
                     ),
                 ))
+
+        # (ii) Internal method-name jargon -- bare-name shape (no parens required)
+        # Only flags names in the curated _INTERNAL_JARGON_NAMES set; plain English
+        # words like 'update', 'configure', 'clear' are not in the set.
+        for m in _INTERNAL_JARGON_RE.finditer(line):
+            name = m.group(1)
+            # Skip if already caught by the parens path above (avoid double-finding)
+            if f'{name}()' in line:
+                continue
+            findings.append(make_finding_for_file(
+                severity='WARN',
+                rule_id='RULE39_changelog_tmi',
+                title=f'Internal jargon name {name!r} (bare, no parens) in user-facing CHANGELOG bullet',
+                file_str=file_rel,
+                lineno=lineno,
+                context=f'    {line.rstrip()}',
+                why=(
+                    f'{name!r} is an internal implementation identifier. End users and '
+                    'HPM popup readers have no context for it. Replace with a behavioral '
+                    'description ("the status parser", "the API request", etc.) or move '
+                    'the reference to the ### Internal subsection.'
+                ),
+                fix=(
+                    f'Replace {name!r} with a plain-language behavioral description, or '
+                    'move the reference to the ### Internal subsection.'
+                ),
+            ))
 
         # (iii) Tracker references
         # Lines where the tracker ref is an external-provenance citation

@@ -5987,3 +5987,338 @@ class TestRule39ChangelogTmi:
             f['rule_id'] == 'RULE39_changelog_tmi' and 'configure()' in f['title']
             for f in findings
         ), f"configure() is a public command and must not flag, got: {findings}"
+
+    # -----------------------------------------------------------------------
+    # Must-catch: category (iv) broadened -- BP#N / RULE#N hash forms
+    # -----------------------------------------------------------------------
+
+    def test_bp_hash_form_in_fixed_section_flagged(self):
+        """
+        BP#1, BP#26, RULE#37, RULE#39 in user-facing bullets must flag RULE39.
+
+        Non-vacuity: reverting _CATALOG_LABEL_RE to r'\\b(BP\\d+|RULE\\d+)\\b'
+        (removing optional '#') causes this test to FAIL -- the hash forms are
+        no longer matched.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **Blank parameter no longer silently fails (BP#26).** Safe fallback applied.
+            - **Two-arg update signature enforced (BP#1).** Polling no longer throws.
+            - **Coercion enforced by RULE#37 going forward.** No behavior change.
+            - **Scope tracked by RULE#39.** No behavior change.
+        """)
+        findings = self._run(src)
+        flagged_labels = {
+            f['title'].split("'")[1]
+            for f in findings
+            if f['rule_id'] == 'RULE39_changelog_tmi' and 'catalog label' in f['title']
+        }
+        for label in ('BP#26', 'BP#1', 'RULE#37', 'RULE#39'):
+            assert label in flagged_labels, (
+                f"Expected catalog label {label!r} to flag RULE39, got flagged: {flagged_labels}"
+            )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch: BREAKING keyword is not a catalog label
+    # -----------------------------------------------------------------------
+
+    def test_breaking_not_flagged_as_catalog_label(self):
+        """
+        BREAKING in a user-facing bullet must NOT be flagged as a catalog label.
+
+        Non-vacuity: adding r'\\bBREAKING\\b' to _CATALOG_LABEL_RE would cause
+        this test to FAIL.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **BREAKING (Core 300S/400S/600S):** Some user-facing prose.
+        """)
+        findings = self._run(src)
+        catalog_findings = [
+            f for f in findings
+            if f['rule_id'] == 'RULE39_changelog_tmi' and 'catalog label' in f['title']
+        ]
+        assert not catalog_findings, (
+            f"BREAKING must not be flagged as a catalog label, got: {catalog_findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch: non-digit suffixes are not catalog labels
+    # -----------------------------------------------------------------------
+
+    def test_bp_no_digit_after_prefix_not_flagged(self):
+        """
+        BP, BPx, BP123BC, RULEa1, RULEx -- forms with no digit-only suffix
+        immediately after BP/RULE -- must NOT flag as catalog labels.
+
+        Non-vacuity: a broad regex like r'\\bBP\\w+\\b' would flag BPx and
+        BP123BC, making this test FAIL.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **BP tracking discipline improved.** BPx notation is avoided; BP123BC is not a real label. RULEa1 and RULEx are similarly unrelated tokens. This BP-style sentence has no trailing digit sequence.
+        """)
+        findings = self._run(src)
+        catalog_findings = [
+            f for f in findings
+            if f['rule_id'] == 'RULE39_changelog_tmi' and 'catalog label' in f['title']
+        ]
+        assert not catalog_findings, (
+            f"Non-digit-suffix BP/RULE tokens must not flag as catalog labels, got: {catalog_findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-catch: bare applyStatus / sendBypassRequest (no parens)
+    # -----------------------------------------------------------------------
+
+    def test_bare_applystatus_in_fixed_section_flagged(self):
+        """
+        Bare 'applyStatus' (no parens) in a user-facing Fixed bullet must flag RULE39.
+
+        Non-vacuity: removing 'applyStatus' from _INTERNAL_JARGON_NAMES causes
+        this test to FAIL (the bare form is no longer matched).
+        """
+        src = textwrap.dedent("""\
+            ## [2.2] - 2026-04-27
+
+            ### Added
+
+            - **Spock unit-test spec** for LV600S -- happy-path applyStatus from fixture plus field assertions.
+        """)
+        findings = self._run(src)
+        assert any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'applyStatus' in f['title']
+            for f in findings
+        ), f"Expected bare 'applyStatus' to flag RULE39, got: {findings}"
+
+    def test_bare_sendbypassrequest_in_added_section_flagged(self):
+        """
+        Bare 'sendBypassRequest' (no parens) in a user-facing Added bullet must flag.
+
+        Non-vacuity: removing 'sendBypassRequest' from _INTERNAL_JARGON_NAMES
+        causes this test to FAIL.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **API call retry added.** The sendBypassRequest path now retries once on 500.
+        """)
+        findings = self._run(src)
+        assert any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'sendBypassRequest' in f['title']
+            for f in findings
+        ), f"Expected bare 'sendBypassRequest' to flag RULE39, got: {findings}"
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch: plain English words that superficially resemble internals
+    # -----------------------------------------------------------------------
+
+    def test_english_updated_not_flagged(self):
+        """
+        The English verb 'updated' in a bullet must NOT flag as internal jargon.
+
+        Non-vacuity: adding 'update' or 'updated' to _INTERNAL_JARGON_NAMES
+        would cause this test to FAIL.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Changed
+
+            - **Polling schedule updated** to use a persistent cron.
+        """)
+        findings = self._run(src)
+        jargon_findings = [
+            f for f in findings
+            if f['rule_id'] == 'RULE39_changelog_tmi' and 'jargon' in f['title'].lower()
+               and 'updated' in f['title']
+        ]
+        assert not jargon_findings, (
+            f"English 'updated' must not flag as internal jargon, got: {jargon_findings}"
+        )
+
+    def test_english_installed_not_flagged(self):
+        """'installed' as English verb must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Added
+
+            - **Levoit Dual 200S Humidifier driver installed** via HPM.
+        """)
+        findings = self._run(src)
+        jargon_findings = [
+            f for f in findings
+            if f['rule_id'] == 'RULE39_changelog_tmi' and 'installed' in f['title']
+        ]
+        assert not jargon_findings, (
+            f"English 'installed' must not flag as internal jargon, got: {jargon_findings}"
+        )
+
+    def test_english_configure_not_flagged(self):
+        """'configure' as English verb (no parens) must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **No need to configure the parent after upgrading.**
+        """)
+        findings = self._run(src)
+        jargon_findings = [
+            f for f in findings
+            if f['rule_id'] == 'RULE39_changelog_tmi' and 'configure' in f['title']
+               and 'jargon' in f['title'].lower()
+        ]
+        assert not jargon_findings, (
+            f"English 'configure' (bare, no parens) must not flag, got: {jargon_findings}"
+        )
+
+    def test_applyStatus_with_parens_still_flagged_via_method_call_re(self):
+        """
+        applyStatus() WITH parens must still flag via _METHOD_CALL_RE path.
+
+        This preserves the existing parens-required predicate; the bare-name
+        path is additive, not a replacement.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **Status parsing improved.** The applyStatus() function now handles missing fields.
+        """)
+        findings = self._run(src)
+        assert any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'applyStatus()' in f['title']
+            for f in findings
+        ), f"Expected applyStatus() (with parens) to flag RULE39, got: {findings}"
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch: forceReinitialize / resetAllChildren / resyncEquipment /
+    #                 probeNightLight are public parent-driver commands
+    # -----------------------------------------------------------------------
+
+    def test_forceReinitialize_is_allowed(self):
+        """
+        forceReinitialize() is a public parent-driver command and must NOT flag.
+
+        Non-vacuity: removing 'forceReinitialize' from _PUBLIC_COMMANDS causes
+        this test to FAIL.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **Run forceReinitialize() on the parent device after upgrading** to re-arm the poll schedule.
+        """)
+        findings = self._run(src)
+        assert not any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'forceReinitialize()' in f['title']
+            for f in findings
+        ), f"forceReinitialize() is a public command and must not flag, got: {findings}"
+
+    def test_resetAllChildren_is_allowed(self):
+        """resetAllChildren() is a public parent-driver command and must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **Use resetAllChildren() to re-create child devices** if they show stale state.
+        """)
+        findings = self._run(src)
+        assert not any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'resetAllChildren()' in f['title']
+            for f in findings
+        ), f"resetAllChildren() is a public command and must not flag, got: {findings}"
+
+    def test_resyncEquipment_is_allowed(self):
+        """resyncEquipment() is a public parent-driver command and must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Added
+
+            - **Run resyncEquipment() from the parent device** to refresh all child configModule assignments.
+        """)
+        findings = self._run(src)
+        assert not any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'resyncEquipment()' in f['title']
+            for f in findings
+        ), f"resyncEquipment() is a public command and must not flag, got: {findings}"
+
+    def test_probeNightLight_is_allowed(self):
+        """probeNightLight() is a public parent-driver command and must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Added
+
+            - **Run probeNightLight() from the parent device** to detect nightlight hardware presence.
+        """)
+        findings = self._run(src)
+        assert not any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'probeNightLight()' in f['title']
+            for f in findings
+        ), f"probeNightLight() is a public command and must not flag, got: {findings}"
+
+    # -----------------------------------------------------------------------
+    # Must-catch: section-transition -- user-facing scope re-entered after Internal
+    # -----------------------------------------------------------------------
+
+    def test_user_facing_reentered_after_internal(self):
+        """
+        After a ### Internal subsection, a subsequent ### Changed section must
+        re-enter user-facing scope, and jargon in that ### Changed section must
+        flag RULE39.
+
+        Non-vacuity: removing the '### changed' entry from _USER_FACING_HEADERS
+        would cause this test to FAIL (### Changed would not re-enter scope and
+        the Exception class in it would not be flagged).
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **Some good user-facing fix.** No jargon here.
+
+            ### Internal
+
+            - **safeIntArg() refactored.** Internal implementation change, intentional jargon.
+
+            ### Changed
+
+            - **NullPointerException no longer thrown on blank input.** Exceptions were silently swallowed.
+        """)
+        findings = self._run(src)
+        # The ### Internal bullet must NOT flag
+        internal_flags = [
+            f for f in findings
+            if f['rule_id'] == 'RULE39_changelog_tmi' and f['line'] == 9
+        ]
+        assert not internal_flags, (
+            f"### Internal bullet must not flag RULE39, got: {internal_flags}"
+        )
+        # The ### Changed bullet MUST flag for NullPointerException
+        changed_flags = [
+            f for f in findings
+            if f['rule_id'] == 'RULE39_changelog_tmi' and 'NullPointerException' in f['title']
+        ]
+        assert changed_flags, (
+            f"NullPointerException in ### Changed (after ### Internal) must flag RULE39, "
+            f"got findings: {findings}"
+        )
