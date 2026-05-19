@@ -52,6 +52,12 @@ import re
 import sys
 from pathlib import Path
 
+from _groovy_lex import (
+    _strip_comments_and_strings,
+    _find_struct_braces,
+    extract_method_body,
+)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DRIVERS_DIR = REPO_ROOT / "Drivers" / "Levoit"
 
@@ -118,158 +124,9 @@ _FIRST_PARAM_RE = re.compile(
 )
 
 
-def _strip_comments_and_strings(text: str) -> str:
-    """
-    Return text with // line comments and /* */ block comments removed,
-    and string literal contents replaced by empty placeholders.
-
-    This prevents code comments or string literals that contain the text
-    `safeIntArg(` from matching structural body-content tests.
-    """
-    result = []
-    i = 0
-    n = len(text)
-    while i < n:
-        c = text[i]
-        if c == '/' and i + 1 < n and text[i + 1] == '/':
-            end = text.find('\n', i)
-            if end < 0:
-                break
-            result.append('\n')
-            i = end + 1
-            continue
-        if c == '/' and i + 1 < n and text[i + 1] == '*':
-            end = text.find('*/', i + 2)
-            if end < 0:
-                break
-            newlines = text[i:end + 2].count('\n')
-            result.append('\n' * newlines)
-            i = end + 2
-            continue
-        if c == '"' and text[i:i + 3] == '"""':
-            end = text.find('"""', i + 3)
-            if end < 0:
-                result.append('""""""')
-                break
-            newlines = text[i:end + 3].count('\n')
-            result.append('""' + '\n' * newlines + '""')
-            i = end + 3
-            continue
-        if c == '"':
-            i += 1
-            while i < n:
-                ch = text[i]
-                if ch == '\\':
-                    i += 2
-                    continue
-                if ch == '"':
-                    i += 1
-                    break
-                i += 1
-            result.append('""')
-            continue
-        if c == "'":
-            i += 1
-            while i < n:
-                ch = text[i]
-                if ch == '\\':
-                    i += 2
-                    continue
-                if ch == "'":
-                    i += 1
-                    break
-                i += 1
-            result.append("''")
-            continue
-        result.append(c)
-        i += 1
-    return ''.join(result)
-
 ENSURE_SWITCH_ON_RE = re.compile(r"\bensureSwitchOn\s*\(")
 
 BP24_NO_ON_RE = re.compile(r"BP24:\s*NO-ON")
-
-
-def _find_struct_braces(source: str, start: int) -> list:
-    results = []
-    i = start
-    n = len(source)
-    while i < n:
-        c = source[i]
-        if c == '/' and i + 1 < n and source[i + 1] == '/':
-            i = source.find('\n', i)
-            if i < 0:
-                break
-            i += 1
-            continue
-        if c == '/' and i + 1 < n and source[i + 1] == '*':
-            end = source.find('*/', i + 2)
-            if end < 0:
-                break
-            i = end + 2
-            continue
-        if c == '"' and source[i:i+3] == '"""':
-            end = source.find('"""', i + 3)
-            if end < 0:
-                break
-            i = end + 3
-            continue
-        if c == '"':
-            i += 1
-            depth_gs = 0
-            while i < n:
-                ch = source[i]
-                if ch == '\\':
-                    i += 2
-                    continue
-                if ch == '"' and depth_gs == 0:
-                    i += 1
-                    break
-                if ch == '$' and i + 1 < n and source[i + 1] == '{':
-                    depth_gs += 1
-                    i += 2
-                    continue
-                if ch == '}' and depth_gs > 0:
-                    depth_gs -= 1
-                    i += 1
-                    continue
-                i += 1
-            continue
-        if c == "'":
-            i += 1
-            while i < n:
-                ch = source[i]
-                if ch == '\\':
-                    i += 2
-                    continue
-                if ch == "'":
-                    i += 1
-                    break
-                i += 1
-            continue
-        if c == '{':
-            results.append((i, '{'))
-        elif c == '}':
-            results.append((i, '}'))
-        i += 1
-    return results
-
-
-def extract_method_body(source: str, def_pos: int) -> str:
-    try:
-        brace_start = source.index("{", def_pos)
-    except ValueError:
-        return source[def_pos:]
-    braces = _find_struct_braces(source, brace_start)
-    depth = 0
-    for pos, kind in braces:
-        if kind == '{':
-            depth += 1
-        else:
-            depth -= 1
-            if depth == 0:
-                return source[def_pos : pos + 1]
-    return source[def_pos:]
 
 
 def _extract_sendEvent_value(body: str):

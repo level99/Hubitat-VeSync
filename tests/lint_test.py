@@ -3677,3 +3677,938 @@ class TestRule22WhitelistParity:
         # = the hardcoded context string → context was always preserved, even before the fix.
         # The context-preservation fix only changed behaviour for lineno>2; lineno=0 was
         # never the broken path.
+
+
+# ---------------------------------------------------------------------------
+# T21-A/B: Verifier internals — _strip_comments_and_strings
+# ---------------------------------------------------------------------------
+
+class TestStripCommentsAndStrings:
+    """
+    Persisted pytest suite for check_bp24_classification._strip_comments_and_strings.
+
+    Covers ALL handled literal/comment forms including Groovy slashy strings
+    and dollar-slashy strings (T21-A regression guards).
+
+    Non-vacuity contracts (T21-A regression guards):
+      - test_slashy_with_embedded_block_comment_* tests MUST FAIL when
+        T21-A is reverted (i.e., when slashy-string detection is removed
+        from _strip_comments_and_strings and replaced with the old code that
+        dispatches // then /* without a prior slashy check).
+      - These are the load-bearing T21-A regression guards.
+    """
+
+    @staticmethod
+    def _strip(text: str) -> str:
+        from _groovy_lex import _strip_comments_and_strings
+        return _strip_comments_and_strings(text)
+
+    # ---- // line comment ----
+
+    def test_line_comment_removed(self):
+        """// comment text must be stripped; trailing newline preserved."""
+        out = self._strip('int x = 1 // some safeIntArg(x) comment\nreturn x\n')
+        assert 'safeIntArg(' not in out
+        assert 'return x' in out
+
+    def test_line_comment_at_eof_removed(self):
+        """// comment with no trailing newline must be stripped (break path)."""
+        out = self._strip('int x = 1 // trailing')
+        assert 'trailing' not in out
+
+    # ---- /* */ block comment ----
+
+    def test_block_comment_removed(self):
+        """/* */ block comment must be stripped; embedded safeIntArg must not survive."""
+        src = 'def x = 1\n/* safeIntArg(x) is described here */\nreturn x\n'
+        out = self._strip(src)
+        assert 'safeIntArg(' not in out
+        assert 'return x' in out
+
+    def test_block_comment_newlines_preserved(self):
+        """Block comment spanning multiple lines must preserve line count."""
+        src = 'a\n/* line1\nline2\nline3 */\nb\n'
+        out = self._strip(src)
+        assert out.count('\n') == src.count('\n')
+
+    def test_unterminated_block_comment_truncates(self):
+        """Unterminated /* is treated as rest-of-input stripped (break path)."""
+        out = self._strip('int x = 1\n/* never closed\nsafeIntArg(x)\n')
+        assert 'safeIntArg(' not in out
+
+    # ---- terminated block comment mentioning safeIntArg (must strip; real call on a later line must survive) ----
+
+    def test_terminated_comment_mentioning_safeintarg_stripped(self):
+        """
+        A terminated /* */ comment that mentions safeIntArg must be stripped,
+        and the real safeIntArg call on a LATER line must survive.
+
+        Regression guard: the verifier must not treat comment text mentioning
+        safeIntArg as evidence the primary param is coerced.
+        """
+        src = (
+            'def setDryingMode(onOff) {\n'
+            '    // safeIntArg( would be used here if this were a numeric setter\n'
+            '    /* exclude: safeIntArg(onOff) is in this comment only */\n'
+            '    Integer sw = (onOff == "on") ? 1 : 0\n'
+            '    hubBypass("setDryingMode", [autoDryingSwitch: sw])\n'
+            '}\n'
+        )
+        out = self._strip(src)
+        # The comment-embedded safeIntArg must be stripped.
+        # There is no real safeIntArg call in the code — after stripping, none
+        # should appear.
+        assert 'safeIntArg(' not in out, (
+            "Terminated comment mentioning safeIntArg must be stripped; "
+            f"survived in stripped output: {out!r}"
+        )
+
+    # ---- Double-quoted strings ----
+
+    def test_double_quoted_string_contents_stripped(self):
+        """String literal contents must be replaced; outer quotes preserved."""
+        out = self._strip('def s = "safeIntArg(x) inside string"\nreturn s\n')
+        assert 'safeIntArg(' not in out
+        assert '""' in out  # placeholder present
+
+    def test_double_quoted_escaped_quote(self):
+        """Escaped \" inside a string must not close the string prematurely."""
+        out = self._strip(r'def s = "he said \"safeIntArg(x)\"" + y')
+        assert 'safeIntArg(' not in out
+
+    # ---- Triple-quoted strings ----
+
+    def test_triple_quoted_string_stripped(self):
+        """Triple-quoted string contents must be stripped."""
+        src = 'def s = """multi\nline\nsafeIntArg(x)"""\nreturn s\n'
+        out = self._strip(src)
+        assert 'safeIntArg(' not in out
+
+    def test_triple_quoted_newlines_preserved(self):
+        """Triple-quoted string must preserve line count via placeholder."""
+        src = 'def s = """line1\nline2\nline3"""\nend\n'
+        out = self._strip(src)
+        assert out.count('\n') == src.count('\n')
+
+    # ---- Single-quoted strings ----
+
+    def test_single_quoted_string_stripped(self):
+        """Single-quoted string contents must be stripped."""
+        out = self._strip("def s = 'safeIntArg(x)'\nreturn s\n")
+        assert 'safeIntArg(' not in out
+
+    # ---- GString ${...} ----
+
+    def test_gstring_expression_contents_stripped(self):
+        """GString body including ${...} is stripped as part of the string literal."""
+        out = self._strip('def s = "value: ${safeIntArg(x)}"\n')
+        assert 'safeIntArg(' not in out
+
+    # ---- Escape sequences ----
+
+    def test_escape_sequences_inside_double_quote(self):
+        """\\n, \\t, \\\\ inside string must not cause premature string close."""
+        out = self._strip(r'def s = "a\nb\tc\\safeIntArg(x)"' + '\nreturn\n')
+        assert 'safeIntArg(' not in out
+
+    # ---- Dollar-slashy strings ----
+
+    def test_dollar_slashy_stripped(self):
+        """Dollar-slashy string $/.../$  body must be stripped."""
+        src = 'def re = $/safeIntArg(x) inside dollar-slashy/$\nreturn\n'
+        out = self._strip(src)
+        assert 'safeIntArg(' not in out
+
+    def test_dollar_slashy_with_embedded_block_comment_chars_stripped(self):
+        """
+        Dollar-slashy string containing /* must NOT open a block comment.
+
+        If the dollar-slashy check fires BEFORE the /* check (correct), the
+        entire string is consumed as a literal and safeIntArg on a later line
+        survives in the stripped output.
+
+        T21-A regression guard (dollar-slashy variant): reverting T21-A
+        removes the dollar-slashy check, so $/ is emitted as '$' then
+        '/' where '/' may or may not enter slashy-string mode depending on
+        context — but the embedded '/*' is then encountered as a bare /
+        followed by *, which opens a block comment, truncating the remaining
+        source including the real safeIntArg call.
+        """
+        src = (
+            'def setDryingMode(onOff) {\n'
+            '    def re = $/a /* b/$\n'
+            '    int secs = safeIntArg(seconds, 0)\n'
+            '}\n'
+        )
+        out = self._strip(src)
+        assert 'safeIntArg(seconds' in out, (
+            "safeIntArg(seconds must survive stripping when dollar-slashy "
+            "string contains /* — dollar-slashy must be consumed before /* dispatch. "
+            f"Got stripped output: {out!r}"
+        )
+
+    # ---- Slashy strings (T21-A core regression guards) ----
+
+    def test_slashy_stripped(self):
+        """Groovy slashy string /.../  body must be stripped."""
+        src = 'def re = /safeIntArg(x)/\nreturn\n'
+        out = self._strip(src)
+        assert 'safeIntArg(' not in out
+
+    def test_slashy_with_embedded_block_comment_survives_safeintarg(self):
+        """
+        Slashy string /a/*b/ must NOT trigger block-comment parsing.
+        The safeIntArg call on a subsequent line must survive in the
+        stripped output.
+
+        T21-A regression guard (adversarial form 1 — no backslash):
+        With T21-A reverted, the tokenizer sees '/*' inside the slashy
+        literal and opens a block comment.  The '*/'-free remainder
+        causes the 'break' path (unterminated block comment), truncating
+        the rest of the body including the real safeIntArg call.
+        This test FAILS without T21-A and PASSES with T21-A applied.
+        """
+        src = (
+            'def setDryingMode(onOff) {\n'
+            '    def re = /a/*b/\n'
+            '    int secs = safeIntArg(seconds, 0)\n'
+            '}\n'
+        )
+        out = self._strip(src)
+        assert 'safeIntArg(seconds' in out, (
+            "safeIntArg(seconds must survive stripping when slashy string "
+            "contains /*. T21-A regression: the slashy check must fire BEFORE "
+            f"the /* dispatch. Got stripped output: {out!r}"
+        )
+
+    def test_slashy_with_backslash_embedded_block_comment_survives_safeintarg(self):
+        """
+        Slashy string /a\\/*b/ (with explicit \\/  escape) must not trigger
+        block-comment parsing.
+
+        T21-A regression guard (adversarial form 2 — with backslash).
+        """
+        src = (
+            'def setDryingMode(onOff) {\n'
+            '    def re = /a\\/*b/\n'
+            '    int secs = safeIntArg(seconds, 0)\n'
+            '}\n'
+        )
+        out = self._strip(src)
+        assert 'safeIntArg(seconds' in out, (
+            "safeIntArg(seconds must survive stripping when slashy string "
+            "contains \\/*. Got stripped output: {out!r}"
+        )
+
+    def test_division_operator_not_misread_as_slashy(self):
+        """
+        A '/' after an identifier (division context) must NOT open a slashy
+        string.  The code after the '/' must survive in the stripped output.
+        """
+        src = 'def x = a / b\nint secs = safeIntArg(seconds, 0)\n'
+        out = self._strip(src)
+        assert 'safeIntArg(seconds' in out, (
+            "Division operator '/' must not open a slashy string; "
+            f"safeIntArg must survive. Got: {out!r}"
+        )
+
+    def test_slashy_after_equals_sign(self):
+        """Slashy string opened after '=' (expression-start) must be stripped."""
+        src = 'def re = /abc/\nint secs = safeIntArg(seconds, 0)\n'
+        out = self._strip(src)
+        # The slashy body /abc/ is stripped; safeIntArg on next line survives.
+        assert 'safeIntArg(seconds' in out
+        assert 'abc' not in out
+
+
+# ---------------------------------------------------------------------------
+# T21-B: Verifier internals — _find_struct_braces / extract_method_body
+# ---------------------------------------------------------------------------
+
+class TestFindStructBraces:
+    """
+    Persisted pytest suite for check_bp24_classification._find_struct_braces
+    and extract_method_body.
+
+    Covers slashy-string brace desync (T21-A INFO-adv-1 fix).
+    """
+
+    @staticmethod
+    def _braces(src: str, start: int = 0):
+        from _groovy_lex import _find_struct_braces
+        return _find_struct_braces(src, start)
+
+    @staticmethod
+    def _body(src: str, def_pos: int = 0) -> str:
+        from _groovy_lex import extract_method_body
+        return extract_method_body(src, def_pos)
+
+    def test_simple_method_body(self):
+        """Simple method body is extracted correctly."""
+        src = 'def foo() { return 1 }'
+        body = self._body(src)
+        assert body == src
+
+    def test_nested_braces_method_body(self):
+        """Nested braces tracked correctly — body ends at outermost close."""
+        src = 'def foo() { if (x) { return 1 } return 0 } def bar() { }'
+        body = self._body(src)
+        assert body == 'def foo() { if (x) { return 1 } return 0 }'
+
+    def test_string_braces_not_structural(self):
+        """Braces inside string literals must not affect depth tracking."""
+        src = 'def foo() { def s = "{ not structural }" }'
+        body = self._body(src)
+        assert body == src
+
+    def test_line_comment_brace_not_structural(self):
+        """Braces inside // comments must not affect depth tracking."""
+        src = 'def foo() {\n    // { not structural }\n    return 1\n}'
+        body = self._body(src)
+        assert body == src
+
+    def test_block_comment_brace_not_structural(self):
+        """Braces inside /* */ comments must not affect depth tracking."""
+        src = 'def foo() {\n    /* { not structural } */\n    return 1\n}'
+        body = self._body(src)
+        assert body == src
+
+    def test_slashy_string_open_brace_not_structural(self):
+        """
+        A '{' inside a slashy string must not increment brace depth.
+
+        T21-A INFO-adv-1 regression guard (slashy-'{'): with T21-A reverted
+        (slashy strings unrecognised), the '{' inside the slashy literal is
+        counted as a structural open-brace, increasing depth to 2.  The method
+        body then extends to the next '}' that brings depth to 1, then the
+        subsequent '}' that brings depth to 0 — which is the close-brace of
+        the FOLLOWING method.  With T21-A applied, the slashy string is
+        consumed correctly and depth tracking is accurate.
+        """
+        src = (
+            'def setDryingMode(onOff) {\n'
+            '    def re = /a{b/\n'
+            '    hubBypass("setDryingMode", [sw: 1])\n'
+            '}\n'
+            'def otherMethod() { return 2 }\n'
+        )
+        body = self._body(src)
+        # Body must end at the first method's closing brace, not leak into otherMethod.
+        assert 'otherMethod' not in body, (
+            "Slashy '{' must not extend body into next method. "
+            f"Got body: {body!r}"
+        )
+        assert 'hubBypass' in body
+
+    def test_slashy_string_close_brace_not_structural(self):
+        """
+        A '}' inside a slashy string must not decrement brace depth.
+
+        T21-A INFO-adv-1 regression guard (slashy-'}'): with T21-A reverted,
+        the '}' inside the slashy literal decrements depth prematurely and
+        extract_method_body returns before reaching the real closing brace,
+        truncating the body.
+        """
+        src = (
+            'def setDryingMode(onOff) {\n'
+            '    def re = /a}b/\n'
+            '    hubBypass("setDryingMode", [sw: 1])\n'
+            '}\n'
+        )
+        body = self._body(src)
+        # Body must include hubBypass — not truncated by the slashy '}'.
+        assert 'hubBypass' in body, (
+            "Slashy '}' must not truncate method body early. "
+            f"Got body: {body!r}"
+        )
+
+    def test_dollar_slashy_brace_not_structural(self):
+        """Braces inside a dollar-slashy string must not affect depth tracking."""
+        src = 'def foo() {\n    def re = $/a{b}c/$\n    return 1\n}'
+        body = self._body(src)
+        assert 'return 1' in body
+        assert body.endswith('}')
+
+    # ---- NIT-1: keyword expression-start context (return, in, etc.) ----
+
+    def test_return_slashy_close_brace_not_structural(self):
+        """
+        Regression guard (NIT-1): 'return /a}b/' — the '}' inside a slashy
+        string opened after the keyword 'return' must NOT be counted structural.
+
+        Without the keyword-opener set in _is_slashy_open_position, 'n' (last
+        char of 'return') is not in _SLASHY_OPENER_PREV so the '/' is treated
+        as division, the '}' is counted structural, and extract_method_body
+        truncates the body early — hiding any safeIntArg call that follows.
+
+        Non-vacuity: this test FAILS when _SLASHY_OPENER_KEYWORDS is removed
+        from _is_slashy_open_position (i.e. when only single-char openers are
+        checked) because 'return' ends in 'n', which is not in _SLASHY_OPENER_PREV.
+        """
+        src = (
+            'def setTimer(seconds) {\n'
+            '    if (x) return /a}b/\n'
+            '    int secs = safeIntArg(seconds, 0)\n'
+            '    hubBypass("addTimerV2", [tmgEvt:[clkSec:secs]])\n'
+            '}\n'
+        )
+        # _strip: the safeIntArg call must survive stripping
+        from _groovy_lex import _strip_comments_and_strings
+        stripped = _strip_comments_and_strings(src)
+        assert 'safeIntArg(seconds' in stripped, (
+            "_strip_comments_and_strings must not truncate source at '}' inside "
+            "'return /a}b/'; the safeIntArg call after it must survive."
+        )
+        # extract_method_body: the body must not truncate at the slashy '}'
+        body = self._body(src)
+        assert 'safeIntArg(seconds' in body, (
+            "extract_method_body must not truncate the method body at '}' inside "
+            "'return /a}b/'; the safeIntArg call after it must be in the body."
+        )
+
+    def test_in_keyword_slashy_close_brace_not_structural(self):
+        """
+        Regression guard (NIT-1): 'x in /a}b/' — '}' inside slashy after 'in'
+        must not be counted structural.  Companion to the 'return' test above.
+        """
+        src = (
+            'def setTimer(seconds) {\n'
+            '    def flag = x in /a}b/\n'
+            '    int secs = safeIntArg(seconds, 0)\n'
+            '    hubBypass("addTimerV2", [tmgEvt:[clkSec:secs]])\n'
+            '}\n'
+        )
+        body = self._body(src)
+        assert 'safeIntArg(seconds' in body, (
+            "extract_method_body must not truncate the method body at '}' inside "
+            "'x in /a}b/'; 'in' must be recognized as an expression-start keyword."
+        )
+
+    # ---- NIT-2: $$ escape inside dollar-slashy ----
+
+    def test_dollar_slashy_double_dollar_escape_survives(self):
+        """
+        Regression guard (NIT-2): a dollar-slashy string '$/$$/$' (body = '$$', which
+        in Groovy is an escaped '$') must close correctly so that following code is
+        visible as real source.
+
+        The pathological form is '$/$$/$':
+
+          With the '$$' fix, _skip_dollar_slashy_string processes the '$$' escape
+          (advancing past both dollars), then finds '/$' immediately and closes.
+          The string spans only those 6 characters; the method body after it is
+          real code visible to safeIntArg detection.
+
+          Without the '$$' fix, the '$$' branch is absent.  The scanner processes
+          the first '$' (no branch fires since text[i+1]='$', not '/'), advances
+          by 1.  The second '$' has text[i+1]='/', so the '$/' escaped-slash branch
+          fires, advancing by 2 (consuming the second '$' and the '/').  Now at the
+          '$' of the real '/$' close marker.  That '$' has no following '/' that
+          would form another '/$', so the scanner advances through it and on through
+          the rest of the file without finding a close — _skip returns n (runs to
+          end of input).  Everything after the opening '$/' including the safeIntArg
+          call is consumed as string content and becomes invisible to the verifier.
+
+        Non-vacuity: reverting the '$$' branch causes _skip to return n, so
+        _strip_comments_and_strings treats the entire remainder of the source as
+        a string literal — 'safeIntArg(seconds' is NOT in the stripped output and
+        the assertion FAILs.
+        """
+        src = (
+            'def setTimer(seconds) {\n'
+            '    def re = $/$$/$\n'
+            '    int secs = safeIntArg(seconds, 0)\n'
+            '    hubBypass("addTimerV2", [tmgEvt:[clkSec:secs]])\n'
+            '}\n'
+        )
+        from _groovy_lex import _strip_comments_and_strings
+        stripped = _strip_comments_and_strings(src)
+        assert 'safeIntArg(seconds' in stripped, (
+            "_strip_comments_and_strings: '$/$$/$' must close correctly so the "
+            "safeIntArg call on the next line is visible as real code; without the "
+            "'$$' escape fix the string runs to end-of-input hiding the call."
+        )
+        # extract_method_body: regardless of whether the string is correctly closed,
+        # the safeIntArg call must be in the returned body.  (With fix: correctly
+        # bounded body.  Without fix: _find_struct_braces finds no close brace after
+        # the runaway string, so extract_method_body returns source[def_pos:] which
+        # still contains safeIntArg — this assertion is a correctness check, not the
+        # non-vacuous regression guard; the strip assertion above is load-bearing.)
+        body = self._body(src)
+        assert 'safeIntArg(seconds' in body, (
+            "extract_method_body: the safeIntArg call must be reachable in the method "
+            "body even when the dollar-slashy literal is present."
+        )
+
+
+# ---------------------------------------------------------------------------
+# T21-B: Verifier internals — is_behavioral_onoff_setter
+# ---------------------------------------------------------------------------
+
+class TestIsBehavioralOnoffSetter:
+    """
+    Persisted pytest suite for check_bp24_classification.is_behavioral_onoff_setter.
+
+    Covers the key discriminator cases documented in the verifier's module docstring.
+    """
+
+    @staticmethod
+    def _is_setter(name: str, body: str, source: str = '') -> bool:
+        from check_bp24_classification import is_behavioral_onoff_setter
+        return is_behavioral_onoff_setter(name, body, source or body)
+
+    # escape-a: safeIntArg in a comment → method classified True (setter)
+    def test_escape_a_safeintarg_in_comment_classified_setter(self):
+        """
+        A genuine on/off setter whose body has safeIntArg only in a comment
+        must be classified True (is a boolean on/off setter).
+
+        Non-vacuity: this test fails if _strip_comments_and_strings is broken
+        and safeIntArg in the comment bleeds through as a structural match,
+        causing primary_is_safeint=True and the non-emitting shape branch to
+        return False (incorrectly excluding the setter).
+        """
+        body = (
+            'def setDryingMode(onOff) {\n'
+            '    // safeIntArg( would be used for a numeric setter\n'
+            '    if (!requireNotNull(onOff, "setDryingMode")) return\n'
+            '    String v = (onOff as String).trim().toLowerCase()\n'
+            '    Integer sw = (v == "on") ? 1 : 0\n'
+            '    hubBypass("setDryingMode", [autoDryingSwitch: sw])\n'
+            '}\n'
+        )
+        result = self._is_setter('setDryingMode', body)
+        assert result is True, (
+            "setDryingMode with safeIntArg only in a comment must be "
+            f"classified True (is a boolean on/off setter), got: {result}"
+        )
+
+    # escape-b: safeIntArg on optional secondary numeric param → classified True
+    def test_escape_b_safeintarg_on_secondary_param_classified_setter(self):
+        """
+        An on/off setter that calls safeIntArg on an optional SECONDARY numeric
+        parameter must still be classified True.
+
+        The non-emitting shape discriminator checks whether the FIRST/primary
+        parameter is safeIntArg-coerced; a secondary-param coercion must not
+        exclude the method from on/off-setter classification.
+        """
+        body = (
+            'def setDryingMode(onOff, level) {\n'
+            '    if (!requireNotNull(onOff, "setDryingMode")) return\n'
+            '    String v = (onOff as String).trim().toLowerCase()\n'
+            '    Integer lvl = safeIntArg(level, 1)\n'
+            '    Integer sw = (v == "on") ? 1 : 0\n'
+            '    hubBypass("setDryingMode", [autoDryingSwitch: sw, level: lvl])\n'
+            '}\n'
+        )
+        result = self._is_setter('setDryingMode', body)
+        assert result is True, (
+            "setDryingMode with safeIntArg on secondary param must be "
+            f"classified True, got: {result}"
+        )
+
+    # setTimer shape: first param is safeIntArg-coerced → excluded (False)
+    def test_settimer_excluded_because_primary_param_is_safeintarg(self):
+        """
+        setTimer whose first/primary parameter is numeric and safeIntArg-coerced
+        must be classified False (not a boolean on/off setter).
+
+        This is the exclusion that prevents duration commands from being
+        enumerated as NO-ON sites.
+        """
+        body = (
+            'def setTimer(seconds, action) {\n'
+            '    if (!requireNotNull(seconds, "setTimer")) return\n'
+            '    int secs = safeIntArg(seconds, 0)\n'
+            '    if (secs <= 0) { cancelTimer(); return }\n'
+            '    String a = (action as String).trim().toLowerCase()\n'
+            '    Integer sw = (a == "on") ? 1 : 0\n'
+            '    hubBypass("addTimerV2", [enabled: sw, tmgEvt: [clkSec: secs]])\n'
+            '}\n'
+        )
+        result = self._is_setter('setTimer', body)
+        assert result is False, (
+            "setTimer with safeIntArg on primary param must be classified "
+            f"False (not a boolean on/off setter), got: {result}"
+        )
+
+    # setDryingMode genuine non-emitting binary on/off → classified True
+    def test_setdryingmode_genuine_nonemitting_classified_setter(self):
+        """
+        setDryingMode — the canonical non-emitting binary on/off setter —
+        must be classified True regardless of whether it has safeIntArg in
+        comments or not.
+
+        This exercises the comment-aware primary-param discriminator from the
+        pytest side.
+        """
+        body = (
+            'def setDryingMode(onOff) {\n'
+            '    if (!requireNotNull(onOff, "setDryingMode")) return\n'
+            '    String v = (onOff as String).trim().toLowerCase()\n'
+            '    Integer sw = (v == "on") ? 1 : 0\n'
+            '    hubBypass("setDryingMode", [autoDryingSwitch: sw])\n'
+            '}\n'
+        )
+        result = self._is_setter('setDryingMode', body)
+        assert result is True, (
+            "setDryingMode must be classified True (non-emitting binary on/off setter), "
+            f"got: {result}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T21-B: Verifier internals — find_safeintarg_command_methods (bp26)
+# ---------------------------------------------------------------------------
+
+class TestFindSafeIntArgCommandMethods:
+    """
+    Persisted pytest suite for check_bp26_spec_coverage.find_safeintarg_command_methods.
+
+    Covers body-content scoping, the deleted-short-circuit no-op invariant,
+    and skip-list exclusions.
+    """
+
+    @staticmethod
+    def _find(src: str) -> list:
+        from check_bp26_spec_coverage import find_safeintarg_command_methods
+        return find_safeintarg_command_methods(src)
+
+    def test_method_with_safeintarg_in_scope(self):
+        """A public set* method with safeIntArg in body is in scope."""
+        src = (
+            'def setMistLevel(level) {\n'
+            '    int lvl = safeIntArg(level, 0)\n'
+            '    hubBypass("setVirtualLevel", [level: lvl])\n'
+            '}\n'
+        )
+        result = self._find(src)
+        assert 'setMistLevel' in result, (
+            f"setMistLevel with safeIntArg must be in scope; got: {result}"
+        )
+
+    def test_method_without_safeintarg_excluded(self):
+        """A public set* method without safeIntArg in body is out of scope."""
+        src = (
+            'def setChildLock(onOff) {\n'
+            '    String v = (onOff as String).trim().toLowerCase()\n'
+            '    hubBypass("setChildLock", [childLockSwitch: (v == "on") ? 1 : 0])\n'
+            '}\n'
+        )
+        result = self._find(src)
+        assert 'setChildLock' not in result, (
+            f"setChildLock without safeIntArg must be excluded; got: {result}"
+        )
+
+    def test_skip_list_method_excluded(self):
+        """Methods in the skip list (e.g. safeIntArg itself) must not appear."""
+        src = (
+            'def safeIntArg(val, fallback) {\n'
+            '    try { return safeIntArg(val, fallback) }\n'
+            '    catch (e) { return fallback }\n'
+            '}\n'
+        )
+        result = self._find(src)
+        assert 'safeIntArg' not in result, (
+            f"safeIntArg helper must be excluded by skip list; got: {result}"
+        )
+
+    def test_body_scoping_limits_to_own_method(self):
+        """
+        safeIntArg in method B's body must NOT cause method A (which lacks it)
+        to appear in results.
+
+        This verifies brace-depth body scoping: method A's body ends at its own
+        closing brace; method B's safeIntArg call is in B's scope only.
+        """
+        src = (
+            'def setChildLock(onOff) {\n'
+            '    String v = (onOff as String).toLowerCase()\n'
+            '    hubBypass("setChildLock", [sw: (v=="on")?1:0])\n'
+            '}\n'
+            'def setMistLevel(level) {\n'
+            '    int lvl = safeIntArg(level, 0)\n'
+            '    hubBypass("setVirtualLevel", [level: lvl])\n'
+            '}\n'
+        )
+        result = self._find(src)
+        assert 'setMistLevel' in result
+        assert 'setChildLock' not in result, (
+            "setChildLock must not be in results because safeIntArg is in "
+            f"setMistLevel's scope only; got: {result}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T21-B: Verifier internals — _is_onoff_emitting (c3 gate coverage)
+# ---------------------------------------------------------------------------
+
+class TestIsOnoffEmitting:
+    """
+    Persisted pytest suite for check_c3_gate_coverage._is_onoff_emitting
+    and _resolve_delegate_callee_body core contracts.
+    """
+
+    @staticmethod
+    def _emit(body: str) -> bool:
+        from check_c3_gate_coverage import _is_onoff_emitting
+        return _is_onoff_emitting(body)
+
+    def test_direct_on_literal_emitting(self):
+        """sendEvent with literal "on" value → emitting."""
+        body = 'def f() { device.sendEvent(name:"switch", value: "on") }'
+        assert self._emit(body) is True
+
+    def test_direct_off_literal_emitting(self):
+        """sendEvent with literal "off" value → emitting."""
+        body = 'def f() { device.sendEvent(name:"switch", value: "off") }'
+        assert self._emit(body) is True
+
+    def test_identifier_via_tolowercase_emitting(self):
+        """sendEvent emits var assigned via .toLowerCase() with on/off comparison → emitting."""
+        body = (
+            'def f(onOff) {\n'
+            '    String v = (onOff as String).trim().toLowerCase()\n'
+            '    if (v in ["on","off"]) { }\n'
+            '    device.sendEvent(name:"switch", value: v)\n'
+            '}\n'
+        )
+        assert self._emit(body) is True
+
+    def test_identifier_via_truthy_ternary_emitting(self):
+        """sendEvent emits var assigned via ? "on" : "off" ternary → emitting."""
+        body = (
+            'def f(onOff) {\n'
+            '    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"\n'
+            '    device.sendEvent(name:"switch", value: canon)\n'
+            '}\n'
+        )
+        assert self._emit(body) is True
+
+    def test_mode_enum_identifier_not_emitting(self):
+        """sendEvent emitting a mode-enum identifier (not on/off) → not emitting."""
+        body = (
+            'def setMode(mode) {\n'
+            '    String m = (mode as String).trim().toLowerCase()\n'
+            '    if (m in ["auto","sleep","manual"]) { }\n'
+            '    device.sendEvent(name:"mode", value: m)\n'
+            '}\n'
+        )
+        # m is assigned via .toLowerCase() but comparison is NOT on/off → not emitting.
+        assert self._emit(body) is False
+
+    def test_no_sendevent_not_emitting(self):
+        """Body with no sendEvent → not emitting."""
+        body = (
+            'def setDryingMode(onOff) {\n'
+            '    Integer sw = (onOff == "on") ? 1 : 0\n'
+            '    hubBypass("setDryingMode", [autoDryingSwitch: sw])\n'
+            '}\n'
+        )
+        assert self._emit(body) is False
+
+    def test_resolve_delegate_callee_body_same_file(self):
+        """_resolve_delegate_callee_body resolves a doSet* callee in the same source."""
+        from check_c3_gate_coverage import _resolve_delegate_callee_body
+        source = (
+            'def setDisplay(onOff) {\n'
+            '    String v = (onOff as String).toLowerCase()\n'
+            '    doSetDisplayScreenSwitch(v)\n'
+            '}\n'
+            'def doSetDisplayScreenSwitch(val) {\n'
+            '    Integer sw = (val == "on") ? 1 : 0\n'
+            '    hubBypass("setDisplay", [screenSwitch: sw])\n'
+            '    device.sendEvent(name:"displayOn", value: val)\n'
+            '}\n'
+        )
+        callee_body = _resolve_delegate_callee_body('setDisplay', source, source)
+        assert callee_body is not None, "Callee body must be resolved from same-file source"
+        assert 'hubBypass' in callee_body
+
+    def test_resolve_delegate_callee_body_missing_returns_none(self):
+        """_resolve_delegate_callee_body returns None when callee not in source."""
+        from check_c3_gate_coverage import _resolve_delegate_callee_body
+        source = (
+            'def setDisplay(onOff) {\n'
+            '    doSetDisplayScreenSwitch(onOff)\n'
+            '}\n'
+        )
+        # doSetDisplayScreenSwitch is not defined in this source snippet.
+        result = _resolve_delegate_callee_body('setDisplay', source, source)
+        assert result is None
+
+
+class TestBp26SlashyDesync:
+    """
+    Slashy-string desync reproduction tests for find_safeintarg_command_methods.
+
+    A slashy literal whose body contains '{' or '}' causes the old slashy-unaware
+    _find_struct_braces (pre-T21-A) to miscount brace depth, truncating the method
+    body early and causing find_safeintarg_command_methods to report the safeIntArg
+    call as absent (false negative) or to include a method from the NEXT def in the
+    brace-scan slice (false positive).
+
+    These tests are the per-verifier counterpart to the TestFindStructBraces guards
+    and verify that the fix propagated correctly through the shared module import.
+    """
+
+    @staticmethod
+    def _find(source: str):
+        from check_bp26_spec_coverage import find_safeintarg_command_methods
+        return find_safeintarg_command_methods(source)
+
+    def test_slashy_with_open_brace_safeintarg_found(self):
+        """safeIntArg in a method that contains a slashy literal with '{' must be detected."""
+        src = (
+            'def setTimer(seconds) {\n'
+            '    def re = /a{b/\n'
+            '    int secs = safeIntArg(seconds, 0)\n'
+            '    hubBypass("addTimerV2", [tmgEvt:[clkSec:secs]])\n'
+            '}\n'
+        )
+        methods = self._find(src)
+        assert 'setTimer' in methods, (
+            "find_safeintarg_command_methods must find setTimer when safeIntArg is present "
+            "after a slashy literal with embedded '{'; old slashy-unaware brace scanner "
+            "would mis-close the method body at the /{/ and miss the safeIntArg call."
+        )
+
+    def test_slashy_with_block_comment_marker_safeintarg_found(self):
+        """safeIntArg after a slashy literal containing '/*' must be detected."""
+        src = (
+            'def setTimer(seconds) {\n'
+            '    def re = /a/*b/\n'
+            '    int secs = safeIntArg(seconds, 0)\n'
+            '    hubBypass("addTimerV2", [tmgEvt:[clkSec:secs]])\n'
+            '}\n'
+        )
+        methods = self._find(src)
+        assert 'setTimer' in methods, (
+            "find_safeintarg_command_methods must find setTimer when safeIntArg follows a "
+            "slashy literal containing '/*'; old code treated /* as block-comment opener "
+            "and truncated source, hiding the safeIntArg call."
+        )
+
+    def test_clean_method_without_safeintarg_not_reported(self):
+        """A method with a slashy literal but no safeIntArg must NOT be reported."""
+        src = (
+            'def setMode(mode) {\n'
+            '    def re = /a{b/\n'
+            '    hubBypass("setPurifierMode", [workMode: mode])\n'
+            '}\n'
+        )
+        methods = self._find(src)
+        assert 'setMode' not in methods, (
+            "find_safeintarg_command_methods must NOT report a method that lacks safeIntArg "
+            "even when the method body contains a slashy literal with a brace."
+        )
+
+    def test_dollar_slashy_with_block_comment_marker_safeintarg_found(self):
+        """safeIntArg after a dollar-slashy literal containing '/*' must be detected."""
+        src = (
+            'def setTimer(seconds) {\n'
+            '    def re = $/a /* b/$\n'
+            '    int secs = safeIntArg(seconds, 0)\n'
+            '    hubBypass("addTimerV2", [tmgEvt:[clkSec:secs]])\n'
+            '}\n'
+        )
+        methods = self._find(src)
+        assert 'setTimer' in methods, (
+            "find_safeintarg_command_methods must find setTimer when safeIntArg follows a "
+            "dollar-slashy literal containing '/*'."
+        )
+
+
+class TestC3SlashyDesync:
+    """
+    Slashy-string desync reproduction tests for check_c3_gate_coverage classify path.
+
+    A slashy literal whose body contains '{' or '}' causes the old slashy-unaware
+    extract_method_body (pre-T21-A) to return a truncated body, so the behavioral
+    predicates (on/off comparison, API call, sendEvent) could be evaluated against
+    an incomplete snippet — potentially misclassifying an in-scope setter as
+    out-of-scope (false negative) or absorbing a neighboring method's content
+    (false positive that inflates predicate matches).
+
+    These tests drive the classify path via is_behavioral_onoff_setter + extract_method_body
+    + classify directly, and verify that the fix propagated correctly through the shared
+    module import.
+    """
+
+    @staticmethod
+    def _run(source: str):
+        """
+        Run the c3 classify pipeline on a source snippet and return a dict
+        mapping method_name -> classification string.
+
+        Mirrors the inner loop of check_c3_gate_coverage.main() but operates on
+        an in-memory source string rather than a real driver file.
+        """
+        from check_c3_gate_coverage import (
+            ANY_METHOD_RE, is_behavioral_onoff_setter, is_delegator, classify
+        )
+        from _groovy_lex import extract_method_body
+
+        all_starts = [
+            (m.start(), m.group(1)) for m in ANY_METHOD_RE.finditer(source)
+        ]
+        all_starts.append((len(source), None))
+
+        results = {}
+        for i, (pos, method_name) in enumerate(all_starts[:-1]):
+            if method_name is None:
+                continue
+            body = extract_method_body(source, pos)
+            def_line = body.splitlines()[0] if body.splitlines() else ""
+            if not is_behavioral_onoff_setter(method_name, body, source):
+                continue
+            if is_delegator(def_line, body):
+                continue
+            results[method_name] = classify(source, pos, body)
+        return results
+
+    def test_slashy_with_open_brace_setter_classified(self):
+        """An on/off setter whose body has a slashy literal with '{' must be classified."""
+        src = (
+            'def setDisplay(onOff) {\n'
+            '    def re = /a{b/\n'
+            '    String val = (onOff as String).trim().toLowerCase()\n'
+            '    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"\n'
+            '    Integer v = (canon == "on") ? 1 : 0\n'
+            '    hubBypass("setDisplay", [screenSwitch: v])\n'
+            '    // No C3 idempotency gate: display state not polled in this driver.\n'
+            '    device.sendEvent(name:"displayOn", value: canon)\n'
+            '}\n'
+        )
+        results = self._run(src)
+        assert 'setDisplay' in results, (
+            "classify pipeline must find setDisplay when the body contains a slashy literal "
+            "with '{'; old slashy-unaware extract_method_body truncated the body at the /{/ "
+            "closing slash, causing the method to fail all three behavioral predicates."
+        )
+        assert results['setDisplay'] == 'HAS_RATIONALE', (
+            f"setDisplay must be classified HAS_RATIONALE; got {results['setDisplay']!r}"
+        )
+
+    def test_slashy_with_block_comment_marker_setter_classified(self):
+        """An on/off setter whose body has a slashy literal containing '/*' must be classified."""
+        src = (
+            'def setChildLock(onOff) {\n'
+            '    def re = /a/*b/\n'
+            '    String val = (onOff as String).trim().toLowerCase()\n'
+            '    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"\n'
+            '    Integer v = (canon == "on") ? 1 : 0\n'
+            '    if (device.currentValue("childLock") == canon) return\n'
+            '    hubBypass("setChildLock", [childLockSwitch: v])\n'
+            '    device.sendEvent(name:"childLock", value: canon)\n'
+            '}\n'
+        )
+        results = self._run(src)
+        assert 'setChildLock' in results, (
+            "classify pipeline must find setChildLock when body contains slashy literal "
+            "with '/*'; old code treated /* as block-comment opener and truncated the body."
+        )
+        assert results['setChildLock'] == 'HAS_GATE', (
+            f"setChildLock must be classified HAS_GATE; got {results['setChildLock']!r}"
+        )

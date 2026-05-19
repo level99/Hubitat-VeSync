@@ -133,6 +133,8 @@ import re
 import sys
 from pathlib import Path
 
+from _groovy_lex import _find_struct_braces, extract_method_body
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DRIVERS_DIR = REPO_ROOT / "Drivers" / "Levoit"
 
@@ -192,114 +194,6 @@ _ONOFF_COMPARISON_RE = re.compile(
 _DIRECT_API_CALL_RE = re.compile(
     r"hubBypass\(|parent\.sendBypassRequest\("
 )
-
-
-def _find_struct_braces(source: str, start: int) -> list[tuple[int, str]]:
-    """
-    Scan from `start` in source and yield (position, '{' or '}') for every
-    brace that is NOT inside a string literal or comment.
-
-    Handled non-structural regions:
-      - // line comments (to end of line)
-      - /* */ block comments
-      - triple-quoted strings  \"\"\"...\"\"\"
-      - double-quoted strings  \"...\" (GString ${...} braces counted separately
-        would add complexity; we skip the entire double-quoted span including
-        any embedded ${...} since they are not method-scope braces)
-      - single-quoted strings  '...'
-    """
-    results: list[tuple[int, str]] = []
-    i = start
-    n = len(source)
-    while i < n:
-        c = source[i]
-        # Line comment
-        if c == '/' and i + 1 < n and source[i + 1] == '/':
-            i = source.find('\n', i)
-            if i < 0:
-                break
-            i += 1
-            continue
-        # Block comment
-        if c == '/' and i + 1 < n and source[i + 1] == '*':
-            end = source.find('*/', i + 2)
-            if end < 0:
-                break
-            i = end + 2
-            continue
-        # Triple-quoted string
-        if c == '"' and source[i:i+3] == '"""':
-            end = source.find('"""', i + 3)
-            if end < 0:
-                break
-            i = end + 3
-            continue
-        # Double-quoted string (GString) — skip whole span including ${...}
-        if c == '"':
-            i += 1
-            depth_gstring = 0
-            while i < n:
-                ch = source[i]
-                if ch == '\\':
-                    i += 2
-                    continue
-                if ch == '"' and depth_gstring == 0:
-                    i += 1
-                    break
-                if ch == '$' and i + 1 < n and source[i + 1] == '{':
-                    depth_gstring += 1
-                    i += 2
-                    continue
-                if ch == '}' and depth_gstring > 0:
-                    depth_gstring -= 1
-                    i += 1
-                    continue
-                i += 1
-            continue
-        # Single-quoted string
-        if c == "'":
-            i += 1
-            while i < n:
-                ch = source[i]
-                if ch == '\\':
-                    i += 2
-                    continue
-                if ch == "'":
-                    i += 1
-                    break
-                i += 1
-            continue
-        # Structural brace
-        if c == '{':
-            results.append((i, '{'))
-        elif c == '}':
-            results.append((i, '}'))
-        i += 1
-    return results
-
-
-def extract_method_body(source: str, def_pos: int) -> str:
-    """
-    Extract a method body by brace-depth matching from the opening brace of
-    the def at def_pos. Skips braces inside string literals and comments.
-    Returns the text from def_pos through the method's closing brace (inclusive).
-    Falls back to the next-def boundary on error.
-    """
-    try:
-        brace_start = source.index("{", def_pos)
-    except ValueError:
-        return source[def_pos:]
-
-    braces = _find_struct_braces(source, brace_start)
-    depth = 0
-    for pos, kind in braces:
-        if kind == '{':
-            depth += 1
-        else:
-            depth -= 1
-            if depth == 0:
-                return source[def_pos : pos + 1]
-    return source[def_pos:]
 
 
 def _extract_sendEvent_value(body: str) -> str | None:

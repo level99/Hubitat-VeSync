@@ -27,6 +27,8 @@ import re
 import sys
 from pathlib import Path
 
+from _groovy_lex import _find_struct_braces
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -46,82 +48,6 @@ def driver_name_to_spec_file(driver_file: Path) -> Path:
     """
     stem = driver_file.stem.replace(" ", "")
     return SPEC_DIR / f"{stem}Spec.groovy"
-
-
-def _find_struct_braces(source: str, start: int) -> list[tuple[int, str]]:
-    """
-    Scan from `start` in source and yield (position, '{' or '}') for every
-    brace that is NOT inside a string literal or comment.
-
-    Handled non-structural regions:
-      - // line comments (to end of line)
-      - /* */ block comments
-      - triple-quoted strings  \"\"\"...\"\"\"
-      - double-quoted strings  \"...\" (GString ${...} braces skipped)
-      - single-quoted strings  '...'
-    """
-    results: list[tuple[int, str]] = []
-    i = start
-    n = len(source)
-    while i < n:
-        c = source[i]
-        if c == '/' and i + 1 < n and source[i + 1] == '/':
-            i = source.find('\n', i)
-            if i < 0:
-                break
-            i += 1
-            continue
-        if c == '/' and i + 1 < n and source[i + 1] == '*':
-            end = source.find('*/', i + 2)
-            if end < 0:
-                break
-            i = end + 2
-            continue
-        if c == '"' and source[i:i+3] == '"""':
-            end = source.find('"""', i + 3)
-            if end < 0:
-                break
-            i = end + 3
-            continue
-        if c == '"':
-            i += 1
-            depth_gs = 0
-            while i < n:
-                ch = source[i]
-                if ch == '\\':
-                    i += 2
-                    continue
-                if ch == '"' and depth_gs == 0:
-                    i += 1
-                    break
-                if ch == '$' and i + 1 < n and source[i + 1] == '{':
-                    depth_gs += 1
-                    i += 2
-                    continue
-                if ch == '}' and depth_gs > 0:
-                    depth_gs -= 1
-                    i += 1
-                    continue
-                i += 1
-            continue
-        if c == "'":
-            i += 1
-            while i < n:
-                ch = source[i]
-                if ch == '\\':
-                    i += 2
-                    continue
-                if ch == "'":
-                    i += 1
-                    break
-                i += 1
-            continue
-        if c == '{':
-            results.append((i, '{'))
-        elif c == '}':
-            results.append((i, '}'))
-        i += 1
-    return results
 
 
 def find_safeintarg_command_methods(driver_source: str) -> list[str]:
