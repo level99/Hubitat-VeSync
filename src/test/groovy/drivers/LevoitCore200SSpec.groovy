@@ -675,21 +675,20 @@ class LevoitCore200SSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setMode") }
     }
 
-    def "W3: setSpeed null state.mode — device turns on and logWarn emitted, not a silent drop (Core 200S)"() {
+    def "W3: setSpeed null state.mode — device turns on AND speed is recovered, not dropped (Core 200S)"() {
         // W3 regression guard: when state.mode is null/unset (fresh device, pre-first-poll),
         // setSpeed("high") must:
         //   1. auto-on (ensureSwitchOn fires before the mode dispatch),
-        //   2. emit a logWarn containing "cannot apply speed" because the mode branch
-        //      cannot resolve the speed without a known mode — NOT silently discard the call.
-        // Pre-fix: the else branch was absent; the command was swallowed with no diagnostic.
-        // Post-fix: else { logWarn "setSpeed: cannot apply speed '${s}' — device mode is
-        //           '${state.mode}'; ignoring" } is present in all 4 Core drivers.
+        //   2. RECOVER by calling setMode("manual") and applying the speed — NOT warn+drop.
+        //      The Tier-24 form (warn+drop) was adversarially proven to turn the device on
+        //      but discard the requested speed: user sees device powered but wrong speed.
+        // Pre-fix: else { logWarn "cannot apply speed"; return } — speed was lost.
+        // Post-fix (Tier-25): else { setMode("manual"); handleSpeed(s); ... } — speed applied.
         //
-        // Distinct from BP18 spec (line 646): that spec passes null as the *argument*;
+        // Distinct from BP18 spec: that spec passes null as the *argument*;
         // this spec passes a valid speed string but leaves *state.mode* null.
-        // Distinct from BP24-B spec (line 583): that spec seeds state.mode="manual" so the
-        // numeric speed path fires; this spec deliberately omits state.mode to exercise the
-        // else branch that was missing.
+        // Distinct from BP24-B spec: that spec seeds state.mode="manual"; this spec
+        // deliberately omits state.mode to exercise the recover-else branch.
         //
         // Both-ways: orchestrator-owned.
         given: "device is off and state.mode is null (fresh device, pre-first-poll)"
@@ -704,11 +703,22 @@ class LevoitCore200SSpec extends HubitatSpec {
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
         onReq != null
 
-        and: "a logWarn containing 'cannot apply speed' was emitted (W3 else branch fired)"
-        testLog.warns.any { it.contains("cannot apply speed") }
+        and: "a setPurifierMode API call was made to set manual mode (recover path fired)"
+        def modeReq = testParent.allRequests.find { it.method == "setPurifierMode" }
+        modeReq != null
 
-        and: "no error was logged (warn only, not error)"
+        and: "a setLevel (speed) API call was made — speed was NOT dropped"
+        def speedReq = testParent.allRequests.find { it.method == "setLevel" }
+        speedReq != null
+
+        and: "the speed attribute was emitted with the requested value"
+        lastEventValue("speed") == "high"
+
+        and: "no error was logged"
         testLog.errors.isEmpty()
+
+        and: "no 'cannot apply speed' warning was emitted (recover path replaces warn+drop)"
+        !testLog.warns.any { it.contains("cannot apply speed") }
     }
 
     // -------------------------------------------------------------------------

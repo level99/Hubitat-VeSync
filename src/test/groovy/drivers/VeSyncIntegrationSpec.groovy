@@ -3471,6 +3471,84 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         childDev.events.any { it.name == "online" && it.value == "true" }
     }
 
+    def "selfHealAttempts resets on natural recovery so device is never prematurely marked offline (Q4b)"() {
+        // Q4b: BP21 flap-accumulation bug.
+        // If a device repeatedly reaches the 5-empty threshold, gets a Resync, and recovers
+        // before the MAX cap (3), its selfHealAttempts counter is only cleared inside
+        // markChildOnline() — which is only called when deviceOfflineSince is set.  A device
+        // that recovers before going offline never triggers markChildOnline(), so its counter
+        // keeps accumulating across flap cycles.  After 3 flap cycles the counter reaches MAX
+        // and the device is prematurely marked offline with zero Resync attempts remaining.
+        //
+        // Fix: clear selfHealAttempts[dni] in the successful-poll branch, unconditionally,
+        // not only inside markChildOnline().
+        //
+        // This test exercises two full threshold-hit→Resync→recover cycles and asserts that
+        // selfHealAttempts[dni] resets to 0 after each natural recovery.
+        //
+        // Both-ways: orchestrator-owned.
+        given: "device has completed one Resync cycle (selfHealAttempts == 1) and now recovers"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.prefsSeeded      = true
+        state.deviceList       = ["FLAP-CID": "config-module"]
+        state.selfHealAttempts = ["FLAP-CID": 1]    // counter from prior Resync
+        // device is NOT marked offline — it recovered before reaching MAX
+
+        def childDev = new TestDevice()
+        childDev.typeName = "Levoit Vital 200S Air Purifier"
+        childDev.updateDataValue("deviceType", "LAP-V201S-WUS")
+        childDev.name  = "Test Purifier"
+        childDev.label = "Test Purifier"
+        childDev.metaClass.update = { Map st, nl -> true }
+        childDevices["FLAP-CID"] = childDev
+
+        // httpPost returns a valid (non-null) result — this is the natural recovery poll
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            capturedHttpPosts << params.clone()
+            if (params.body?.payload) capturedBypassBodies << params.body.clone()
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    result: [powerSwitch: 1, fanSpeedLevel: 2],
+                    traceId: "test-trace"
+                ]
+            ]
+            callback(fakeResp)
+        }
+
+        when: "first successful poll after threshold-hit cycle"
+        driver.updateDevices()
+
+        then: "selfHealAttempts[FLAP-CID] was reset to 0 (key absent from map)"
+        !(state.selfHealAttempts as Map)?.containsKey("FLAP-CID")
+
+        and: "device was NOT marked offline (no deviceOfflineSince entry)"
+        !(state.deviceOfflineSince as Map)?.containsKey("FLAP-CID")
+
+        when: "a second threshold-hit cycle fires (ensurePollHealth called at count==5)"
+        state.consecutiveEmpty = ["FLAP-CID": 5]
+        state.selfHealAttempts = [:]   // reset by the successful poll above (as asserted)
+        int resyncCount = 0
+        driver.metaClass.runIn = { int delay, String handler ->
+            if (handler == "getDevices") resyncCount++
+        }
+        driver.ensurePollHealth()
+
+        then: "selfHealAttempts is now 1 (counter starts fresh, NOT 2)"
+        (state.selfHealAttempts as Map)?.get("FLAP-CID") == 1
+
+        and: "a Resync was scheduled (not blocked by accumulated count)"
+        resyncCount == 1
+
+        and: "device was NOT prematurely marked offline (counter < MAX)"
+        !(state.deviceOfflineSince as Map)?.containsKey("FLAP-CID")
+    }
+
     def "emitOfflineWarnsIfDue() emits WARN once per hour while device is offline (Q5)"() {
         // Q5: the hourly-WARN helper must emit exactly once per hour interval.
         // First call: 2h elapsed since lastOfflineWarnAt (seeded by markChildOffline) → emits.

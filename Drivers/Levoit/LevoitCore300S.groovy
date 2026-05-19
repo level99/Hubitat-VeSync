@@ -235,6 +235,10 @@ def setSpeed(speed) {
     logDebug "setSpeed(${speed})"
     if (!requireNotNull(speed, "setSpeed")) return false                        // BP18 null-guard
     String s = (speed as String).trim().toLowerCase()
+    // Remap integer-string values from setLevel() path to named speed strings.
+    // setLevel() passes Integer 1/2/3; (speed as String) yields "1"/"2"/"3".
+    // Emit named speeds ("low"/"medium"/"high") for attribute consistency.
+    if (s in ["1", "2", "3"]) s = mapIntegerStringToSpeed(s)
     // Power short-circuits BEFORE ensureSwitchOn — setSpeed("off") must NOT auto-on first
     if (s == "off") { off(); return }
     ensureSwitchOn()                                                             // BP24-B auto-on (after short-circuit)
@@ -261,7 +265,20 @@ def setSpeed(speed) {
         logInfo "Speed: ${s}"
     }
     else {
-        logWarn "setSpeed: cannot apply speed '${s}' — device mode is '${state.mode}'; ignoring"
+        // Recover: unknown or null state.mode (e.g. fresh device, pre-first-poll).
+        // Guard against on() re-entrancy: when state.turningOn is set we are inside on()'s
+        // own setSpeed call — skip mode establishment to avoid issuing a spurious
+        // setPurifierMode that would clobber a concurrently-dispatched setMode command.
+        // on() will call setMode(state.mode) or update() after this setSpeed returns.
+        if (!state.turningOn) {
+            handleMode("manual")
+            state.mode = "manual"
+            handleEvent("mode", "manual")
+        }
+        handleSpeed(s)
+        state.speed = s
+        handleEvent("speed", s)
+        logInfo "Speed: ${s}"
     }
 }
 

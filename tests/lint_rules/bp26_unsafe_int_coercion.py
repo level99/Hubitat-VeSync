@@ -2,7 +2,7 @@
 bp26_unsafe_int_coercion.py — RULE37: flag bare ``as Integer`` / ``as int`` /
 ``.toInteger()`` coercions on untyped command parameters inside ``set*`` /
 ``cycle*`` methods, AND on Map-field accesses inside ``set*(Map mapParam)``
-methods.
+or ``set*(mapParam)`` (untyped) methods.
 
 Bug Pattern #26 — unsafe numeric coercion on command parameters.
 
@@ -28,8 +28,16 @@ Detection scope:
     enclosing method.  Statically-typed params (``Integer level``) are safe
     because the Hubitat sandbox enforces the type at dispatch time.
   Pass 2 (Map-field, B2 extension): coercions on Map-field accesses inside
-    ``set*(Map mapParam)`` methods (``mapParam?.field as Integer`` etc.).
-    Flags: ``(x as Integer)``, ``(x as int)``, ``x.toInteger()``.
+    ``set*(Map mapParam)`` OR ``set*(mapParam)`` (untyped) methods.
+    Detects the following forms (all throw on non-numeric Map values):
+      - ``mapParam?.field as Integer`` / ``mapParam.field as Integer``   (one-hop)
+      - ``(mapParam.field) as Integer``                                  (a: paren-before-as)
+      - ``mapParam.outer.field as Integer``                              (b: multi-level chain)
+      - ``def alias = mapParam.field; alias as Integer``                 (c: aliased local)
+      - ``Integer.parseInt(mapParam.field)``                             (d: parseInt form)
+      - ``colorMap['key'] as Integer`` / ``colorMap['key'].toInteger()`` (e: bracket access)
+      - ``def setColor(colorMap)`` body with ``colorMap.hue as Integer`` (f: untyped Map param)
+    Flags: ``as Integer``, ``as int``, ``.toInteger()``, ``Integer.parseInt()``.
   - Does NOT flag: ``safeIntArg(x, ...)``, typed-param coercions, coercions
     on variables that were assigned from a ``safeIntArg`` call.
 
@@ -56,23 +64,47 @@ SET_METHOD_RE = re.compile(
 
 # Matches def set*(Map mapParam ...) — Map-typed first parameter.
 # Group 1: method_name, Group 2: Map-param variable name.
-# These methods receive Hubitat ColorControl / ColorTemperature Maps from RM or dashboard
-# tiles.  RULE37 originally skipped these (first-param guard only tracked untyped params).
-# This extension scans their bodies for unsafe Map-field coercions.
 SET_MAP_METHOD_RE = re.compile(
     r'^\s*def\s+((?:set|cycle)\w+)\s*\(\s*Map\s+(\w+)',
     re.MULTILINE,
 )
 
-# Matches mapParam?.field as Integer / mapParam.field as Integer (parenthesized or bare)
-# and mapParam?.field.toInteger() / mapParam.field.toInteger().
-# Group 1 (AS form): the full mapParam?.field or mapParam.field receiver.
-# Group 2 (toInteger form): the full receiver.
-_MAP_FIELD_AS_INTEGER_RE = re.compile(
-    r'\b(\w+\??\.[\w]+)\s+as\s+(?:Integer|int)\b'
+# Matches def set*(colorMap) — untyped first param that looks like a Map variable
+# (name contains "map", "color", "Map", or "Color", case-insensitive).
+# This covers ``def setColor(colorMap)`` which Hubitat drivers commonly declare without
+# the ``Map`` keyword.  Group 1: method_name, Group 2: param_name.
+SET_UNTYPED_MAP_PARAM_RE = re.compile(
+    r'^\s*def\s+((?:set|cycle)\w+)\s*\(\s*(\w*[Mm]ap\w*|\w*[Cc]olor\w*)\s*(?:[,=)])',
+    re.MULTILINE,
 )
+
+# Map-field as-Integer forms: catches all dot-access variants.
+# Handles:
+#   - ``mapParam?.field as Integer``                (one-hop, optional-chained)
+#   - ``mapParam.field as Integer``                 (one-hop)
+#   - ``(mapParam.field) as Integer``               (a: paren-before-as)
+#   - ``mapParam.outer.field as Integer``           (b: multi-level chain)
+#   - ``mapParam['key'] as Integer``                (e: bracket access)
+# Group 1: the full receiver expression (for diagnostic messages).
+_MAP_FIELD_AS_INTEGER_RE = re.compile(
+    r'(?:\((\w+(?:\??\.\w+)+)\)|\b(\w+(?:\??\.\w+)+|\w+\[[\'\"]?\w+[\'\"]?\]))\s+as\s+(?:Integer|int)\b'
+)
+
+# Map-field toInteger() form: one-hop and multi-hop dot-access + bracket access.
 _MAP_FIELD_TO_INTEGER_RE = re.compile(
-    r'\b(\w+\??\.[\w]+)\.toInteger\s*\(\s*\)'
+    r'\b(\w+(?:\??\.\w+)+|\w+\[[\'\"]?\w+[\'\"]?\])\.toInteger\s*\(\s*\)'
+)
+
+# Integer.parseInt / Long.parseLong on a Map-field access.
+_PARSEINT_RE = re.compile(
+    r'\b(?:Integer|Long)\.parse(?:Int|Long)\s*\(\s*(\w+(?:\??\.\w+)+|\w+\[[\'\"]?\w+[\'\"]?\])\s*\)'
+)
+
+# Alias assignment: ``def alias = mapParam.field`` / ``def alias = mapParam?.field``
+# / ``def alias = mapParam['key']``.
+# Group 1: alias variable name, Group 2: full receiver (for base extraction).
+_ALIAS_ASSIGN_RE = re.compile(
+    r'\bdef\s+(\w+)\s*=\s*(\w+(?:\??\.\w+)+|\w+\[[\'\"]?\w+[\'\"]?\])'
 )
 
 # Matches (x as Integer) / (x as int) [parenthesized] OR bare x as Integer / x as int
@@ -120,6 +152,12 @@ SAFEINTARG_COERCION_FALLBACK_RE = re.compile(
     r'(?:[^()]*|\([^)]*\))*'             # fallback body: non-paren chars OR one paren group
     r'\b(?:as\s+(?:Integer|int)\b|toInteger\s*\(\s*\))',  # coercion present in fallback
 )
+
+
+def _base_of(receiver_str: str) -> str:
+    """Extract the leading variable name from ``foo?.bar``, ``foo.bar.baz``,
+    ``foo['key']``, or bare ``foo``."""
+    return receiver_str.split('[')[0].split('.')[0].rstrip('?')
 
 
 def _find_method_body_end(source: str, brace_start: int) -> int:
@@ -357,14 +395,35 @@ def check_rule37_unsafe_int_coercion(
                             ))
                             break
 
-    # --- Map-field coercion extension (B2) ---
-    # For set*(Map mapParam) methods, also flag unsafe Integer coercion of Map fields
-    # accessed via mapParam?.field or mapParam.field.  The first-param guard above skips
-    # these methods entirely because their first param has a type keyword (Map).  Hubitat
-    # ColorControl / ColorTemperature Map values arrive as Strings from RM color-map
-    # expressions and dashboard tiles; bare `mapParam?.hue as Integer` throws
-    # NumberFormatException on decimal strings like "55.5" or blank strings "".
-    for m in SET_MAP_METHOD_RE.finditer(raw_text):
+    # --- Map-field coercion extension (B2, closed-mechanism pass) ---
+    # Scans set*(Map mapParam) AND set*(mapParam) methods for all enumerable unsafe
+    # coercion forms.  Covers the full class predicate:
+    #   (a) paren-before-as: (colorMap.hue) as Integer
+    #   (b) multi-level chain: colorMap.color.hue as Integer
+    #   (c) aliased local: def h = colorMap.hue; h as Integer
+    #   (d) parseInt form: Integer.parseInt(colorMap.hue)
+    #   (e) bracket access: colorMap['hue'] as Integer / colorMap['hue'].toInteger()
+    #   (f) untyped Map param: def setColor(colorMap) with colorMap.hue as Integer
+    # One finding per method is enough (break after first hit per category, then exit).
+
+    # Collect all set*(Map ...) matches and all set*(untypedMapLookingParam ...) matches.
+    # Deduplicate by method start position so a method that matches both regexes is only
+    # scanned once (Map-typed regex wins; untyped is checked only when Map-typed misses).
+    _map_method_positions = set()
+    _map_method_matches = []
+
+    for mm in SET_MAP_METHOD_RE.finditer(raw_text):
+        _map_method_positions.add(mm.start())
+        _map_method_matches.append(mm)
+
+    for mm in SET_UNTYPED_MAP_PARAM_RE.finditer(raw_text):
+        if mm.start() not in _map_method_positions:
+            # Only append if not already covered by SET_MAP_METHOD_RE.
+            # Also skip if SET_METHOD_RE already covers this method (it handles non-Map params).
+            _map_method_positions.add(mm.start())
+            _map_method_matches.append(mm)
+
+    for m in _map_method_matches:
         method_name = m.group(1)
         map_param   = m.group(2)
 
@@ -406,14 +465,30 @@ def check_rule37_unsafe_int_coercion(
                 ))
             continue
 
-        # Scan for mapParam?.field as Integer / mapParam.field as Integer
-        for cast_m in _MAP_FIELD_AS_INTEGER_RE.finditer(body_clean):
-            receiver = cast_m.group(1)
-            # receiver must start with the Map param name (with or without ?.)
-            base = receiver.split('.')[0].rstrip('?')
+        # Collect alias names assigned from mapParam fields in this body.
+        # e.g. ``def h = colorMap.hue`` or ``def hue = colorMap?.hue`` or
+        # ``def hue = colorMap['hue']``.  Group 1: alias, Group 2: full receiver.
+        alias_to_receiver = {}
+        for alias_m in _ALIAS_ASSIGN_RE.finditer(body_clean):
+            alias      = alias_m.group(1)
+            receiver   = alias_m.group(2)
+            base       = receiver.split('[')[0].split('.')[0].rstrip('?')
             if base == map_param:
+                alias_to_receiver[alias] = receiver
+
+        found_in_method = False
+
+        # (a/b) as-Integer forms: paren-before-as + multi-level + one-hop + bracket access.
+        for cast_m in _MAP_FIELD_AS_INTEGER_RE.finditer(body_clean):
+            # Group 1: paren form (without the parens), Group 2: bare/bracket form.
+            receiver = cast_m.group(1) or cast_m.group(2)
+            if receiver is None:
+                continue
+            base = _base_of(receiver)
+            if base == map_param or base in alias_to_receiver:
                 abs_pos = brace_start + cast_m.start()
                 lineno = _line_of(raw_text, abs_pos)
+                label = alias_to_receiver[base] if base in alias_to_receiver else receiver
                 findings.append(make_finding(
                     severity='FAIL',
                     rule_id='RULE37_unsafe_int_coercion',
@@ -425,46 +500,147 @@ def check_rule37_unsafe_int_coercion(
                     lineno=lineno,
                     raw_lines=raw_lines,
                     why=(
-                        f'`{receiver} as Integer` throws NumberFormatException / '
+                        f'`{label} as Integer` throws NumberFormatException / '
                         f'GroovyCastException on non-numeric Map values ("55.5", "", "abc"). '
                         f'Hubitat ColorControl tiles and Rule Machine color-map expressions '
                         f'can produce these via hub-variable bindings or expression slots.'
                     ),
                     fix=(
-                        f'Replace `{receiver} as Integer` with '
+                        f'Replace with `safeIntArg({label}, <fallback>)` from LevoitChildBaseLib.'
+                    ),
+                ))
+                found_in_method = True
+                break
+
+        if found_in_method:
+            continue
+
+        # (e/b) toInteger() forms: one-hop, multi-hop, bracket access.
+        for ti_m in _MAP_FIELD_TO_INTEGER_RE.finditer(body_clean):
+            receiver = ti_m.group(1)
+            base = _base_of(receiver)
+            if base == map_param or base in alias_to_receiver:
+                abs_pos = brace_start + ti_m.start()
+                lineno = _line_of(raw_text, abs_pos)
+                findings.append(make_finding(
+                    severity='FAIL',
+                    rule_id='RULE37_unsafe_int_coercion',
+                    title=(
+                        f'BP26: {method_name}() uses `{receiver}.toInteger()` '
+                        f'on Map-field access'
+                    ),
+                    file_rel=file_rel,
+                    lineno=lineno,
+                    raw_lines=raw_lines,
+                    why=(
+                        f'`.toInteger()` throws NumberFormatException on non-numeric '
+                        f'Map field values. Use safeIntArg() instead.'
+                    ),
+                    fix=(
+                        f'Replace `{receiver}.toInteger()` with '
                         f'`safeIntArg({receiver}, <fallback>)` from LevoitChildBaseLib.'
                     ),
                 ))
-                break  # one finding per method is enough
+                found_in_method = True
+                break
 
-        else:
-            # Scan for mapParam?.field.toInteger()
-            for ti_m in _MAP_FIELD_TO_INTEGER_RE.finditer(body_clean):
-                receiver = ti_m.group(1)
-                base = receiver.split('.')[0].rstrip('?')
-                if base == map_param:
-                    abs_pos = brace_start + ti_m.start()
-                    lineno = _line_of(raw_text, abs_pos)
-                    findings.append(make_finding(
-                        severity='FAIL',
-                        rule_id='RULE37_unsafe_int_coercion',
-                        title=(
-                            f'BP26: {method_name}() uses `{receiver}.toInteger()` '
-                            f'on Map-field access'
-                        ),
-                        file_rel=file_rel,
-                        lineno=lineno,
-                        raw_lines=raw_lines,
-                        why=(
-                            f'`.toInteger()` throws NumberFormatException on non-numeric '
-                            f'Map field values. Use safeIntArg() instead.'
-                        ),
-                        fix=(
-                            f'Replace `{receiver}.toInteger()` with '
-                            f'`safeIntArg({receiver}, <fallback>)` from LevoitChildBaseLib.'
-                        ),
-                    ))
-                    break
+        if found_in_method:
+            continue
+
+        # (c) Alias coercion: ``def h = colorMap.hue; h as Integer``.
+        # AS_INTEGER_RE captures bare `alias as Integer` (group 2 of AS_INTEGER_RE).
+        for cast_m in AS_INTEGER_RE.finditer(body_clean):
+            alias = cast_m.group(1) or cast_m.group(2)
+            if alias and alias in alias_to_receiver:
+                original_receiver = alias_to_receiver[alias]
+                abs_pos = brace_start + cast_m.start()
+                lineno = _line_of(raw_text, abs_pos)
+                findings.append(make_finding(
+                    severity='FAIL',
+                    rule_id='RULE37_unsafe_int_coercion',
+                    title=(
+                        f'BP26: {method_name}() uses alias `{alias} as Integer` '
+                        f'(assigned from Map-field `{original_receiver}`)'
+                    ),
+                    file_rel=file_rel,
+                    lineno=lineno,
+                    raw_lines=raw_lines,
+                    why=(
+                        f'`{alias}` was assigned from `{original_receiver}` which is a '
+                        f'Map field value (String at runtime). `{alias} as Integer` throws '
+                        f'NumberFormatException / GroovyCastException on non-numeric input.'
+                    ),
+                    fix=(
+                        f'Assign `{alias} = safeIntArg({original_receiver}, <fallback>)` '
+                        f'instead of direct assignment + coercion.'
+                    ),
+                ))
+                found_in_method = True
+                break
+
+        if found_in_method:
+            continue
+
+        # (c) Alias toInteger(): ``def h = colorMap.hue; h.toInteger()``.
+        for ti_m in TO_INTEGER_RE.finditer(body_clean):
+            alias = ti_m.group(1)
+            if alias in alias_to_receiver:
+                original_receiver = alias_to_receiver[alias]
+                abs_pos = brace_start + ti_m.start()
+                lineno = _line_of(raw_text, abs_pos)
+                findings.append(make_finding(
+                    severity='FAIL',
+                    rule_id='RULE37_unsafe_int_coercion',
+                    title=(
+                        f'BP26: {method_name}() uses alias `{alias}.toInteger()` '
+                        f'(assigned from Map-field `{original_receiver}`)'
+                    ),
+                    file_rel=file_rel,
+                    lineno=lineno,
+                    raw_lines=raw_lines,
+                    why=(
+                        f'`{alias}` was assigned from `{original_receiver}`, a Map field '
+                        f'(String at runtime). `.toInteger()` throws on non-numeric values.'
+                    ),
+                    fix=(
+                        f'Assign `{alias} = safeIntArg({original_receiver}, <fallback>)` '
+                        f'instead of direct assignment + .toInteger().'
+                    ),
+                ))
+                found_in_method = True
+                break
+
+        if found_in_method:
+            continue
+
+        # (d) Integer.parseInt / Long.parseLong on a Map-field access.
+        for pi_m in _PARSEINT_RE.finditer(body_clean):
+            receiver = pi_m.group(1)
+            base = _base_of(receiver)
+            if base == map_param or base in alias_to_receiver:
+                abs_pos = brace_start + pi_m.start()
+                lineno = _line_of(raw_text, abs_pos)
+                findings.append(make_finding(
+                    severity='FAIL',
+                    rule_id='RULE37_unsafe_int_coercion',
+                    title=(
+                        f'BP26: {method_name}() uses Integer.parseInt({receiver}) '
+                        f'on Map-field access — throws NumberFormatException on non-numeric input'
+                    ),
+                    file_rel=file_rel,
+                    lineno=lineno,
+                    raw_lines=raw_lines,
+                    why=(
+                        f'`Integer.parseInt({receiver})` throws NumberFormatException on '
+                        f'decimal strings ("55.5"), blank strings (""), or non-numeric values. '
+                        f'Map values from RM color-map expressions or dashboard tiles can be '
+                        f'any of these.'
+                    ),
+                    fix=(
+                        f'Replace with `safeIntArg({receiver}, <fallback>)` from LevoitChildBaseLib.'
+                    ),
+                ))
+                break
 
     return findings
 

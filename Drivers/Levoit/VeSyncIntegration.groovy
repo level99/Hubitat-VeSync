@@ -1047,6 +1047,16 @@ def Boolean updateDevices()
                             counts.remove(dni)
                             state.consecutiveEmpty = counts
                         }
+                        // BP21: reset selfHealAttempts on every successful poll, unconditionally.
+                        // Without this, a device that hits the empty threshold, gets a Resync,
+                        // and recovers BEFORE the MAX cap never resets its counter.  After enough
+                        // flap cycles the counter reaches MAX and the device is incorrectly marked
+                        // offline with zero remaining Resync attempts.
+                        if (state.selfHealAttempts?.containsKey(dni)) {
+                            def healMap = state.selfHealAttempts as Map
+                            healMap.remove(dni)
+                            state.selfHealAttempts = healMap
+                        }
                         // BP21: if device was previously marked offline, mark it back online now.
                         if (state.deviceOfflineSince?.containsKey(dni)) {
                             markChildOnline(dni)

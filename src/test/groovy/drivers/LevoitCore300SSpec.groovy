@@ -656,6 +656,32 @@ class LevoitCore300SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // Item 4: setLevel(N) emits named speed attribute (not raw integer string)
+    // -------------------------------------------------------------------------
+
+    def "setLevel(50) emits speed attribute as named band 'medium', not raw '2' (Core 300S)"() {
+        // Regression guard: setLevel() calls setSpeed(2) which calls handleSpeed().
+        // Without the mapIntegerStringToSpeed() remap, the speed attribute is emitted as
+        // "2" (raw integer-string). Rule Machine rules using ``speed == "medium"`` would
+        // never match. Fix: add the remap line to setSpeed before the mode dispatch.
+        //
+        // Both-ways: orchestrator-owned.
+        given: "device is on in manual mode so the speed path fires directly"
+        settings.descriptionTextEnable = true
+        state.mode = "manual"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel(50) is called — passes Integer 2 to setSpeed"
+        driver.setLevel(50)
+
+        then: "the speed attribute was emitted as 'medium' (named), not '2' (raw)"
+        lastEventValue("speed") == "medium"
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
     // Bug Pattern #26: safeIntArg regression — non-numeric RM inputs must not throw
     // -------------------------------------------------------------------------
 
@@ -799,5 +825,48 @@ class LevoitCore300SSpec extends HubitatSpec {
 
         and: "room_size is 5 (truncated from 5.7)"
         req.data.room_size == 5
+    }
+
+    // -------------------------------------------------------------------------
+    // W3: setSpeed null state.mode — RECOVER instead of warn+drop (Tier-25)
+    // -------------------------------------------------------------------------
+
+    def "W3: setSpeed null state.mode — device turns on AND speed is recovered, not dropped (Core 300S)"() {
+        // W3 regression guard: when state.mode is null/unset (fresh device, pre-first-poll),
+        // setSpeed("high") must:
+        //   1. auto-on (ensureSwitchOn fires before the mode dispatch),
+        //   2. RECOVER by calling setMode("manual") and applying the speed — NOT warn+drop.
+        // Pre-fix: else { logWarn "cannot apply speed"; return } — speed was lost.
+        // Post-fix (Tier-25): else { setMode("manual"); handleSpeed(s); ... } — speed applied.
+        //
+        // Both-ways: orchestrator-owned.
+        given: "device is off and state.mode is null (fresh device, pre-first-poll)"
+        settings.descriptionTextEnable = true
+        // state.mode intentionally NOT set — simulates a fresh/pre-poll device
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setSpeed is called with a valid non-off speed"
+        driver.setSpeed("high")
+
+        then: "on() was called — ensureSwitchOn turned the device on before the mode dispatch"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "a setPurifierMode API call was made to set manual mode (recover path fired)"
+        def modeReq = testParent.allRequests.find { it.method == "setPurifierMode" }
+        modeReq != null
+
+        and: "a setLevel (speed) API call was made — speed was NOT dropped"
+        def speedReq = testParent.allRequests.find { it.method == "setLevel" }
+        speedReq != null
+
+        and: "the speed attribute was emitted with the requested value"
+        lastEventValue("speed") == "high"
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+
+        and: "no 'cannot apply speed' warning was emitted (recover path replaces warn+drop)"
+        !testLog.warns.any { it.contains("cannot apply speed") }
     }
 }

@@ -551,6 +551,95 @@ class LevoitCore600SSpec extends HubitatSpec {
         testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
 
+    // -------------------------------------------------------------------------
+    // Item 4: setLevel(N) emits named speed attribute (not raw integer string)
+    // -------------------------------------------------------------------------
+
+    def "setLevel(60) emits speed attribute as named band 'high', not raw '3' (Core 600S)"() {
+        // Regression guard: setLevel() calls setSpeed(3) which calls handleSpeed().
+        // Without the mapIntegerStringToSpeed() remap, the speed attribute is emitted as
+        // "3" (raw integer-string). Rule Machine rules using ``speed == "high"`` would
+        // never match. Fix: add the remap line to setSpeed before the mode dispatch.
+        // pct=60: 60 >= 50 && 60 < 75 → speed 3 → "high".
+        //
+        // Both-ways: orchestrator-owned.
+        given: "device is on in manual mode so the speed path fires directly"
+        settings.descriptionTextEnable = true
+        state.mode = "manual"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel(60) is called — passes Integer 3 to setSpeed (60 >= 50, < 75 threshold)"
+        driver.setLevel(60)
+
+        then: "the speed attribute was emitted as 'high' (named), not '3' (raw)"
+        lastEventValue("speed") == "high"
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "setLevel(100) emits speed attribute as named band 'max', not raw '4' (Core 600S)"() {
+        // Same regression guard for the 4th speed level unique to Core 400S/600S.
+        //
+        // Both-ways: orchestrator-owned.
+        given: "device is on in manual mode"
+        settings.descriptionTextEnable = true
+        state.mode = "manual"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel(100) is called — passes Integer 4 to setSpeed (100 >= 75)"
+        driver.setLevel(100)
+
+        then: "the speed attribute was emitted as 'max' (named), not '4' (raw)"
+        lastEventValue("speed") == "max"
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // W3: setSpeed null state.mode — RECOVER instead of warn+drop (Tier-25)
+    // -------------------------------------------------------------------------
+
+    def "W3: setSpeed null state.mode — device turns on AND speed is recovered, not dropped (Core 600S)"() {
+        // W3 regression guard: when state.mode is null/unset (fresh device, pre-first-poll),
+        // setSpeed("high") must:
+        //   1. auto-on (ensureSwitchOn fires before the mode dispatch),
+        //   2. RECOVER by calling setMode("manual") and applying the speed — NOT warn+drop.
+        // Pre-fix: else { logWarn "cannot apply speed"; return } — speed was lost.
+        // Post-fix (Tier-25): else { setMode("manual"); handleSpeed(s); ... } — speed applied.
+        //
+        // Both-ways: orchestrator-owned.
+        given: "device is off and state.mode is null (fresh device, pre-first-poll)"
+        settings.descriptionTextEnable = true
+        // state.mode intentionally NOT set — simulates a fresh/pre-poll device
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setSpeed is called with a valid non-off speed"
+        driver.setSpeed("high")
+
+        then: "on() was called — ensureSwitchOn turned the device on before the mode dispatch"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "a setPurifierMode API call was made to set manual mode (recover path fired)"
+        def modeReq = testParent.allRequests.find { it.method == "setPurifierMode" }
+        modeReq != null
+
+        and: "a setLevel (speed) API call was made — speed was NOT dropped"
+        def speedReq = testParent.allRequests.find { it.method == "setLevel" }
+        speedReq != null
+
+        and: "the speed attribute was emitted with the requested value"
+        lastEventValue("speed") == "high"
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+
+        and: "no 'cannot apply speed' warning was emitted (recover path replaces warn+drop)"
+        !testLog.warns.any { it.contains("cannot apply speed") }
+    }
+
     // -----------------------------------------------------------------------
     // BP25: case-sensitivity — setChildLock / setDisplay uppercase inputs
     // -----------------------------------------------------------------------

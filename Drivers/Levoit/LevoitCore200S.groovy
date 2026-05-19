@@ -242,7 +242,20 @@ def setSpeed(speed) {
         logInfo "Speed: ${s}"
     }
     else {
-        logWarn "setSpeed: cannot apply speed '${s}' — device mode is '${state.mode}'; ignoring"
+        // Recover: unknown or null state.mode (e.g. fresh device, pre-first-poll).
+        // Guard against on() re-entrancy: when state.turningOn is set we are inside on()'s
+        // own setSpeed call — skip mode establishment to avoid issuing a spurious
+        // setPurifierMode that would clobber a concurrently-dispatched setMode command.
+        // on() will call setMode(state.mode) or update() after this setSpeed returns.
+        if (!state.turningOn) {
+            handleMode("manual")
+            state.mode = "manual"
+            handleEvent("mode", "manual")
+        }
+        handleSpeed(s)
+        state.speed = s
+        handleEvent("speed", s)
+        logInfo "Speed: ${s}"
     }
 }
 

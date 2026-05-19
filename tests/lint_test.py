@@ -5348,3 +5348,120 @@ class TestRule37BP26MapFieldCoercion:
         assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
             f"Typed Integer param must not flag via Map-field extension, got: {findings}"
         )
+
+    # -----------------------------------------------------------------------
+    # Blind-spot closures (a)-(f): each was missed by the original B2 pass.
+    # -----------------------------------------------------------------------
+
+    # (a) paren-before-as: (colorMap.hue) as Integer
+    BAD_PAREN_BEFORE_AS = textwrap.dedent("""\
+        def setColor(Map colorMap){
+            Integer hue = (colorMap.hue) as Integer
+            hubBypass("setLightStatus", [hue: hue])
+        }
+    """)
+
+    # (b) multi-level chain: colorMap.color.hue as Integer
+    BAD_MULTI_LEVEL_CHAIN = textwrap.dedent("""\
+        def setColor(Map colorMap){
+            Integer hue = colorMap.color.hue as Integer
+            hubBypass("setLightStatus", [hue: hue])
+        }
+    """)
+
+    # (c) aliased local: def h = colorMap.hue; h as Integer
+    BAD_ALIASED_LOCAL = textwrap.dedent("""\
+        def setColor(Map colorMap){
+            def h = colorMap.hue
+            Integer hue = h as Integer
+            hubBypass("setLightStatus", [hue: hue])
+        }
+    """)
+
+    # (d) Integer.parseInt on a Map field
+    BAD_PARSEINT = textwrap.dedent("""\
+        def setColor(Map colorMap){
+            Integer hue = Integer.parseInt(colorMap.hue)
+            hubBypass("setLightStatus", [hue: hue])
+        }
+    """)
+
+    # (e) bracket access: colorMap['hue'] as Integer
+    BAD_BRACKET_ACCESS = textwrap.dedent("""\
+        def setColor(Map colorMap){
+            Integer hue = colorMap['hue'] as Integer
+            hubBypass("setLightStatus", [hue: hue])
+        }
+    """)
+
+    # (f) untyped Map param: def setColor(colorMap) with colorMap.hue as Integer
+    BAD_UNTYPED_MAP_PARAM = textwrap.dedent("""\
+        def setColor(colorMap){
+            Integer hue = colorMap.hue as Integer
+            hubBypass("setLightStatus", [hue: hue])
+        }
+    """)
+
+    # Must-not-catch: safeIntArg on bracket access — already safe
+    GOOD_BRACKET_SAFEINTARG = textwrap.dedent("""\
+        def setColor(Map colorMap){
+            Integer hue = safeIntArg(colorMap['hue'], 0)
+            hubBypass("setLightStatus", [hue: hue])
+        }
+    """)
+
+    def test_paren_before_as_fails(self):
+        """(a) ``(colorMap.hue) as Integer`` must flag RULE37 FAIL."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_PAREN_BEFORE_AS)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for (colorMap.hue) as Integer, got: {findings}"
+        )
+
+    def test_multi_level_chain_fails(self):
+        """(b) ``colorMap.color.hue as Integer`` (two-hop) must flag RULE37 FAIL."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_MULTI_LEVEL_CHAIN)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for multi-level chain, got: {findings}"
+        )
+
+    def test_aliased_local_fails(self):
+        """(c) ``def h = colorMap.hue; h as Integer`` must flag RULE37 FAIL."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_ALIASED_LOCAL)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for aliased local, got: {findings}"
+        )
+
+    def test_parseint_fails(self):
+        """(d) ``Integer.parseInt(colorMap.hue)`` must flag RULE37 FAIL."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_PARSEINT)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for Integer.parseInt, got: {findings}"
+        )
+
+    def test_bracket_access_fails(self):
+        """(e) ``colorMap['hue'] as Integer`` must flag RULE37 FAIL."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_BRACKET_ACCESS)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for bracket access, got: {findings}"
+        )
+
+    def test_untyped_map_param_fails(self):
+        """(f) ``def setColor(colorMap)`` (no Map keyword) with ``colorMap.hue as Integer`` must flag."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_UNTYPED_MAP_PARAM)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for untyped Map param, got: {findings}"
+        )
+
+    def test_bracket_safeintarg_passes(self):
+        """safeIntArg on bracket access must NOT flag — correct form, already safe."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_BRACKET_SAFEINTARG)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"safeIntArg bracket access must not flag RULE37, got: {findings}"
+        )
