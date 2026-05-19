@@ -297,6 +297,28 @@ The standard grep-to-zero artifact closes both gaps. Every "sweep all" dispatch 
 
 This applies to: lint choke-point call-site guards, Spock regression tests for named bug patterns, PoC mutation proofs in tier-review tasks, and any assertion whose stated purpose is "this test fails if the fix is removed."
 
+**Ownership & division of labor — the root-cause fix for "why so many rounds".** The both-ways proof is an **orchestrator-driven protocol, not a delegated capability.** Three roles, no overlap:
+
+- **Orchestrator (you, Opus):** OWN the mutation design and the discriminating pass-criterion. You decide the exact revert (`git stash push -- fileX`, or "replace line N with `pass`") AND the exact signal that proves the guard real ("proves out *only* if `TestFoo::test_bar` fails with an `AssertionError` naming `<X>` — NOT merely if exit≠0"). You apply the revert, run each leg (dispatch the Haiku tester for a full-suite leg; run directly for a single targeted test — whichever is cheaper), judge whether the failure is the *right* failure, restore, and confirm clean (`git diff --stat`). This judgment is Opus-tier and **never delegated** — it is exactly the work that was being done ad-hoc each round; making it an explicit owned protocol is what removes the rounds.
+- **Tester (Haiku):** runs the harness on whatever tree state it is handed and reports **strictly verbatim**. It does NOT design the mutation, does NOT judge "should this be failing", does NOT reconcile two runs. A dirty working tree it sees during a both-ways sequence is the orchestrator's intentional mutation — it reports what the harness says on the tree as-given. If a dispatch asks it to *invent* the mutation or pass-criterion, it returns UNCERTAIN and asks — never improvises (a safe failure, not a fabricated "both-ways PASSED").
+- **QA (Sonnet/Opus):** vacuity-by-construction is **NOT QA's burden** — static reading cannot detect it (T11-1 was QA-APPROVED "sound" on two passes and was vacuous). QA reviews scope, correctness, wording, cross-pattern interaction; it explicitly **defers the vacuity verdict to the orchestrator-driven both-ways** and must not certify "this guard is non-vacuous" by reasoning.
+
+**A single-direction run is never proof.** A guard observed only PASSING on the correct tree proves nothing — a hollow guard and a real guard are indistinguishable in that direction. Accepting a single-direction tester run as "the guard works" is the exact defect this protocol exists to kill.
+
+### Closed mechanism over reactive instance-patching
+
+**When you find one instance of a problem that belongs to an enumerable class, do not patch the instance and widen a hand-grep. Build a closed, tested mechanism that catches the whole class — in the same diff.**
+
+**Why:** Tier 22 "generalized" the comment-scrub grep and it *still* missed the no-hyphen `T11` and no-hash `Issue N` forms — a hand-grep only enumerates the shapes its author thought of, and the class is open-ended. Tier 23 converted that grep into RULE38 (a lint rule with an authoritative form-set + must-catch / must-not-catch pytest fixtures + a grep-to-zero proof) and it immediately found ~6 more real instances the hand-grep missed. The patch-and-widen loop costs one sweep round per missed shape, indefinitely; the closed mechanism costs one conversion, once.
+
+**How to apply** — any "scrub all X" / "sweep every Y" / "guard every site Z" task:
+1. Define the class by an authoritative predicate, not an example list.
+2. Encode it as a mechanical check (lint rule / verifier / gating test) with **must-catch AND must-not-catch fixtures**.
+3. Prove completeness with a grep-to-zero (or equivalent) artifact, supplied verbatim.
+4. The instance fix and the mechanism land in the **same** diff. For an enumerable-class problem, a fix without the mechanism is incomplete by definition.
+
+This is the durable generalization of "Mechanical proof for migrate-all-X tasks" and the Tier-23 thesis: a hand-search with a blind spot becomes a lint rule with its own tests — never re-patched in place. Both the `vesync-driver-developer` and `vesync-driver-qa-design` agent defs carry this rule so it applies even on a wiped-context dispatch.
+
 ### Sweep-orchestration: coverage audits committed HEAD, not the working tree
 
 **When a full QA sweep fans out adversarial and coverage sub-agents in parallel, coverage MUST audit committed HEAD (`git show HEAD:<file>` / `git diff <base>..HEAD`), NOT the live working tree.**

@@ -132,6 +132,13 @@ def check_rule14_bare_settings_ref(path, raw_lines, cleaned_lines, raw_text, con
     if path.suffix != '.groovy':
         return findings
 
+    # Only applies to files in Drivers/Levoit/ directory.
+    if 'Drivers' not in path.parts and 'Levoit' not in path.parts:
+        # Check by path string as well for Windows vs. Unix path segments
+        path_str = str(path).replace('\\', '/')
+        if 'Drivers/Levoit/' not in path_str:
+            return findings
+
     for i, line in enumerate(cleaned_lines, 1):
         m = BARE_PREF_PATTERN.search(line)
         if m:

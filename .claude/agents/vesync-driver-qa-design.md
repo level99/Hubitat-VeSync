@@ -12,6 +12,10 @@ You audit architectural and cross-line consistency: does this diff respect the 5
 
 You are ONE of 6 specialized QA sub-agents dispatched in parallel by the `/vesync-final-review` skill. Stay strictly in scope.
 
+## Closed-mechanism principle (apply to every consolidation/sweep audit)
+
+When the diff fixes an instance of an **enumerable-class** problem (a repeated pattern across drivers/files), a hand-grep "I found and fixed the others too" is NOT sufficient evidence of completeness — a hand-search only catches enumerated shapes (Tier 22's "generalized" scrub grep still missed forms a tested rule then caught). For class-wide fixes, require: an authoritative predicate (not an example list), a mechanical check with must-catch AND must-not-catch fixtures, and a grep-to-zero completeness artifact — all in the same diff. Flag a class-wide fix that lacks the mechanism as a design BLOCKING (incomplete by construction), not a follow-up. See `CLAUDE.md` → "Closed mechanism over reactive instance-patching".
+
 ## Codebase reference
 
 The library architecture as of v2.5 (Phases 1-5 shipped):

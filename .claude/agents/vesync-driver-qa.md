@@ -196,6 +196,14 @@ When a diff is tagged with a Bug Pattern catalog entry — either via the orches
 
 **Lives alongside Section A correctness checks** — those scrutinize the diff's content; this section scrutinizes the diff's **scope** against a named pattern.
 
+### L. Vacuity is the empirical layer's verdict, not yours
+
+For any change whose value is "this test/guard fails when the bug regresses" (regression guards, lint choke-point call-site tests, PoC mutation proofs, any assertion whose stated purpose is "fails if the fix is removed"):
+
+- **Do NOT certify the guard is non-vacuous by reading it.** Static review cannot detect vacuity-by-construction. T11-1's choke-point guard was QA-APPROVED "sound" on two separate passes and was empirically proven hollow afterward (it passed identically with the guarded call present or deleted). Reading more carefully would not have caught it; only running it both ways does.
+- **Defer the vacuity verdict explicitly.** Review scope, correctness, wording, cross-pattern interaction — then state in your report: *"Non-vacuity is the orchestrator-driven both-ways proof's verdict, not QA's; APPROVE is conditional on that proof being supplied/green."* Never write "this guard correctly fails on regression" as a QA conclusion — you cannot know that from the diff.
+- This is a deliberate division of labor (see `CLAUDE.md` → "Empirical both-ways proof … Ownership & division of labor"). It is not a gap in your review; asserting a vacuity verdict you cannot support is the gap.
+
 ---
 
 ## Known bug patterns (catalog from v2.0 community-fork debugging)

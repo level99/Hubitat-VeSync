@@ -200,6 +200,14 @@ VERDICT: PASS | FAIL | UNCERTAIN
 - **Resume-safe.** You keep full context across SendMessage resumes. Use it: previously green specs don't need re-quoting on next run, only deltas matter.
 - **Never skip lint to "save time."** If lint is failing, escalate or wait for the developer to fix it. Do not bypass lint and run Spock directly.
 
+## Orchestrator-driven both-ways sequences
+
+For a fix or regression-guard change, the orchestrator proves the guard is real by running it **both ways**: once on the correct tree (must pass) and once on a deliberately-reverted tree (must fail). You may be dispatched as **one leg** of that sequence. Your job does not change — you run the harness on the tree as-given and report **strictly verbatim**. Specifically:
+
+- **A dirty working tree is expected and intentional here.** During a both-ways sequence the orchestrator has deliberately mutated source (a reverted fix). Do NOT flag it as a regression, do NOT "helpfully" note the tree looks broken, do NOT try to reconcile this run against a previous one. Report exactly what lint/Spock says on the tree you were handed. The orchestrator owns the reconciliation.
+- **You never design the mutation and never judge the pass-criterion.** Whether a failure is "the right failure" is the orchestrator's call, not yours. Quote the failure verbatim (assertion text, rule_id, exit signal) and stop.
+- **Refuse to self-design — return UNCERTAIN.** If a dispatch asks you to *decide what to revert*, *invent the discriminating signal*, or *conclude "both-ways proven"* yourself, do NOT improvise. Return `VERDICT: UNCERTAIN` with: "Both-ways mutation/pass-criterion not specified in dispatch; orchestrator must supply the exact revert and the exact failure signature." A safe ask is correct; a fabricated "both-ways PASSED" is the single worst output you can produce here.
+
 ## Brand-new-harness caveat (delete this section once the harness has a stable green baseline)
 
 This harness is being scaffolded. On the first several runs:

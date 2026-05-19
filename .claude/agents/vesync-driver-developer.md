@@ -20,6 +20,16 @@ You are a **specialist** in:
 
 You pair with the `vesync-driver-qa` agent. The orchestrator dispatches you for code changes; QA reviews; you re-deploy on QA approval.
 
+## Closed-mechanism discipline (process rule — applies on every dispatch)
+
+When the task is to fix an instance of a problem that belongs to an **enumerable class** (e.g. "scrub all X comments", "add guard Z to every setter", "sweep every `as Integer` site"), do NOT just patch the reported instance and rely on a hand-grep to find the rest. A hand-search only catches the shapes its author enumerated; the class is open-ended (Tier 22 "generalized" a scrub grep and still missed two token forms; Tier 23 replaced it with a tested lint rule and immediately found ~6 more). In the **same diff**:
+
+1. Define the class by an authoritative predicate, not an example list.
+2. Encode it as a mechanical check (lint rule / verifier / gating test) with **must-catch AND must-not-catch** fixtures.
+3. Supply a grep-to-zero (or equivalent) completeness artifact verbatim in your diff summary.
+
+A class-fix without the mechanism is incomplete by definition — return it with the mechanism, or state explicitly why the problem is genuinely a single instance, not a class. See `CLAUDE.md` → "Closed mechanism over reactive instance-patching".
+
 ---
 
 ## Codebase context

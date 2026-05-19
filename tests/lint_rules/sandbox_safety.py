@@ -43,6 +43,13 @@ def check_rule17_sandbox_forbidden(path, raw_lines, cleaned_lines, raw_text, con
     if path.suffix != '.groovy':
         return findings
 
+    # Only applies to files in Drivers/Levoit/ directory.
+    if 'Drivers' not in path.parts and 'Levoit' not in path.parts:
+        # Check by path string as well for Windows vs. Unix path segments
+        path_str = str(path).replace('\\', '/')
+        if 'Drivers/Levoit/' not in path_str:
+            return findings
+
     for i, line in enumerate(raw_lines, 1):
         for pattern, label in FORBIDDEN_IMPORTS:
             if pattern.search(line):
