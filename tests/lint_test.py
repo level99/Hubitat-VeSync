@@ -792,7 +792,7 @@ class TestRule26JavadocTerminator:
     An embedded `*/` causes Groovy to close the block comment prematurely.
     Everything between the embedded `*/` and the intended close is then
     parsed as live code, producing a compile error. This bit the codebase
-    twice (v2.1 fe4d723 and v2.2 PR#4) before the rule was added.
+    twice during the v2.1–v2.2 cycle before the rule was added.
 
     Note: RULE26 operates on raw_text (NOT cleaned_lines) because
     groovy_lite.clean_source already strips block comments. The run_rule()
@@ -3680,7 +3680,7 @@ class TestRule22WhitelistParity:
 
 
 # ---------------------------------------------------------------------------
-# T21-A/B: Verifier internals — _strip_comments_and_strings
+# Verifier internals — _strip_comments_and_strings
 # ---------------------------------------------------------------------------
 
 class TestStripCommentsAndStrings:
@@ -3688,14 +3688,14 @@ class TestStripCommentsAndStrings:
     Persisted pytest suite for check_bp24_classification._strip_comments_and_strings.
 
     Covers ALL handled literal/comment forms including Groovy slashy strings
-    and dollar-slashy strings (T21-A regression guards).
+    and dollar-slashy strings (slashy-opener regression guards).
 
-    Non-vacuity contracts (T21-A regression guards):
+    Non-vacuity contracts (slashy-opener regression guards):
       - test_slashy_with_embedded_block_comment_* tests MUST FAIL when
-        T21-A is reverted (i.e., when slashy-string detection is removed
-        from _strip_comments_and_strings and replaced with the old code that
-        dispatches // then /* without a prior slashy check).
-      - These are the load-bearing T21-A regression guards.
+        slashy-string detection is removed from _strip_comments_and_strings
+        and replaced with code that dispatches // then /* without a prior
+        slashy check.
+      - These are the load-bearing slashy-opener regression guards.
     """
 
     @staticmethod
@@ -3827,12 +3827,12 @@ class TestStripCommentsAndStrings:
         entire string is consumed as a literal and safeIntArg on a later line
         survives in the stripped output.
 
-        T21-A regression guard (dollar-slashy variant): reverting T21-A
-        removes the dollar-slashy check, so $/ is emitted as '$' then
-        '/' where '/' may or may not enter slashy-string mode depending on
-        context — but the embedded '/*' is then encountered as a bare /
-        followed by *, which opens a block comment, truncating the remaining
-        source including the real safeIntArg call.
+        Regression guard (dollar-slashy variant): removing the dollar-slashy
+        check causes $/ to be emitted as '$' then '/' where '/' may or may not
+        enter slashy-string mode depending on context — but the embedded '/*'
+        is then encountered as a bare / followed by *, which opens a block
+        comment, truncating the remaining source including the real safeIntArg
+        call.
         """
         src = (
             'def setDryingMode(onOff) {\n'
@@ -3847,7 +3847,7 @@ class TestStripCommentsAndStrings:
             f"Got stripped output: {out!r}"
         )
 
-    # ---- Slashy strings (T21-A core regression guards) ----
+    # ---- Slashy strings (slashy-opener core regression guards) ----
 
     def test_slashy_stripped(self):
         """Groovy slashy string /.../  body must be stripped."""
@@ -3861,12 +3861,16 @@ class TestStripCommentsAndStrings:
         The safeIntArg call on a subsequent line must survive in the
         stripped output.
 
-        T21-A regression guard (adversarial form 1 — no backslash):
-        With T21-A reverted, the tokenizer sees '/*' inside the slashy
-        literal and opens a block comment.  The '*/'-free remainder
+        Regression guard (adversarial form 1 — no backslash):
+        Without the slashy-opener check, the tokenizer sees '/*' inside the
+        slashy literal and opens a block comment.  The '*/'-free remainder
         causes the 'break' path (unterminated block comment), truncating
         the rest of the body including the real safeIntArg call.
-        This test FAILS without T21-A and PASSES with T21-A applied.
+        This test FAILS without the slashy-opener check and PASSES with it.
+
+        Non-vacuity: removing the slashy-string detection from
+        _strip_comments_and_strings (i.e. reverting so '/' is never treated as
+        a slashy opener) causes this test to FAIL.
         """
         src = (
             'def setDryingMode(onOff) {\n'
@@ -3877,8 +3881,8 @@ class TestStripCommentsAndStrings:
         out = self._strip(src)
         assert 'safeIntArg(seconds' in out, (
             "safeIntArg(seconds must survive stripping when slashy string "
-            "contains /*. T21-A regression: the slashy check must fire BEFORE "
-            f"the /* dispatch. Got stripped output: {out!r}"
+            "contains /*; the slashy check must fire BEFORE the /* dispatch. "
+            f"Got stripped output: {out!r}"
         )
 
     def test_slashy_with_backslash_embedded_block_comment_survives_safeintarg(self):
@@ -3886,7 +3890,8 @@ class TestStripCommentsAndStrings:
         Slashy string /a\\/*b/ (with explicit \\/  escape) must not trigger
         block-comment parsing.
 
-        T21-A regression guard (adversarial form 2 — with backslash).
+        Regression guard (adversarial form 2 — with backslash): this test
+        FAILS without the slashy-opener check and PASSES with it applied.
         """
         src = (
             'def setDryingMode(onOff) {\n'
@@ -3922,7 +3927,7 @@ class TestStripCommentsAndStrings:
 
 
 # ---------------------------------------------------------------------------
-# T21-B: Verifier internals — _find_struct_braces / extract_method_body
+# Verifier internals — _find_struct_braces / extract_method_body
 # ---------------------------------------------------------------------------
 
 class TestFindStructBraces:
@@ -3930,7 +3935,7 @@ class TestFindStructBraces:
     Persisted pytest suite for check_bp24_classification._find_struct_braces
     and extract_method_body.
 
-    Covers slashy-string brace desync (T21-A INFO-adv-1 fix).
+    Covers slashy-string brace desync (slashy-brace-desync guard).
     """
 
     @staticmethod
@@ -3977,13 +3982,13 @@ class TestFindStructBraces:
         """
         A '{' inside a slashy string must not increment brace depth.
 
-        T21-A INFO-adv-1 regression guard (slashy-'{'): with T21-A reverted
-        (slashy strings unrecognised), the '{' inside the slashy literal is
-        counted as a structural open-brace, increasing depth to 2.  The method
-        body then extends to the next '}' that brings depth to 1, then the
-        subsequent '}' that brings depth to 0 — which is the close-brace of
-        the FOLLOWING method.  With T21-A applied, the slashy string is
-        consumed correctly and depth tracking is accurate.
+        Regression guard (slashy-open-brace): without slashy-string recognition,
+        the '{' inside the slashy literal is counted as a structural open-brace,
+        increasing depth to 2.  The method body then extends to the next '}'
+        that brings depth to 1, then the subsequent '}' that brings depth to 0
+        — which is the close-brace of the FOLLOWING method.  With the
+        slashy-opener check applied, the slashy string is consumed correctly
+        and depth tracking is accurate.
         """
         src = (
             'def setDryingMode(onOff) {\n'
@@ -4004,7 +4009,7 @@ class TestFindStructBraces:
         """
         A '}' inside a slashy string must not decrement brace depth.
 
-        T21-A INFO-adv-1 regression guard (slashy-'}'): with T21-A reverted,
+        Regression guard (slashy-close-brace): without slashy-string recognition,
         the '}' inside the slashy literal decrements depth prematurely and
         extract_method_body returns before reaching the real closing brace,
         truncating the body.
@@ -4029,12 +4034,12 @@ class TestFindStructBraces:
         assert 'return 1' in body
         assert body.endswith('}')
 
-    # ---- NIT-1: keyword expression-start context (return, in, etc.) ----
+    # ---- Keyword expression-start context (return, in, etc.) ----
 
     def test_return_slashy_close_brace_not_structural(self):
         """
-        Regression guard (NIT-1): 'return /a}b/' — the '}' inside a slashy
-        string opened after the keyword 'return' must NOT be counted structural.
+        Regression guard: 'return /a}b/' — the '}' inside a slashy string
+        opened after the keyword 'return' must NOT be counted structural.
 
         Without the keyword-opener set in _is_slashy_open_position, 'n' (last
         char of 'return') is not in _SLASHY_OPENER_PREV so the '/' is treated
@@ -4068,7 +4073,7 @@ class TestFindStructBraces:
 
     def test_in_keyword_slashy_close_brace_not_structural(self):
         """
-        Regression guard (NIT-1): 'x in /a}b/' — '}' inside slashy after 'in'
+        Regression guard: 'x in /a}b/' — '}' inside slashy after 'in'
         must not be counted structural.  Companion to the 'return' test above.
         """
         src = (
@@ -4084,11 +4089,11 @@ class TestFindStructBraces:
             "'x in /a}b/'; 'in' must be recognized as an expression-start keyword."
         )
 
-    # ---- NIT-2: $$ escape inside dollar-slashy ----
+    # ---- Dollar-slashy $$ escape ----
 
     def test_dollar_slashy_double_dollar_escape_survives(self):
         """
-        Regression guard (NIT-2): a dollar-slashy string '$/$$/$' (body = '$$', which
+        Regression guard (dollar-slashy-$$-escape): a dollar-slashy string '$/$$/$' (body = '$$', which
         in Groovy is an escaped '$') must close correctly so that following code is
         visible as real source.
 
@@ -4142,7 +4147,7 @@ class TestFindStructBraces:
 
 
 # ---------------------------------------------------------------------------
-# T21-B: Verifier internals — is_behavioral_onoff_setter
+# Verifier internals — is_behavioral_onoff_setter
 # ---------------------------------------------------------------------------
 
 class TestIsBehavioralOnoffSetter:
@@ -4259,7 +4264,7 @@ class TestIsBehavioralOnoffSetter:
 
 
 # ---------------------------------------------------------------------------
-# T21-B: Verifier internals — find_safeintarg_command_methods (bp26)
+# Verifier internals — find_safeintarg_command_methods (bp26)
 # ---------------------------------------------------------------------------
 
 class TestFindSafeIntArgCommandMethods:
@@ -4341,7 +4346,7 @@ class TestFindSafeIntArgCommandMethods:
 
 
 # ---------------------------------------------------------------------------
-# T21-B: Verifier internals — _is_onoff_emitting (c3 gate coverage)
+# Verifier internals — _is_onoff_emitting (c3 gate coverage)
 # ---------------------------------------------------------------------------
 
 class TestIsOnoffEmitting:
@@ -4443,10 +4448,10 @@ class TestBp26SlashyDesync:
     """
     Slashy-string desync reproduction tests for find_safeintarg_command_methods.
 
-    A slashy literal whose body contains '{' or '}' causes the old slashy-unaware
-    _find_struct_braces (pre-T21-A) to miscount brace depth, truncating the method
-    body early and causing find_safeintarg_command_methods to report the safeIntArg
-    call as absent (false negative) or to include a method from the NEXT def in the
+    A slashy literal whose body contains '{' or '}' causes a slashy-unaware
+    _find_struct_braces to miscount brace depth, truncating the method body early
+    and causing find_safeintarg_command_methods to report the safeIntArg call as
+    absent (false negative) or to include a method from the NEXT def in the
     brace-scan slice (false positive).
 
     These tests are the per-verifier counterpart to the TestFindStructBraces guards
@@ -4524,12 +4529,12 @@ class TestC3SlashyDesync:
     """
     Slashy-string desync reproduction tests for check_c3_gate_coverage classify path.
 
-    A slashy literal whose body contains '{' or '}' causes the old slashy-unaware
-    extract_method_body (pre-T21-A) to return a truncated body, so the behavioral
-    predicates (on/off comparison, API call, sendEvent) could be evaluated against
-    an incomplete snippet — potentially misclassifying an in-scope setter as
-    out-of-scope (false negative) or absorbing a neighboring method's content
-    (false positive that inflates predicate matches).
+    A slashy literal whose body contains '{' or '}' causes a slashy-unaware
+    extract_method_body to return a truncated body, so the behavioral predicates
+    (on/off comparison, API call, sendEvent) could be evaluated against an incomplete
+    snippet — potentially misclassifying an in-scope setter as out-of-scope (false
+    negative) or absorbing a neighboring method's content (false positive that
+    inflates predicate matches).
 
     These tests drive the classify path via is_behavioral_onoff_setter + extract_method_body
     + classify directly, and verify that the fix propagated correctly through the shared
@@ -4611,4 +4616,292 @@ class TestC3SlashyDesync:
         )
         assert results['setChildLock'] == 'HAS_GATE', (
             f"setChildLock must be classified HAS_GATE; got {results['setChildLock']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Slashy-opener: ~ operator guards and structural-char token reset
+# ---------------------------------------------------------------------------
+
+class TestSlashyOpenerTildeOperator:
+    """
+    Regression guards for the '~' addition to _SLASHY_OPENER_PREV.
+
+    A Groovy regex-find expression 'x =~ /pattern/' has '~' as the last
+    character before the opening '/'.  If '~' is absent from _SLASHY_OPENER_PREV
+    the '/' is mis-classified as a division operator: the lexer walks INTO the
+    regex body, misreads trailing metacharacters as source tokens, and
+    _find_struct_braces returns an unbalanced brace stream.
+
+    Concrete real-corpus instance (LevoitDiagnosticsLib.groovy):
+        def m = tn =~ /v?(\d+\.\d+(?:\.\d+)?)\s*$/
+    At that line the '/' after '~' is a slashy opener; misclassifying it as
+    division causes the lexer to walk into the pattern and misread the trailing
+    '\\s*$/' span — an unbalanced brace stream follows, causing _find_struct_braces
+    to report incorrect depth and silently drop any following safeIntArg() calls
+    or on/off setter bodies from verifier scope.
+
+    Non-vacuity contracts:
+      - Each test MUST FAIL when '~' is removed from _SLASHY_OPENER_PREV and
+        MUST PASS with it present.
+      - The :415-shape test is the canonical real-corpus guard; the others cover
+        the ==~ match operator and ~/re/ Pattern-literal forms.
+    """
+
+    @staticmethod
+    def _strip(text: str) -> str:
+        from _groovy_lex import _strip_comments_and_strings
+        return _strip_comments_and_strings(text)
+
+    @staticmethod
+    def _braces(src: str, start: int = 0):
+        from _groovy_lex import _find_struct_braces
+        return _find_struct_braces(src, start)
+
+    # ---- Real-corpus :415 shape ----
+
+    def test_tilde_regex_find_safeintarg_survives(self):
+        """
+        Regression guard (real-corpus :415 shape): 'def m = tn =~ /pat}ern/'
+        — the slashy body must be consumed by _strip so the embedded '}' does
+        NOT appear in stripped output.
+
+        The last char before '/' is '~' (the =~ find-operator).  With '~' in
+        _SLASHY_OPENER_PREV: '/' opens a slashy string → body consumed →
+        'pat}ern' absent from output → PASS.  Without '~': '/' treated as
+        division → body NOT consumed → 'pat}ern' present in output → FAIL.
+
+        Non-vacuity: removing '~' from _SLASHY_OPENER_PREV causes this test
+        to FAIL (discriminating property: slashy-body-consumption).
+        """
+        src = (
+            'def getDriverVersion() {\n'
+            '    String tn = device?.typeName as String\n'
+            '    def m = tn =~ /pat}ern/\n'
+            '    int secs = safeIntArg(retrySeconds, 0)\n'
+            '    hubBypass("getStatus", [tmgEvt:[clkSec:secs]])\n'
+            '}\n'
+        )
+        out = self._strip(src)
+        assert 'pat}ern' not in out, (
+            "The slashy body 'pat}ern' must be consumed (absent from stripped "
+            "output) when '~' is in _SLASHY_OPENER_PREV.  If '~' is removed, "
+            "'/' is treated as division, the body is NOT consumed, and 'pat}ern' "
+            f"remains in output.  Got stripped output: {out!r}"
+        )
+
+    def test_tilde_regex_find_brace_balance(self):
+        """
+        Regression guard (brace balance): 'def m = tn =~ /pattern\\s*$/' must
+        not perturb _find_struct_braces brace counting.
+
+        Without '~' in _SLASHY_OPENER_PREV the '/' is misread as division and
+        the pattern body is scanned as source — metacharacters like '\\s*$/'
+        and the method's real closing '}' together produce an unbalanced stream.
+
+        Non-vacuity: removing '~' from _SLASHY_OPENER_PREV causes this test
+        to FAIL (unbalanced open/close counts).
+        """
+        src = (
+            'def getDriverVersion() {\n'
+            '    String tn = device?.typeName as String\n'
+            '    def m = tn =~ /v?(\\d+\\.\\d+(?:\\.\\d+)?)\\s*$/\n'
+            '    if (m) return m[0][1]\n'
+            '}\n'
+            'def otherMethod() {\n'
+            '    return 42\n'
+            '}\n'
+        )
+        braces = self._braces(src)
+        opens = sum(1 for _, k in braces if k == '{')
+        closes = sum(1 for _, k in braces if k == '}')
+        assert opens == closes, (
+            f"_find_struct_braces must return a balanced brace stream when "
+            f"source contains '=~ /pattern/'; got opens={opens} closes={closes}. "
+            "Removing '~' from _SLASHY_OPENER_PREV causes the regex body to be "
+            "scanned as source, producing extra phantom closes."
+        )
+
+    # ---- Operator-class guards ----
+
+    def test_tilde_match_operator_slashy_opened(self):
+        """
+        Regression guard: 'x ==~ /auto}sleep/' — the slashy body must be
+        consumed by _strip so the embedded '}' does NOT appear in stripped
+        output.
+
+        '~' is the last char before '/' (from the ==~ match operator).  With
+        '~' in _SLASHY_OPENER_PREV: '/' opens a slashy string → body consumed
+        → 'auto}sleep' absent from output → PASS.  Without '~': '/' treated
+        as division → body NOT consumed → 'auto}sleep' present → FAIL.
+
+        Non-vacuity: removing '~' from _SLASHY_OPENER_PREV causes this test
+        to FAIL (discriminating property: slashy-body-consumption).
+        """
+        src = (
+            'def setMode(m) {\n'
+            '    if (m ==~ /auto}sleep/) { }\n'
+            '    int secs = safeIntArg(retrySeconds, 0)\n'
+            '}\n'
+        )
+        out = self._strip(src)
+        assert 'auto}sleep' not in out, (
+            "The slashy body 'auto}sleep' must be consumed (absent from stripped "
+            "output) when '~' is in _SLASHY_OPENER_PREV.  If '~' is removed, "
+            "'/' is treated as division, the body is NOT consumed, and 'auto}sleep' "
+            f"remains in output.  Got: {out!r}"
+        )
+
+    def test_tilde_pattern_literal(self):
+        """
+        Regression guard: '~/auto}sleep/' is a Groovy Pattern literal — the
+        slashy body must be consumed by _strip so the embedded '}' does NOT
+        appear in stripped output.
+
+        Unary '~' directly precedes the slashy opener.  With '~' in
+        _SLASHY_OPENER_PREV: '/' opens a slashy string → body consumed →
+        'auto}sleep' absent from output → PASS.  Without '~': '/' treated as
+        division → body NOT consumed → 'auto}sleep' present → FAIL.
+
+        Non-vacuity: removing '~' from _SLASHY_OPENER_PREV causes this test
+        to FAIL (discriminating property: slashy-body-consumption).
+        """
+        src = (
+            'def setMode(m) {\n'
+            '    def pat = ~/auto}sleep/\n'
+            '    int secs = safeIntArg(retrySeconds, 0)\n'
+            '}\n'
+        )
+        out = self._strip(src)
+        assert 'auto}sleep' not in out, (
+            "The slashy body 'auto}sleep' must be consumed (absent from stripped "
+            "output) when '~' is in _SLASHY_OPENER_PREV.  If '~' is removed, "
+            "'/' is treated as division, the body is NOT consumed, and 'auto}sleep' "
+            f"remains in output.  Got: {out!r}"
+        )
+
+
+
+# ---------------------------------------------------------------------------
+# Structural-char token-boundary reset in _strip_comments_and_strings
+# ---------------------------------------------------------------------------
+
+class TestStripStructuralCharTokenReset:
+    """
+    Regression guards for the structural-char branch in _strip_comments_and_strings
+    and _find_struct_braces.
+
+    When a non-whitespace, non-ident character is encountered, the cur_token /
+    prev_token boundary must be committed so the GOVERNING token for a subsequent
+    '/' resolves correctly.
+
+    The discriminating shape is 'foo}return /x}y/' (NO space between '}' and
+    'return').  The '}' is a structural char NOT in _SLASHY_OPENER_PREV:
+
+      With reset ACTIVE: '}' commits cur_token='foo' → prev_token='foo',
+      cur_token=''.  'return' accumulates as a fresh cur_token.  Space commits
+      prev_token='return'.  At '/', last_structural='}' (not in set) → keyword
+      path → 'return' in _SLASHY_OPENER_KEYWORDS → slashy → inner '}' not
+      counted as a structural brace → balanced stream.
+
+      With reset REVERTED to 'pass': '}' records as a structural brace but does
+      NOT clear cur_token='foo'.  The following 'r','e',...'n' ALL satisfy
+      c.isalpha() and cur_token is non-empty, so they APPEND to cur_token →
+      cur_token='fooreturn'.  Space commits prev_token='fooreturn'.  At '/',
+      governing='fooreturn' NOT in keywords → division → inner '}' counted as
+      a structural close-brace → imbalanced / safeIntArg swallowed.
+
+    This shape is load-bearing: a space between '}' and 'return' would allow the
+    whitespace-commit branch to independently commit cur_token before 'return'
+    accumulates, making the structural-char reset appear redundant for that path
+    and the test vacuous.  The no-space form is the minimal discriminating shape.
+
+    Non-vacuity contracts:
+      - test_structural_char_resets_token_for_return_slashy: reverting the
+        structural-char reset block ('if cur_token: prev_token = cur_token;
+        cur_token = ""' inside 'if c not in " \\t\\n\\r":') in
+        _strip_comments_and_strings to 'pass' causes this test to FAIL —
+        'fooreturn' is accumulated, '/' is treated as division, the body /x}y/
+        is NOT consumed, and 'x}y' remains in stripped output, triggering the
+        'x}y' not in out assertion.
+      - test_structural_char_reset_brace_balance: reverting the analogous reset
+        block in _find_struct_braces to 'pass' causes this test to FAIL —
+        'fooreturn' is accumulated, '/' is treated as division, the inner '}'
+        of /x}y/ is counted as a structural close-brace → unbalanced stream.
+    """
+
+    @staticmethod
+    def _strip(text: str) -> str:
+        from _groovy_lex import _strip_comments_and_strings
+        return _strip_comments_and_strings(text)
+
+    @staticmethod
+    def _braces(src: str, start: int = 0):
+        from _groovy_lex import _find_struct_braces
+        return _find_struct_braces(src, start)
+
+    def test_structural_char_resets_token_for_return_slashy(self):
+        """
+        Regression guard: 'if (cond) {foo}return /x}y/' (no space between '}'
+        and 'return') — the slashy body 'x}y' must be consumed by _strip so it
+        does NOT appear in stripped output.
+
+        With reset ACTIVE: '}' commits 'foo'→prev_token, clears cur_token.
+        'return' accumulates fresh → keyword path → slashy opened → body /x}y/
+        consumed → 'x}y' absent from output → PASS.
+
+        Non-vacuity: reverting the structural-char reset block in
+        _strip_comments_and_strings to 'pass' causes this test to FAIL:
+        'fooreturn' is accumulated instead of 'return', '/' is treated as
+        division, body /x}y/ is NOT consumed, and 'x}y' remains in stripped
+        output, triggering the 'x}y' not in out assertion.
+        """
+        # 'foo}return' — no whitespace between the prior-token-ending '}' and 'return'.
+        # The '}' is NOT in _SLASHY_OPENER_PREV so the slashy decision falls to
+        # the keyword path, which requires 'return' to be correctly isolated as
+        # prev_token.  The slashy body /x}y/ must be consumed, leaving 'x}y' absent.
+        src = (
+            'def setTimer(seconds) {\n'
+            '    if (cond) {foo}return /x}y/\n'
+            '    int secs = safeIntArg(seconds, 0)\n'
+            '    hubBypass("addTimerV2", [tmgEvt:[clkSec:secs]])\n'
+            '}\n'
+        )
+        out = self._strip(src)
+        assert 'x}y' not in out, (
+            "The slashy body 'x}y' must be consumed (absent from stripped output) "
+            "when the structural-char reset correctly isolates 'return' as the "
+            "governing token.  If the reset is reverted to 'pass', 'fooreturn' is "
+            "accumulated instead of 'return', '/' is treated as division, the body "
+            "is NOT consumed, and 'x}y' remains in output.  "
+            f"Got: {out!r}"
+        )
+
+    def test_structural_char_reset_brace_balance(self):
+        """
+        Brace-balance companion: 'if (cond) {foo}return /x}y/' — _find_struct_braces
+        must return a balanced stream (the '}' inside the slashy is not structural).
+
+        Non-vacuity: reverting the structural-char reset block in _find_struct_braces
+        (the analogous 'if cur_token:...' inside 'if c not in " \\t\\n\\r":') to
+        'pass' causes this test to FAIL: 'fooreturn' is accumulated, '/' is treated
+        as division, and the '}' inside /x}y/ is counted as a structural close-brace,
+        producing one extra close relative to opens.
+        """
+        src = (
+            'def setTimer(seconds) {\n'
+            '    if (cond) {foo}return /x}y/\n'
+            '    int secs = safeIntArg(seconds, 0)\n'
+            '    hubBypass("addTimerV2", [tmgEvt:[clkSec:secs]])\n'
+            '}\n'
+        )
+        braces = self._braces(src)
+        opens = sum(1 for _, k in braces if k == '{')
+        closes = sum(1 for _, k in braces if k == '}')
+        assert opens == closes, (
+            f"_find_struct_braces must return a balanced stream when source "
+            f"contains 'foo}}return /x}}y/'; got opens={opens} closes={closes}. "
+            "Without the structural-char token reset 'fooreturn' is accumulated, "
+            "'/' is treated as division, and the inner '}}' is counted as a "
+            "structural close-brace."
         )

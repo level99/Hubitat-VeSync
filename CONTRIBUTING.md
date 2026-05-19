@@ -447,6 +447,17 @@ manifest: cumulate releaseNotes across versions (HPM convention) + harden cut-re
 v2.1: 5 new drivers + first fan support (preview)
 ```
 
+### Comment-scrub pre-flight
+
+Before pushing any PR, grep the diff for process-specific tokens that must not appear in code or test comments:
+
+```bash
+grep -rEn 'T[0-9]+-[A-Z0-9]|Tier ?#?[0-9]|Sweep ?#?[0-9]|PR ?#[0-9]|issue ?#[0-9]|[Gg]emini' \
+    tests/_groovy_lex.py tests/lint_test.py tests/lint_rules/ Drivers/Levoit/
+```
+
+The pattern must return no output. Allowed exceptions: external-provenance references (e.g. pyvesync test-fixture citation, HA integration note, GitHub URL in a documentation link) are fine when the provenance is external to this repo's own PR/tier/sweep numbering scheme. Bug Pattern catalog citations (`Bug Pattern #N`, `BP24`, `RULE37`) are fine in comments — those are durable catalog identifiers, not process tokens. **Pipeline-internal labels** (`T21-A`, `Tier 22`, `Sweep #14`, `PR #167`, Gemini bot name) are process tokens that become meaningless after the corresponding cycle closes; strip them and replace with the behavioral invariant the code or test enforces.
+
 ### One concern per PR
 
 Squash-merge is the default. Each PR collapses to a single commit on `main`, so the PR's scope = a single logical unit going into history. Bundling unrelated fixes makes review harder and the squash commit message muddier. Open separate PRs for separate concerns.

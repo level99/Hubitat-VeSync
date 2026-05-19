@@ -14,10 +14,10 @@ Handles ALL Groovy non-structural regions:
   - single-quoted strings  '...'
   - dollar-slashy strings  $/.../$  (unambiguous open/close markers)
   - slashy strings  /.../  (context-sensitive: opened only in expression-start
-    position — after = ( , [ { ; : ? | & or at start of scan; NOT after an
+    position — see _SLASHY_OPENER_PREV for the grammar-derived set; NOT after an
     operand token such as identifier ) ] digit or close-quote)
 
-Slashy-string context rule (T21-A):
+Slashy-string context rule:
   A '/' that follows an operand is a division operator, not a slashy-string
   opener.  Two trackers collaborate: `last_structural` (the last non-whitespace
   single character) is checked against _SLASHY_OPENER_PREV for single-char
@@ -41,8 +41,28 @@ Public API:
 # ---------------------------------------------------------------------------
 
 # Single-character tokens after which a bare '/' opens a slashy string.
-# Does NOT include letters/digits/)/] (operand chars).
-_SLASHY_OPENER_PREV = frozenset('=([{,;:?|&')
+#
+# CLOSED PRINCIPLE — this set is minimal: it contains only chars that are
+# BOTH (a) grammar-unambiguous slashy-openers (a '/' whose immediate non-ws
+# predecessor is one of these is necessarily expression-start, never division)
+# AND (b) actually occur, or plausibly occur, immediately before a slashy in
+# this codebase's Groovy.  Grammar-correct-but-currently-unexercised operators
+# (e.g. '>', '<', '^', '*', '%', '+', '-', '!') are DELIBERATELY EXCLUDED to
+# minimize the false-positive-slashy silent-drop surface.  In particular, '+'
+# and '-' are excluded because postfix '++' / '--' make '+' / '-' ambiguous as
+# last_structural before a division '/' (e.g. 'a++ / b' → last char '+', yet
+# '/' is real division).  If a real corpus instance of '<op> /slashy/' for some
+# other operator ever appears, add that single char HERE together with a
+# non-vacuous both-ways regression guard — never speculatively.
+#
+# Members:
+#   = ( [ { , ; : ?   — assignment, open-bracket, separator, ternary
+#   | &               — bitwise/logical binary ops
+#   ~                 — regex-find =~ / match ==~ / not-find !~ (last char '~')
+#                       and Pattern literal ~/re/.  Real corpus instance:
+#                       LevoitDiagnosticsLib.groovy  tn =~ /v?(...)\s*$/
+# Does NOT include letters/digits/)/] (operand chars), which signal division.
+_SLASHY_OPENER_PREV = frozenset('=([{,;:?|&~')
 
 # Keyword tokens after which a bare '/' is in expression-start position.
 # These are value/expression-start keywords in Groovy: the token ends a
@@ -140,7 +160,7 @@ def _strip_comments_and_strings(text: str) -> str:
 
     Slashy strings /.../  and dollar-slashy strings $/.../$ are handled before
     the // / /* dispatch so an embedded '/*' inside a slashy literal is never
-    misread as a block-comment opener (T21-A fix).
+    misread as a block-comment opener (slashy-opener-checked-before-comment-dispatch).
     """
     result = []
     i = 0
@@ -162,7 +182,7 @@ def _strip_comments_and_strings(text: str) -> str:
             cur_token = prev_token = ''
             continue
 
-        # '/' dispatch — slashy BEFORE // and /* (T21-A fix).
+        # '/' dispatch — slashy BEFORE // and /* (slashy-opener-checked-before-comment-dispatch).
         if c == '/':
             # Governing token: cur_token if mid-identifier, else prev_token.
             governing = cur_token if cur_token else prev_token
@@ -289,7 +309,7 @@ def _find_struct_braces(source: str, start: int) -> list[tuple[int, str]]:
     Scan from `start` in source and return (position, '{' or '}') for every
     brace that is NOT inside a string literal or comment.
 
-    Handled non-structural regions (Groovy-aware, T21-A):
+    Handled non-structural regions (Groovy-aware, slashy-strings-included):
       - // line comments
       - /* */ block comments
       - triple-quoted strings  \"\"\"...\"\"\"
@@ -315,7 +335,7 @@ def _find_struct_braces(source: str, start: int) -> list[tuple[int, str]]:
             cur_token = prev_token = ''
             continue
 
-        # '/' dispatch — slashy BEFORE // and /* (T21-A fix).
+        # '/' dispatch — slashy BEFORE // and /* (slashy-opener-checked-before-comment-dispatch).
         if c == '/':
             # Governing token: cur_token if mid-identifier, else prev_token.
             governing = cur_token if cur_token else prev_token
