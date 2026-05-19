@@ -1395,7 +1395,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Tier-3 regression tests — range clamp (Fix 3)
+    // Regression guards — out-of-range input clamping
     // -------------------------------------------------------------------------
 
     def "setHorizontalRange(-10, 200) clamps to (0, 100) — out-of-range inputs rejected gracefully"() {

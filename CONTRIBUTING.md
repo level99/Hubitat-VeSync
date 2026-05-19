@@ -449,14 +449,19 @@ v2.1: 5 new drivers + first fan support (preview)
 
 ### Comment-scrub pre-flight
 
-Before pushing any PR, grep the diff for process-specific tokens that must not appear in code or test comments:
+Before pushing any PR, run the linter in strict mode — RULE38 enforces the process-token scrub:
 
 ```bash
-grep -rEn 'T[0-9]+-[A-Z0-9]|Tier ?#?[0-9]|Sweep ?#?[0-9]|PR ?#[0-9]|issue ?#[0-9]|[Gg]emini' \
-    tests/_groovy_lex.py tests/lint_test.py tests/lint_rules/ Drivers/Levoit/
+uv run --python 3.12 tests/lint.py --strict
 ```
 
-The pattern must return no output. Allowed exceptions: external-provenance references (e.g. pyvesync test-fixture citation, HA integration note, GitHub URL in a documentation link) are fine when the provenance is external to this repo's own PR/tier/sweep numbering scheme. Bug Pattern catalog citations (`Bug Pattern #N`, `BP24`, `RULE37`) are fine in comments — those are durable catalog identifiers, not process tokens. **Pipeline-internal labels** (`T21-A`, `Tier 22`, `Sweep #14`, `PR #167`, Gemini bot name) are process tokens that become meaningless after the corresponding cycle closes; strip them and replace with the behavioral invariant the code or test enforces.
+RULE38 flags pipeline-internal labels (`T21-A`, `Tier 22`, `Sweep #14`, `PR #167`, `Lead-Finding-N`, Gemini bot name) in code and test comments.  These tokens become meaningless after the corresponding cycle closes; strip them and replace with the behavioral invariant the code or test enforces.
+
+Bug Pattern catalog citations (`Bug Pattern #N`, `BP24`, `RULE37`) are fine in comments — those are durable catalog identifiers, not process tokens.  External-provenance references (pyvesync PR/issue citations, HA integration notes, NiklasGustafsson upstream refs) are explicitly allowed by RULE38 and must not be changed.
+
+RULE38 scans `Drivers/Levoit/` and `tests/`.  Spock specs under `src/test/groovy/` are **not** scanned by canonical `lint --strict` (adding that path causes false-positive cascades from RULE20).  Process-token scrubbing of Spock specs is enforced by design-lane sweep discipline and pre-flight review — not by this rule.
+
+One further RULE38 boundary: QA-style finding enumeration in driver `//` comments — `// - Issue N:`, `// (Issues N, M)`, `// Pattern N:` — IS a this-fork process token and must be scrubbed in pre-flight, but is deliberately **not** RULE38-detected on `.groovy` files (the no-`#` `Issue N` form is indistinguishable from natural-language "issue" as a noun in driver source; catching it would require a Groovy external-provenance allowlist to avoid false-positives on legitimate no-`#` upstream citations).  Scrub it manually — the design-lane sweep is the enforcing mechanism for this form, not `lint --strict`.
 
 ### One concern per PR
 

@@ -876,7 +876,7 @@ class LevoitClassic300SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Tier-3 regression tests — setMistLevel null/0/valid (Fix 4)
+    // Regression guards — setMistLevel null/0/valid input handling
     // -------------------------------------------------------------------------
 
     def "setMistLevel(null) is rejected with logWarn and no API call (BP18 Fix 4)"() {

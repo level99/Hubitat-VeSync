@@ -32,7 +32,7 @@ SOFTWARE.
 //                  speed attributes ("low"/"medium"/"high") not "1"/"2"/"3".
 //                  Fix: setLevel(null) NPE (BP18) — added Math.max/min/(val as Integer)?:0 coercion
 //                  before null-unsafe arithmetic comparisons.
-// 2026-05-03: v2.5  Migrated to LevoitCorePurifier shared library (Phase 2, Round 6).
+// 2026-05-03: v2.5  Migrated to LevoitCorePurifier shared library (Phase 2).
 //                  Removed 14 shared methods now provided by LevoitCorePurifierLib.
 //                  BP24-A fix: cycleSpeed() dead state.switch branch replaced with
 //                  ensureSwitchOn() from LevoitChildBase.

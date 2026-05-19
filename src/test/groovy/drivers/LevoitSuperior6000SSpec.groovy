@@ -585,7 +585,7 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Tier-3 regression tests — setTargetHumidity null/0/valid (Fix 5)
+    // Regression guards — setTargetHumidity null/0/valid input handling
     // -------------------------------------------------------------------------
 
     def "setTargetHumidity(null) is rejected with logWarn and no API call (BP18 Fix 5)"() {

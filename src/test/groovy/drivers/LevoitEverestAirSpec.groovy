@@ -895,7 +895,7 @@ class LevoitEverestAirSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Tier-3 regression tests (v2.5 batch)
+    // Regression guards — v2.5 null-input and coercion fixes
     // -------------------------------------------------------------------------
 
     def "on() re-entrance guard: second call while turningOn=true is a no-op (Fix 1)"() {

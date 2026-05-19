@@ -199,12 +199,12 @@ SOFTWARE.
 //                  ([]) is a valid VeSync response (zero-device account), not an
 //                  error. Changed `!resp.data.result.list` to `== null` so the
 //                  success path completes for accounts with no devices.
-// 2026-04-25: v2.0+ Parent-driver NIT fixes (Issues 2, 3, Pattern 2):
-//                  - Issue 2: removed unused `result =` assignment in updateDevices()
+// 2026-04-25: v2.0+ Parent-driver fixes:
+//                  - removed unused `result =` assignment in updateDevices()
 //                    (was causing MissingPropertyException on every poll cycle)
-//                  - Issue 3: getDevices() now retries with re-auth on token expiry
+//                  - getDevices() now retries with re-auth on token expiry
 //                    (same effectiveClosure pattern as sendBypassRequest)
-//                  - Pattern 2: extracted hardcoded API metadata to @Field constants
+//                  - extracted hardcoded API metadata to @Field constants
 //                    (APP_VERSION, DEFAULT_TRACE_ID, DEFAULT_TIME_ZONE);
 //                    timeZone now derived from hub location with fallback to DEFAULT_TIME_ZONE.
 //                    NOTE: regional API routing (US→smartapi.vesync.com / EU→smartapi.vesync.eu)

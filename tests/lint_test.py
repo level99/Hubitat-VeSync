@@ -2941,12 +2941,12 @@ class TestLintSeverityHardCheck:
 
 
 # ---------------------------------------------------------------------------
-# Lead-Finding-1 (T11 QA): make_finding_for_file severity gate parity test
+# Parity guard: make_finding_for_file severity gate
 # ---------------------------------------------------------------------------
 
 class TestMakeFindingForFileSeverityGate:
     """
-    Lead-Finding-1: make_finding_for_file re-implements the severity gate inline
+    Parity guard: make_finding_for_file re-implements the severity gate inline
     (bypassing make_finding). This test verifies the inline gate raises ValueError
     on an invalid severity, keeping it in sync with make_finding's own gate.
     Nothing else tests make_finding_for_file's gate directly.
@@ -2966,6 +2966,326 @@ class TestMakeFindingForFileSeverityGate:
                 why='why',
                 fix='fix',
             )
+
+
+# ---------------------------------------------------------------------------
+# RULE38 — process-token scrub (authoritative form-set)
+# ---------------------------------------------------------------------------
+
+from lint_rules.process_token_scrub import check_rule38_process_token_scrub
+
+
+class TestRule38ProcessTokenScrub:
+    """
+    RULE38: process-token labels must not appear in code or test comments.
+
+    Must-catch: every form in the authoritative form-set fires a FAIL finding.
+    Must-not-catch: external-provenance citations are explicitly suppressed.
+
+    Non-vacuity contracts (both-ways):
+      - must-catch assertions FAIL if the rule's pattern is reverted/narrowed.
+      - must-not-catch assertions FAIL if the allowlist is removed.
+    """
+
+    # -----------------------------------------------------------------------
+    # Helpers
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _run_groovy(comment_line: str) -> list:
+        """
+        Invoke RULE38 against a minimal Groovy driver snippet containing the
+        given comment line inside a method body.  Returns findings list.
+        """
+        src = (
+            'metadata { definition(name:"TestDriver") { } }\n'
+            f'def someMethod() {{\n'
+            f'    {comment_line}\n'
+            f'    hubBypass("get", [:])\n'
+            f'}}\n'
+        )
+        return run_rule(check_rule38_process_token_scrub, src, "TestDriver.groovy")
+
+    @staticmethod
+    def _run_py(comment_line: str) -> list:
+        """
+        Invoke RULE38 against a minimal Python snippet containing the given
+        comment line.  Returns findings list.
+        """
+        src = (
+            'def some_function():\n'
+            f'    {comment_line}\n'
+            '    pass\n'
+        )
+        path = REPO_ROOT / 'tests' / 'lint_rules' / 'test_fixture.py'
+        raw_lines = src.splitlines()
+        from lint_rules.groovy_lite import clean_source
+        _, cleaned_lines = clean_source(src)
+        return check_rule38_process_token_scrub(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-catch: Tier forms
+    # -----------------------------------------------------------------------
+
+    def test_catches_tier_n_spaced(self):
+        """'// Tier 22' must be flagged — spaced Tier N form."""
+        findings = self._run_groovy('// Tier 22 guard: ...')
+        assert findings, "Expected RULE38 finding for 'Tier 22'"
+        assert findings[0]['severity'] == 'FAIL'
+        assert findings[0]['rule_id'] == 'RULE38_process_token_scrub'
+
+    def test_catches_tier_hyphen(self):
+        """'// Tier-22' must be flagged — hyphenated form."""
+        findings = self._run_groovy('// Tier-22 guard')
+        assert findings, "Expected RULE38 finding for 'Tier-22'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    def test_catches_tier_hash(self):
+        """'// tier #22' must be flagged — hash form, case-insensitive."""
+        findings = self._run_groovy('// tier #22 fix')
+        assert findings, "Expected RULE38 finding for 'tier #22'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    def test_catches_bare_t_digits(self):
+        """'// T11' must be flagged — bare abbreviation."""
+        findings = self._run_groovy('// T11 QA finding')
+        assert findings, "Expected RULE38 finding for 'T11'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    def test_catches_t_digits_alnum(self):
+        """'// T21-A' must be flagged — T<digits>-<alnum> form."""
+        findings = self._run_groovy('// T21-A: added guard')
+        assert findings, "Expected RULE38 finding for 'T21-A'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    def test_catches_t11_hyphen_digit(self):
+        """'// T11-1' must be flagged — T<digits>-<digit> form."""
+        findings = self._run_groovy('// T11-1: parity test')
+        assert findings, "Expected RULE38 finding for 'T11-1'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    # -----------------------------------------------------------------------
+    # Must-catch: Sweep forms
+    # -----------------------------------------------------------------------
+
+    def test_catches_sweep_hash(self):
+        """'// Sweep #16' must be flagged."""
+        findings = self._run_groovy('// Sweep #16 remediation')
+        assert findings, "Expected RULE38 finding for 'Sweep #16'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    def test_catches_sweep_spaced(self):
+        """'// sweep 17' must be flagged — case-insensitive spaced form."""
+        findings = self._run_groovy('// sweep 17 finding')
+        assert findings, "Expected RULE38 finding for 'sweep 17'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    def test_catches_s_hash_digits(self):
+        """'// S#16' must be flagged — compact S#N form."""
+        findings = self._run_groovy('// S#16 PoC')
+        assert findings, "Expected RULE38 finding for 'S#16'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    # -----------------------------------------------------------------------
+    # Must-catch: PR / Issue forms (this-fork, Python files only)
+    # NOTE: these use _run_py because PR/Issue patterns are only checked in
+    # Python test/lint files, not in Groovy driver files.  See module docstring
+    # in process_token_scrub.py for rationale.
+    # -----------------------------------------------------------------------
+
+    def test_catches_pr_hash(self):
+        """'# PR #167' in a Python comment must be flagged — hash form."""
+        findings = self._run_py('# PR #167 fixed this')
+        assert findings, "Expected RULE38 finding for 'PR #167'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    def test_catches_pr_no_hash(self):
+        """'# pr#4' in a Python comment must be flagged — no-space form."""
+        findings = self._run_py('# pr#4 merged')
+        assert findings, "Expected RULE38 finding for 'pr#4'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    def test_catches_issue_n(self):
+        """'# Issue 2' in a Python comment must be flagged — no-hash form."""
+        findings = self._run_py('# Issue 2: removed unused assignment')
+        assert findings, "Expected RULE38 finding for 'Issue 2'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    def test_catches_issue_hash_n(self):
+        """'# issue #296' in a Python comment must be flagged (no pyvesync context)."""
+        findings = self._run_py('# issue #296: fixed polling')
+        assert findings, "Expected RULE38 finding for 'issue #296'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    # -----------------------------------------------------------------------
+    # Must-catch: QA-round labels
+    # -----------------------------------------------------------------------
+
+    def test_catches_lead_finding(self):
+        """'// Lead-Finding-1' must be flagged."""
+        findings = self._run_py('# Lead-Finding-1: parity guard')
+        assert findings, "Expected RULE38 finding for 'Lead-Finding-1'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    def test_catches_round_n(self):
+        """'// Round 3' must be flagged — QA round reference."""
+        findings = self._run_groovy('// Round 3 fix: added null guard')
+        assert findings, "Expected RULE38 finding for 'Round 3'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    # -----------------------------------------------------------------------
+    # Must-catch: Bot names
+    # -----------------------------------------------------------------------
+
+    def test_catches_gemini_upper(self):
+        """'// GEMINI' must be flagged — uppercase form."""
+        findings = self._run_groovy('// GEMINI flagged this')
+        assert findings, "Expected RULE38 finding for 'GEMINI'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    def test_catches_gemini_lower(self):
+        """'// gemini-code-assist' must be flagged."""
+        findings = self._run_groovy('// gemini-code-assist review')
+        assert findings, "Expected RULE38 finding for 'gemini-code-assist'"
+        assert findings[0]['severity'] == 'FAIL'
+
+    # -----------------------------------------------------------------------
+    # Must-NOT-catch: external-provenance allowlist (Python files)
+    # These tests use _run_py to test the allowlist non-vacuously:
+    # without the allowlist, each would be flagged as a PR/Issue process token.
+    # -----------------------------------------------------------------------
+
+    def test_allows_pyvesync_pr(self):
+        """'# pyvesync PR #505' in Python comment must NOT be flagged."""
+        findings = self._run_py('# see pyvesync PR #505 for context')
+        assert not findings, (
+            f"RULE38 must not flag pyvesync PR reference; got: {findings}"
+        )
+
+    def test_allows_pyvesync_issue(self):
+        """'# pyvesync issue #296' in Python comment must NOT be flagged."""
+        findings = self._run_py('# pyvesync issue #296 upstream fix')
+        assert not findings, (
+            f"RULE38 must not flag pyvesync issue reference; got: {findings}"
+        )
+
+    def test_allows_ha_pr(self):
+        """'# HA PR #137544' in Python comment must NOT be flagged."""
+        findings = self._run_py('# HA PR #137544 fix')
+        assert not findings, (
+            f"RULE38 must not flag HA PR reference; got: {findings}"
+        )
+
+    def test_allows_ha_issue(self):
+        """'# HA issue #160387' in Python comment must NOT be flagged."""
+        findings = self._run_py('# HA issue #160387 context')
+        assert not findings, (
+            f"RULE38 must not flag HA issue reference; got: {findings}"
+        )
+
+    def test_allows_homebridge(self):
+        """'# Homebridge PR #12' in Python comment must NOT be flagged."""
+        findings = self._run_py('# Homebridge PR #12 compat')
+        assert not findings, (
+            f"RULE38 must not flag Homebridge reference; got: {findings}"
+        )
+
+    def test_allows_smartthings(self):
+        """'# SmartThings issue #5' in Python comment must NOT be flagged."""
+        findings = self._run_py('# SmartThings issue #5 leftover')
+        assert not findings, (
+            f"RULE38 must not flag SmartThings reference; got: {findings}"
+        )
+
+    def test_allows_webdjoe(self):
+        """'# webdjoe upstream PR #44' in Python comment must NOT be flagged."""
+        findings = self._run_py('# webdjoe upstream PR #44 fix')
+        assert not findings, (
+            f"RULE38 must not flag webdjoe reference; got: {findings}"
+        )
+
+    def test_allows_niklasgustafs(self):
+        """'# NiklasGustafsson PR #12' in Python comment must NOT be flagged."""
+        findings = self._run_py('# ported from NiklasGustafsson upstream PR #12')
+        assert not findings, (
+            f"RULE38 must not flag NiklasGustafsson reference; got: {findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-catch: bare 'upstream' must NOT suppress this-fork PR token
+    # Non-vacuity: FAILS on pre-fix code (allowlist had 'upstream'), PASSES
+    # after fix ('upstream' removed from allowlist).
+    # -----------------------------------------------------------------------
+
+    def test_still_flags_upstream_fork_pr(self):
+        """'# upstream maintainer asked for PR #167 rework' must be flagged.
+        Bare 'upstream' is not an external-provenance token — it co-occurs with
+        this-fork process labels and must not suppress them."""
+        findings = self._run_py('# upstream maintainer asked for PR #167 rework')
+        assert findings, (
+            "Expected RULE38 finding — bare 'upstream' must not suppress this-fork PR token"
+        )
+        assert findings[0]['severity'] == 'FAIL'
+
+    # -----------------------------------------------------------------------
+    # Scope: out-of-scope files must not be checked
+    # -----------------------------------------------------------------------
+
+    def test_out_of_scope_changelog(self):
+        """CHANGELOG.md is out of scope — must not be checked."""
+        src = '## [2.5] - 2026-05-04\n### Fixed\n- Tier 22 sweep completed\n'
+        path = REPO_ROOT / 'CHANGELOG.md'
+        raw_lines = src.splitlines()
+        from lint_rules.groovy_lite import clean_source
+        _, cleaned_lines = clean_source(src)
+        findings = check_rule38_process_token_scrub(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+        assert not findings, (
+            f"RULE38 must not scan CHANGELOG.md; got: {findings}"
+        )
+
+    def test_out_of_scope_contributing(self):
+        """CONTRIBUTING.md is out of scope — must not be checked."""
+        src = '### Comment-scrub\n\nSee Tier 22 example.\n'
+        path = REPO_ROOT / 'CONTRIBUTING.md'
+        raw_lines = src.splitlines()
+        from lint_rules.groovy_lite import clean_source
+        _, cleaned_lines = clean_source(src)
+        findings = check_rule38_process_token_scrub(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+        assert not findings, (
+            f"RULE38 must not scan CONTRIBUTING.md; got: {findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Scope: non-comment code must not be flagged
+    # -----------------------------------------------------------------------
+
+    def test_no_flag_outside_comment(self):
+        """Process token in string literal (not comment) must not be flagged."""
+        findings = self._run_groovy('def x = "Tier 22"')
+        assert not findings, (
+            f"RULE38 must not flag process tokens outside comment regions; got: {findings}"
+        )
 
 
 # ---------------------------------------------------------------------------
