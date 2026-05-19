@@ -503,21 +503,27 @@ class LevoitGenericSpec extends HubitatSpec {
         testLog.errors.isEmpty()
     }
 
-    def "BP26: setLevel(null) does not throw and emits level=0 (Generic)"() {
-        // safeIntArg(null, 0) returns 0 — the Generic driver has no power implications for
-        // setLevel(0) so it just emits level=0 rather than routing to off().
+    def "BP26: setLevel(null) is rejected via requireNotNull — no level event, logWarn (Generic, W1)"() {
+        // W1 fix: LevoitGeneric.setLevel(val) now starts with
+        // `if (!requireNotNull(val, "setLevel")) return` — null is rejected before
+        // safeIntArg is reached, so no level event is emitted and no API call is made.
+        // Pre-fix (old behavior): safeIntArg(null, 0) returned 0 and level=0 was emitted.
+        // Post-fix (W1 behavior): requireNotNull logs a WARN naming "setLevel" and returns.
+        //
+        // Both-ways: orchestrator-owned.
         given:
-        settings.descriptionTextEnable = false
+        settings.descriptionTextEnable = true
 
-        when: "setLevel called with null (Rule Machine blank slot)"
+        when: "setLevel called with null (Rule Machine blank parameter slot)"
         driver.setLevel(null)
 
         then: "no exception thrown"
         noExceptionThrown()
 
-        and: "level event is emitted with value 0"
-        def evt = testDevice.allEvents("level")
-        evt.size() > 0
-        evt.last().value == 0
+        and: "no level event was emitted — requireNotNull short-circuited before any event"
+        testDevice.allEvents("level").isEmpty()
+
+        and: "a logWarn naming 'setLevel' was emitted (requireNotNull rejection)"
+        testLog.warns.any { it.contains("setLevel") }
     }
 }

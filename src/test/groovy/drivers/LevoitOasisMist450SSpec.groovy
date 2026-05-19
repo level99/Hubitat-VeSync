@@ -2197,4 +2197,91 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         and: "a warning was logged naming the method"
         testLog.warns.any { it.contains("setSaturation") }
     }
+
+    // -------------------------------------------------------------------------
+    // B2 regression guards: setColor(Map) safe Map-field coercion
+    // -------------------------------------------------------------------------
+    // These specs guard against BP26 Map-field coercion regressions inside
+    // setColor(Map colorMap).  Pre-fix: bare `colorMap?.hue as Integer` threw
+    // NumberFormatException on decimal strings, blank strings, or non-numeric Map
+    // values — the sandbox swallowed the exception leaving a silent no-op.
+    // Post-fix: safeIntArg() + null-Map guard handle all bad-input shapes.
+    //
+    // Both-ways proof: orchestrator-owned.
+
+    def "BP26: setColor(null) does not throw and logs a WARN (null Map guard)"() {
+        // Null colorMap is the Rule Machine 'Set Color' blank-slot shape.
+        // Pre-fix: no null check — null.?hue evaluated, causing NPE swallowed silently.
+        // Post-fix: null-Map guard at method entry logs WARN and returns immediately.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+
+        when: "setColor called with null (Rule Machine blank parameter slot)"
+        driver.setColor(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no API call was made — null guard short-circuited before hubBypass"
+        testParent.allRequests.findAll { it.method == "setLightStatus" }.isEmpty()
+
+        and: "a WARN was logged naming the problem"
+        testLog.warns.any { it.contains("setColor") || it.contains("null") || it.contains("colorMap") }
+    }
+
+    def "BP26: setColor([hue:'55.5']) does not throw — decimal-string hue handled by safeIntArg"() {
+        // Dashboard color-picker tiles or hub-variable bindings can produce decimal strings.
+        // Pre-fix: `colorMap?.hue as Integer` on "55.5" threw NumberFormatException (silent).
+        // Post-fix: safeIntArg("55.5", 0) → 55 (truncation); no exception.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+
+        when: "setColor called with decimal-string hue"
+        driver.setColor([hue: "55.5", saturation: 80, level: 70])
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "setLightStatus API call was made (decimal hue truncated to 55)"
+        testParent.allRequests.findAll { it.method == "setLightStatus" }.size() >= 1
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setColor([hue:'']) does not throw — blank-string hue handled by safeIntArg"() {
+        // Rule Machine 'Set Color' with a hub-variable bound to blank string.
+        // Pre-fix: `"" as Integer` threw NumberFormatException (silent no-op).
+        // Post-fix: safeIntArg("", 0) → 0 (fallback); method proceeds with hue=0.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+
+        when: "setColor called with blank-string hue"
+        driver.setColor([hue: "", saturation: 100, level: 80])
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setColor([hue:'abc']) does not throw — non-numeric hue handled by safeIntArg"() {
+        // safeIntArg("abc", 0) → 0 (non-numeric input falls back to 0, no exception).
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+
+        when: "setColor called with non-numeric hue string"
+        driver.setColor([hue: "abc", saturation: 100, level: 80])
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
 }

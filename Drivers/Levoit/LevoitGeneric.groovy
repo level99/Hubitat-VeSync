@@ -163,6 +163,7 @@ def setLevel(val, duration) {
 }
 
 def setLevel(val){
+    if (!requireNotNull(val, "setLevel")) return   // BP18: null-guard (blank RM slot; safeIntArg is null-safe but produces 0 with no log)
     logDebug "setLevel(${val})"
     // Record the level; we can't know which speed/mist command applies until we know
     // the device shape, so just store and emit for rules/automations.

@@ -496,7 +496,10 @@ private void ensurePollHealth() {
     if (!state.consecutiveEmpty) return
     int threshold = 5
 
-    state.consecutiveEmpty.each { String dni, countRaw ->
+    // Iterate over a snapshot so in-loop mutation of state.consecutiveEmpty
+    // (via counts.remove + state.consecutiveEmpty = counts) does not cause
+    // ConcurrentModificationException when >=2 devices hit the threshold in the same cycle.
+    new LinkedHashMap(state.consecutiveEmpty ?: [:]).each { String dni, countRaw ->
         int count = countRaw as Integer
         if (count < threshold) return  // not yet a concern
 

@@ -84,7 +84,7 @@ metadata {
             attribute "timerRemain", "number";                         // Auto-off timer remaining (seconds; 0 when no timer)
             attribute "pm25", "number";                                // Raw PM2.5 reading (µg/m³)
             attribute "airQualityIndex", "number";                     // Levoit categorical AQ index (1-4); distinct from computed US-AQI 'aqi'
-            attribute "airQuality", "number";                          // US-AQI (0-500); Rule Machine / dashboard convenience (airQualityIndex, the required AirQuality capability attribute, was already present — this is additive)
+            attribute "airQuality", "number";                          // US-AQI (0-500); type="number" on Core 300S/400S/600S, "string" on Vital 100S/200S — families diverge. Use airQualityIndex for cross-family comparisons.
 
             attribute "aqi", "number";                                 // AQI (0-500)
             attribute "aqiDanger", "string";                           // AQI danger level
@@ -262,6 +262,9 @@ def setSpeed(speed) {
         state.speed = s
         handleEvent("speed", s)
         logInfo "Speed: ${s}"
+    }
+    else {
+        logWarn "setSpeed: cannot apply speed '${s}' — device mode is '${state.mode}'; ignoring"
     }
 }
 

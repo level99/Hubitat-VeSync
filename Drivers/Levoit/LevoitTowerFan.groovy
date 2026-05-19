@@ -244,7 +244,7 @@ def setOscillation(onOff){
     if (!(s in ["on","off"])) { logError "setOscillation: invalid value '${s}'"; recordError("setOscillation invalid: ${s}", [method:"setOscillationSwitch"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("oscillation") == s) return
-    int v = (s in ["on","true","1","yes"]) ? 1 : 0
+    int v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setOscillationSwitch", [oscillationSwitch: v], "setOscillationSwitch(${s})")
     if (httpOk(resp)) {
         device.sendEvent(name:"oscillation", value: s)

@@ -675,6 +675,42 @@ class LevoitCore200SSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setMode") }
     }
 
+    def "W3: setSpeed null state.mode — device turns on and logWarn emitted, not a silent drop (Core 200S)"() {
+        // W3 regression guard: when state.mode is null/unset (fresh device, pre-first-poll),
+        // setSpeed("high") must:
+        //   1. auto-on (ensureSwitchOn fires before the mode dispatch),
+        //   2. emit a logWarn containing "cannot apply speed" because the mode branch
+        //      cannot resolve the speed without a known mode — NOT silently discard the call.
+        // Pre-fix: the else branch was absent; the command was swallowed with no diagnostic.
+        // Post-fix: else { logWarn "setSpeed: cannot apply speed '${s}' — device mode is
+        //           '${state.mode}'; ignoring" } is present in all 4 Core drivers.
+        //
+        // Distinct from BP18 spec (line 646): that spec passes null as the *argument*;
+        // this spec passes a valid speed string but leaves *state.mode* null.
+        // Distinct from BP24-B spec (line 583): that spec seeds state.mode="manual" so the
+        // numeric speed path fires; this spec deliberately omits state.mode to exercise the
+        // else branch that was missing.
+        //
+        // Both-ways: orchestrator-owned.
+        given: "device is off and state.mode is null (fresh device, pre-first-poll)"
+        settings.descriptionTextEnable = true
+        // state.mode intentionally NOT set — simulates a fresh/pre-poll device
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setSpeed is called with a valid non-off speed"
+        driver.setSpeed("high")
+
+        then: "on() was called — ensureSwitchOn turned the device on before the mode dispatch"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "a logWarn containing 'cannot apply speed' was emitted (W3 else branch fired)"
+        testLog.warns.any { it.contains("cannot apply speed") }
+
+        and: "no error was logged (warn only, not error)"
+        testLog.errors.isEmpty()
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #25: C3 gate case-sensitivity — uppercase "ON"/"OFF" input
     // -------------------------------------------------------------------------

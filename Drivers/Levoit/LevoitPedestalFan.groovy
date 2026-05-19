@@ -346,7 +346,7 @@ def setHorizontalOscillation(onOff){
     if (!(s in ["on","off"])) { logError "setHorizontalOscillation: invalid value '${s}'"; recordError("setHorizontalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("horizontalOscillation") == s) return
-    Integer v = (s in ["on","true","1","yes"]) ? 1 : 0
+    Integer v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setOscillationStatus",
         [horizontalOscillationState: v, actType: "default"],
         "setOscillationStatus(H=${s})")
@@ -367,7 +367,7 @@ def setVerticalOscillation(onOff){
     if (!(s in ["on","off"])) { logError "setVerticalOscillation: invalid value '${s}'"; recordError("setVerticalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("verticalOscillation") == s) return
-    Integer v = (s in ["on","true","1","yes"]) ? 1 : 0
+    Integer v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setOscillationStatus",
         [verticalOscillationState: v, actType: "default"],
         "setOscillationStatus(V=${s})")
@@ -459,7 +459,7 @@ def setChildLock(onOff){
     }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("childLock") == s) return
-    int v = (s in ["on","true","1","yes"]) ? 1 : 0
+    int v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     // [PREVIEW v2.4] iteration #1: method setChildLock + payload {childLock} (symmetric to read field)
     def resp = hubBypass("setChildLock", [childLock: v], "setChildLock(${s})")
     if (httpOk(resp)) {
@@ -527,7 +527,7 @@ def setSmartCleaningReminder(onOff){
     }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("smartCleaningReminder") == s) return
-    int v = (s in ["on","true","1","yes"]) ? 1 : 0
+    int v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setSmartCleaningReminder", [smartCleaningReminderState: v],
                          "setSmartCleaningReminder(${s})")
     if (httpOk(resp)) {

@@ -76,7 +76,7 @@ metadata {
         attribute "mode", "string"
         attribute "pm25", "number"
         attribute "airQualityIndex", "number"
-        attribute "airQuality", "string"
+        attribute "airQuality", "string"      // categorical label ("good"/"moderate"/etc.); type="string" on Vital line, "number" on Core 300S/400S/600S — families diverge. Use airQualityIndex for cross-family numeric comparisons.
         attribute "petMode", "string"
         attribute "autoPreference", "string"
         attribute "roomSize", "number"

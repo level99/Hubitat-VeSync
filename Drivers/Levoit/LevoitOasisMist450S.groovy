@@ -472,16 +472,19 @@ def setNightlightSwitch(value){
 // colorMap is the standard Hubitat map: {hue: 0-100, saturation: 0-100, level: 0-100}.
 // Hubitat ColorControl hue is 0-100 (percentage of full circle), NOT 0-360 degrees.
 // Convert hue 0-100 -> 0-360 for internal HSV calculations.
+// BP26: colorMap field coercions use safeIntArg to avoid NumberFormatException/GroovyCastException
+// when RM or dashboard tiles pass decimal strings ("55.5"), blank (""), or non-numeric values.
 def setColor(Map colorMap){
     logDebug "setColor(${colorMap})"
+    if (colorMap == null) { logWarn "setColor called with null colorMap (likely blank Rule Machine slot); ignoring"; return }
     if (!isRgbVariant()) return
-    Integer hue100  = Math.max(0, Math.min(100, (colorMap?.hue  as Integer) ?: 0))
-    Integer sat100  = Math.max(0, Math.min(100, (colorMap?.saturation as Integer) ?: 100))
+    Integer hue100  = Math.max(0, Math.min(100, safeIntArg(colorMap?.hue,  0)))
+    Integer sat100  = Math.max(0, Math.min(100, safeIntArg(colorMap?.saturation, 100)))
     // colorMap.level is Hubitat's SwitchLevel (0-100) -- use as brightness if provided.
     // brightness must be in range 40-100 (firmware floor at 40 per pyvesync PR #502).
     Integer brightness = (colorMap?.level != null)
-        ? Math.max(40, Math.min(100, colorMap.level as Integer))
-        : ((state.nightlightBrightness as Integer) ?: 100)
+        ? Math.max(40, Math.min(100, safeIntArg(colorMap.level, 100)))
+        : safeIntArg(state.nightlightBrightness, 100)
     // Raw (pre-brightness) RGB from hue/sat at full value -- used for colorSliderLocation.
     def (Integer rawR, Integer rawG, Integer rawB) = hsvToRgb(hue100 / 100.0, sat100 / 100.0, 1.0)
     // Brightness-adjusted RGB for the actual payload.

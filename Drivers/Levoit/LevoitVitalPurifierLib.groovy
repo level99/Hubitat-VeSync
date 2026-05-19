@@ -358,7 +358,7 @@ def setDisplay(onOff) {
 
 def resetFilter() {
     logDebug "resetFilter()"
-    def resp = hubBypass("resetFilterLife", [:], "resetFilterLife")
+    def resp = hubBypass("resetFilter", [:], "resetFilter")
     if (httpOk(resp)) logDebug "Filter reset requested"
 }
 

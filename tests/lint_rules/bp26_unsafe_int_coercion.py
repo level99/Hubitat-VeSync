@@ -1,7 +1,8 @@
 """
 bp26_unsafe_int_coercion.py — RULE37: flag bare ``as Integer`` / ``as int`` /
 ``.toInteger()`` coercions on untyped command parameters inside ``set*`` /
-``cycle*`` methods.
+``cycle*`` methods, AND on Map-field accesses inside ``set*(Map mapParam)``
+methods.
 
 Bug Pattern #26 — unsafe numeric coercion on command parameters.
 
@@ -16,14 +17,19 @@ Sources of non-numeric args in practice:
   - Rule Machine parameter slot left blank  -> ``""`` (NOT null)
   - Dashboard numeric tile                  -> decimal string like ``"5.7"``
   - Hub variable binding                    -> ``"true"`` / ``"1"`` / ``"false"``
+  - ColorControl ``setColor(Map colorMap)`` -> Map field values are Strings
+    from RM color-map expressions; ``colorMap?.hue as Integer`` on ``"55.5"``
+    throws ``NumberFormatException`` (silent).
 
 Detection scope:
   - Only ``.groovy`` files under ``Drivers/Levoit/``.
   - Only inside method bodies whose name starts with ``set`` or ``cycle``.
-  - Only coercions that operate on a name matching the first (untyped) param
-    of the enclosing method — statically-typed params (``Integer level``) are
-    safe because the Hubitat sandbox enforces the type at dispatch time.
-  - Flags: ``(x as Integer)``, ``(x as int)``, ``x.toInteger()``.
+  Pass 1 (untyped-param): coercions on the first (untyped) param of the
+    enclosing method.  Statically-typed params (``Integer level``) are safe
+    because the Hubitat sandbox enforces the type at dispatch time.
+  Pass 2 (Map-field, B2 extension): coercions on Map-field accesses inside
+    ``set*(Map mapParam)`` methods (``mapParam?.field as Integer`` etc.).
+    Flags: ``(x as Integer)``, ``(x as int)``, ``x.toInteger()``.
   - Does NOT flag: ``safeIntArg(x, ...)``, typed-param coercions, coercions
     on variables that were assigned from a ``safeIntArg`` call.
 
@@ -46,6 +52,27 @@ DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
 SET_METHOD_RE = re.compile(
     r'^\s*def\s+((?:set|cycle)\w+)\s*\(\s*(\w+)\s*(?:[,=)])',
     re.MULTILINE,
+)
+
+# Matches def set*(Map mapParam ...) — Map-typed first parameter.
+# Group 1: method_name, Group 2: Map-param variable name.
+# These methods receive Hubitat ColorControl / ColorTemperature Maps from RM or dashboard
+# tiles.  RULE37 originally skipped these (first-param guard only tracked untyped params).
+# This extension scans their bodies for unsafe Map-field coercions.
+SET_MAP_METHOD_RE = re.compile(
+    r'^\s*def\s+((?:set|cycle)\w+)\s*\(\s*Map\s+(\w+)',
+    re.MULTILINE,
+)
+
+# Matches mapParam?.field as Integer / mapParam.field as Integer (parenthesized or bare)
+# and mapParam?.field.toInteger() / mapParam.field.toInteger().
+# Group 1 (AS form): the full mapParam?.field or mapParam.field receiver.
+# Group 2 (toInteger form): the full receiver.
+_MAP_FIELD_AS_INTEGER_RE = re.compile(
+    r'\b(\w+\??\.[\w]+)\s+as\s+(?:Integer|int)\b'
+)
+_MAP_FIELD_TO_INTEGER_RE = re.compile(
+    r'\b(\w+\??\.[\w]+)\.toInteger\s*\(\s*\)'
 )
 
 # Matches (x as Integer) / (x as int) [parenthesized] OR bare x as Integer / x as int
@@ -138,9 +165,17 @@ def check_rule37_unsafe_int_coercion(
     """
     RULE37 (Bug Pattern #26): flag bare ``as Integer`` / ``as int`` /
     ``.toInteger()`` coercions on untyped first command parameters inside
-    ``set*`` / ``cycle*`` methods.  These throw before ``?:`` can rescue
+    ``set*`` / ``cycle*`` methods, AND on Map-field accesses inside
+    ``set*(Map mapParam)`` methods.  These throw before ``?:`` can rescue
     on non-numeric Rule Machine inputs.  Use ``safeIntArg(x, fallback)``
     from LevoitChildBaseLib instead.
+
+    Two scan passes:
+    1. Untyped-first-param pass (original): scans ``set*(param)``/``cycle*(param)``
+       methods where the first parameter has no type keyword.
+    2. Map-field pass (B2 extension): scans ``set*(Map mapParam)`` methods for
+       unsafe Integer coercion of Map-field accesses (``mapParam?.field as Integer``).
+       Hubitat ColorControl ``setColor(Map colorMap)`` is the canonical example.
     """
     findings = []
 
@@ -321,6 +356,115 @@ def check_rule37_unsafe_int_coercion(
                                 ),
                             ))
                             break
+
+    # --- Map-field coercion extension (B2) ---
+    # For set*(Map mapParam) methods, also flag unsafe Integer coercion of Map fields
+    # accessed via mapParam?.field or mapParam.field.  The first-param guard above skips
+    # these methods entirely because their first param has a type keyword (Map).  Hubitat
+    # ColorControl / ColorTemperature Map values arrive as Strings from RM color-map
+    # expressions and dashboard tiles; bare `mapParam?.hue as Integer` throws
+    # NumberFormatException on decimal strings like "55.5" or blank strings "".
+    for m in SET_MAP_METHOD_RE.finditer(raw_text):
+        method_name = m.group(1)
+        map_param   = m.group(2)
+
+        if (file_rel, method_name) in exemption_set:
+            continue
+
+        brace_start = raw_text.find('{', m.end() - 1)
+        if brace_start == -1:
+            continue
+        body_end = _find_method_body_end(raw_text, brace_start)
+        if body_end == -1:
+            continue
+
+        body = raw_text[brace_start:body_end]
+        body_clean = _strip_line_comments(body)
+
+        # If the whole body already uses safeIntArg, the method is safe.
+        # Still check for coercion-in-fallback (same invariant as the untyped-param path).
+        if SAFE_INT_ARG_RE.search(body_clean):
+            fb_m = SAFEINTARG_COERCION_FALLBACK_RE.search(body_clean)
+            if fb_m:
+                abs_pos = brace_start + fb_m.start()
+                lineno = _line_of(raw_text, abs_pos)
+                findings.append(make_finding(
+                    severity='FAIL',
+                    rule_id='RULE37_unsafe_int_coercion',
+                    title=(
+                        f'BP26: {method_name}() has a coercion expression in '
+                        f'safeIntArg() fallback position (Map-field method)'
+                    ),
+                    file_rel=file_rel,
+                    lineno=lineno,
+                    raw_lines=raw_lines,
+                    why=(
+                        'safeIntArg fallback argument is evaluated before the call; '
+                        "a coercion cast there throws before safeIntArg's guard can intercept."
+                    ),
+                    fix='Nest the fallback in a second safeIntArg() call.',
+                ))
+            continue
+
+        # Scan for mapParam?.field as Integer / mapParam.field as Integer
+        for cast_m in _MAP_FIELD_AS_INTEGER_RE.finditer(body_clean):
+            receiver = cast_m.group(1)
+            # receiver must start with the Map param name (with or without ?.)
+            base = receiver.split('.')[0].rstrip('?')
+            if base == map_param:
+                abs_pos = brace_start + cast_m.start()
+                lineno = _line_of(raw_text, abs_pos)
+                findings.append(make_finding(
+                    severity='FAIL',
+                    rule_id='RULE37_unsafe_int_coercion',
+                    title=(
+                        f'BP26: {method_name}() uses `{receiver} as Integer` '
+                        f'on Map-field access — throws on decimal strings or blank inputs'
+                    ),
+                    file_rel=file_rel,
+                    lineno=lineno,
+                    raw_lines=raw_lines,
+                    why=(
+                        f'`{receiver} as Integer` throws NumberFormatException / '
+                        f'GroovyCastException on non-numeric Map values ("55.5", "", "abc"). '
+                        f'Hubitat ColorControl tiles and Rule Machine color-map expressions '
+                        f'can produce these via hub-variable bindings or expression slots.'
+                    ),
+                    fix=(
+                        f'Replace `{receiver} as Integer` with '
+                        f'`safeIntArg({receiver}, <fallback>)` from LevoitChildBaseLib.'
+                    ),
+                ))
+                break  # one finding per method is enough
+
+        else:
+            # Scan for mapParam?.field.toInteger()
+            for ti_m in _MAP_FIELD_TO_INTEGER_RE.finditer(body_clean):
+                receiver = ti_m.group(1)
+                base = receiver.split('.')[0].rstrip('?')
+                if base == map_param:
+                    abs_pos = brace_start + ti_m.start()
+                    lineno = _line_of(raw_text, abs_pos)
+                    findings.append(make_finding(
+                        severity='FAIL',
+                        rule_id='RULE37_unsafe_int_coercion',
+                        title=(
+                            f'BP26: {method_name}() uses `{receiver}.toInteger()` '
+                            f'on Map-field access'
+                        ),
+                        file_rel=file_rel,
+                        lineno=lineno,
+                        raw_lines=raw_lines,
+                        why=(
+                            f'`.toInteger()` throws NumberFormatException on non-numeric '
+                            f'Map field values. Use safeIntArg() instead.'
+                        ),
+                        fix=(
+                            f'Replace `{receiver}.toInteger()` with '
+                            f'`safeIntArg({receiver}, <fallback>)` from LevoitChildBaseLib.'
+                        ),
+                    ))
+                    break
 
     return findings
 

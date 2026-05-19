@@ -285,7 +285,7 @@ def doSetMuteSwitch(onOff) {
     if (!(s in ["on","off"])) { logError "setMute: invalid value '${s}'"; recordError("setMute invalid: ${s}", [method:"setMuteSwitch"]); return }
     // C3 idempotency gate: suppress redundant API call when attribute already matches.
     if (device.currentValue("mute") == s) return
-    int v = (s in ["on","true","1","yes"]) ? 1 : 0
+    int v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setMuteSwitch", [muteSwitch: v], "setMuteSwitch(${s})")
     if (httpOk(resp)) {
         device.sendEvent(name:"mute", value: s)
@@ -303,7 +303,7 @@ def doSetDisplayScreenSwitch(onOff) {
     if (!(s in ["on","off"])) { logError "setDisplay: invalid value '${s}'"; recordError("setDisplay invalid: ${s}", [method:"setDisplay"]); return }
     // C3 idempotency gate: suppress redundant API call when attribute already matches.
     if (device.currentValue("displayOn") == s) return
-    int v = (s in ["on","true","1","yes"]) ? 1 : 0
+    int v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${s})")
     if (httpOk(resp)) {
         device.sendEvent(name:"displayOn", value: s)

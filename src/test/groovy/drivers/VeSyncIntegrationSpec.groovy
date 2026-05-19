@@ -3371,6 +3371,52 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         ((state.selfHealAttempts as Map)?.get("OFFLINE-CID") ?: 0) <= 3
     }
 
+    def "ensurePollHealth() heals BOTH devices when two DNIs reach threshold in the same cycle (Q3b — B3 regression guard)"() {
+        // B3 regression guard: before the snapshot-iteration fix, iterating
+        // state.consecutiveEmpty while mutating it mid-loop caused a
+        // ConcurrentModificationException when 2+ DNIs hit the threshold in the
+        // same poll cycle.  The exception caused ensurePollHealth() to process only
+        // the first matching DNI; all subsequent ones were silently dropped.
+        //
+        // Fix: ensurePollHealth() iterates a snapshot (new LinkedHashMap(...)) so
+        // in-loop mutation of state.consecutiveEmpty does not affect the iteration.
+        //
+        // This test FAILS on pre-fix code (exception thrown after first DNI, second
+        // DNI never processed) and PASSES on the fixed implementation.
+        // Both-ways proof: orchestrator-owned.
+        given: "TWO devices both at consecutive-empty threshold 5"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.consecutiveEmpty = ["CID-A": 5, "CID-B": 5]
+        // Neither DNI is already marked offline — both should enter the self-heal path.
+        state.deviceOfflineSince = [:]
+        state.selfHealAttempts   = [:]
+
+        List<String> resyncScheduled = []
+        driver.metaClass.runIn = { int delay, String handler ->
+            if (handler == "getDevices") resyncScheduled << handler
+        }
+        // getChildDevice returns a stub child for label resolution
+        driver.metaClass.getChildDevice = { String dni ->
+            def d = new TestDevice()
+            d.name = "Test Device ${dni}"
+            d
+        }
+
+        when: "ensurePollHealth() runs with both DNIs at threshold"
+        driver.ensurePollHealth()
+
+        then: "no exception was thrown (snapshot iteration prevents ConcurrentModificationException)"
+        noExceptionThrown()
+
+        and: "both DNIs triggered self-heal (selfHealAttempts incremented for each)"
+        ((state.selfHealAttempts as Map)?.get("CID-A") ?: 0) >= 1
+        ((state.selfHealAttempts as Map)?.get("CID-B") ?: 0) >= 1
+
+        and: "at least one getDevices resync was scheduled (runIn fired)"
+        resyncScheduled.size() >= 1
+    }
+
     def "first non-empty poll after offline period clears state and emits online:true (Q4)"() {
         // Q4: the success branch of updateDevices() must detect state.deviceOfflineSince[dni]
         // and call markChildOnline(dni), which clears offline state and fires sendEvent(online:"true").

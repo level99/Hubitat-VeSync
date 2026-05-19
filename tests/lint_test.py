@@ -5225,3 +5225,126 @@ class TestStripStructuralCharTokenReset:
             "'/' is treated as division, and the inner '}}' is counted as a "
             "structural close-brace."
         )
+
+
+# ---------------------------------------------------------------------------
+# RULE37 extension — BP26 Map-field coercion inside set*(Map mapParam) methods
+# ---------------------------------------------------------------------------
+
+class TestRule37BP26MapFieldCoercion:
+    """
+    RULE37 B2 extension: set*(Map mapParam) methods must not use bare
+    ``as Integer`` / ``.toInteger()`` on Map-field accesses
+    (e.g. ``colorMap?.hue as Integer``).
+
+    The original RULE37 implementation only scanned the FIRST UNTYPED parameter
+    of each set*/cycle* method.  A Map-typed first parameter (``Map colorMap``)
+    caused the method to be skipped entirely, making Map-field coercions invisible
+    to lint.
+
+    Hubitat ColorControl ``setColor(Map colorMap)`` receives Map values from:
+    - Rule Machine 'Set Color' action -- values are Strings in hub-variable bindings
+    - Dashboard color-picker tiles -- decimal strings ("55.5") are common
+    - Any external integration passing a Groovy Map literal with String values
+
+    A bare ``colorMap?.hue as Integer`` throws ``NumberFormatException`` on
+    "55.5" BEFORE ``?:`` can rescue, and the sandbox swallows it silently.
+
+    Non-vacuity contracts:
+      - test_map_field_as_integer_fails: reverting the Map-field extension (removing
+        SET_MAP_METHOD_RE loop from the rule) causes this test to FAIL because the
+        rule returns [] for the BAD_MAP_FIELD_AS_INTEGER source.
+      - test_map_field_safeintarg_passes: must NOT flag when safeIntArg() is used --
+        confirms the extension does not over-fire on already-safe code.
+    """
+
+    from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion as _rule
+
+    # Must-catch: bare `colorMap?.hue as Integer` inside set*(Map ...) — classic BP26 miss.
+    BAD_MAP_FIELD_AS_INTEGER = textwrap.dedent("""\
+        def setColor(Map colorMap){
+            Integer hue  = (colorMap?.hue as Integer) ?: 0
+            Integer sat  = (colorMap?.saturation as Integer) ?: 100
+            Integer bri  = colorMap?.level as Integer
+            hubBypass("setLightStatus", [brightness: bri])
+        }
+    """)
+
+    # Must-catch: toInteger() form on Map field.
+    BAD_MAP_FIELD_TO_INTEGER = textwrap.dedent("""\
+        def setColor(Map colorMap){
+            Integer hue = colorMap?.hue.toInteger()
+            hubBypass("setLightStatus", [hue: hue])
+        }
+    """)
+
+    # Must-not-catch: safeIntArg-guarded Map-field access — already safe.
+    GOOD_MAP_FIELD_SAFEINTARG = textwrap.dedent("""\
+        def setColor(Map colorMap){
+            if (colorMap == null) { logWarn "null colorMap"; return }
+            Integer hue100 = Math.max(0, Math.min(100, safeIntArg(colorMap?.hue, 0)))
+            Integer sat100 = Math.max(0, Math.min(100, safeIntArg(colorMap?.saturation, 100)))
+            Integer bri    = (colorMap?.level != null)
+                ? Math.max(40, Math.min(100, safeIntArg(colorMap.level, 100)))
+                : safeIntArg(state.nightlightBrightness, 100)
+            hubBypass("setLightStatus", [brightness: bri])
+        }
+    """)
+
+    # Must-not-catch: typed Integer param (not a Map) — original rule exemption still holds.
+    GOOD_TYPED_INT_PARAM = textwrap.dedent("""\
+        def setMistLevel(Integer level) {
+            Integer lvl = (level as Integer) ?: 0
+            hubBypass("setVirtualLevel", [level: lvl])
+        }
+    """)
+
+    def test_map_field_as_integer_fails(self):
+        """
+        ``colorMap?.hue as Integer`` inside set*(Map ...) must flag RULE37 FAIL.
+
+        Non-vacuity: removing SET_MAP_METHOD_RE loop from the rule returns [] here,
+        making this test FAIL (no finding emitted when bug is present).
+        """
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_MAP_FIELD_AS_INTEGER)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for Map-field 'as Integer', got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE37_unsafe_int_coercion'), (
+            f"RULE37 Map-field finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_map_field_to_integer_fails(self):
+        """``colorMap?.hue.toInteger()`` inside set*(Map ...) must flag RULE37 FAIL."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_MAP_FIELD_TO_INTEGER)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37_unsafe_int_coercion for Map-field toInteger(), got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE37_unsafe_int_coercion'), (
+            f"RULE37 Map-field finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_map_field_safeintarg_passes(self):
+        """
+        safeIntArg-guarded Map-field access must NOT flag — correct form, already safe.
+
+        Non-vacuity: over-firing here would block all setColor(Map) implementations
+        from passing lint, which is the wrong behavior.
+        """
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_MAP_FIELD_SAFEINTARG)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"safeIntArg-guarded Map-field must not flag RULE37, got: {findings}"
+        )
+
+    def test_typed_int_param_passes(self):
+        """Typed Integer param (not Map) remains exempt from Map-field extension."""
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_TYPED_INT_PARAM)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Typed Integer param must not flag via Map-field extension, got: {findings}"
+        )

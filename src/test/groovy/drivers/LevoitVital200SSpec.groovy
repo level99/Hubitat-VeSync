@@ -1094,4 +1094,32 @@ class LevoitVital200SSpec extends HubitatSpec {
         req.data.lightDetectionSwitch == 1
         lastEventValue("lightDetection") == "on"
     }
+
+    // -------------------------------------------------------------------------
+    // B1 regression guard: resetFilter() uses method name "resetFilter" (not "resetFilterLife")
+    // -------------------------------------------------------------------------
+
+    def "resetFilter() sends bypass method 'resetFilter' (B1 regression guard)"() {
+        // Regression guard: pyvesync VeSyncAirBaseV2.reset_filter() sends {"method":"resetFilter"}.
+        // An earlier draft of LevoitVitalPurifierLib used "resetFilterLife" (wrong name) which
+        // VeSync silently rejects — the filter life counter was never actually reset.
+        // This test FAILS on pre-fix code (method name is "resetFilterLife")
+        // and PASSES on the corrected implementation ("resetFilter").
+        // Both-ways proof: orchestrator-owned.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.resetFilter()
+
+        then: "the bypass request was sent with method 'resetFilter' (not 'resetFilterLife')"
+        def req = testParent.allRequests.find { it.method == "resetFilter" }
+        req != null
+
+        and: "no 'resetFilterLife' request was sent (wrong method name rejected by VeSync)"
+        testParent.allRequests.find { it.method == "resetFilterLife" } == null
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
 }

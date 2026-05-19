@@ -241,6 +241,9 @@ def setSpeed(speed) {
         handleEvent("speed", s)
         logInfo "Speed: ${s}"
     }
+    else {
+        logWarn "setSpeed: cannot apply speed '${s}' — device mode is '${state.mode}'; ignoring"
+    }
 }
 
 def setMode(mode) {

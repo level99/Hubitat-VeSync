@@ -29,7 +29,7 @@ No judgment, no synthesis, no adversarial reasoning. Haiku handles this efficien
 ### Step 1 — Lint --strict
 
 ```bash
-/c/Users/dcox.WEP.original/.local/bin/uv run --python 3.12 tests/lint.py --strict
+uv run --python 3.12 tests/lint.py --strict
 ```
 
 Capture exit code and last ~20 lines of output.
@@ -111,6 +111,26 @@ grep -E 'FORK_RELEASE_VERSION\s*=\s*"' Drivers/Levoit/LevoitDiagnosticsLib.groov
 ```
 
 Compare against the per-driver `version:` values from Step 7 and manifest `version`. Drift = **FAIL** (cut-release Artifact C invariant).
+
+### Step 8b — Verifier battery
+
+Run the three verifiers and the lint pytest suite. These are exit-code gated — any non-zero exit is a FAIL.
+
+```bash
+# Lint rule pytest suite (must-catch + must-not-catch fixtures)
+PYTHONIOENCODING=utf-8 uv run --python 3.12 --with pytest --with pyyaml -m pytest tests/lint_test.py -q
+
+# BP24 classification verifier (on/off setters must have BP24 comment)
+uv run --python 3.12 tests/check_bp24_classification.py
+
+# C3 gate coverage verifier (attribute-emitting setters must have idempotency gate)
+uv run --python 3.12 tests/check_c3_gate_coverage.py
+
+# BP26 spec coverage verifier (safeIntArg command methods must have Spock spec)
+uv run --python 3.12 tests/check_bp26_spec_coverage.py
+```
+
+**Verdict**: exit code 0 for all → PASS. Any non-zero → FAIL with the failing verifier named.
 
 ### Step 9 — Diff triage (classify which deep-audit sub-agents to dispatch)
 
