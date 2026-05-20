@@ -230,15 +230,12 @@ _INTERNAL_JARGON_NAMES = frozenset({
     'sendBypassRequest',
     'ensurePollHealth',
     'ensurePollWatchdog',
-    'peelEnvelope',
-    'seedPrefs',
     'hubBypass',
     'safeIntArg',
     'ensureSwitchOn',
     'ensureDebugWatchdog',
     'mapIntegerStringToSpeed',
     'requireNotNull',
-    'handleEvent',
 })
 
 # Pre-built pattern for bare internal-jargon names (word-boundary anchored).

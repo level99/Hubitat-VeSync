@@ -6322,3 +6322,91 @@ class TestRule39ChangelogTmi:
             f"NullPointerException in ### Changed (after ### Internal) must flag RULE39, "
             f"got findings: {findings}"
         )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch: names deliberately excluded from _INTERNAL_JARGON_NAMES
+    # peelEnvelope / seedPrefs / handleEvent.  Excluded under the reactive-grow
+    # policy: peelEnvelope and seedPrefs have zero codebase presence (anticipatory
+    # inclusions are not eligible per docstring policy); handleEvent is also
+    # Hubitat platform vocabulary (lifecycle callback name) so the bare-name
+    # path could over-suppress legitimate user-facing prose.  Parens-form
+    # `handleEvent()` is still flagged via _METHOD_CALL_RE.  These tests lock
+    # the exclusion: re-adding any of these three names to the frozenset
+    # causes the corresponding test to FAIL.
+    # -----------------------------------------------------------------------
+
+    def test_bare_peelenvelope_not_flagged(self):
+        """
+        'peelEnvelope' bare (no parens) in a user-facing bullet must NOT flag RULE39.
+
+        Non-vacuity: re-adding 'peelEnvelope' to _INTERNAL_JARGON_NAMES causes
+        this test to FAIL (the bare-name path then matches).
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - The peelEnvelope helper now skips empty results.
+        """)
+        findings = self._run(src)
+        jargon_findings = [
+            f for f in findings
+            if f['rule_id'] == 'RULE39_changelog_tmi' and 'peelEnvelope' in f['title']
+        ]
+        assert not jargon_findings, (
+            f"'peelEnvelope' is NOT in _INTERNAL_JARGON_NAMES and must not flag, got: {jargon_findings}"
+        )
+
+    def test_bare_seedprefs_not_flagged(self):
+        """
+        'seedPrefs' bare (no parens) in a user-facing bullet must NOT flag RULE39.
+
+        Non-vacuity: re-adding 'seedPrefs' to _INTERNAL_JARGON_NAMES causes
+        this test to FAIL.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - seedPrefs runs once per device lifecycle.
+        """)
+        findings = self._run(src)
+        jargon_findings = [
+            f for f in findings
+            if f['rule_id'] == 'RULE39_changelog_tmi' and 'seedPrefs' in f['title']
+        ]
+        assert not jargon_findings, (
+            f"'seedPrefs' is NOT in _INTERNAL_JARGON_NAMES and must not flag, got: {jargon_findings}"
+        )
+
+    def test_bare_handleevent_not_flagged(self):
+        """
+        'handleEvent' bare (no parens) in a user-facing bullet must NOT flag RULE39.
+
+        This exact phrasing is the 'Hubitat platform vocabulary' usage the WARN-2
+        removal protects: a user-facing note about the lifecycle callback is NOT
+        jargon-dump.  The parens-form handleEvent() is still flagged via
+        _METHOD_CALL_RE (analogous shape to test_applyStatus_with_parens_still_flagged_via_method_call_re).
+
+        Non-vacuity: re-adding 'handleEvent' to _INTERNAL_JARGON_NAMES causes
+        this test to FAIL.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - The driver's handleEvent lifecycle callback now registers on install.
+        """)
+        findings = self._run(src)
+        jargon_findings = [
+            f for f in findings
+            if f['rule_id'] == 'RULE39_changelog_tmi' and 'handleEvent' in f['title']
+               and 'jargon' in f['title'].lower()
+        ]
+        assert not jargon_findings, (
+            f"'handleEvent' (bare, no parens) is NOT in _INTERNAL_JARGON_NAMES and must not flag, "
+            f"got: {jargon_findings}"
+        )
