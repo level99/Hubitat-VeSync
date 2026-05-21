@@ -1184,7 +1184,7 @@ class TestRule27NullGuardOnSetCommands:
     RULE27 (Bug Pattern #18): set* command methods must have an explicit
     ``if (arg == null)`` guard before any normalization call on the parameter.
 
-    10 tests: 5 PASS, 4 FAIL, 1 finding-quality.
+    11 tests: 6 PASS, 4 FAIL, 1 finding-quality.
     """
 
     # --- PASS cases ---
@@ -1227,6 +1227,15 @@ class TestRule27NullGuardOnSetCommands:
             // Note: (mode as String).toLowerCase() would NPE if mode is null (Bug Pattern #18)
             String m = (mode as String).toLowerCase()
             if (!(m in ["auto","manual"])) { logError "bad mode"; return }
+        }
+    """)
+
+    PASS_REQUIRE_NON_EMPTY_ENUM = textwrap.dedent("""\
+        def setMode(mode) {
+            logDebug "setMode(${mode})"
+            if (!requireNonEmptyEnum(mode, "setMode")) return
+            String m = (mode as String).toLowerCase()
+            if (!(m in ["auto","manual"])) { logError "bad mode: ${m}"; return }
         }
     """)
 
@@ -1309,6 +1318,20 @@ class TestRule27NullGuardOnSetCommands:
         assert rule27 == [], (
             f"Expected no RULE27 findings when vulnerable pattern appears only in a // comment, "
             f"got: {rule27}"
+        )
+
+    def test_pass_require_non_empty_enum_guard(self):
+        """requireNonEmptyEnum before normalization: no RULE27 finding.
+
+        Non-vacuity: reverting the require(?:NotNull|NonEmptyEnum) regex extension in
+        bp18_null_guard.py to accept only requireNotNull would cause this test to FAIL
+        with a false-positive RULE27 finding on the requireNonEmptyEnum-guarded method
+        (the guard would not be recognized as a valid null-guard, so RULE27 would fire).
+        """
+        findings = run_rule(check_rule27_bp18_null_guard, self.PASS_REQUIRE_NON_EMPTY_ENUM)
+        rule27 = [f for f in findings if f['rule_id'] == 'RULE27_bp18_null_guard']
+        assert rule27 == [], (
+            f"Expected no RULE27 findings for requireNonEmptyEnum guard, got: {rule27}"
         )
 
     def test_fail_no_guard_cast_lower(self):
@@ -5764,6 +5787,26 @@ class TestRule39ChangelogTmi:
             f['rule_id'] == 'RULE39_changelog_tmi' and 'sendBypassRequest()' in f['title']
             for f in findings
         ), f"Expected sendBypassRequest() finding, got: {findings}"
+
+    def test_bare_requirenonemptyenum_in_fixed_section_flagged(self):
+        """
+        requireNonEmptyEnum (bare, no parens) in a user-facing Fixed bullet must flag RULE39.
+
+        Non-vacuity: removing 'requireNonEmptyEnum' from _INTERNAL_JARGON_NAMES in
+        changelog_tmi.py causes this test to FAIL (no RULE39 finding is emitted).
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - **Blank string no longer slips past guard.** A new requireNonEmptyEnum guard rejects empty inputs.
+        """)
+        findings = self._run(src)
+        assert any(
+            f['rule_id'] == 'RULE39_changelog_tmi' and 'requireNonEmptyEnum' in f['title']
+            for f in findings
+        ), f"Expected requireNonEmptyEnum bare-name RULE39 finding, got: {findings}"
 
     # -----------------------------------------------------------------------
     # Must-catch: category (iii) -- tracker references

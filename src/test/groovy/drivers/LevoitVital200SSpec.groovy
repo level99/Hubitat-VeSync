@@ -1122,4 +1122,45 @@ class LevoitVital200SSpec extends HubitatSpec {
         and: "no error was logged"
         testLog.errors.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // NIT 4: setAutoPreference string-enum guard upgraded to requireNonEmptyEnum
+    // setAutoPreference(pref): the `pref` param is a user-callable string enum.
+    // Empty "" slipped past the former requireNotNull guard and reached the cloud.
+    // -------------------------------------------------------------------------
+
+    def "NIT 4: setAutoPreference('') silently exits without API call (empty-string RM blank slot) (Vital 200S/VitalPurifierLib)"() {
+        // Pre-fix: requireNotNull("") returned true; "" was sent as autoPreference to the cloud.
+        // Post-fix: requireNonEmptyEnum("") returns false silently; no API call.
+        given:
+        testParent.allRequests.clear()
+        int warnsBefore = testLog.warns.size()
+
+        when:
+        driver.setAutoPreference("")
+
+        then: "no API call"
+        testParent.allRequests.find { it.method == "setAutoPreference" } == null
+
+        and: "no WARN logged (empty string is the RM blank-slot path — silent)"
+        testLog.warns.size() == warnsBefore
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "NIT 4: setAutoPreference(null) still warns (null path unchanged) (Vital 200S/VitalPurifierLib)"() {
+        // Null path must still warn — regression guard on the existing BP18 behavior.
+        given:
+        testParent.allRequests.clear()
+
+        when:
+        driver.setAutoPreference(null)
+
+        then: "WARN logged for null"
+        testLog.warns.any { it.toLowerCase().contains("setautopreference") }
+
+        and: "no API call"
+        testParent.allRequests.find { it.method == "setAutoPreference" } == null
+    }
 }

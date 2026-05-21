@@ -90,6 +90,37 @@ boolean requireNotNull(arg, String methodName) {
     return true
 }
 
+// BP18 extended null-guard for string-enum setters: intercepts both null AND empty/whitespace-only
+// string, so that a blank Rule Machine parameter slot (which arrives as "" not null) does not leak
+// into the value-emission path and produce an empty-value INFO log.
+//
+// Usage: replace requireNotNull with requireNonEmptyEnum at the top of any string-enum setter
+// (setMode, setSpeed, setDisplay, setChildLock, setDryingMode, set*, etc.) — NOT for numeric
+// setters (setLevel, setMistLevel, setTargetHumidity, etc.) which use safeIntArg instead.
+//
+//   def setMode(mode) {
+//       if (!requireNonEmptyEnum(mode, "setMode")) return
+//       String m = (mode as String).trim().toLowerCase()
+//       // ... rest of method ...
+//   }
+//
+// Returns false (caller should return) when arg is null or empty/whitespace-only.
+// Returns true  (caller should continue) when arg contains a non-whitespace value.
+// Null input:         logs WARN (same as requireNotNull, visible for debugging)
+// Empty/blank input:  returns false SILENTLY (RM blank-slot convention; double-warning undesirable)
+boolean requireNonEmptyEnum(arg, String methodName) {
+    if (arg == null) {
+        logWarn "${methodName} called with null arg (likely empty Rule Machine action parameter); ignoring"
+        return false
+    }
+    if ((arg as String).trim().isEmpty()) {
+        // Silent per design: empty string is RM blank-slot equivalent of null.
+        // requireNotNull already handles null with a WARN; a second WARN here is undesirable.
+        return false
+    }
+    return true
+}
+
 // BP26 safe numeric coercion: convert any command-arg type to Integer without
 // ever throwing. Rule Machine and dashboard tiles can pass String, GString,
 // BigDecimal, Boolean, or null. Plain `(x as Integer)` throws

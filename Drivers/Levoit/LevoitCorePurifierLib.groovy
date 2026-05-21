@@ -58,8 +58,8 @@ def toggle() {
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(displayOn) {
     logDebug "setDisplay(${displayOn})"
-    // BP18: null-guard — Rule Machine passes null for blank parameter slots.
-    if (!requireNotNull(displayOn, "setDisplay")) return false
+    // BP18: null/empty-guard — Rule Machine passes null or "" for blank parameter slots.
+    if (!requireNonEmptyEnum(displayOn, "setDisplay")) return false
     // BP25: normalize to lowercase, then derive canonical on/off for C3 gate and callee.
     // Passing canon (not raw v) to handleDisplayOn ensures the attribute emits "on"/"off",
     // never "true"/"1"/"yes". The C3 gate compares canonical vs canonical.
@@ -152,8 +152,8 @@ def handleDisplayOn(displayOn)
 def setChildLock(value) {
     // Core-line API uses child_lock (boolean); Vital-line API uses childLockSwitch (integer). Intentional divergence per pyvesync class hierarchy.
     logDebug "setChildLock(${value})"
-    // BP18: null-guard — Rule Machine passes null for blank parameter slots.
-    if (!requireNotNull(value, "setChildLock")) return false
+    // BP18: null/empty-guard — Rule Machine passes null or "" for blank parameter slots.
+    if (!requireNonEmptyEnum(value, "setChildLock")) return false
     // BP25: normalize to lowercase, then derive canonical on/off for sendEvent and C3 gate.
     // Attribute always emits "on" or "off"; the C3 gate compares canonical vs canonical so
     // truthy-variant input ("TRUE", "1", "yes") does not defeat same-state suppression.
@@ -262,7 +262,7 @@ def setAutoMode(mode) {
 }
 
 def setAutoMode(mode, roomSize) {
-    if (!requireNotNull(mode, "setAutoMode")) return
+    if (!requireNonEmptyEnum(mode, "setAutoMode")) return
     // BP26: safe integer coercion — Rule Machine passes "" or null for blank numeric slots.
     // Nested safeIntArg: the inner call guards the fallback expression itself.
     // An unguarded `(state.room_size ?: 800) as Integer` cast can throw NumberFormatException

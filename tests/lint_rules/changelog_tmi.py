@@ -236,6 +236,7 @@ _INTERNAL_JARGON_NAMES = frozenset({
     'ensureDebugWatchdog',
     'mapIntegerStringToSpeed',
     'requireNotNull',
+    'requireNonEmptyEnum',
 })
 
 # Pre-built pattern for bare internal-jargon names (word-boundary anchored).

@@ -154,7 +154,7 @@ metadata {
 // Both routes funnel through the same sendLevel() internal helper (provided by LevoitFanLib).
 def setSpeed(spd){
     logDebug "setSpeed(${spd})"
-    if (!requireNotNull(spd, "setSpeed")) return
+    if (!requireNonEmptyEnum(spd, "setSpeed")) return
     // Short-circuit power commands before the auto-on guard.
     // setSpeed("off") must NOT trigger ensureSwitchOn() — the intent is explicitly to turn off.
     // setSpeed("on") short-circuits here too for symmetry (on() does everything needed).
@@ -210,7 +210,7 @@ def setSpeed(spd){
 //     correct API literal --> remove the reverse-mapping and send "sleep" directly.
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return
+    if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["normal","turbo","auto","sleep"])) {
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|auto|sleep"
@@ -239,7 +239,7 @@ def setDisplay(o) { doSetDisplayScreenSwitch(o) }
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setOscillation(onOff){
     logDebug "setOscillation(${onOff})"
-    if (!requireNotNull(onOff, "setOscillation")) return
+    if (!requireNonEmptyEnum(onOff, "setOscillation")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setOscillation: invalid value '${s}'"; recordError("setOscillation invalid: ${s}", [method:"setOscillationSwitch"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.

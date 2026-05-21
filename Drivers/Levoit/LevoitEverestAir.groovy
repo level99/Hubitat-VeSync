@@ -220,7 +220,7 @@ def toggle(){
 // This is the canonical convention for turbo-as-mode going forward in this codebase.
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return
+    if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual","turbo"])) {
         logError "Invalid mode: ${m} -- must be: auto, sleep, manual, turbo"
@@ -271,7 +271,7 @@ def setFanSpeed(speed){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" evaluates ("ON" == "on") as false → sends screenSwitch:0 (off) when intent was on.
     String v = (onOff as String).trim().toLowerCase()
@@ -294,7 +294,7 @@ def setDisplay(onOff){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    if (!requireNotNull(onOff, "setChildLock")) return
+    if (!requireNonEmptyEnum(onOff, "setChildLock")) return
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" evaluates ("ON" == "on") as false → sends childLockSwitch:0 (unlocked) when intent was locked.
     String v = (onOff as String).trim().toLowerCase()
@@ -320,7 +320,7 @@ def setChildLock(onOff){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setLightDetection(onOff){
     logDebug "setLightDetection(${onOff})"
-    if (!requireNotNull(onOff, "setLightDetection")) return
+    if (!requireNonEmptyEnum(onOff, "setLightDetection")) return
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" evaluates ("ON" == "on") as false → sends lightDetectionSwitch:0 (off) when intent was on.
     String v = (onOff as String).trim().toLowerCase()

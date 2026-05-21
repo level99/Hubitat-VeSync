@@ -240,7 +240,7 @@ metadata {
 // no "auto" mode; "eco" is the closest semantic equivalent.
 def setSpeed(spd){
     logDebug "setSpeed(${spd})"
-    if (!requireNotNull(spd, "setSpeed")) return
+    if (!requireNonEmptyEnum(spd, "setSpeed")) return
     // Short-circuit power commands before the auto-on guard.
     // setSpeed("off") must NOT trigger ensureSwitchOn() — the intent is explicitly to turn off.
     // setSpeed("on") short-circuits here too for symmetry (on() does everything needed).
@@ -294,7 +294,7 @@ def setSpeed(spd){
 //     add "auto" as an alias or replace "eco" with "auto".
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return
+    if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["normal","turbo","eco","sleep"])) {
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|eco|sleep"
@@ -341,7 +341,7 @@ def setDisplay(o) { doSetDisplayScreenSwitch(o) }
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setHorizontalOscillation(onOff){
     logDebug "setHorizontalOscillation(${onOff})"
-    if (!requireNotNull(onOff, "setHorizontalOscillation")) return
+    if (!requireNonEmptyEnum(onOff, "setHorizontalOscillation")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setHorizontalOscillation: invalid value '${s}'"; recordError("setHorizontalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
@@ -362,7 +362,7 @@ def setHorizontalOscillation(onOff){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setVerticalOscillation(onOff){
     logDebug "setVerticalOscillation(${onOff})"
-    if (!requireNotNull(onOff, "setVerticalOscillation")) return
+    if (!requireNonEmptyEnum(onOff, "setVerticalOscillation")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setVerticalOscillation: invalid value '${s}'"; recordError("setVerticalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
@@ -450,7 +450,7 @@ def setVerticalRange(top, bottom){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    if (!requireNotNull(onOff, "setChildLock")) return
+    if (!requireNonEmptyEnum(onOff, "setChildLock")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) {
         logError "setChildLock: invalid value '${s}' -- must be on|off"
@@ -518,7 +518,7 @@ def setChildLock(onOff){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setSmartCleaningReminder(onOff){
     logDebug "setSmartCleaningReminder(${onOff})"
-    if (!requireNotNull(onOff, "setSmartCleaningReminder")) return
+    if (!requireNonEmptyEnum(onOff, "setSmartCleaningReminder")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) {
         logError "setSmartCleaningReminder: invalid value '${s}'"

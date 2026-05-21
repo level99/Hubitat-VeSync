@@ -140,7 +140,7 @@ def off(){
 // ---------- Mode ----------
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return
+    if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","manual","sleep"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     // autoPro is the canonical API value for "auto" on Superior 6000S
@@ -160,6 +160,12 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
+    // BUG #212: Sup6000S V2 firmware rejects setVirtualLevel during sleep mode (inner code -1).
+    // BP24: NO-ON — preference setter; firmware-rejects during sleep mode (Sup6000S V2 constraint).
+    if (device.currentValue("mode") == "sleep") {
+        logInfo "Skipping setMistLevel during sleep mode (Sup6000S firmware rejects preference writes in sleep mode; change mode first)"
+        return
+    }
     Integer lvl = safeIntArg(level, 0)
     if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(9, lvl))
@@ -221,14 +227,23 @@ def setTargetHumidity(percent){
 // ---------- Feature setters ----------
 // V2-line shared bodies via lib; delegators preserve method-presence semantics.
 // BP24: NO-ON — configures a device preference; powering on is not implied.
-def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
+// BUG #212: Sup6000S V2 firmware rejects setDisplay during sleep mode (inner code -1).
+// Skip with an INFO explanation rather than logging a false-positive ERROR.
+def setDisplay(onOff) {
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return false
+    if (device.currentValue("mode") == "sleep") {
+        logInfo "Skipping setDisplay during sleep mode (Sup6000S firmware rejects preference writes in sleep mode; change mode first)"
+        return true
+    }
+    doSetDisplayScreenSwitch(onOff)
+}
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    if (!requireNotNull(onOff, "setChildLock")) return false
+    if (!requireNonEmptyEnum(onOff, "setChildLock")) return false
     // BP25: derive canonical on/off for sendEvent and C3 gate — never emit raw "true"/"1"/"yes".
     String val = (onOff as String).trim().toLowerCase()
     String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
@@ -244,7 +259,7 @@ def setChildLock(onOff){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
-    if (!requireNotNull(onOff, "setDryingMode")) return false
+    if (!requireNonEmptyEnum(onOff, "setDryingMode")) return false
     // No C3 idempotency gate: the dryingMode attribute reflects the hardware's current drying
     // state (active/complete/idle/off), not the autoDryingSwitch user preference that this
     // method writes. Comparing against dryingMode would incorrectly suppress the write when

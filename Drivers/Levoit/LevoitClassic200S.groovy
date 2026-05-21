@@ -177,7 +177,7 @@ def off(){
 // Payload: {mode: <value>} -- same as Classic 300S, NOT {workMode: <value>} (V2-class devices)
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return
+    if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     // CROSS-CHECK: only auto and manual are valid for Classic 200S (no sleep per device_map.py)
     // Validate BEFORE ensureSwitchOn() so invalid input does not auto-turn on an off device.
@@ -256,7 +256,7 @@ def setHumidity(percent){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return false
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return false
     String val = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
     String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
@@ -278,7 +278,7 @@ def setDisplay(onOff){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
-    if (!requireNotNull(onOff, "setAutoStop")) return false
+    if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" from Rule Machine bypasses the gate and evaluates ("ON"=="on") as false
     // → sets enabled:false (disables auto-stop) when the intent was to enable it.

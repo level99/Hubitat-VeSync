@@ -222,7 +222,7 @@ def setLevel(val) {
 
 def setSpeed(spd) {
     logDebug "setSpeed(${spd})"
-    if (!requireNotNull(spd, "setSpeed")) return
+    if (!requireNonEmptyEnum(spd, "setSpeed")) return
     // BP25: normalize to lowercase so Rule Machine "OFF"/"SLEEP" route correctly.
     String s = (spd as String).trim().toLowerCase()
     if (s == "off") return off()
@@ -257,7 +257,7 @@ def setSpeedLevel(level) {
 //   auto/sleep/pet: use setPurifierMode with {workMode: <mode>}.
 def setMode(mode) {
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return false
+    if (!requireNonEmptyEnum(mode, "setMode")) return false
 
     // Only check power if we're not already turning on
     if (!state.turningOn && device.currentValue("switch") != "on") {
@@ -298,7 +298,7 @@ def setMode(mode) {
 // ---- Feature setters ----
 
 def setPetMode(onOff) {
-    if (!requireNotNull(onOff, "setPetMode")) return
+    if (!requireNonEmptyEnum(onOff, "setPetMode")) return
     // BP25: normalize to lowercase before mode selection.
     String v = (onOff as String).trim().toLowerCase()
     setMode(v == "on" ? "pet" : "auto")
@@ -306,7 +306,7 @@ def setPetMode(onOff) {
 
 def setAutoPreference(pref) {
     logDebug "setAutoPreference(${pref})"
-    if (!requireNotNull(pref, "setAutoPreference")) return
+    if (!requireNonEmptyEnum(pref, "setAutoPreference")) return
     def resp = hubBypass("setAutoPreference", [autoPreference: pref, roomSize: state.roomSize ?: 600], "setAutoPreference")
     if (httpOk(resp)) { state.autoPreference = pref; device.sendEvent(name:"autoPreference", value: pref) }
 }
@@ -322,7 +322,7 @@ def setRoomSize(sz) {
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff) {
     logDebug "setChildLock(${onOff})"
-    if (!requireNotNull(onOff, "setChildLock")) return
+    if (!requireNonEmptyEnum(onOff, "setChildLock")) return
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     // Without this, "ON" bypasses the gate (gate compares against "on") AND the payload
     // coercion evaluates ("ON" == "on") as false → sends childLockSwitch:0 (unlock) when
@@ -342,7 +342,7 @@ def setChildLock(onOff) {
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff) {
     logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return
     // BP25: normalize to lowercase before C3 gate and payload coercion (same rationale as setChildLock).
     String v = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".

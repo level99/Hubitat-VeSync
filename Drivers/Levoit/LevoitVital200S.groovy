@@ -111,7 +111,7 @@ metadata {
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setLightDetection(onOff) {
     logDebug "setLightDetection(${onOff})"
-    if (!requireNotNull(onOff, "setLightDetection")) return
+    if (!requireNonEmptyEnum(onOff, "setLightDetection")) return
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     String v = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".

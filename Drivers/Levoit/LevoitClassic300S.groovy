@@ -124,7 +124,7 @@ def off(){
 // ---------- Mode ----------
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return
+    if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     // Validate BEFORE ensureSwitchOn() so invalid input does not auto-turn on an off device.
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
@@ -193,7 +193,7 @@ def setHumidity(percent){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return false
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return false
     String val = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
     String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
@@ -213,7 +213,7 @@ def setDisplay(onOff){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
-    if (!requireNotNull(onOff, "setAutoStop")) return false
+    if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
     // BP25: normalize to lowercase before C3 gate and payload coercion.
     // "ON" from Rule Machine bypasses the gate and evaluates ("ON"=="on") as false
     // → sets enabled:false (disables auto-stop) when the intent was to enable it.
@@ -249,7 +249,7 @@ def setAutoStop(onOff){
 // a boolean on/off toggle. It is not classified as an on/off setter in the C3 gate scope.
 def setNightLight(level){
     logDebug "setNightLight(${level})"
-    if (!requireNotNull(level, "setNightLight")) return
+    if (!requireNonEmptyEnum(level, "setNightLight")) return
     String lvlStr = (level as String).trim().toLowerCase()
     // Night-light is discrete 3-step only (HA finding #9 -- physical device constraint)
     Map nlNameToInt = [off: 0, dim: 50, bright: 100]

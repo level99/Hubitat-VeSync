@@ -280,7 +280,7 @@ private Integer levelFromPercent(Integer pct) {
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def doSetMuteSwitch(onOff) {
     logDebug "setMute(${onOff})"
-    if (!requireNotNull(onOff, "setMute")) return
+    if (!requireNonEmptyEnum(onOff, "setMute")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setMute: invalid value '${s}'"; recordError("setMute invalid: ${s}", [method:"setMuteSwitch"]); return }
     // C3 idempotency gate: suppress redundant API call when attribute already matches.
@@ -298,7 +298,7 @@ def doSetMuteSwitch(onOff) {
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def doSetDisplayScreenSwitch(onOff) {
     logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return
     String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setDisplay: invalid value '${s}'"; recordError("setDisplay invalid: ${s}", [method:"setDisplay"]); return }
     // C3 idempotency gate: suppress redundant API call when attribute already matches.

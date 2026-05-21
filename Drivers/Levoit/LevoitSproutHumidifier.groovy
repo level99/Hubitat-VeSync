@@ -189,7 +189,7 @@ def off(){
 // In reverse: workMode='autoPro' from API response maps back to user-facing 'auto'.
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return
+    if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     // Wire-value mapping: auto -> 'autoPro' (device_map.py mist_modes for Sprout)
@@ -253,7 +253,7 @@ def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    if (!requireNotNull(onOff, "setChildLock")) return false
+    if (!requireNonEmptyEnum(onOff, "setChildLock")) return false
     // BP25: derive canonical on/off for sendEvent and C3 gate — never emit raw "true"/"1"/"yes".
     String val = (onOff as String).trim().toLowerCase()
     String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
@@ -279,7 +279,7 @@ def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
-    if (!requireNotNull(onOff, "setDryingMode")) return false
+    if (!requireNonEmptyEnum(onOff, "setDryingMode")) return false
     // BP25: normalize to lowercase, then derive canonical on/off for sendEvent and C3 gate.
     // Attribute always emits "on" or "off"; the C3 gate compares canonical vs canonical.
     String v = (onOff as String).trim().toLowerCase()
@@ -311,7 +311,7 @@ def setDryingMode(onOff){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setNightlight(onOff, brightness = null, colorTemp = null){
     logDebug "setNightlight(${onOff}, ${brightness}, ${colorTemp})"
-    if (!requireNotNull(onOff, "setNightlight")) return
+    if (!requireNonEmptyEnum(onOff, "setNightlight")) return
     // BP25: normalize to lowercase before all comparisons.
     String nl = (onOff as String).trim().toLowerCase()
     Integer br   = (brightness  != null) ? Math.max(0, Math.min(100, safeIntArg(brightness, 0)))       : null   // BP26

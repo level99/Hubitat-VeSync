@@ -190,7 +190,7 @@ def off(){
 //   Source: pyvesync LUH-A603S-WUS.yaml set_auto_mode: {workMode: 'humidity'}
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return
+    if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) {
         logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"

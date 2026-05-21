@@ -878,4 +878,206 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         req.data.autoStopSwitch == 1
         lastEventValue("autoStopEnabled") == "on"
     }
+
+    // -------------------------------------------------------------------------
+    // BUG #212: sleep-mode guard — setDisplay and setMistLevel must skip during sleep
+    // These tests MUST FAIL on pre-fix code and PASS on post-fix code.
+    // -------------------------------------------------------------------------
+
+    def "BUG #212: setDisplay skips cloud call when device is in sleep mode (Sup6000S firmware constraint)"() {
+        // Pre-fix: setDisplay("on") delegated to doSetDisplayScreenSwitch without a sleep-mode check.
+        // The cloud accepted the call but returned inner code -1, logging an ERROR.
+        // Post-fix: setDisplay checks device.currentValue("mode") == "sleep" and returns early with INFO.
+        given: "device mode is sleep"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "mode", value: "sleep"])
+        testParent.allRequests.clear()
+
+        when:
+        driver.setDisplay("on")
+
+        then: "no API call was made"
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+
+        and: "an INFO log was emitted (not an ERROR)"
+        testLog.infos.any { it.toLowerCase().contains("sleep") }
+        testLog.errors.isEmpty()
+    }
+
+    def "BUG #212: setDisplay proceeds normally when device is in manual mode (no false-positive)"() {
+        // Guard must NOT fire for non-sleep modes.
+        given: "device mode is manual"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "mode", value: "manual"])
+        testParent.allRequests.clear()
+
+        when:
+        driver.setDisplay("on")
+
+        then: "API call was sent"
+        !testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+    }
+
+    def "BUG #212: setMistLevel skips cloud call when device is in sleep mode (Sup6000S firmware constraint)"() {
+        // Pre-fix: setMistLevel(5) proceeded to setVirtualLevel even during sleep mode.
+        // Post-fix: sleep-mode guard after requireNotNull but before safeIntArg returns early with INFO.
+        given: "device mode is sleep"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "mode", value: "sleep"])
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when:
+        driver.setMistLevel(5)
+
+        then: "no API call was made"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+
+        and: "an INFO log was emitted (not an ERROR)"
+        testLog.infos.any { it.toLowerCase().contains("sleep") }
+        testLog.errors.isEmpty()
+    }
+
+    def "BUG #212: setMistLevel proceeds normally when device is in auto mode (no false-positive)"() {
+        given: "device mode is auto"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "mode", value: "auto"])
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when:
+        driver.setMistLevel(5)
+
+        then: "setVirtualLevel API call was sent"
+        !testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // BUG #213: requireNonEmptyEnum — empty-string inputs silently rejected
+    // These tests MUST FAIL on pre-fix code (setMode("") produced an INFO leak)
+    // and PASS on post-fix code (silent early return, no API call, no log).
+    // -------------------------------------------------------------------------
+
+    def "BUG #213: setMode('') silently exits without API call (empty-string RM blank slot)"() {
+        // Pre-fix: requireNotNull("") returned true; "" became mode ""; logInfo "Mode: " was emitted.
+        // Post-fix: requireNonEmptyEnum("") returns false silently; no processing occurs.
+        given:
+        settings.descriptionTextEnable = true
+        testParent.allRequests.clear()
+        int infosBefore = testLog.infos.size()
+
+        when:
+        driver.setMode("")
+
+        then: "no API call"
+        testParent.allRequests.findAll { it.method == "setHumidityMode" }.isEmpty()
+
+        and: "no new INFO log emitted (empty-string path is silent)"
+        testLog.infos.size() == infosBefore
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "BUG #213: setMode(null) still emits WARN (null path unchanged by fix)"() {
+        // Null path must still warn — requireNonEmptyEnum delegates null handling to original requireNotNull WARN.
+        given:
+        testParent.allRequests.clear()
+
+        when:
+        driver.setMode(null)
+
+        then: "WARN logged for null"
+        testLog.warns.any { it.contains("setMode") && it.contains("null") }
+
+        and: "no API call"
+        testParent.allRequests.isEmpty()
+    }
+
+    def "BUG #213: setChildLock('') silently exits without API call (empty-string RM blank slot)"() {
+        given:
+        settings.descriptionTextEnable = true
+        testParent.allRequests.clear()
+        int infosBefore = testLog.infos.size()
+
+        when:
+        driver.setChildLock("")
+
+        then: "no API call"
+        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
+
+        and: "no new INFO log emitted"
+        testLog.infos.size() == infosBefore
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "BUG #213: setDryingMode('') silently exits without API call (empty-string RM blank slot)"() {
+        given:
+        settings.descriptionTextEnable = true
+        testParent.allRequests.clear()
+        int infosBefore = testLog.infos.size()
+
+        when:
+        driver.setDryingMode("")
+
+        then: "no API call"
+        testParent.allRequests.findAll { it.method == "setDryingMode" }.isEmpty()
+
+        and: "no new INFO log emitted"
+        testLog.infos.size() == infosBefore
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    // -------------------------------------------------------------------------
+    // NIT 3: null-guard fires BEFORE sleep-mode check in setDisplay
+    // Ordering guard: null input must be rejected (WARN) even when device is sleeping.
+    // Pre-fix ordering: sleep check first → null passed to doSetDisplayScreenSwitch silently.
+    // Post-fix ordering: requireNonEmptyEnum first → null produces WARN before sleep check runs.
+    // -------------------------------------------------------------------------
+
+    def "NIT 3: setDisplay(null) while in sleep mode logs WARN — null-guard fires before sleep check"() {
+        // Pre-fix ordering: sleep-mode guard ran first; null + sleep-mode returned true silently.
+        // Post-fix ordering: requireNonEmptyEnum runs first, logs WARN, returns false.
+        given: "device mode is sleep"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "mode", value: "sleep"])
+        testParent.allRequests.clear()
+
+        when:
+        driver.setDisplay(null)
+
+        then: "no API call was made"
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+
+        and: "a WARN was logged (not silent return)"
+        testLog.warns.any { it.toLowerCase().contains("setdisplay") }
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "NIT 3: setDisplay('') while in sleep mode silently exits — empty-string rejected before sleep check"() {
+        // Empty string is rejected by requireNonEmptyEnum before the sleep-mode check even runs.
+        given: "device mode is sleep"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "mode", value: "sleep"])
+        testParent.allRequests.clear()
+        int infosBefore = testLog.infos.size()
+
+        when:
+        driver.setDisplay("")
+
+        then: "no API call"
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+
+        and: "no INFO log about sleep mode (sleep check never reached)"
+        testLog.infos.size() == infosBefore
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
 }

@@ -1009,4 +1009,110 @@ class LevoitCore200SSpec extends HubitatSpec {
         then: "C3 gate suppressed the call because canon=='on'==currentValue"
         testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // BUG #213: requireNonEmptyEnum — empty-string from Rule Machine blank slot
+    // These tests MUST FAIL on pre-fix code and PASS on post-fix code.
+    // Pre-fix: requireNotNull("") returned true; "" was processed, producing an
+    //   INFO log like "Speed: " or passing "" to the enum-check WARN path.
+    // Post-fix: requireNonEmptyEnum("") returns false silently.
+    // -------------------------------------------------------------------------
+
+    def "BUG #213: setSpeed('') silently exits without API call or log (Core 200S)"() {
+        given:
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+        int infosBefore  = testLog.infos.size()
+        int warnsBefore  = testLog.warns.size()
+
+        when:
+        driver.setSpeed("")
+
+        then: "no API call"
+        testParent.allRequests.size() == 0
+
+        and: "no new INFO or WARN log (empty string is silently rejected)"
+        testLog.infos.size() == infosBefore
+        testLog.warns.size() == warnsBefore
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "BUG #213: setMode('') silently exits without API call or log (Core 200S)"() {
+        given:
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+        int infosBefore  = testLog.infos.size()
+        int warnsBefore  = testLog.warns.size()
+
+        when:
+        driver.setMode("")
+
+        then: "no API call"
+        testParent.allRequests.size() == 0
+
+        and: "no new INFO or WARN log (empty string is silently rejected)"
+        testLog.infos.size() == infosBefore
+        testLog.warns.size() == warnsBefore
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "BUG #213: setSpeed(null) still warns (null path unchanged by fix) (Core 200S)"() {
+        given:
+        testParent.allRequests.clear()
+
+        when:
+        driver.setSpeed(null)
+
+        then: "WARN logged for null"
+        testLog.warns.any { it.contains("setSpeed") }
+
+        and: "no API call"
+        testParent.allRequests.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // NIT 4: setAutoMode string-enum guard upgraded to requireNonEmptyEnum
+    // setAutoMode(mode, roomSize): the `mode` param is a user-callable string enum.
+    // Empty "" slipped past the former requireNotNull guard and reached the cloud.
+    // -------------------------------------------------------------------------
+
+    def "NIT 4: setAutoMode('') silently exits without API call (empty-string RM blank slot) (Core 200S/CorePurifierLib)"() {
+        // Pre-fix: requireNotNull("") returned true; "" was sent as mode to the cloud.
+        // Post-fix: requireNonEmptyEnum("") returns false silently; no API call.
+        given:
+        testParent.allRequests.clear()
+        int warnsBefore = testLog.warns.size()
+
+        when:
+        driver.setAutoMode("")
+
+        then: "no API call for setAutoMode or setLevel or autoPreference"
+        testParent.allRequests.isEmpty()
+
+        and: "no WARN logged (empty string is the RM blank-slot path — silent)"
+        testLog.warns.size() == warnsBefore
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "NIT 4: setAutoMode(null) still warns (null path unchanged) (Core 200S/CorePurifierLib)"() {
+        given:
+        testParent.allRequests.clear()
+
+        when:
+        driver.setAutoMode(null)
+
+        then: "WARN logged for null"
+        testLog.warns.any { it.toLowerCase().contains("setautomode") }
+
+        and: "no API call"
+        testParent.allRequests.isEmpty()
+    }
 }

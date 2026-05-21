@@ -194,7 +194,7 @@ def toggle(){
 // This driver mirrors that: setMode("manual") calls setFanSpeed(1) instead.
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return
+    if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setPurifierMode"]); return }
     if (m == "manual") {
@@ -241,7 +241,7 @@ def setFanSpeed(speed){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return
     // BP25: normalize to lowercase, then derive a canonical on/off string from the truthy test.
     // sendEvent always emits "on" or "off" — never the raw input ("true", "1", "yes").
     // The C3 gate compares canonical vs canonical so truthy-variant input cannot defeat it.
@@ -264,7 +264,7 @@ def setDisplay(onOff){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    if (!requireNotNull(onOff, "setChildLock")) return
+    if (!requireNonEmptyEnum(onOff, "setChildLock")) return
     // BP25: normalize to lowercase, then derive canonical on/off for sendEvent and C3 gate.
     String v = (onOff as String).trim().toLowerCase()
     String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
@@ -293,7 +293,7 @@ def setChildLock(onOff){
 // but this method is not classified as an on/off setter in the C3 gate scope.
 def setNightlightMode(nlMode){
     logDebug "setNightlightMode(${nlMode})"
-    if (!requireNotNull(nlMode, "setNightlightMode")) return
+    if (!requireNonEmptyEnum(nlMode, "setNightlightMode")) return
     String m = (nlMode as String).trim().toLowerCase()
     if (!(m in ["on","off","dim"])) { logError "Invalid nightlight mode: ${m} -- must be: on, off, dim"; recordError("Invalid nightlight mode: ${m}", [method:"setNightLight"]); return }
     def resp = hubBypass("setNightLight", [night_light: m], "setNightLight(${m})")

@@ -171,7 +171,7 @@ private boolean httpOk(resp) {
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def doSetDisplayScreenSwitch(onOff) {
     logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return false
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return false
     String val = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off",
     // never the raw normalized input ("true", "1", "yes"). The C3 gate compares canonical
@@ -191,7 +191,7 @@ def doSetDisplayScreenSwitch(onOff) {
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def doSetAutoStopSwitch(onOff) {
     logDebug "setAutoStop(${onOff})"
-    if (!requireNotNull(onOff, "setAutoStop")) return false
+    if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
     String val = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
     String canon = (val in ["on","true","1","yes"]) ? "on" : "off"

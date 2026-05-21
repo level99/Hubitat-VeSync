@@ -251,7 +251,7 @@ def off(){
 // payload: {mode: <value>} -- NOT {workMode: <value>} (Superior 6000S style)
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return
+    if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     // Validate BEFORE ensureSwitchOn() so invalid input does not auto-turn on an off device.
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
@@ -403,7 +403,7 @@ def setHumidity(percent){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return false
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return false
     String val = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
     String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
@@ -436,7 +436,7 @@ private boolean isRgbVariant(){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setNightlightSwitch(value){
     logDebug "setNightlightSwitch(${value})"
-    if (!requireNotNull(value, "setNightlightSwitch")) return
+    if (!requireNonEmptyEnum(value, "setNightlightSwitch")) return
     if (!isRgbVariant()) return
     // BP25: normalize to lowercase so Rule Machine "ON"/"OFF" routes correctly.
     // No C3 idempotency gate: setNightlightSwitch preserves the last-known color and
@@ -686,7 +686,7 @@ def probeNightLight(){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
-    if (!requireNotNull(onOff, "setAutoStop")) return false
+    if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
     String val = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
     String canon = (val in ["on","true","1","yes"]) ? "on" : "off"

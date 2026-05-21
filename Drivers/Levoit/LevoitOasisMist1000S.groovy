@@ -175,7 +175,7 @@ def off(){
 // No firmware-variant issue documented for 1000S (canonical pyvesync fixture uses 'auto').
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return
+    if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     def resp = hubBypass("setHumidityMode", [workMode: m], "setHumidityMode(${m})")
@@ -269,7 +269,7 @@ private boolean isNightlightVariant(){
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setNightlight(onOff, brightness = null){
     logDebug "setNightlight(${onOff}, ${brightness})"
-    if (!requireNotNull(onOff, "setNightlight")) return
+    if (!requireNonEmptyEnum(onOff, "setNightlight")) return
     if (!isNightlightVariant()) return
     // BP25: normalize to lowercase before all comparisons.
     String nl = (onOff as String).trim().toLowerCase()

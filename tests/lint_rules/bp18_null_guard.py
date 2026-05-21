@@ -144,20 +144,25 @@ def _make_guard_re(arg: str) -> re.Pattern:
 
 def _make_require_not_null_re(arg: str) -> re.Pattern:
     """
-    Build a regex that matches a ``requireNotNull(arg, ...)`` helper call on ``arg``.
+    Build a regex that matches a ``requireNotNull(arg, ...)`` or
+    ``requireNonEmptyEnum(arg, ...)`` helper call on ``arg``.
 
     Matches:
       requireNotNull(arg, "setDisplay")
       if (!requireNotNull(arg, "setDisplay")) return false
       requireNotNull( arg , "methodName")
+      requireNonEmptyEnum(arg, "setMode")
+      if (!requireNonEmptyEnum(arg, "setMode")) return
 
-    The helper (from LevoitChildBaseLib) checks for null, logs a WARN, and returns
-    false.  Its presence before a normalization call satisfies the BP18 guard
-    requirement (Form 2 — see module docstring).
+    Both helpers (from LevoitChildBaseLib) check for null, log a WARN, and return
+    false; requireNonEmptyEnum additionally silently rejects empty/whitespace-only
+    strings (for string-enum setters where blank Rule Machine slots produce "").
+    Either form before a normalization call satisfies the BP18 guard requirement
+    (Form 2 — see module docstring).
     """
     a = re.escape(arg)
     return re.compile(
-        rf'requireNotNull\s*\(\s*{a}\s*,'
+        rf'require(?:NotNull|NonEmptyEnum)\s*\(\s*{a}\s*,'
     )
 
 

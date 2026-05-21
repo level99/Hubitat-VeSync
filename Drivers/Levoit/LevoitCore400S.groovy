@@ -237,7 +237,7 @@ def setLevel(value)
 
 def setSpeed(speed) {
     logDebug "setSpeed(${speed})"
-    if (!requireNotNull(speed, "setSpeed")) return false                        // BP18 null-guard
+    if (!requireNonEmptyEnum(speed, "setSpeed")) return false                   // BP18 null/empty-guard
     String s = (speed as String).trim().toLowerCase()
     // Remap integer-string values from setLevel() path to named speed strings.
     // setLevel() passes Integer 1-4; (speed as String) yields "1"-"4".
@@ -288,7 +288,7 @@ def setSpeed(speed) {
 
 def setMode(mode) {
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return false                          // BP18 null-guard
+    if (!requireNonEmptyEnum(mode, "setMode")) return false                     // BP18 null/empty-guard
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["manual", "sleep", "auto"])) {                                  // reject invalid BEFORE auto-on
         logWarn "setMode: invalid mode '${m}' -- must be one of: manual, sleep, auto; ignoring"
