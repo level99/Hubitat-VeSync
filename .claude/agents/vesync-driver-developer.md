@@ -107,7 +107,7 @@ data: { powerSwitch: 0|1, switchIdx: 0 }
 | Display on/off | `setDisplay` | `{screenSwitch: 0\|1}` |
 | Child lock | `setChildLock` | `{childLockSwitch: 0\|1}` |
 | Light detection | `setLightDetection` | `{lightDetectionSwitch: 0\|1}` |
-| Auto preference | `setAutoPreference` | `{autoPreferenceType: "default"\|"efficient"\|"quiet", roomSize: int}` |
+| Auto preference | `setAutoPreference` | `{autoPreference: "default"\|"efficient"\|"quiet", roomSize: int}` |
 | Reset filter | `resetFilter` | `{}` |
 | Set timer | `addTimerV2` | `{enabled:true, startAct:[{type:"powerSwitch", act:0}], tmgEvt:{clkSec:int}}` |
 | Cancel timer | `delTimerV2` | `{id: <stored timer id>, subDeviceNo: 0}` |

@@ -4265,4 +4265,37 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         then: "networkProbeInFlight is null/false after cycle completes"
         !state.networkProbeInFlight
     }
+
+    def "login() does not NPE when VeSync returns HTTP 200 without a result body"() {
+        given: "fresh-install state: no stored token, valid credentials configured"
+        // Driver references bare `email` / `password` (Hubitat sandbox auto-resolves
+        // to settings.*); Spock harness doesn't bridge those — wire explicit getters.
+        driver.metaClass.getEmail    = { -> "test@example.com" }
+        driver.metaClass.getPassword = { -> "p4ssw0rd" }
+        settings.deviceRegion = "US"
+
+        and: "httpPost returns HTTP 200 with inner failure code and no result field"
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            Expando resp = new Expando()
+            resp.status = 200
+            // No `result` field — this is the bug-trigger shape that previously NPE'd
+            resp.data = [code: -11201000, msg: "Invalid credentials or session conflict", traceId: "test-trace"]
+            callback.call(resp)
+        }
+
+        when:
+        Boolean loginResult = driver.login()
+
+        then: "login returns false cleanly (no NPE)"
+        noExceptionThrown()
+        loginResult == false
+
+        and: "an ERROR log surfaces the inner code and msg for diagnosis"
+        testLog.errors.any {
+            it.contains("inner code=-11201000") && it.contains("msg='Invalid credentials or session conflict'")
+        }
+
+        and: "state.token is NOT set"
+        !state.containsKey('token') || state.token == null
+    }
 }

@@ -7,10 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.6] - 2026-05-21
+## [2.6] - 2026-05-22
 
 ### Fixed
 
+- **Failed logins now produce an actionable error message instead of an internal crash.** When VeSync returns an HTTP 200 response with a body that signals an inner authentication failure (account-level bot detection, concurrent-session rejection from another integration, IP-based rate limit, or a verification-required flow), the driver previously crashed with no useful diagnostic. The actual VeSync error code and message now appear in Hubitat logs and `captureDiagnostics()` output. Affects diagnostics only — does not change which login attempts succeed or fail.
 - **Superior 6000S `setDisplay` and `setMistLevel` no longer fail with a cloud error when the device is in sleep mode.** The Sup6000S firmware rejects preference writes during sleep mode (returning inner code -1). Both commands now check the current mode first and skip the cloud call with an INFO log when sleeping — change the mode to manual or auto first if you want to adjust display or mist level.
 - **Blank Rule Machine parameter slots on string-typed setters now produce no log artifacts at all (class-wide sweep).** Previously, when a Rule Machine action's string parameter was left blank, the driver received an empty string `""` instead of `null`. The existing null-guard accepted that and the method could emit a log line with no useful value before returning. Empty and whitespace-only inputs are now silently rejected at the top of every on/off-and-mode setter, consistent with how numeric setters already handled blank inputs. Affects all on/off and mode commands across all drivers — `setMode`, `setSpeed`, `setDisplay`, `setChildLock`, `setDryingMode`, `setNightlight`, `setAutoStop`, `setOscillation`, and related methods.
 - **Vital 100S / 200S "reset filter" now actually resets the filter life.** The command sent the wrong instruction to the VeSync cloud, so the filter-life percentage never reset after a filter change — the cloud silently accepted the request and did nothing. It now sends the correct instruction, matching the Core line and EverestAir (which were already correct).

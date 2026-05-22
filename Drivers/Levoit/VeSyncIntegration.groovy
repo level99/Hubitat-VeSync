@@ -853,10 +853,22 @@ Boolean login() {
         def result = false
         httpPost(params) { resp ->
             if (checkHttpResponse("login", resp)) {
-                state.token = resp.data.result.token
-                state.accountID = resp.data.result.accountID
-                logInfo "Logged in to VeSync (${getDeviceRegion()} region: ${getApiHost()})"
-                result = true
+                if (resp.data?.result?.token) {
+                    state.token = resp.data.result.token
+                    state.accountID = resp.data.result.accountID
+                    logInfo "Logged in to VeSync (${getDeviceRegion()} region: ${getApiHost()})"
+                    result = true
+                } else {
+                    // VeSync returned HTTP 200 without a result body — typically signals
+                    // an inner authentication failure (account-level bot detection,
+                    // concurrent-session rejection, IP-based rate limit, or a
+                    // verification-required flow). Surface the inner code + msg so
+                    // the failure is diagnosable from logs.
+                    def innerCode = resp.data?.code
+                    def innerMsg  = resp.data?.msg
+                    logError "login: HTTP 200 but no result body — VeSync inner code=${innerCode} msg='${innerMsg}'"
+                    recordError("login: inner failure code=${innerCode} msg='${innerMsg}'", [site:"login"])
+                }
             }
         }
         return result
