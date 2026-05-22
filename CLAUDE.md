@@ -378,6 +378,12 @@ This is a **maintainer-only** scenario; end users never trip this because they o
 
 ---
 
+## Developer dispatch: model selection
+
+The `vesync-driver-developer` agent uses **Opus**, always. No per-dispatch override. v2.6 surfaced enough Sonnet-introduced bugs that the per-token savings were eaten by extra QA-iteration rounds downstream, but the load-bearing reason for "always Opus" is that mixing models breaks the `SendMessage` resume cache (cached agent state is model-tied; switching models forces a fresh dispatch with full re-briefing context, losing the 60-70% input-token savings the pipeline is designed around).
+
+---
+
 ## QA dispatch: model selection
 
 The `vesync-driver-qa` agent defaults to **Sonnet** as of v2.2 (was Opus through v2.1). Per the agent's own self-analysis after the v2.1 review cycles, Sonnet produces equivalent verdicts at ~5× lower per-token cost for most diffs in this codebase. Opus remains worth the cost for a specific subset.
@@ -630,7 +636,7 @@ See `CONTRIBUTING.md` "Fork remotes (`gh` CLI gotcha)" — this fork has two rem
 
 ## Cost optimization notes
 
-The 4-agent pipeline is shaped around model-cost asymmetry: dev/QA Sonnet (~5× cheaper than Opus per token), tester/ops Haiku (~19× cheaper than Opus). Resume via `SendMessage` on warm cache preserves ~60-70% of input tokens (driver source + prior findings stay cached). Tester/ops contain raw output (100KB Gradle / 60KB logs) into ~1KB structured summaries — main + dev + QA contexts stay lean. Cumulative effect: iterative driver work runs at **~30-40% of all-Opus-main-session cost**. See "QA dispatch: model selection" above for QA cost-attribution detail (48/29/15/3/5).
+The 4-agent pipeline is shaped around model-cost asymmetry: dev Opus (full per-token cost, fewer defects — see "Developer dispatch: model selection" above), QA Sonnet (~5× cheaper than Opus per token), tester/ops Haiku (~19× cheaper than Opus). Resume via `SendMessage` on warm cache preserves ~60-70% of input tokens. Tester/ops contain raw output into ~1KB structured summaries — main + dev + QA contexts stay lean. See "QA dispatch: model selection" above for QA cost-attribution detail (48/29/15/3/5).
 
 ---
 
