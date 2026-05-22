@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 
 /**
@@ -527,5 +528,267 @@ class LevoitCore600SSpec extends HubitatSpec {
 
         and: "a warning was logged mentioning the invalid mode"
         testLog.warns.any { it.contains("invalid mode") || it.contains("badvalue") }
+    }
+
+    // -------------------------------------------------------------------------
+    // BP18 regression guard: setLevel(null) does not throw NPE
+    // -------------------------------------------------------------------------
+
+    def "BP18: setLevel(null) does not throw and does not send a speed command (Core 600S)"() {
+        // Regression guard: before this fix, null < 25 threw NPE (Groovy null arithmetic),
+        // which the Hubitat sandbox swallowed silently. Now coerces null → 0 → off() path.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(null)
+
+        then: "no NPE thrown"
+        noExceptionThrown()
+
+        and: "no setLevel (speed) API call was made — null coerces to 0, routes to off()"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // Item 4: setLevel(N) emits named speed attribute (not raw integer string)
+    // -------------------------------------------------------------------------
+
+    def "setLevel(60) emits speed attribute as named band 'high', not raw '3' (Core 600S)"() {
+        // Regression guard: setLevel() calls setSpeed(3) which calls handleSpeed().
+        // Without the mapIntegerStringToSpeed() remap, the speed attribute is emitted as
+        // "3" (raw integer-string). Rule Machine rules using ``speed == "high"`` would
+        // never match. Fix: add the remap line to setSpeed before the mode dispatch.
+        // pct=60: 60 >= 50 && 60 < 75 → speed 3 → "high".
+        //
+        // Both-ways: orchestrator-owned.
+        given: "device is on in manual mode so the speed path fires directly"
+        settings.descriptionTextEnable = true
+        state.mode = "manual"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel(60) is called — passes Integer 3 to setSpeed (60 >= 50, < 75 threshold)"
+        driver.setLevel(60)
+
+        then: "the speed attribute was emitted as 'high' (named), not '3' (raw)"
+        lastEventValue("speed") == "high"
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "setLevel(100) emits speed attribute as named band 'max', not raw '4' (Core 600S)"() {
+        // Same regression guard for the 4th speed level unique to Core 400S/600S.
+        //
+        // Both-ways: orchestrator-owned.
+        given: "device is on in manual mode"
+        settings.descriptionTextEnable = true
+        state.mode = "manual"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel(100) is called — passes Integer 4 to setSpeed (100 >= 75)"
+        driver.setLevel(100)
+
+        then: "the speed attribute was emitted as 'max' (named), not '4' (raw)"
+        lastEventValue("speed") == "max"
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // W3: setSpeed null state.mode — RECOVER instead of warn+drop (Tier-25)
+    // -------------------------------------------------------------------------
+
+    def "W3: setSpeed null state.mode — device turns on AND speed is recovered, not dropped (Core 600S)"() {
+        // W3 regression guard: when state.mode is null/unset (fresh device, pre-first-poll),
+        // setSpeed("high") must:
+        //   1. auto-on (ensureSwitchOn fires before the mode dispatch),
+        //   2. RECOVER by calling setMode("manual") and applying the speed — NOT warn+drop.
+        // Pre-fix: else { logWarn "cannot apply speed"; return } — speed was lost.
+        // Post-fix (Tier-25): else { setMode("manual"); handleSpeed(s); ... } — speed applied.
+        //
+        // Both-ways: orchestrator-owned.
+        given: "device is off and state.mode is null (fresh device, pre-first-poll)"
+        settings.descriptionTextEnable = true
+        // state.mode intentionally NOT set — simulates a fresh/pre-poll device
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setSpeed is called with a valid non-off speed"
+        driver.setSpeed("high")
+
+        then: "on() was called — ensureSwitchOn turned the device on before the mode dispatch"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "a setPurifierMode API call was made to set manual mode (recover path fired)"
+        def modeReq = testParent.allRequests.find { it.method == "setPurifierMode" }
+        modeReq != null
+
+        and: "a setLevel (speed) API call was made — speed was NOT dropped"
+        def speedReq = testParent.allRequests.find { it.method == "setLevel" }
+        speedReq != null
+
+        and: "the speed attribute was emitted with the requested value"
+        lastEventValue("speed") == "high"
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+
+        and: "no 'cannot apply speed' warning was emitted (recover path replaces warn+drop)"
+        !testLog.warns.any { it.contains("cannot apply speed") }
+    }
+
+    def "re-entrancy guard: setSpeed from on() does not issue setPurifierMode (Core 600S)"() {
+        // Regression guard for the `if (!state.turningOn) { handleMode("manual"); ... }`
+        // wrapper in setSpeed's recover-else branch.
+        //
+        // When on() calls setSpeed() internally, state.turningOn is already set.
+        // The guard suppresses the setPurifierMode call to prevent a race.
+        // The speed command (setLevel) must still fire.
+        //
+        // Goes RED if the `if (!state.turningOn)` wrapper is removed.
+        // Both-ways: orchestrator-owned.
+        given: "state.turningOn is set and state.mode is null"
+        settings.descriptionTextEnable = false
+        state.turningOn = true
+        state.mode = null
+
+        when: "setSpeed is called (as on() would call it internally)"
+        driver.setSpeed("high")
+
+        then: "no setPurifierMode request was issued — re-entrancy guard suppressed it"
+        testParent.allRequests.findAll { it.method == "setPurifierMode" }.isEmpty()
+
+        and: "a setLevel (speed) API call WAS made — speed is still applied"
+        !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        and: "no exception was thrown"
+        noExceptionThrown()
+    }
+
+    // -----------------------------------------------------------------------
+    // BP25: case-sensitivity — setChildLock / setDisplay uppercase inputs
+    // -----------------------------------------------------------------------
+
+    def "BP25: setChildLock('ON') uppercase makes the API call and sends child_lock:true (not false)"() {
+        given: "childLock is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when: "setChildLock is called with uppercase 'ON'"
+        driver.setChildLock("ON")
+
+        then: "API call was made"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+
+        and: "payload carries child_lock:true (lock), NOT false (unlock)"
+        req.data.child_lock == true
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25: setChildLock('ON') when childLock is already 'on' is a no-op (C3 gate works with uppercase)"() {
+        given: "childLock is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when: "setChildLock called with uppercase 'ON'"
+        driver.setChildLock("ON")
+
+        then: "no API call was made (C3 gate worked correctly)"
+        testParent.allRequests.find { it.method == "setChildLock" } == null
+    }
+
+    def "BP25: setDisplay('ON') uppercase makes the API call and sends state:true (not false)"() {
+        given: "display is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "off"])
+
+        when: "setDisplay is called with uppercase 'ON'"
+        driver.setDisplay("ON")
+
+        then: "API call was made"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+
+        and: "payload carries state:true (on), NOT false (off)"
+        req.data.state == true
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25: setDisplay('ON') when display is already 'on' is a no-op (C3 gate works with uppercase)"() {
+        given: "display is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "on"])
+
+        when:
+        driver.setDisplay("ON")
+
+        then: "no API call was made"
+        testParent.allRequests.find { it.method == "setDisplay" } == null
+    }
+
+    @Unroll
+    def "BP26: setLevel('#badInput') does not throw and does not make a setLevel API call (Core 600S fallback=0 → off)"() {
+        // safeIntArg coerces "abc"/""/true to 0; pct==0 routes to off(), no speed API call.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no speed setLevel API call"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setLevel('5.7') does not throw and makes a setLevel API call (Core 600S)"() {
+        // safeIntArg("5.7") → 5 (truncation). 5% < 25% → speed band 1.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a speed setLevel API call was made"
+        !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
+
+    def "BP26: setTimer('') does not throw on empty-string input from Rule Machine (Core 600S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setTimer called with empty string (Rule Machine blank slot)"
+        driver.setTimer("")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setTimer('abc') does not throw on non-numeric input from Rule Machine (Core 600S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setTimer called with non-numeric string"
+        driver.setTimer("abc")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
     }
 }

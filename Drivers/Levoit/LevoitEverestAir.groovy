@@ -108,7 +108,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) — fan 1-3, auto/sleep/manual/turbo modes, AQ sensors (AQLevel/PM2.5), light detection, display, child lock, vent angle (passive read). pyvesync VeSyncAirBaseV2 class. V2-style payloads. First driver in codebase with TURBO mode and VENT_ANGLE attribute.",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -182,9 +182,17 @@ def initialize(){ logDebug "Initializing" }
 // V2-style convention — different from VeSyncAirBypass Core line: {switch: 'on'/'off', id: 0}
 def on(){
     logDebug "on()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
-    if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    // Re-entrance guard: ensureSwitchOn() → on() → setFanSpeed() → ensureSwitchOn() would recurse
+    // without this. state.turningOn matches the pattern used in humidifier drivers (e.g. Sup6000S).
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
+        if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
 }
 
 def off(){
@@ -212,8 +220,8 @@ def toggle(){
 // This is the canonical convention for turbo-as-mode going forward in this codebase.
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    if (!requireNonEmptyEnum(mode, "setMode")) return
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual","turbo"])) {
         logError "Invalid mode: ${m} -- must be: auto, sleep, manual, turbo"
         recordError("Invalid mode: ${m}", [method:"setPurifierMode"])
@@ -240,7 +248,12 @@ def setMode(mode){
 // Setting a fan speed implicitly establishes manual mode.
 def setFanSpeed(speed){
     logDebug "setFanSpeed(${speed})"
-    Integer spd = Math.max(1, Math.min(3, (speed as Integer) ?: 1))
+    // BP18: null-guard — Rule Machine blank slots pass null; silent coercion to speed 1 is wrong.
+    if (!requireNotNull(speed, "setFanSpeed")) return
+    Integer spd = safeIntArg(speed, 1, 1, 3)
+    // BP24-B: auto-on from off-state. on() re-entrance guard (state.turningOn) prevents recursion
+    // when setMode("manual") delegates here and on() calls setFanSpeed internally.
+    ensureSwitchOn()
     def resp = hubBypass("setLevel", [levelIdx: 0, manualSpeedLevel: spd, levelType: "wind"], "setLevel(wind,${spd})")
     if (httpOk(resp)) {
         state.lastFanSpeed = spd
@@ -255,13 +268,22 @@ def setFanSpeed(speed){
 
 // ---------- Display ----------
 // VeSyncAirBaseV2 toggle_display: setDisplay {screenSwitch: int}
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    // "ON" evaluates ("ON" == "on") as false → sends screenSwitch:0 (off) when intent was on.
+    String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("displayOn") == canon) return
+    Integer sw = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
+        device.sendEvent(name:"displayOn", value: canon)
+        logInfo "Display: ${canon}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
@@ -269,13 +291,22 @@ def setDisplay(onOff){
 
 // ---------- Child lock ----------
 // VeSyncAirBaseV2 toggle_child_lock: setChildLock {childLockSwitch: int}
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${onOff})")
+    if (!requireNonEmptyEnum(onOff, "setChildLock")) return
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    // "ON" evaluates ("ON" == "on") as false → sends childLockSwitch:0 (unlocked) when intent was locked.
+    String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("childLock") == canon) return
+    Integer sw = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: onOff)
-        logInfo "Child lock: ${onOff}"
+        device.sendEvent(name:"childLock", value: canon)
+        logInfo "Child lock: ${canon}"
     } else {
         logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }
@@ -286,13 +317,22 @@ def setChildLock(onOff){
 // Same API as Vital 200S: setLightDetection {lightDetectionSwitch: int}
 // lightDetection attribute: whether the feature is ON/OFF (user setting).
 // lightDetected attribute: whether ambient light is currently detected (passive read from status).
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setLightDetection(onOff){
     logDebug "setLightDetection(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: v], "setLightDetection(${onOff})")
+    if (!requireNonEmptyEnum(onOff, "setLightDetection")) return
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    // "ON" evaluates ("ON" == "on") as false → sends lightDetectionSwitch:0 (off) when intent was on.
+    String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("lightDetection") == canon) return
+    Integer sw = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: sw], "setLightDetection(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"lightDetection", value: onOff)
-        logInfo "Light detection: ${onOff}"
+        device.sendEvent(name:"lightDetection", value: canon)
+        logInfo "Light detection: ${canon}"
     } else {
         logError "Light detection write failed"; recordError("Light detection write failed", [method:"setLightDetection"])
     }
@@ -313,18 +353,27 @@ def resetFilter(){
 
 // ---------- Timer ----------
 // VeSyncAirBaseV2 set_timer/clear_timer parity.
-// Timer shape: {action: 'on'|'off', total: <seconds>}
-// action: what the device does when the timer fires (default "off").
-// Cookie-cutter port from Tower Fan timer pattern (Phase 5b-hardened).
+// EverestAir is VeSyncAirBaseV2 class — uses addTimerV2 / delTimerV2 API names
+// and the PurifierV2TimerPayloadData shape, same as Vital 200S / Vital 100S.
+// Timer shape (set): {enabled:true, startAct:[{type:"powerSwitch", act:0|1}], tmgEvt:{clkSec:<seconds>}}
+// Timer shape (cancel): {id: <timerId>, subDeviceNo: 0}
+// action parameter: "off" (act:0, device powers off when timer fires) or "on" (act:1).
+// The Tower Fan uses setTimer/clearTimer (different device class) -- do NOT use those names here.
 def setTimer(seconds, action="off"){
     if (!requireNotNull(seconds, "setTimer")) return
-    int secs = seconds as Integer
+    int secs = safeIntArg(seconds, 0)   // BP26: safeIntArg never throws on non-numeric RM input
     if (secs <= 0) { cancelTimer(); return }
     // action defaults to "off" in the Groovy signature; only null-guard when explicitly null
-    String act = (action != null) ? (action as String).toLowerCase() : "off"
-    if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"setTimer"]); return }
+    String act = (action != null) ? (action as String).trim().toLowerCase() : "off"
+    if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"addTimerV2"]); return }
     logDebug "setTimer(${secs}s, action=${act})"
-    def resp = hubBypass("setTimer", [action: act, total: secs], "setTimer(${secs}s,${act})")
+    int actVal = (act == "on") ? 1 : 0
+    def data = [
+        enabled: true,
+        startAct: [[type: "powerSwitch", act: actVal]],
+        tmgEvt: [clkSec: secs]
+    ]
+    def resp = hubBypass("addTimerV2", data, "addTimerV2(${secs}s,${act})")
     if (httpOk(resp)) {
         // Capture timer ID from response so cancelTimer can reference it
         def tid = resp?.data?.result?.result?.id ?: resp?.data?.result?.id
@@ -333,9 +382,9 @@ def setTimer(seconds, action="off"){
         } else {
             logDebug "setTimer: response did not include timer id -- cancelTimer will use state.timerId if known"
         }
-        logInfo "Timer set: ${act} in ${secs}s (id=${state.timerId})"
+        logInfo "Timer set: power ${act} in ${secs}s (id=${state.timerId})"
     } else {
-        logError "Timer set failed"; recordError("Timer set failed", [method:"setTimer"])
+        logError "Timer set failed"; recordError("Timer set failed", [method:"addTimerV2"])
     }
 }
 
@@ -345,12 +394,12 @@ def cancelTimer(){
         logDebug "cancelTimer: no active timer id in state -- no-op"
         return
     }
-    def resp = hubBypass("clearTimer", [id: state.timerId], "clearTimer(id=${state.timerId})")
+    def resp = hubBypass("delTimerV2", [id: state.timerId, subDeviceNo: 0], "delTimerV2(id=${state.timerId})")
     if (httpOk(resp)) {
         state.remove("timerId")
         logInfo "Timer cancelled"
     } else {
-        logError "Timer cancel failed"; recordError("Timer cancel failed", [method:"clearTimer"])
+        logError "Timer cancel failed"; recordError("Timer cancel failed", [method:"delTimerV2"])
     }
 }
 

@@ -97,7 +97,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit LV600S Hub Connect (LUH-A603S-WUS) — DIFFERENT from LevoitLV600S.groovy (A602S). Uses VeSyncLV600S class payloads: powerSwitch/switchIdx, workMode:'humidity' for auto mode, levelIdx/virtualLevel/levelType. Mist 1-9, warm mist 0-3, target humidity top-level camelCase. No setAutoStop command (passive read only). No night-light.",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -190,8 +190,8 @@ def off(){
 //   Source: pyvesync LUH-A603S-WUS.yaml set_auto_mode: {workMode: 'humidity'}
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    if (!requireNonEmptyEnum(mode, "setMode")) return
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) {
         logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"
         recordError("Invalid mode: ${m}", [method:"setHumidityMode"])
@@ -218,15 +218,18 @@ def setMode(mode){
 //   Source: pyvesync LUH-A603S-WUS.yaml set_mist_level: {levelIdx:0, levelType:'mist', virtualLevel:2}
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    if (!requireNotNull(level, "setMistLevel")) return
+    Integer lvl = safeIntArg(level, 0)
+    if (lvl <= 0) { off(); return }
+    Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
-    def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "setVirtualLevel(mist,${lvl})")
+    def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: clamped, levelType: "mist"], "setVirtualLevel(mist,${clamped})")
     if (httpOk(resp)) {
-        state.mistLevel = lvl
-        device.sendEvent(name:"mistLevel", value: lvl)
-        logInfo "Mist level: ${lvl}"
+        state.mistLevel = clamped
+        device.sendEvent(name:"mistLevel", value: clamped)
+        logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
+        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -238,8 +241,9 @@ def setMistLevel(level){
 //   Source: pyvesync LUH-A603S-WUS.yaml set_warm_level: {levelIdx:0, levelType:'warm', mistLevel:0, warmLevel:3}
 //   Source: pyvesync LUH-A603S-WUS.yaml set_warm_off: (warmLevel:0 case from set_warm_level)
 def setWarmMistLevel(level){
+    if (!requireNotNull(level, "setWarmMistLevel")) return
     logDebug "setWarmMistLevel(${level})"
-    Integer lvl = (level as Integer) ?: 0
+    Integer lvl = safeIntArg(level, 0)   // BP26: safeIntArg never throws on non-numeric RM input
     if (lvl < 0 || lvl > 3) {
         logError "Invalid warm mist level ${lvl} -- must be 0-3 (0=off, 1-3=warm intensity)"
         recordError("Invalid warm mist level ${lvl}", [method:"setLevel"])
@@ -270,7 +274,10 @@ def setWarmMistLevel(level){
 //   Source: pyvesync LUH-A603S-WUS.yaml set_humidity: {targetHumidity: 50}
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
-    Integer p = Math.max(30, Math.min(80, (percent as Integer) ?: 50))
+    if (!requireNotNull(percent, "setHumidity")) return
+    Integer p = safeIntArg(percent, 0)
+    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
+    p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [targetHumidity: p], "setTargetHumidity(${p})")
     if (httpOk(resp)) {
         state.targetHumidity = p
@@ -285,6 +292,7 @@ def setHumidity(percent){
 // AUTO_STOP capability not present on LV600SHC per pyvesync feature flags;
 // LevoitLV600SHubConnectSpec.groovy:683 regression-guards method absence.
 // CROSS-CHECK [pyvesync LUH-A603S-WUS.yaml turn_on_display]: {screenSwitch: 0|1} integer.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
 
 // ---------- applyStatus ----------

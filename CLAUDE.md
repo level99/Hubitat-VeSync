@@ -163,6 +163,40 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
 
 ---
 
+## Two-tier QA: pipeline agent vs `/vesync-final-review` skill
+
+This codebase ships TWO QA entry points, with deliberate cost-quality tiering:
+
+| Tier | Tool | When to use | Cost | Catch rate |
+|---|---|---|---|---|
+| **Iteration** | `Agent({vesync-driver-qa})` | Inside dev↔qa↔tester↔ops pipeline loops, many times per PR during active development | ~$1-2 per round (Sonnet, SendMessage-resumed) | ~60-70% per round; cache + context accumulates across rounds |
+| **Ship gate** | `/vesync-final-review` skill | ONCE before opening a PR or flipping draft → ready-for-review | ~$8-10 per run (Haiku pre-flight + 6 specialized sub-agents in parallel fan-out) | ~100% per run against this fork's review style |
+
+Typical PR cycle:
+1. Dev iterates: `vesync-driver-developer` → `vesync-driver-qa` (Sonnet, cheap iteration) → `vesync-driver-tester` → `vesync-driver-operations`. Loop 3-5×.
+2. Before opening PR or flipping ready: run `/vesync-final-review` once. Address findings.
+3. Open / mark ready. Maintainer reviews.
+
+Don't invoke `/vesync-final-review` mid-iteration — it's the ship gate, not the iteration partner. Don't try to push the pipeline agent to skill-level rigor — that's what the skill exists for. The tiering is the whole point.
+
+Sub-agents that the skill fans out to (defined under `.claude/agents/vesync-driver-qa-*.md`): `coverage` (Opus), `platform` (Sonnet), `protocol` (Sonnet), `adversarial` (Opus), `design` (Sonnet), `operator` (Sonnet), plus `preflight` (Haiku) as the sequential gate.
+
+| Sub-agent | Scope |
+|---|---|
+| `vesync-driver-qa-preflight` | Lint --strict, Spock compile, manifest sanity, BP catalog grep, convention scan, path leakage, version + FORK_RELEASE_VERSION lockstep, diff triage / dispatch plan |
+| `vesync-driver-qa-coverage` | Spock test coverage (BP-pattern regression tests, family-symmetric coverage, lib-spec coverage), lint rule coverage (new BP class → new rule), documentation coverage (`Drivers/Levoit/readme.md`, CHANGELOG `[Unreleased]`, BP catalog entry), fixture coverage |
+| `vesync-driver-qa-platform` | BP14 (reboot survival), BP15 (driver vs app API), BP16 (debug watchdog), BP18 (null-guard), string-literal `runIn` handler, capability/attribute/command coherence, RULE30 logger discipline, 3-signature `update()` per BP1 |
+| `vesync-driver-qa-protocol` | bypassV2 envelope shape, BP4 field-name verification (snake_case vs camelCase per family), BP3 envelope peel depth, BP13 token-expiry re-auth, configModule routing, pyvesync canonical cross-reference |
+| `vesync-driver-qa-adversarial` | Input adversaries (null/empty/unicode/MAX_INT), state adversaries (guard-bypass), concurrency adversaries (async race, re-entrance), environment adversaries (BP14/16/17/19/21/22), Rule Machine adversaries (BP18 blank slots, C3 idempotency, BP23/BP24 from-off) |
+| `vesync-driver-qa-design` | Lib boundary integrity (Phase 1-5 architecture), cross-line consistency (Core/Vital/Classic/V2/Fan family), helper-extraction opportunities, intentional-asymmetry rationale, BP24 SHOULD-ON/NO-ON/SKIP-OK classification |
+| `vesync-driver-qa-operator` | BREAKING flag honesty (what breaks vs what's preserved), TMI filter (no impl-detail in user-facing prose), CHANGELOG `[Unreleased]` per-commit discipline, dashboard/RM impact disclosure, log discipline + PII sanitize routing, `Drivers/Levoit/readme.md` device-row updates, cut-release invariant trips |
+
+The skill's pre-flight Haiku gate runs FIRST as a sequential check; if it FAILs (lint broken, manifest malformed, version lockstep broken, etc.), the skill stops without dispatching the expensive deep-audit agents — broken-PR cost ~$0.005 instead of $5-8.
+
+**Operator agent rationale**: v2.5 specifically had three rounds of "the BREAKING wording doesn't say what actually breaks" (display→displayOn, setTimer description, Sup6000S abbreviation leak). The other sub-agents miss this class because their lens is correctness, not communication. Dedicated set of eyes on user-facing meaningfulness pays for itself.
+
+---
+
 ## Workflow optimizations (lessons learned)
 
 These rules came out of the v2.2 / v2.2.1 release cycles where the orchestrator (main session) drifted from the pipeline rules above and burned user time on rework. They reinforce the existing pipeline rather than replace it.
@@ -227,6 +261,78 @@ If neither holds — STOP. Dispatch QA first.
 
 Drift pattern observed in v2.2.1: dev returned with fix → orchestrator went directly to tester to save round-trip → user caught the missing QA step → had to backfill QA. The QA step is cheap (Sonnet, small diff); skipping creates rework when QA finds something tester wouldn't catch (logging discipline, design quality, cross-pattern interactions, PII routing).
 
+### Verify before citing an in-codebase pattern as canonical
+
+Before citing an existing in-codebase implementation as the "canonical pattern" in a dispatch prompt or a QA finding — e.g., *"follow the LevoitHumidifierLib pattern"* or *"match how Vital 200S does it"* — confirm the pattern has a lint rule or BP-catalog entry endorsing it.
+
+Why this matters: the v2.6 QA audit found that the original BP25 dispatch prompt cited `LevoitHumidifierLib.groovy`'s `doSetDisplayScreenSwitch` as the correct pattern, which is correct. But v2.5 had simultaneously introduced several NEW drivers (EverestAir, Sprout Air) with nearly-correct-but-not-quite implementations — `(v == "on") ? 1 : 0` without the truthy-variant check, `.toLowerCase()` without `.trim()`. Because those newer drivers also used the phrase "BP25 fix pattern" in their comments, they read as authoritative. The correct reference was `LevoitHumidifierLib`; the misleading references were the newly-landed drivers. The distinction only became clear after cross-referencing with the lint rule (RULE33) and the BP25 catalog entry.
+
+**Practical rule:** when building a dispatch prompt that says "match pattern X in file Y," verify Y's pattern against the lint rule or catalog entry that governs it. If no lint rule or catalog entry exists for the pattern, say so explicitly in the dispatch prompt ("this is an unblessed pattern; verify before adopting") rather than silently propagating a potentially wrong convention.
+
+### Mechanical proof for "migrate all X" tasks
+
+**Completeness of any "migrate every site" or "sweep all drivers" task MUST be proven by a mechanical zero-result check, not by agent self-report.** When a task says "migrate every rule to the shared helper," "add a null-guard to every `set*` method," or "sweep all `as Integer` sites," the completion claim must be backed by a grep or static check that produces an empty result — supplied verbatim in the diff summary.
+
+Two real instances where self-report failed and the mechanical check would have caught the miss in the same review cycle:
+
+1. **BP26 v2.6 initial sweep** — reported all `safeIntArg` sites migrated; a third site in Tower Fan (bare `seconds as Integer`) was missed and shipped. Caught only because RULE37 was later extended to flag bare `as Integer` forms. The fix-scope proof artifact (`grep -rn 'as Integer' Drivers/`) would have been non-empty and surfaced the miss.
+
+2. **v2.6 lint-helper migration** — reported all rules using `make_finding`; six rules still emitted raw inline dicts (`findings.append({...})`). Missed because the migration relied on agent recall. The proof artifact (`grep -rn 'findings.append({' tests/lint_rules/`) would have returned 6 hits, blocking the "complete" claim.
+
+The standard grep-to-zero artifact closes both gaps. Every "sweep all" dispatch MUST include the grep command and its empty output in the returned diff summary. If the grep returns hits, those are either in-scope misses (fix them before closing the task) or explicitly waived out-of-scope sites (document the rationale per-site, same as the named-bug-pattern fix-scope protocol).
+
+### Empirical both-ways proof for regression guards and fix PoCs
+
+**Any fix whose value is "fails when the bug regresses" (a regression guard / regression test), and any behavior fix that has a proof-of-concept, MUST be empirically proven both-ways before acceptance** — the guard observed FAILING when the fix is reverted or the bug reintroduced, AND observed PASSING on the correct tree. Theoretical QA reasoning alone is NOT sufficient.
+
+**Why:** T11-1's `main()`-guard test for the dead-gate choke-point was QA-reviewed as sound on two separate passes. Sweep-#6 adversarial empirically proved it passed identically whether the choke-point call was present or deleted — incidental `LINT_UNUSED_EXEMPTION` WARN findings in strict mode satisfied its weak `code != 0` discriminator, masking the choke-point's absence entirely. Theoretical review cannot detect this class of vacuity; only running the test both ways can.
+
+**How to apply:**
+
+1. Write the fix + the regression guard (test or assertion).
+2. Run the guard on the correct tree — it MUST pass. Record the verbatim pytest / Spock output line.
+3. Revert / delete / replace the fix with a minimal no-op mutation (e.g., replace a call with `pass` / delete the assertion (Python lint-rule tests), or comment out / replace with `return` (Groovy Spock specs)). Run the guard again — it MUST fail. Record the verbatim failure block.
+4. Restore the fix fully. Run `git diff --stat <fixed-file>` to confirm clean revert.
+5. Report all four observations verbatim in the diff summary. If step 3 does NOT produce a failure, the guard is still vacuous — iterate until it does.
+
+This applies to: lint choke-point call-site guards, Spock regression tests for named bug patterns, PoC mutation proofs in tier-review tasks, and any assertion whose stated purpose is "this test fails if the fix is removed."
+
+**Ownership & division of labor — the root-cause fix for "why so many rounds".** The both-ways proof is an **orchestrator-driven protocol, not a delegated capability.** Three roles, no overlap:
+
+- **Orchestrator (you, Opus):** OWN the mutation design and the discriminating pass-criterion. You decide the exact revert (`git stash push -- fileX`, or "replace line N with `pass`") AND the exact signal that proves the guard real ("proves out *only* if `TestFoo::test_bar` fails with an `AssertionError` naming `<X>` — NOT merely if exit≠0"). You apply the revert, run each leg (dispatch the Haiku tester for a full-suite leg; run directly for a single targeted test — whichever is cheaper), judge whether the failure is the *right* failure, restore, and confirm clean (`git diff --stat`). This judgment is Opus-tier and **never delegated** — it is exactly the work that was being done ad-hoc each round; making it an explicit owned protocol is what removes the rounds.
+- **Tester (Haiku):** runs the harness on whatever tree state it is handed and reports **strictly verbatim**. It does NOT design the mutation, does NOT judge "should this be failing", does NOT reconcile two runs. A dirty working tree it sees during a both-ways sequence is the orchestrator's intentional mutation — it reports what the harness says on the tree as-given. If a dispatch asks it to *invent* the mutation or pass-criterion, it returns UNCERTAIN and asks — never improvises (a safe failure, not a fabricated "both-ways PASSED").
+- **QA (Sonnet/Opus):** vacuity-by-construction is **NOT QA's burden** — static reading cannot detect it (T11-1 was QA-APPROVED "sound" on two passes and was vacuous). QA reviews scope, correctness, wording, cross-pattern interaction; it explicitly **defers the vacuity verdict to the orchestrator-driven both-ways** and must not certify "this guard is non-vacuous" by reasoning.
+
+**A single-direction run is never proof.** A guard observed only PASSING on the correct tree proves nothing — a hollow guard and a real guard are indistinguishable in that direction. Accepting a single-direction tester run as "the guard works" is the exact defect this protocol exists to kill.
+
+### Closed mechanism over reactive instance-patching
+
+**When you find one instance of a problem that belongs to an enumerable class, do not patch the instance and widen a hand-grep. Build a closed, tested mechanism that catches the whole class — in the same diff.**
+
+**Why:** Tier 22 "generalized" the comment-scrub grep and it *still* missed the no-hyphen `T11` and no-hash `Issue N` forms — a hand-grep only enumerates the shapes its author thought of, and the class is open-ended. Tier 23 converted that grep into RULE38 (a lint rule with an authoritative form-set + must-catch / must-not-catch pytest fixtures + a grep-to-zero proof) and it immediately found ~6 more real instances the hand-grep missed. The patch-and-widen loop costs one sweep round per missed shape, indefinitely; the closed mechanism costs one conversion, once.
+
+**How to apply** — any "scrub all X" / "sweep every Y" / "guard every site Z" task:
+1. Define the class by an authoritative predicate, not an example list.
+2. Encode it as a mechanical check (lint rule / verifier / gating test) with **must-catch AND must-not-catch fixtures**.
+3. Prove completeness with a grep-to-zero (or equivalent) artifact, supplied verbatim.
+4. The instance fix and the mechanism land in the **same** diff. For an enumerable-class problem, a fix without the mechanism is incomplete by definition.
+
+This is the durable generalization of "Mechanical proof for migrate-all-X tasks" and the Tier-23 thesis: a hand-search with a blind spot becomes a lint rule with its own tests — never re-patched in place. Both the `vesync-driver-developer` and `vesync-driver-qa-design` agent defs carry this rule so it applies even on a wiped-context dispatch.
+
+### Sweep-orchestration: coverage audits committed HEAD, not the working tree
+
+**When a full QA sweep fans out adversarial and coverage sub-agents in parallel, coverage MUST audit committed HEAD (`git show HEAD:<file>` / `git diff <base>..HEAD`), NOT the live working tree.**
+
+**Why:** the adversarial sub-agent's empirical revert-tests mutate source files, run lint/tests against the mutated state, then restore. When coverage runs concurrently and inspects `git status` or the live working tree, it observes the transient mutation as an apparent code regression — a phantom BLOCKING finding that requires a full analysis cycle to diagnose as a false positive.
+
+**Convention:** a dirty working tree during a parallel sweep is the expected signature of a sibling agent's in-flight empirical test, not a code regression. Inspecting the committed state (`git show`, `git diff base..HEAD`) is immune to this class of false positive because committed HEAD is not affected by in-flight working-tree mutations.
+
+**Canonical incident:** Sweep #8 adversarial and coverage ran in parallel. Adversarial reverted `LevoitCorePurifierLib.groovy`'s `setAutoMode` nest to `safeIntArg(roomSize, (state.room_size ?: 800) as Integer)` for its empirical test. Coverage observed the dirty tree, flagged the regression as BLOCKING, and spent a full analysis cycle determining it was adversarial's in-progress test rather than a real regression. Cost: one extra pipeline round. Fix: coverage reads `git show HEAD:Drivers/Levoit/LevoitCorePurifierLib.groovy` rather than the live file.
+
+**How to apply:** in sweep orchestration briefs, explicitly instruct the coverage sub-agent: "Audit committed HEAD only. Use `git show HEAD:<path>` to read driver files and `git diff <base>..HEAD` to read the diff. Do not read the live working tree — a sibling adversarial agent may have mutated it for empirical testing."
+
+See `CONTRIBUTING.md` "Sweep-orchestration: coverage audits committed HEAD" for the one-line companion pointer.
+
 ### Per-commit CHANGELOG discipline (prevention layer)
 
 Every `feat:` or `fix:` commit on a release branch MUST include a one-line bullet update to `CHANGELOG.md`'s `[Unreleased]` section in the same diff. This is the prevention layer; the `/cut-release` pre-flight CHANGELOG drift check is the safety net.
@@ -261,6 +367,14 @@ Recovery sequence (order matters):
 Avoidance: don't deploy uncommitted working-tree code via MCP to the maintainer's hub if that hub is also where HPM updates are tested. Either keep the maintainer's hub on HPM-published versions only, or accept the post-cut Repair routine as standard.
 
 This is a **maintainer-only** scenario; end users never trip this because they only get drivers via HPM. Mention this in the cut-release post-flight if HPM testing is part of the verification step.
+
+### HPM library-duplicate trap
+
+`install_library` on a hub that already has the same name+namespace library (typically from an HPM bundle install) creates a SECOND copy at a different ID. Both coexist; Hubitat `#include` binds drivers to ONE — usually the HPM-installed (lower-ID) one. `update_library_code` on the other copy then reports `success:true` but dependents still throw `MissingMethodException` for the new methods. Hub reboot does NOT fix it; this is parse-time binding, not cache.
+
+**Pre-`install_library` check:** enumerate existing libraries by name first (scan `/library/ajax/code?id=N` IDs 1–200 via curl, ~10s). If a library with the same name+namespace exists, use `update_library_code` against that ID instead of installing a new one. If duplicates already exist, update ALL of them.
+
+**Post-deploy validation (cheap):** spawn a fresh dependent-driver child and exercise a new-method code path. `update_library_code` returning `success:true` is necessary but not sufficient — only a runtime method call proves the binding propagated.
 
 ---
 
@@ -463,6 +577,21 @@ The QA agent's definition contains a numbered catalog of bug patterns from the v
 21. BP17 self-heal loops on chronically-offline devices — `ensurePollHealth()` triggers `getDevices()` configModule refresh on 5 consecutive empty polls; the refresh succeeds, polling resumes, but if the underlying device is genuinely offline (unplugged / off WiFi / off VeSync cloud), polls remain empty → BP17 fires again 5 polls later → infinite ~5min self-heal cycle plus per-poll ERROR spam. Fix: bound the self-heal counter (max 3 attempts per device); after 3 fails, mark device as offline in state, suppress further self-heal triggers, refactor logging to tiered DEBUG/INFO/WARN with hourly re-surface, expose state via per-child `online` attribute. See `vesync-driver-qa.md` BP21 entry for full design.
 22. HTTP-error path log spam during network outages — `sendBypassRequest()` previously logged `logError` every poll cycle for every child when the hub lost internet (DNS failure, connection timeout, etc.) — e.g., 6 children × 1 cycle/min = 6 ERROR lines/min for the duration of the outage. Distinct from BP21 (which addresses empty-API-result path); this is the network-layer error path (`UnknownHostException`, `SocketTimeoutException`, `ConnectException`, `NoRouteToHostException`). Fix: classify exception by class name (cause-chain walk, depth 10, handles sandbox/proxy wrappers); on first network-class exception log one-time WARN and set `state.networkUnreachableSince` + `state.lastNetworkWarnAt` (both parent-level — network outages affect all children identically); subsequent errors are DEBUG-only; `emitNetworkWarnIfDue()` re-surfaces a WARN hourly while still down; recovery detected on first successful `httpPost()` completion → INFO with elapsed duration + all state fields cleared. Dual circuit-breaker: (1) top-level at `updateDevices()` entry skips the entire poll cycle during a known outage — prevents the parallel-child stall where all children dispatch `httpPost` near-simultaneously before the first failure can set state, causing all to stall for full connect-timeout; (2) per-call in `sendBypassRequest()` guards command-triggered (non-polling) calls. Both probe every 5 minutes for recovery. Coordination: top-level breaker sets `state.networkProbeInFlight = true` when firing a recovery probe, cleared in a `try/finally` at end of `updateDevices()`; per-call breaker checks `!state.networkProbeInFlight` so the probe cycle's children are not re-blocked. Covers both JDK and Apache HttpClient (8 exception classes total). Non-network exceptions keep the existing `logError` path. See `vesync-driver-qa.md` BP22 entry for full design.
 23. `setLevel(N>0)` doesn't auto-turn-on the device when switch is off — SwitchLevel capability convention is that calling `setLevel` on an off device should turn it on AND set the level. The Levoit SwitchLevel-implementing drivers historically split: Superior 6000S (humidifier) had the auto-on guard in `setMistLevel`; Vital line had a guard in `setSpeed` but NOT on the `setLevel → setSpeedLevel → writeSpeedPreferred` path that bypasses `setSpeed`; Core line and fan drivers had no guard at all. User-visible symptom (surfaced 2026-05-02 via Willow Nap routine on maintainer hub): Room Lighting "Activate" calls `setLevel(100)` on a Levoit purifier child set to Dimmer activation type; the cloud accepts the speed/mode commands but the device stays physically off because nothing called `on()`. Affects Core 200S/300S/400S/600S, Vital 100S/200S, Tower Fan, Pedestal Fan (8 drivers). Fix: add `if (!state.turningOn && device.currentValue("switch") != "on") on()` at top of `setLevel(val)` in each affected driver, after the `val == 0 → off()` early-return guard. The `state.turningOn` re-entrance flag (already set by `on()` in Vital line; needs to be added to Core line's `on()` if not present) prevents recursion when `on()`'s own internal speed/mode setup re-enters. Also add the `if (val == 0) { off(); return }` early-return to Core line drivers (already present in Vital + fan drivers). See `vesync-driver-qa.md` BP23 entry for canonical fix shape; live-verified on maintainer hub via Willow Nap routine post-fix. Note: this bug class is the same shape as BP1 (every-driver-needs-identical-boilerplate) and is a strong candidate for class-library extraction (Core line / Vital line / Fan line shared libraries) — see ROADMAP.md.
+24. C3 gate case-sensitivity — on/off setter methods compare raw caller input against stored attribute values without lowercasing first. VeSync attribute values are always lowercase (`"on"` / `"off"`). When Rule Machine or a dashboard passes `"ON"` or `"OFF"` (uppercase), two compounding bugs occur simultaneously: (a) the C3 idempotency gate (`device.currentValue("x") == onOff`) evaluates `"on" == "ON"` as `false` even when the device is already in the requested state — the gate is bypassed and a redundant cloud call is made every time; (b) the payload coercion (`onOff == "on" ? 1 : 0`) evaluates `"ON" == "on"` as `false` — the payload sends the OPPOSITE of the intended value (e.g. `childLockSwitch:0` when the user asked to lock, `enabled:false` when the user asked to enable auto-stop). Both sub-bugs fire together for any uppercase input. The pattern also applies to early-return routing — `setSpeed("OFF")` with raw `spd=="off"` check routes to `mapSpeedToInteger` instead of `off()`. The fix is to apply `String v = (onOff as String).toLowerCase()` immediately after the BP18 null-guard and before all comparisons, then use `v` throughout. The canonical correct implementation is `LevoitHumidifierLib.groovy`'s `doSetDisplayScreenSwitch`. `Fix scope: class-wide` — affects every on/off setter method across the driver surface that (1) performs a `== "on"` or `== "off"` comparison AND (2) does not already have a `toLowerCase()` normalization. All sites fixed in v2.5 sweep: `setChildLock` + `setDisplay` + `setLightDetection` + `setPetMode` + `setSpeed` (LevoitVitalPurifierLib); `setChildLock` + `setDisplay` (LevoitCorePurifierLib, with BP18 null-guards also added); `setLightDetection` (LevoitVital200S per-driver); `setAutoStop` (LevoitClassic200S, LevoitClassic300S, LevoitDual200S); `setDisplay` + `setChildLock` + `setLightDetection` (LevoitEverestAir); `setDisplay` + `setChildLock` (LevoitSproutAir, with BP18 null-guards also added); `setNightlightSwitch` (LevoitOasisMist450S); `setNightlight` (LevoitOasisMist1000S, LevoitSproutHumidifier); `setNightLight` (LevoitCore200S Light — API payload coercion only; no C3 gate on this method). Drivers already correct (out of scope): LevoitHumidifierLib `doSetDisplayScreenSwitch`, LevoitSuperior6000S, LevoitLV600S, LevoitLV600SHubConnect (all pre-lowercase via LevoitHumidifierLib or LevoitHumidifier shared method). **Re-blessed canonical pattern (v2.6)**: the original v2.5 fix normalized with `.toLowerCase()` but emitted the raw normalized var, meaning truthy inputs "true"/"1"/"yes" got stored as-is in the attribute. The re-blessed pattern derives a canonical value via a truthy-coercion ternary: `String val = ...; String canon = (val in ["on","true","1","yes"]) ? "on" : "off"` and emits `canon` in both `sendEvent` and the C3 gate comparison. See `LevoitHumidifierLib.doSetDisplayScreenSwitch` for the verbatim blessed reference. RULE33b (`tests/lint_rules/bp25_case_sensitivity.py`) enforces the canonical emission on both `set*` and `doSet*` shared-helper definitions (doSet* coverage ensures regressions in the blessed reference itself are caught); `check_c3_gate_coverage.py` `_is_onoff_emitting()` recognizes the truthy-ternary pattern. Two intentional exceptions: (1) FanLib's shared helpers use a strict enum-rejection gate that rejects truthy variants (documented behavioral divergence from HumidifierLib; RULE33b's `_STRICT_GATE_RE` exempts these); (2) multi-state enum setters (setNightlightMode, etc.) are not binary on/off and are not in scope. **Var-name note:** the `val`/`canon`/`v` trio (`val` = normalize, `canon` = canonical, `v` = payload Integer) describes variables in the `doSetDisplayScreenSwitch` blessed-reference where an explicitly-named Integer payload var is needed for `[screenSwitch: v]`. Per-driver inline implementations may use `v` as the normalize String without conflict — RULE33b validates emit correctness, not variable names.
+
+    **BP24 classification taxonomy** — every on/off setter is classified at the source site with a one-line comment:
+    - `// BP24: SHOULD-ON — SwitchLevel/FanControl convention; turn device on if currently off.` — command-type setters where powering on IS implied (speed/level commands). These MUST call `ensureSwitchOn()` before the API call.
+    - `// BP24: NO-ON — configures a device preference; powering on is not implied.` — preference-type setters where powering on is NOT implied (display, child lock, auto-stop, drying mode, nightlight, oscillation, etc.). These MUST NOT call `ensureSwitchOn()`.
+    - `// BP24: SKIP-OK — non-MUST command; auto-on behavior is device-specific and caller-controlled.` — reserved for edge cases that don't fit either classification.
+    A site lacking any BP24 comment is flagged by `tests/check_bp24_classification.py` (exits nonzero on any NO-ON site missing the comment). The comment is the classification marker that lets a future maintainer distinguish deliberate-NO-ON from an accidental missing `ensureSwitchOn()` call.
+
+25. Unsafe integer coercion on command parameters — `(x as Integer)` and `.toInteger()` throw `NumberFormatException` or `GroovyCastException` BEFORE the `?:` Elvis fallback can intercept the exception, because in Groovy the `?:` operator catches null but NOT thrown exceptions. The Hubitat sandbox swallows the exception silently, leaving the command a no-op with no log entry. Sources of non-numeric command args: Rule Machine parameter field left blank (passes `""` or `null` as a string), dashboard numeric tile sends `"5.7"` (decimal string), hub variable binding passes `"true"` or `"1"`. Fix: replace every `(x as Integer) ?: N` site in command-param coercion paths with `safeIntArg(x, N)` from `LevoitChildBaseLib`. The helper does a `toString().trim()` → `.isInteger()` / `.isBigDecimal()` chain with an explicit fallback, and is belt-and-suspenders safe for all Rule Machine input types. `Fix scope: class-wide` — applies to every command method across all drivers that coerces a user-supplied numeric parameter to Integer. Fixed in v2.6 sweep via `safeIntArg()` extraction into `LevoitChildBaseLib` + ~20 site retrofit across Core 200S/300S/400S/600S, Vital 200S, LevoitCorePurifierLib, LevoitVitalPurifierLib, LevoitFanLib, Superior 6000S, Classic 200S/300S, Dual 200S, LV600S, LV600S HubConnect, OasisMist 450S/1000S, Sprout Humidifier, EverestAir, Sprout Air, Pedestal Fan. Lint rule RULE37 (`tests/lint_rules/bp26_unsafe_int_coercion.py`) enforces the pattern going forward.
+
+    **RULE37 scope (Pass 1 — scalar params):** scans `set*` / `doSet*` / `cycle*` methods. Scalar typed params (`Integer level`, `Number n`) are safe — the Hubitat sandbox enforces the declared type at dispatch time, so non-numeric inputs never reach the method body. Scalar UNtyped params are unsafe. `doSet*` shared-helper definitions are included in scope because they receive the same user-supplied input that the public `set*` caller normalises and then passes through unchanged.
+
+    **RULE37 scope (Pass 2 — Map-field coercions):** scans `set*(Map mapParam)` and `set*(colorMap)` (untyped Map-looking param) methods for unsafe coercions of Map-field accesses (e.g. `colorMap?.hue as Integer`). Map field values are always `String` at runtime — they come from Rule Machine color-map expressions, dashboard color pickers, or Maker API. The canonical case is `setColor(Map colorMap)` on OasisMist 450S. **Partially-guarded methods are still flagged:** if a method guards some fields with `safeIntArg(m.a, 0)` but raw-casts others (`m.b as Integer`), RULE37 still flags the unguarded `m.b` cast — the presence of `safeIntArg` on one field does NOT exempt the whole method.
+
+    **API-response-field coercions** in `applyStatus`/`update` are intentionally out of scope — the VeSync API contract guarantees numeric types for device-status fields, so only user-controlled command parameters are untrusted inputs; RULE37's `set*`/`doSet*`/`cycle*`-only method predicate enforces this boundary.
 
 When the developer or QA recognizes one of these patterns in a diff, name it explicitly: *"Bug Pattern #1 — missing 2-arg signature."* The other agent recognizes the name and applies the canonical fix.
 

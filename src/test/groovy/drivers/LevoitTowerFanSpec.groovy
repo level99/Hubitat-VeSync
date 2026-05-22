@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestParent
 
@@ -1063,5 +1064,188 @@ class LevoitTowerFanSpec extends HubitatSpec {
 
         and: "no error was logged"
         testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // C3 idempotency gate: setOscillation suppresses redundant API calls
+    // Both-ways: remove the C3 gate in setOscillation → these specs FAIL; restore → PASS.
+    // -------------------------------------------------------------------------
+
+    def "C3: setOscillation('on') is a no-op when oscillation is already 'on'"() {
+        given: "oscillation attribute is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "oscillation", value: "on"])
+
+        when:
+        driver.setOscillation("on")
+
+        then: "no setOscillationSwitch API call was made"
+        testParent.allRequests.findAll { it.method == "setOscillationSwitch" }.isEmpty()
+    }
+
+    def "C3: setOscillation('on') makes an API call when oscillation is 'off'"() {
+        given: "oscillation attribute is 'off'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "oscillation", value: "off"])
+
+        when:
+        driver.setOscillation("on")
+
+        then: "a setOscillationSwitch API call was made"
+        def req = testParent.allRequests.find { it.method == "setOscillationSwitch" }
+        req != null
+        req.data.oscillationSwitch == 1
+    }
+
+    // ---- C3 idempotency gate: setMute (via doSetMuteSwitch in LevoitFanLib) ----
+    // Both-ways: remove the C3 gate in doSetMuteSwitch → these specs FAIL; restore → PASS.
+
+    def "C3: setMute('on') is a no-op when mute is already 'on' (LevoitFanLib doSetMuteSwitch)"() {
+        given: "mute attribute is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "mute", value: "on"])
+
+        when:
+        driver.setMute("on")
+
+        then: "no setMuteSwitch API call was made"
+        testParent.allRequests.findAll { it.method == "setMuteSwitch" }.isEmpty()
+    }
+
+    def "C3: setMute('on') makes an API call when mute is 'off' (LevoitFanLib doSetMuteSwitch)"() {
+        given: "mute attribute is 'off'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "mute", value: "off"])
+
+        when:
+        driver.setMute("on")
+
+        then: "a setMuteSwitch API call was made"
+        def req = testParent.allRequests.find { it.method == "setMuteSwitch" }
+        req != null
+        req.data.muteSwitch == 1
+    }
+
+    // ---- C3 idempotency gate: setDisplay (via doSetDisplayScreenSwitch in LevoitFanLib) ----
+    // Both-ways: remove the C3 gate in doSetDisplayScreenSwitch → these specs FAIL; restore → PASS.
+
+    def "C3: setDisplay('off') is a no-op when displayOn is already 'off' (LevoitFanLib doSetDisplayScreenSwitch)"() {
+        given: "displayOn attribute is already 'off'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "displayOn", value: "off"])
+
+        when:
+        driver.setDisplay("off")
+
+        then: "no setDisplay API call was made"
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+    }
+
+    def "C3: setDisplay('on') makes an API call when displayOn is 'off' (LevoitFanLib doSetDisplayScreenSwitch)"() {
+        given: "displayOn attribute is 'off'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "displayOn", value: "off"])
+
+        when:
+        driver.setDisplay("on")
+
+        then: "a setDisplay API call was made"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #26: safeIntArg regression — non-numeric RM inputs must not throw
+    // -------------------------------------------------------------------------
+
+    def "BP26: setTimer('abc') does not throw on non-numeric input from Rule Machine (Tower Fan)"() {
+        // Before BP26 fix, `seconds as Integer` on "abc" threw NumberFormatException (swallowed
+        // silently by Hubitat sandbox, leaving the command a no-op with no log entry).
+        // safeIntArg("abc", 0) returns 0, which routes to the cancelTimer / early-return path.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setTimer called with non-numeric string (Rule Machine non-numeric slot)"
+        driver.setTimer("abc")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setTimer('5.7') does not throw on decimal-string input from Rule Machine (Tower Fan)"() {
+        // Dashboard numeric tiles can pass decimal strings; safeIntArg truncates toward zero.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setTimer called with decimal string"
+        driver.setTimer("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setTimer(null) does not throw and does not set a timer (Tower Fan)"() {
+        // requireNotNull at method entry rejects null with a WARN and returns before safeIntArg.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setTimer called with null (Rule Machine blank slot)"
+        driver.setTimer(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no timer API call was made"
+        testParent.allRequests.findAll { it.method == "setTimer" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // BP26: LevoitFanLib.setLevel — numeric coercion (Tower Fan includes LevoitFan)
+    // Both-ways: revert safeIntArg in LevoitFanLib.setLevel → these specs FAIL; restore → PASS.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "BP26: setLevel('#badInput') does not throw and routes to off() (Tower Fan fallback=0)"() {
+        // safeIntArg maps "abc", "", true to 0. 0 → off() path. No setLevel API call.
+        // This test fails if safeIntArg is removed from LevoitFanLib.setLevel.
+        given: "device is on so the auto-on guard does not confuse the assertion"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setLevel API call — 0 coercion routes to off()"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setLevel('5.7') does not throw and makes a setLevel API call with truncated value (Tower Fan)"() {
+        // safeIntArg("5.7") → 5. levelFromPercent(5) → 1. setLevel API called with manualSpeedLevel=1.
+        // This test fails if safeIntArg is removed from LevoitFanLib.setLevel.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setLevel API call was made"
+        !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
 }

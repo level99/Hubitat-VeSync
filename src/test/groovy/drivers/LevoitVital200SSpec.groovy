@@ -16,6 +16,9 @@ import support.TestParent
  *   Bug Pattern #7  — info HTML uses local variables, not device.currentValue()
  *   Bug Pattern #12 — pref-seed fires when descriptionTextEnable is null, preserves false
  *   Happy path      — full applyStatus from LAP-V201S.yaml emits expected events (canonical values)
+ *   Bug Pattern #25 — setChildLock/setDisplay('ON') uppercase sends correct payload (1 not 0),
+ *                      C3 gate works correctly with uppercase input, emitted event is lowercase;
+ *                      truthy inputs ('true','1') canonicalized to 'on' (not stored verbatim)
  */
 class LevoitVital200SSpec extends HubitatSpec {
 
@@ -702,6 +705,78 @@ class LevoitVital200SSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setAutoPreference") }
     }
 
+    // -------------------------------------------------------------------------
+    // Fix 1 regression guard: setAutoPreference field name (autoPreference, not autoPreferenceType)
+    // -------------------------------------------------------------------------
+
+    def "setAutoPreference('default') sends payload with field 'autoPreference' NOT 'autoPreferenceType'"() {
+        // Regression guard: before this fix, the driver sent {autoPreferenceType: pref, ...}
+        // which the VeSync cloud silently accepted but applied no preference change.
+        // pyvesync VeSyncAirBaseV2.set_auto_preference() sends {'autoPreference': preference, ...}.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setAutoPreference("default")
+
+        then: "setAutoPreference API call was made"
+        def req = testParent.allRequests.find { it.method == "setAutoPreference" }
+        req != null
+
+        and: "payload contains 'autoPreference' (correct pyvesync field name)"
+        req.data.containsKey("autoPreference")
+        req.data.autoPreference == "default"
+
+        and: "payload does NOT contain 'autoPreferenceType' (wrong field name from before fix)"
+        !req.data.containsKey("autoPreferenceType")
+    }
+
+    def "setRoomSize(400) sends payload with field 'autoPreference' NOT 'autoPreferenceType'"() {
+        // Same regression guard as above — setRoomSize calls setAutoPreference endpoint with
+        // the current preference type and new room size. Must use 'autoPreference', not 'autoPreferenceType'.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.autoPreference = "efficient"
+
+        when:
+        driver.setRoomSize(400)
+
+        then: "setAutoPreference API call was made (setRoomSize uses the same endpoint)"
+        def req = testParent.allRequests.find { it.method == "setAutoPreference" }
+        req != null
+
+        and: "payload contains 'autoPreference' (not 'autoPreferenceType')"
+        req.data.containsKey("autoPreference")
+        req.data.autoPreference == "efficient"   // reads from state.autoPreference
+        req.data.roomSize == 400
+
+        and: "payload does NOT contain 'autoPreferenceType'"
+        !req.data.containsKey("autoPreferenceType")
+    }
+
+    // -------------------------------------------------------------------------
+    // BP18 regression guard: setLevel(null) does not throw NPE
+    // -------------------------------------------------------------------------
+
+    def "BP18: setLevel(null) does not throw and does not send a speed command"() {
+        // Regression guard: before this fix, null < 20 threw NPE (Groovy null arithmetic),
+        // which the Hubitat sandbox swallowed silently. Now routes to off() via 0 coercion.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(null)
+
+        then: "no NPE thrown"
+        noExceptionThrown()
+
+        and: "no setLevel (speed) API call was made — null routes to off() path"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
+
     def "BP18: setPetMode(null) returns silently with logWarn (no API call)"() {
         when:
         driver.setPetMode(null)
@@ -722,5 +797,370 @@ class LevoitVital200SSpec extends HubitatSpec {
 
         and: "logWarn fired with the method name"
         testLog.warns.any { it.contains("setRoomSize") }
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #25: C3 gate case-sensitivity — uppercase "ON"/"OFF" input
+    // These specs MUST FAIL on pre-fix code (raw param compared) and
+    // PASS on post-fix code (toLowerCase() normalization added).
+    // -------------------------------------------------------------------------
+
+    def "BP25: setChildLock('ON') uppercase makes the API call and sends childLockSwitch:1 (not 0)"() {
+        // Pre-fix: ("ON" == "on") is false → childLockSwitch:0 sent (unlock instead of lock).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → childLockSwitch:1 (correct).
+        given: "childLock is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when: "setChildLock is called with uppercase 'ON'"
+        driver.setChildLock("ON")
+
+        then: "API call was made (gate correctly passed — 'off' != 'on')"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+
+        and: "payload carries childLockSwitch:1 (lock), NOT 0 (unlock)"
+        req.data.childLockSwitch == 1
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25: setChildLock('ON') when childLock is already 'on' is a no-op (C3 gate works with uppercase)"() {
+        // Pre-fix: ("on" == "ON") is false → gate bypassed, redundant API call made.
+        // Post-fix: toLowerCase() yields "on" == "on" → gate fires, no API call.
+        given: "childLock is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when: "setChildLock called with uppercase 'ON' (idempotent call)"
+        driver.setChildLock("ON")
+
+        then: "no API call was made (C3 gate worked correctly)"
+        testParent.allRequests.find { it.method == "setChildLock" } == null
+    }
+
+    def "BP25: setDisplay('ON') uppercase makes the API call and sends screenSwitch:1 (not 0)"() {
+        // Pre-fix: ("ON" == "on") is false → screenSwitch:0 sent (turn off instead of on).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → screenSwitch:1 (correct).
+        given: "display is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "off"])
+
+        when: "setDisplay is called with uppercase 'ON'"
+        driver.setDisplay("ON")
+
+        then: "API call was made"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+
+        and: "payload carries screenSwitch:1 (on), NOT 0 (off)"
+        req.data.screenSwitch == 1
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25: setDisplay('ON') when display is already 'on' is a no-op (C3 gate works with uppercase)"() {
+        // Pre-fix: ("on" == "ON") is false → gate bypassed, redundant API call made.
+        // Post-fix: toLowerCase() yields "on" == "on" → gate fires, no API call.
+        given: "display is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "on"])
+
+        when: "setDisplay called with uppercase 'ON' (idempotent call)"
+        driver.setDisplay("ON")
+
+        then: "no API call was made (C3 gate worked correctly)"
+        testParent.allRequests.find { it.method == "setDisplay" } == null
+    }
+
+    // ---- BP25: setLightDetection (Vital200S-only setter) ----
+
+    def "BP25: setLightDetection('ON') sends lightDetectionSwitch:1, not 0 (BP25 regression guard)"() {
+        // Pre-fix: (onOff=="on") where onOff="ON" evaluates false → lightDetectionSwitch:0 (wrong).
+        // Post-fix: toLowerCase() normalizes "ON"→"on" → lightDetectionSwitch:1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setLightDetection("ON")
+
+        then: "setLightDetection sent with lightDetectionSwitch:1 (enabled)"
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 1
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("lightDetection") == "on"
+    }
+
+    def "BP25: setLightDetection('OFF') sends lightDetectionSwitch:0 (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setLightDetection("OFF")
+
+        then: "setLightDetection sent with lightDetectionSwitch:0 (disabled)"
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 0
+
+        and: "emitted event value is lowercase 'off'"
+        lastEventValue("lightDetection") == "off"
+    }
+
+    def "BP18: setLightDetection(null) returns silently with no API call (BP18 null-guard)"() {
+        when:
+        driver.setLightDetection(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.find { it.method == "setLightDetection" } == null
+        testLog.warns.any { it.contains("setLightDetection") }
+    }
+
+    // -------------------------------------------------------------------------
+    // C3 idempotency gate — setLightDetection must not re-call API when the value
+    // already matches the current lightDetection attribute (Vital 200S)
+    // -------------------------------------------------------------------------
+
+    def "C3: setLightDetection with already-current value makes no hubBypass call (Vital 200S)"() {
+        // Regression guard: before this fix, setLightDetection had no C3 gate, so calling
+        // setLightDetection("on") when light detection was already on fired a redundant cloud
+        // call on every Rule Machine evaluation.
+        // This test FAILS on pre-fix code (gate absent → allRequests is non-empty)
+        // and PASSES with the gate present.
+        given: "lightDetection attribute is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "lightDetection", value: "on"])
+
+        when: "setLightDetection called with the same value"
+        driver.setLightDetection("on")
+
+        then: "no setLightDetection API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setLightDetection" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setLightDetection with different value does make a hubBypass call (Vital 200S)"() {
+        // Confirm the gate is a state-change guard, not a complete no-op.
+        given: "lightDetection attribute is 'off'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "lightDetection", value: "off"])
+
+        when: "setLightDetection called with 'on' (different from current)"
+        driver.setLightDetection("on")
+
+        then: "setLightDetection API call was made"
+        testParent.allRequests.any { it.method == "setLightDetection" }
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26 + BP18: setTimer (VitalPurifierLib) — numeric coercion + null-guard
+    // -----------------------------------------------------------------------
+
+    def "BP18+BP26: setTimer(null) returns silently with no API call"() {
+        // VitalPurifierLib.setTimer previously had neither requireNotNull nor safeIntArg.
+        // Post-fix: requireNotNull rejects null; safeIntArg handles non-numeric strings.
+        when:
+        driver.setTimer(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
+    }
+
+    def "BP26: setTimer('#badInput') does not throw and does not make an addTimerV2 API call (fallback=0 → cancelTimer)"() {
+        // safeIntArg maps "abc" and "" to 0; true maps to 0 ("true" is not numeric).
+        // 0 → n<=0 guard → cancelTimer() path; no addTimerV2 call.
+        when:
+        driver.setTimer(badInput)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setTimer('5.7') does not throw and makes an addTimerV2 API call with truncated value (5 minutes)"() {
+        // safeIntArg("5.7") → 5 (truncation). 5 > 0 → addTimerV2 called with clkSec=300 (5×60).
+        when:
+        driver.setTimer("5.7")
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "addTimerV2" }
+        req != null
+        req.data.tmgEvt?.clkSec == 300
+    }
+
+    // -----------------------------------------------------------------------
+    // BP25-truthy: truthy-input assertions — regression guards for canon ternary.
+    // "ON" tests above prove toLowerCase() normalization.  These prove the canon
+    // ternary: reverting sendEvent(canon) → sendEvent(val) would store "true" or
+    // "1" verbatim, failing these assertions.
+    // -----------------------------------------------------------------------
+
+    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits childLock='on' (Vital 200S)"() {
+        // Pre-canon: v="true"; sendEvent(value:"true"). Post-canon: canon="on"; sendEvent(value:"on").
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when:
+        driver.setChildLock("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits childLock='on' (Vital 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when:
+        driver.setChildLock("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits display='on' (Vital 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "off"])
+
+        when:
+        driver.setDisplay("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('1') sends screenSwitch:1 and emits display='on' (Vital 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "off"])
+
+        when:
+        driver.setDisplay("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25-truthy: setLightDetection('true') sends lightDetectionSwitch:1 and emits lightDetection='on' (Vital 200S)"() {
+        // setLightDetection is a Vital200S per-driver method, not in VitalPurifierLib.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setLightDetection("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 1
+        lastEventValue("lightDetection") == "on"
+    }
+
+    def "BP25-truthy: setLightDetection('1') sends lightDetectionSwitch:1 and emits lightDetection='on' (Vital 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setLightDetection("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 1
+        lastEventValue("lightDetection") == "on"
+    }
+
+    // -------------------------------------------------------------------------
+    // B1 regression guard: resetFilter() uses method name "resetFilter" (not "resetFilterLife")
+    // -------------------------------------------------------------------------
+
+    def "resetFilter() sends bypass method 'resetFilter' (B1 regression guard)"() {
+        // Regression guard: pyvesync VeSyncAirBaseV2.reset_filter() sends {"method":"resetFilter"}.
+        // An earlier draft of LevoitVitalPurifierLib used "resetFilterLife" (wrong name) which
+        // VeSync silently rejects — the filter life counter was never actually reset.
+        // This test FAILS on pre-fix code (method name is "resetFilterLife")
+        // and PASSES on the corrected implementation ("resetFilter").
+        // Both-ways proof: orchestrator-owned.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.resetFilter()
+
+        then: "the bypass request was sent with method 'resetFilter' (not 'resetFilterLife')"
+        def req = testParent.allRequests.find { it.method == "resetFilter" }
+        req != null
+
+        and: "no 'resetFilterLife' request was sent (wrong method name rejected by VeSync)"
+        testParent.allRequests.find { it.method == "resetFilterLife" } == null
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // NIT 4: setAutoPreference string-enum guard upgraded to requireNonEmptyEnum
+    // setAutoPreference(pref): the `pref` param is a user-callable string enum.
+    // Empty "" slipped past the former requireNotNull guard and reached the cloud.
+    // -------------------------------------------------------------------------
+
+    def "NIT 4: setAutoPreference('') silently exits without API call (empty-string RM blank slot) (Vital 200S/VitalPurifierLib)"() {
+        // Pre-fix: requireNotNull("") returned true; "" was sent as autoPreference to the cloud.
+        // Post-fix: requireNonEmptyEnum("") returns false silently; no API call.
+        given:
+        testParent.allRequests.clear()
+        int warnsBefore = testLog.warns.size()
+
+        when:
+        driver.setAutoPreference("")
+
+        then: "no API call"
+        testParent.allRequests.find { it.method == "setAutoPreference" } == null
+
+        and: "no WARN logged (empty string is the RM blank-slot path — silent)"
+        testLog.warns.size() == warnsBefore
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "NIT 4: setAutoPreference(null) still warns (null path unchanged) (Vital 200S/VitalPurifierLib)"() {
+        // Null path must still warn — regression guard on the existing BP18 behavior.
+        given:
+        testParent.allRequests.clear()
+
+        when:
+        driver.setAutoPreference(null)
+
+        then: "WARN logged for null"
+        testLog.warns.any { it.toLowerCase().contains("setautopreference") }
+
+        and: "no API call"
+        testParent.allRequests.find { it.method == "setAutoPreference" } == null
     }
 }

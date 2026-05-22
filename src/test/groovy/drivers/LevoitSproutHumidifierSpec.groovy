@@ -373,15 +373,38 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         !call.data.containsKey("type")
     }
 
-    def "setMistLevel clamps to 1-2 range (2-level hardware)"() {
+    def "setMistLevel(0) routes to off() (SwitchLevel setLevel(0) convention)"() {
         when:
-        driver.setMistLevel(0)   // below min -> 1
-        driver.setMistLevel(9)   // above max -> 2 (Sprout max is 2, not 9)
+        driver.setMistLevel(0)
+
+        then: "setSwitch off was sent, no setVirtualLevel call"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+    }
+
+    def "setMistLevel(1) passes through as the minimum valid level (Sprout floor)"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(1)
 
         then:
         def calls = testParent.allRequests.findAll { it.method == "setVirtualLevel" }
+        calls.size() == 1
         calls[0].data.virtualLevel == 1
-        calls[1].data.virtualLevel == 2
+    }
+
+    def "setMistLevel(9) clamps to 2 (Sprout 2-level ceiling — NOT 9 like Classic 300S)"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(9)   // above max → 2 (Sprout max is 2, not 9)
+
+        then:
+        def calls = testParent.allRequests.findAll { it.method == "setVirtualLevel" }
+        calls.size() == 1
+        calls[0].data.virtualLevel == 2
     }
 
     // -------------------------------------------------------------------------
@@ -635,5 +658,380 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
         onReq != null
         onReq.data.switchIdx == 0
+    }
+
+    // ---- BP25: setNightlight (3-param: onOff, brightness, colorTemp) ----
+
+    def "BP25: setNightlight('ON') with no brightness sends nightLightSwitch:1 (not 0) (BP25 regression guard)"() {
+        // Pre-fix: (onOff == "on" && br > 0) where onOff="ON" evaluates false → nlSwitch=0 (wrong).
+        // Post-fix: toLowerCase() normalizes "ON"→"on" → on branch, br defaults to 100 → nlSwitch=1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setNightlight called with uppercase 'ON' and no brightness"
+        driver.setNightlight("ON")
+
+        then: "setLightStatus sent with nightLightSwitch:1 (on)"
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.nightLightSwitch == 1
+
+        and: "nightlightOn event emitted as 'on'"
+        lastEventValue("nightlightOn") == "on"
+    }
+
+    def "BP25: setNightlight('OFF') sends nightLightSwitch:0 and brightness:0 (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setNightlight("OFF")
+
+        then: "setLightStatus sent with nightLightSwitch:0 (off) and brightness:0"
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.nightLightSwitch == 0
+        req.data.brightness == 0
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setMistLevel with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setMistLevel('#badInput') does not throw and does not make a setVirtualLevel (mist) API call (Sprout Humidifier)"() {
+        // safeIntArg() maps non-numeric inputs to 0; 0 triggers the lvl<=0 guard → off() path.
+        // Sprout uses setVirtualLevel with {levelIdx, virtualLevel, levelType:'mist'}.
+        given: "device is on so the auto-on guard doesn't confuse the assertion"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setVirtualLevel (mist) API call"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" && it.data.levelType == "mist" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setMistLevel('5.7') does not throw and makes a setVirtualLevel API call with truncated value (2, clamped to Sprout max)"() {
+        // safeIntArg("5.7") → 5 (truncation). Math.max(1, Math.min(2, 5)) = 2 (Sprout max is 2).
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setVirtualLevel API call was made with virtualLevel=2 (5.7 truncated to 5, clamped to Sprout max 2)"
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" && it.data.levelType == "mist" }
+        req != null
+        req.data.virtualLevel == 2
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setHumidity with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setHumidity('#badInput') does not throw and does not make a setTargetHumidity API call (Sprout Humidifier)"() {
+        // safeIntArg() maps non-numeric inputs to 0; 0 triggers the p<=0 guard → logWarn + return.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setTargetHumidity API call"
+        testParent.allRequests.findAll { it.method == "setTargetHumidity" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setHumidity('5.7') does not throw and makes a setTargetHumidity API call with clamped value (30) (Sprout Humidifier)"() {
+        // safeIntArg("5.7") → 5. 5 > 0 so the rejection guard is skipped;
+        // Math.max(30, Math.min(80, 5)) = 30 (clamped to minimum). Sprout uses camelCase targetHumidity.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setTargetHumidity API call was made with targetHumidity=30 (5 clamped to minimum)"
+        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
+        req != null
+        req.data.targetHumidity == 30
+    }
+
+    // -------------------------------------------------------------------------
+    // BP26: safe numeric coercion — setNightlight brightness + colorTemp (2nd + 3rd params)
+    // RULE37 is first-param-only by design; non-first-param coercions are gated
+    // by Spock regression specs instead of lint. setNightlight brightness/colorTemp
+    // is the canonical worked example of this pattern for multi-param methods.
+    // -------------------------------------------------------------------------
+
+    def "BP26: setNightlight('on', 80, 2700) happy path — both numeric params reach API unchanged"() {
+        // Baseline: confirms safeIntArg correctly passes-through valid numeric inputs.
+        // safeIntArg(80, 0) = 80; safeIntArg(2700, 3500) = 2700; nlSwitch=1.
+        when:
+        driver.setNightlight("on", 80, 2700)
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness        == 80
+        req.data.colorTemperature  == 2700
+        req.data.nightLightSwitch  == 1
+    }
+
+    def "BP26: setNightlight('on', '#badBr') does not throw; garbage brightness coerces to fallback 0 then promoted to 50"() {
+        // safeIntArg("abc"/""/true → fallback 0) → Math.max(0,Math.min(100,0)) = 0 → br=0.
+        // nl="on", not-off branch: br==0 → promoted to 50 (Sprout's "turn on with no brightness" default).
+        // colorTemp: null → skips safeIntArg → null → in on-branch: ct = ct ?: 3500 = 3500.
+        // nlSwitch = ("on"=="on" && 50>0) ? 1 : 0 = 1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setNightlight("on", badBr)
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness       == 50
+        req.data.colorTemperature == 3500
+        req.data.nightLightSwitch == 1
+
+        where:
+        badBr << ["abc", "", true]
+    }
+
+    def "BP26: setNightlight('on', '55.7') does not throw; brightness truncates to 55"() {
+        // safeIntArg("55.7", 0) → BigDecimal("55.7").intValue() = 55 (truncation).
+        // Math.max(0, Math.min(100, 55)) = 55. br=55, not 0 → not promoted. nlSwitch=1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setNightlight("on", "55.7")
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness       == 55
+        req.data.nightLightSwitch == 1
+    }
+
+    def "BP26: setNightlight('on', 50, 'abc') does not throw; garbage colorTemp coerces to fallback 3500"() {
+        // safeIntArg("abc", 3500) → fallback 3500. Math.max(2000, Math.min(3500, 3500)) = 3500.
+        // brightness=50: safeIntArg(50, 0) = 50; not promoted (br!=0). nlSwitch=1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setNightlight("on", 50, "abc")
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness       == 50
+        req.data.colorTemperature == 3500
+        req.data.nightLightSwitch == 1
+    }
+
+    def "BP26: setNightlight('on', 50, '2750.9') does not throw; colorTemp truncates to 2750"() {
+        // safeIntArg("2750.9", 3500) → BigDecimal("2750.9").intValue() = 2750 (truncation).
+        // Math.max(2000, Math.min(3500, 2750)) = 2750 (within range, no clamping).
+        // brightness=50 unchanged; nlSwitch=1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setNightlight("on", 50, "2750.9")
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness       == 50
+        req.data.colorTemperature == 2750
+        req.data.nightLightSwitch == 1
+    }
+
+    // -------------------------------------------------------------------------
+    // C3 idempotency gate: setDryingMode suppresses redundant API calls
+    // Both-ways: remove the C3 gate in setDryingMode → these specs FAIL; restore → PASS.
+    // -------------------------------------------------------------------------
+
+    def "C3: setDryingMode('on') is a no-op when dryingEnabled is already 'on'"() {
+        // The C3 gate prevents a redundant cloud call when the attribute already matches.
+        given: "dryingEnabled attribute is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "dryingEnabled", value: "on"])
+
+        when: "setDryingMode called with the same value"
+        driver.setDryingMode("on")
+
+        then: "no setDryingMode API call was made"
+        testParent.allRequests.findAll { it.method == "setDryingMode" }.isEmpty()
+    }
+
+    def "C3: setDryingMode('on') makes an API call when dryingEnabled is 'off'"() {
+        // The C3 gate must NOT suppress the call when the value differs.
+        given: "dryingEnabled attribute is 'off'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "dryingEnabled", value: "off"])
+
+        when: "setDryingMode called with 'on'"
+        driver.setDryingMode("on")
+
+        then: "a setDryingMode API call was made"
+        def req = testParent.allRequests.find { it.method == "setDryingMode" }
+        req != null
+        req.data.autoDryingSwitch == 1
+    }
+
+    def "C3: setDryingMode normalizes 'ON' to 'on' before emitting the event"() {
+        // BP25 fix: the event value must be the normalized lowercase string, not the raw parameter.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "dryingEnabled", value: "off"])
+
+        when:
+        driver.setDryingMode("ON")
+
+        then: "event value is lowercase 'on'"
+        lastEventValue("dryingEnabled") == "on"
+    }
+
+    def "BP25-truthy: setDryingMode('true') sends autoDryingSwitch:1 and emits 'on'"() {
+        // Pre-fix: v = "true"; sendEvent(value:"true"). Post-fix: canon="on"; sendEvent(value:"on").
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "dryingEnabled", value: "off"])
+
+        when:
+        driver.setDryingMode("true")
+
+        then: "API call sent with autoDryingSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setDryingMode" }
+        req != null
+        req.data.autoDryingSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("dryingEnabled") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits 'on'"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits 'on'"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setDryingMode('1') sends autoDryingSwitch:1 and emits 'on'"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "dryingEnabled", value: "off"])
+
+        when:
+        driver.setDryingMode("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDryingMode" }
+        req != null
+        req.data.autoDryingSwitch == 1
+        lastEventValue("dryingEnabled") == "on"
+    }
+
+    def "BP25-truthy: C3 gate suppresses setDryingMode when dryingEnabled='on' and input is 'true'"() {
+        given:
+        testDevice.events.add([name: "dryingEnabled", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDryingMode("true")
+
+        then: "C3 gate suppressed the call because canon=='on'==currentValue"
+        testParent.allRequests.findAll { it.method == "setDryingMode" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // BP25-truthy: doSet* shared-helper path (setDisplay / setAutoStop delegators)
+    // These methods delegate to LevoitHumidifierLib doSetDisplayScreenSwitch /
+    // doSetAutoStopSwitch.  The truthy-canon ternary in the shared helpers must
+    // emit "on" (not "true") and send the correct integer payload.
+    // These specs MUST FAIL if value: canon is reverted to value: val in
+    // LevoitHumidifierLib doSetDisplayScreenSwitch or doSetAutoStopSwitch.
+    // -------------------------------------------------------------------------
+
+    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("true")
+
+        then: "API call sent with screenSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setAutoStop('true') sends autoStopSwitch:1 and emits 'on' (doSet* path)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setAutoStop("true")
+
+        then: "API call sent with autoStopSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setAutoStopSwitch" }
+        req != null
+        req.data.autoStopSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("autoStopEnabled") == "on"
     }
 }

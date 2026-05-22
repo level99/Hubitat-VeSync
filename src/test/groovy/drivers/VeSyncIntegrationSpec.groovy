@@ -1668,7 +1668,7 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     // cron) correctly arms persistent polling, self-heals pre-v2.2 installs,
     // and is idempotent once migrated.
     //
-    // Also covers the cron-syntax branching fix (PR #4, Gemini review):
+    // Also covers the cron-syntax branching fix:
     // Quartz seconds-field range is 0-59; "0/N * * * * ?" is invalid for N >= 60.
     // setupPollSchedule() branches:
     //   interval < 60  => "0/${interval} * * * * ?" (seconds-resolution)
@@ -3371,6 +3371,52 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         ((state.selfHealAttempts as Map)?.get("OFFLINE-CID") ?: 0) <= 3
     }
 
+    def "ensurePollHealth() heals BOTH devices when two DNIs reach threshold in the same cycle (Q3b — B3 regression guard)"() {
+        // B3 regression guard: before the snapshot-iteration fix, iterating
+        // state.consecutiveEmpty while mutating it mid-loop caused a
+        // ConcurrentModificationException when 2+ DNIs hit the threshold in the
+        // same poll cycle.  The exception caused ensurePollHealth() to process only
+        // the first matching DNI; all subsequent ones were silently dropped.
+        //
+        // Fix: ensurePollHealth() iterates a snapshot (new LinkedHashMap(...)) so
+        // in-loop mutation of state.consecutiveEmpty does not affect the iteration.
+        //
+        // This test FAILS on pre-fix code (exception thrown after first DNI, second
+        // DNI never processed) and PASSES on the fixed implementation.
+        // Both-ways proof: orchestrator-owned.
+        given: "TWO devices both at consecutive-empty threshold 5"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.consecutiveEmpty = ["CID-A": 5, "CID-B": 5]
+        // Neither DNI is already marked offline — both should enter the self-heal path.
+        state.deviceOfflineSince = [:]
+        state.selfHealAttempts   = [:]
+
+        List<String> resyncScheduled = []
+        driver.metaClass.runIn = { int delay, String handler ->
+            if (handler == "getDevices") resyncScheduled << handler
+        }
+        // getChildDevice returns a stub child for label resolution
+        driver.metaClass.getChildDevice = { String dni ->
+            def d = new TestDevice()
+            d.name = "Test Device ${dni}"
+            d
+        }
+
+        when: "ensurePollHealth() runs with both DNIs at threshold"
+        driver.ensurePollHealth()
+
+        then: "no exception was thrown (snapshot iteration prevents ConcurrentModificationException)"
+        noExceptionThrown()
+
+        and: "both DNIs triggered self-heal (selfHealAttempts incremented for each)"
+        ((state.selfHealAttempts as Map)?.get("CID-A") ?: 0) >= 1
+        ((state.selfHealAttempts as Map)?.get("CID-B") ?: 0) >= 1
+
+        and: "at least one getDevices resync was scheduled (runIn fired)"
+        resyncScheduled.size() >= 1
+    }
+
     def "first non-empty poll after offline period clears state and emits online:true (Q4)"() {
         // Q4: the success branch of updateDevices() must detect state.deviceOfflineSince[dni]
         // and call markChildOnline(dni), which clears offline state and fires sendEvent(online:"true").
@@ -3423,6 +3469,84 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         and: "the child received an online:true event"
         childDev.events.any { it.name == "online" && it.value == "true" }
+    }
+
+    def "selfHealAttempts resets on natural recovery so device is never prematurely marked offline (Q4b)"() {
+        // Q4b: BP21 flap-accumulation bug.
+        // If a device repeatedly reaches the 5-empty threshold, gets a Resync, and recovers
+        // before the MAX cap (3), its selfHealAttempts counter is only cleared inside
+        // markChildOnline() — which is only called when deviceOfflineSince is set.  A device
+        // that recovers before going offline never triggers markChildOnline(), so its counter
+        // keeps accumulating across flap cycles.  After 3 flap cycles the counter reaches MAX
+        // and the device is prematurely marked offline with zero Resync attempts remaining.
+        //
+        // Fix: clear selfHealAttempts[dni] in the successful-poll branch, unconditionally,
+        // not only inside markChildOnline().
+        //
+        // This test exercises two full threshold-hit→Resync→recover cycles and asserts that
+        // selfHealAttempts[dni] resets to 0 after each natural recovery.
+        //
+        // Both-ways: orchestrator-owned.
+        given: "device has completed one Resync cycle (selfHealAttempts == 1) and now recovers"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.prefsSeeded      = true
+        state.deviceList       = ["FLAP-CID": "config-module"]
+        state.selfHealAttempts = ["FLAP-CID": 1]    // counter from prior Resync
+        // device is NOT marked offline — it recovered before reaching MAX
+
+        def childDev = new TestDevice()
+        childDev.typeName = "Levoit Vital 200S Air Purifier"
+        childDev.updateDataValue("deviceType", "LAP-V201S-WUS")
+        childDev.name  = "Test Purifier"
+        childDev.label = "Test Purifier"
+        childDev.metaClass.update = { Map st, nl -> true }
+        childDevices["FLAP-CID"] = childDev
+
+        // httpPost returns a valid (non-null) result — this is the natural recovery poll
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            capturedHttpPosts << params.clone()
+            if (params.body?.payload) capturedBypassBodies << params.body.clone()
+            def fakeResp = new Expando()
+            fakeResp.status = 200
+            fakeResp.data = [
+                code: 0,
+                result: [
+                    code: 0,
+                    result: [powerSwitch: 1, fanSpeedLevel: 2],
+                    traceId: "test-trace"
+                ]
+            ]
+            callback(fakeResp)
+        }
+
+        when: "first successful poll after threshold-hit cycle"
+        driver.updateDevices()
+
+        then: "selfHealAttempts[FLAP-CID] was reset to 0 (key absent from map)"
+        !(state.selfHealAttempts as Map)?.containsKey("FLAP-CID")
+
+        and: "device was NOT marked offline (no deviceOfflineSince entry)"
+        !(state.deviceOfflineSince as Map)?.containsKey("FLAP-CID")
+
+        when: "a second threshold-hit cycle fires (ensurePollHealth called at count==5)"
+        state.consecutiveEmpty = ["FLAP-CID": 5]
+        state.selfHealAttempts = [:]   // reset by the successful poll above (as asserted)
+        int resyncCount = 0
+        driver.metaClass.runIn = { int delay, String handler ->
+            if (handler == "getDevices") resyncCount++
+        }
+        driver.ensurePollHealth()
+
+        then: "selfHealAttempts is now 1 (counter starts fresh, NOT 2)"
+        (state.selfHealAttempts as Map)?.get("FLAP-CID") == 1
+
+        and: "a Resync was scheduled (not blocked by accumulated count)"
+        resyncCount == 1
+
+        and: "device was NOT prematurely marked offline (counter < MAX)"
+        !(state.deviceOfflineSince as Map)?.containsKey("FLAP-CID")
     }
 
     def "emitOfflineWarnsIfDue() emits WARN once per hour while device is offline (Q5)"() {
@@ -4081,6 +4205,34 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         httpPostCalled
     }
 
+    def "updateDevices() clears networkProbeInFlight when driverReloading is true (A1 flag-leak fix)"() {
+        // Regression guard: state.networkProbeInFlight is set when a probe interval elapses,
+        // BEFORE the try/finally that clears it.  The driverReloading early-return executes
+        // between the flag-set and the try, so without the explicit clear the flag stays true
+        // for the rest of the outage — permanently disarming the per-call circuit-breaker in
+        // sendBypassRequest().  This test FAILS if state.remove('networkProbeInFlight') is
+        // removed from the driverReloading guard, and PASSES with the fix in place.
+        given: "outage state with expired probe interval"
+        settings.refreshInterval = 30
+        settings.debugOutput = true
+        state.prefsSeeded = true
+        state.scheduleVersion = "2.2"
+        long outageStart = driver.now() - 600000L
+        long staleProbe  = driver.now() - 360000L   // expired — cycle will arm as probe
+        state.networkUnreachableSince = outageStart
+        state.lastNetworkWarnAt       = outageStart
+        state.lastNetworkProbeAt      = staleProbe
+
+        and: "driver is flagged as reloading"
+        state.driverReloading = true
+
+        when: "updateDevices() is called — probe interval has elapsed so flag would be set"
+        driver.updateDevices()
+
+        then: "networkProbeInFlight is NOT left set (flag-leak prevented)"
+        !state.networkProbeInFlight
+    }
+
     def "updateDevices() clears networkProbeInFlight in finally block after probe cycle (R16)"() {
         // R16: networkProbeInFlight must be cleared at the end of updateDevices() regardless
         // of whether the probe cycle succeeded or failed. The try/finally guarantee ensures
@@ -4112,5 +4264,38 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         then: "networkProbeInFlight is null/false after cycle completes"
         !state.networkProbeInFlight
+    }
+
+    def "login() does not NPE when VeSync returns HTTP 200 without a result body"() {
+        given: "fresh-install state: no stored token, valid credentials configured"
+        // Driver references bare `email` / `password` (Hubitat sandbox auto-resolves
+        // to settings.*); Spock harness doesn't bridge those — wire explicit getters.
+        driver.metaClass.getEmail    = { -> "test@example.com" }
+        driver.metaClass.getPassword = { -> "p4ssw0rd" }
+        settings.deviceRegion = "US"
+
+        and: "httpPost returns HTTP 200 with inner failure code and no result field"
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            Expando resp = new Expando()
+            resp.status = 200
+            // No `result` field — this is the bug-trigger shape that previously NPE'd
+            resp.data = [code: -11201000, msg: "Invalid credentials or session conflict", traceId: "test-trace"]
+            callback.call(resp)
+        }
+
+        when:
+        Boolean loginResult = driver.login()
+
+        then: "login returns false cleanly (no NPE)"
+        noExceptionThrown()
+        loginResult == false
+
+        and: "an ERROR log surfaces the inner code and msg for diagnosis"
+        testLog.errors.any {
+            it.contains("inner code=-11201000") && it.contains("msg='Invalid credentials or session conflict'")
+        }
+
+        and: "state.token is NOT set"
+        !state.containsKey('token') || state.token == null
     }
 }

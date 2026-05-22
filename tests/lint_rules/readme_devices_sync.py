@@ -14,7 +14,7 @@ FAIL rather than a silent omission.
 
 Normalization note: driver definition(name: ...) values in Core-line drivers use
 "Core200S" (no internal space) while the README table writes "Core 200S" (with
-space) in its bold cell text.  Both sides are whitespace-collapsed (all \s+
+space) in its bold cell text.  Both sides are whitespace-collapsed (all \\s+
 removed) before the substring comparison, so "Core200S" == "Core 200S" after
 normalization.  Markdown bold markers (**) are stripped from the README cell text
 before comparison.
@@ -22,6 +22,7 @@ before comparison.
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding, make_finding_for_file
 
 
 # ---------------------------------------------------------------------------
@@ -38,19 +39,6 @@ EXCLUDED_FILES = {
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": file_str,
-        "line": lineno,
-        "context": context,
-        "why": why,
-        "fix": fix,
-    }
-
 
 def _extract_definition_block(source: str):
     """
@@ -145,7 +133,7 @@ def check_rule21_readme_devices_sync(repo_root: Path, config: dict):
 
     # --- Guard: README missing ---
     if not readme_path.exists():
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="FAIL",
             rule_id="RULE21_readme_missing",
             title="README.md not found at repo root",
@@ -165,7 +153,7 @@ def check_rule21_readme_devices_sync(repo_root: Path, config: dict):
     # --- Guard: section missing ---
     section_text, section_start_line = _extract_supported_devices_section(readme_text)
     if section_text is None:
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="FAIL",
             rule_id="RULE21_section_missing",
             title="README.md has no '## Supported devices' section",
@@ -213,7 +201,7 @@ def check_rule21_readme_devices_sync(repo_root: Path, config: dict):
         driver_name_normalized = _normalize(driver_name)
 
         if driver_name_normalized not in section_normalized:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="FAIL",
                 rule_id="RULE21_driver_not_in_readme",
                 title=f"Driver not listed in README.md 'Supported devices' table: {driver_path.name}",

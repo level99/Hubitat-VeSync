@@ -95,7 +95,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit OasisMist 1000S (LUH-M101S-WUS/-WUSR/-WEUR) — mist 1-9, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display; WEUR adds nightlight (runtime-gated). pyvesync VeSyncHumid1000S class; V2-style payloads (powerSwitch/workMode/virtualLevel). No warm mist.",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -175,8 +175,8 @@ def off(){
 // No firmware-variant issue documented for 1000S (canonical pyvesync fixture uses 'auto').
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    if (!requireNonEmptyEnum(mode, "setMode")) return
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     def resp = hubBypass("setHumidityMode", [workMode: m], "setHumidityMode(${m})")
     if (httpOk(resp)) {
@@ -194,15 +194,18 @@ def setMode(mode){
 // Different field names from VeSyncHumid200300S ({id, level, type}) and different method name.
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    if (!requireNotNull(level, "setMistLevel")) return
+    Integer lvl = safeIntArg(level, 0)
+    if (lvl <= 0) { off(); return }
+    Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
-    def resp = hubBypass("virtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "virtualLevel(mist,${lvl})")
+    def resp = hubBypass("virtualLevel", [levelIdx: 0, virtualLevel: clamped, levelType: "mist"], "virtualLevel(mist,${clamped})")
     if (httpOk(resp)) {
-        state.mistLevel = lvl
-        device.sendEvent(name:"mistLevel", value: lvl)
-        logInfo "Mist level: ${lvl}"
+        state.mistLevel = clamped
+        device.sendEvent(name:"mistLevel", value: clamped)
+        logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"virtualLevel"])
+        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"virtualLevel"])
     }
 }
 
@@ -212,7 +215,10 @@ def setMistLevel(level){
 // Range: 30-80% per pyvesync device_map.py (no custom humidity_min for this model family).
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
-    Integer p = Math.max(30, Math.min(80, (percent as Integer) ?: 50))
+    if (!requireNotNull(percent, "setHumidity")) return
+    Integer p = safeIntArg(percent, 0)
+    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
+    p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [targetHumidity: p], "setTargetHumidity(${p})")
     if (httpOk(resp)) {
         state.targetHumidity = p
@@ -224,7 +230,9 @@ def setHumidity(percent){
 }
 
 // V2-line shared body via lib; delegators preserve method-presence semantics.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 
 // ---------- Nightlight (WEUR only -- runtime-gated) ----------
@@ -254,13 +262,21 @@ private boolean isNightlightVariant(){
 //   setNightlight("on",  70)     → setLightStatus {brightness: 70, nightLightSwitch: 1}
 //   setNightlight("off", 0)      → setLightStatus {brightness: 0,  nightLightSwitch: 0}
 // On non-WEUR variants: no-ops with INFO log.
+//
+// No C3 idempotency gate: two calls with the same on/off value but different brightness
+// arguments send different payloads to the device. Comparing only the nightlightOn attribute
+// would incorrectly suppress a legitimate brightness change that accompanies the same state.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setNightlight(onOff, brightness = null){
     logDebug "setNightlight(${onOff}, ${brightness})"
+    if (!requireNonEmptyEnum(onOff, "setNightlight")) return
     if (!isNightlightVariant()) return
+    // BP25: normalize to lowercase before all comparisons.
+    String nl = (onOff as String).trim().toLowerCase()
     if (brightness == null) {
         // Pure on/off toggle -- use setNightLightStatus (pyvesync toggle_nightlight path)
-        Integer nlSwitch = (onOff == "on") ? 1 : 0
-        def resp = hubBypass("setNightLightStatus", [nightLightSwitch: nlSwitch], "setNightLightStatus(${onOff})")
+        Integer nlSwitch = (nl in ["on","true","1","yes"]) ? 1 : 0
+        def resp = hubBypass("setNightLightStatus", [nightLightSwitch: nlSwitch], "setNightLightStatus(${nl})")
         if (httpOk(resp)) {
             String onOffStr = (nlSwitch == 1) ? "on" : "off"
             device.sendEvent(name:"nightlightOn", value: onOffStr)
@@ -270,8 +286,8 @@ def setNightlight(onOff, brightness = null){
         }
     } else {
         // Brightness control -- use setLightStatus (pyvesync set_nightlight_brightness path)
-        Integer br = Math.max(0, Math.min(100, (brightness as Integer) ?: 0))
-        if (onOff == "off") br = 0
+        Integer br = Math.max(0, Math.min(100, safeIntArg(brightness, 0)))   // BP26: safeIntArg handles non-numeric RM input ("abc", "", "5.7")
+        if (nl == "off") br = 0
         Integer nlSwitch = (br > 0) ? 1 : 0
         def resp = hubBypass("setLightStatus", [brightness: br, nightLightSwitch: nlSwitch], "setLightStatus(brightness=${br})")
         if (httpOk(resp)) {

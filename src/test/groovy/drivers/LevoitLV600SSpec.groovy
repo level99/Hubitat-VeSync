@@ -348,12 +348,12 @@ class LevoitLV600SSpec extends HubitatSpec {
         !req.data.containsKey("levelType")
     }
 
-    def "setMistLevel clamps values below 1 to 1"() {
-        given:
-        settings.descriptionTextEnable = false
+    def "setMistLevel(1) passes through as the minimum valid level (LV600S floor)"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
-        driver.setMistLevel(0)
+        driver.setMistLevel(1)
 
         then:
         def req = testParent.allRequests.find { it.method == "setVirtualLevel" && it.data.type == "mist" }
@@ -1035,5 +1035,114 @@ class LevoitLV600SSpec extends HubitatSpec {
         then: "setSwitch(enabled:true) was sent (auto-on via ensureSwitchOn)"
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
         onReq != null
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setWarmMistLevel with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setWarmMistLevel('#badInput') does not throw and does not make a setVirtualLevel API call"() {
+        // safeIntArg coercion:
+        //   "abc" / "" / true  → 0 → warm-off guard (lvl==0 && switch!="on") → return
+        //   "5.7" → 5 → range guard (5 > 3) → logError + return
+        // In all cases no setVirtualLevel(warm) call is made; the critical guarantee is
+        // no NumberFormatException is thrown and swallowed silently.
+        given: "device is off so the lvl==0 short-circuit fires for zero-coerced inputs"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when:
+        driver.setWarmMistLevel(badInput)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", "5.7", true]
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setMistLevel with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setMistLevel('#badInput') does not throw and does not make a setVirtualLevel (mist) API call (fallback=0 → off)"() {
+        // safeIntArg() maps non-numeric inputs to 0; 0 triggers the lvl<=0 guard → off() path.
+        // No setVirtualLevel(mist) call is made.
+        // Pre-fix: (level as Integer) on these inputs threw before the guard could fire.
+        given: "device is on so the auto-on guard doesn't confuse the assertion"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setVirtualLevel (mist) API call"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" && it.data.type == "mist" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setMistLevel('5.7') does not throw and makes a setVirtualLevel API call with truncated value (5)"() {
+        // safeIntArg("5.7") → 5 (truncation). 5 > 0 so the off() early-return is skipped;
+        // Math.max(1, Math.min(9, 5)) = 5 and sent to the cloud.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setVirtualLevel API call was made with level=5 (truncated from 5.7)"
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" && it.data.type == "mist" }
+        req != null
+        req.data.level == 5
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setHumidity with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setHumidity('#badInput') does not throw and does not make a setTargetHumidity API call (fallback=0 → rejected)"() {
+        // safeIntArg() maps non-numeric inputs to 0; 0 triggers the p<=0 guard → logWarn + return.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setTargetHumidity API call"
+        testParent.allRequests.findAll { it.method == "setTargetHumidity" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setHumidity('5.7') does not throw and makes a setTargetHumidity API call with clamped value (30)"() {
+        // safeIntArg("5.7") → 5 (truncation). 5 > 0 so the rejection guard is skipped;
+        // Math.max(30, Math.min(80, 5)) = 30 (clamped to minimum). A valid cloud call is made.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setTargetHumidity API call was made with target_humidity=30 (5 clamped to minimum)"
+        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
+        req != null
+        req.data.target_humidity == 30
     }
 }

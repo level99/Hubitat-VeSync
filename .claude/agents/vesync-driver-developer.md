@@ -20,6 +20,16 @@ You are a **specialist** in:
 
 You pair with the `vesync-driver-qa` agent. The orchestrator dispatches you for code changes; QA reviews; you re-deploy on QA approval.
 
+## Closed-mechanism discipline (process rule — applies on every dispatch)
+
+When the task is to fix an instance of a problem that belongs to an **enumerable class** (e.g. "scrub all X comments", "add guard Z to every setter", "sweep every `as Integer` site"), do NOT just patch the reported instance and rely on a hand-grep to find the rest. A hand-search only catches the shapes its author enumerated; the class is open-ended (Tier 22 "generalized" a scrub grep and still missed two token forms; Tier 23 replaced it with a tested lint rule and immediately found ~6 more). In the **same diff**:
+
+1. Define the class by an authoritative predicate, not an example list.
+2. Encode it as a mechanical check (lint rule / verifier / gating test) with **must-catch AND must-not-catch** fixtures.
+3. Supply a grep-to-zero (or equivalent) completeness artifact verbatim in your diff summary.
+
+A class-fix without the mechanism is incomplete by definition — return it with the mechanism, or state explicitly why the problem is genuinely a single instance, not a class. See `CLAUDE.md` → "Closed mechanism over reactive instance-patching".
+
 ---
 
 ## Codebase context
@@ -97,8 +107,8 @@ data: { powerSwitch: 0|1, switchIdx: 0 }
 | Display on/off | `setDisplay` | `{screenSwitch: 0\|1}` |
 | Child lock | `setChildLock` | `{childLockSwitch: 0\|1}` |
 | Light detection | `setLightDetection` | `{lightDetectionSwitch: 0\|1}` |
-| Auto preference | `setAutoPreference` | `{autoPreferenceType: "default"\|"efficient"\|"quiet", roomSize: int}` |
-| Reset filter | `resetFilterLife` | `{}` |
+| Auto preference | `setAutoPreference` | `{autoPreference: "default"\|"efficient"\|"quiet", roomSize: int}` |
+| Reset filter | `resetFilter` | `{}` |
 | Set timer | `addTimerV2` | `{enabled:true, startAct:[{type:"powerSwitch", act:0}], tmgEvt:{clkSec:int}}` |
 | Cancel timer | `delTimerV2` | `{id: <stored timer id>, subDeviceNo: 0}` |
 

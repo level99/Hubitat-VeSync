@@ -49,6 +49,7 @@ rule_id ``RULE31_state_switch_dead_branch``.
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding
 
 
 DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
@@ -68,13 +69,6 @@ DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
 # We exclude lines that are pure write assignments (``state.switch =``).
 STATE_SWITCH_READ_RE = re.compile(r'\bstate\.switch\b')
 STATE_SWITCH_WRITE_RE = re.compile(r'\bstate\.switch\s*=(?!=)')  # = but not ==
-
-
-def _context_lines(raw_lines, lineno, window=3):
-    """Return up to ``window`` lines of context around lineno (1-based)."""
-    start = max(0, lineno - 1 - window)
-    end = min(len(raw_lines), lineno + window)
-    return '\n'.join(f"    {raw_lines[i]}" for i in range(start, end))
 
 
 def check_rule31_state_switch_dead_branch(
@@ -123,17 +117,17 @@ def check_rule31_state_switch_dead_branch(
             continue
 
         # Found a read of state.switch — flag it
-        findings.append({
-            "severity": "FAIL",
-            "rule_id": "RULE31_state_switch_dead_branch",
-            "title": (
+        findings.append(make_finding(
+            severity="FAIL",
+            rule_id="RULE31_state_switch_dead_branch",
+            title=(
                 "Dead-branch guard: state.switch is never written; "
                 "any read is a permanently-dead condition (Bug Pattern #24-A)"
             ),
-            "file": file_rel,
-            "line": i,
-            "context": _context_lines(raw_lines, i),
-            "why": (
+            file_rel=file_rel,
+            lineno=i,
+            raw_lines=raw_lines,
+            why=(
                 "Bug Pattern #24-A: ``state.switch`` is never written anywhere in the "
                 "codebase. Power state is tracked via ``device.sendEvent(name:'switch', ...)`` "
                 "and read via ``device.currentValue('switch')``. Any conditional that reads "
@@ -141,7 +135,7 @@ def check_rule31_state_switch_dead_branch(
                 "auto-on guard never fires, and configure-style commands (cycleSpeed, setSpeed, "
                 "etc.) silently leave the device off when invoked from automation on an off device."
             ),
-            "fix": (
+            fix=(
                 "Replace ``if (state.switch == 'off') { on() }`` (dead branch) with the "
                 "canonical BP24 auto-on guard: "
                 "``if (!state.turningOn && device.currentValue('switch') != 'on') on()`` — "
@@ -149,7 +143,7 @@ def check_rule31_state_switch_dead_branch(
                 "API call. See Bug Pattern #24-A in .claude/agents/vesync-driver-qa.md for "
                 "the canonical fix and classification taxonomy."
             ),
-        })
+        ))
 
     return findings
 

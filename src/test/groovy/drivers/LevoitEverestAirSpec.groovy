@@ -36,9 +36,17 @@ import support.TestParent
  *   Vent angle        -- fanRotateAngle passive read -> ventAngle attribute
  *                     -- no setVentAngle command (no write path in pyvesync)
  *   Reset filter      -- resetFilter() sends resetFilter {}
- *   Timer set/cancel  -- setTimer(60,"off") sends {action:'off',total:60}; secs<=0 routes to
- *                        cancelTimer; null seconds rejected (BP18); cancelTimer sends clearTimer
- *                        with state.timerId; no-op when no timerId in state
+ *   Timer set/cancel  -- setTimer(3600,"off") sends addTimerV2 with V2 payload shape
+ *                        {enabled, startAct:[{type:"powerSwitch", act:0}], tmgEvt:{clkSec:N}};
+ *                        action "on" → act:1; secs<=0 routes to cancelTimer;
+ *                        null seconds rejected (BP18); cancelTimer sends delTimerV2
+ *                        with {id, subDeviceNo:0}; no-op when no timerId in state.
+ *                        Regression guard: Tower Fan API names (setTimer/clearTimer) must NOT appear.
+ *   BP18              -- setDisplay/setChildLock/setLightDetection(null) rejected with logWarn
+ *                        (requireNotNull added as part of BP25 fix sweep)
+ *   Bug Pattern #25   -- setDisplay/setChildLock/setLightDetection('ON') uppercase sends correct
+ *                        integer payload (1 not 0) and emits lowercase event value;
+ *                        truthy inputs ('true','1') canonicalized to 'on' (not stored verbatim)
  */
 class LevoitEverestAirSpec extends HubitatSpec {
 
@@ -594,18 +602,47 @@ class LevoitEverestAirSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Timer set and cancel (pyvesync VeSyncAirBaseV2 set_timer/clear_timer parity)
+    // Timer set and cancel — EverestAir is VeSyncAirBaseV2, uses addTimerV2 / delTimerV2
+    // NOT setTimer / clearTimer (Tower Fan / Core line shape).
+    // Payload shape (set): {enabled:true, startAct:[{type:"powerSwitch", act:0|1}], tmgEvt:{clkSec:<seconds>}}
+    // Payload shape (cancel): {id: <timerId>, subDeviceNo: 0}
     // -------------------------------------------------------------------------
 
-    def "setTimer(60, 'off') sends setTimer with {action:'off', total:60}"() {
+    def "setTimer(3600, 'off') sends addTimerV2 with V2 payload shape (NOT Tower Fan setTimer)"() {
+        // Regression guard: before this fix, setTimer sent 'setTimer' + {action, total} — Tower Fan
+        // shape — which VeSyncAirBaseV2 firmware silently rejects. Must now be addTimerV2.
         when:
-        driver.setTimer(60, "off")
+        driver.setTimer(3600, "off")
 
-        then: "setTimer request has correct payload shape for EverestAir"
-        def req = testParent.allRequests.find { it.method == "setTimer" }
+        then: "addTimerV2 request was sent (not the old Tower Fan 'setTimer' API name)"
+        def req = testParent.allRequests.find { it.method == "addTimerV2" }
         req != null
-        req.data.action == "off"
-        req.data.total == 60
+
+        and: "payload matches PurifierV2TimerPayloadData shape"
+        req.data.enabled == true
+        req.data.startAct instanceof List
+        req.data.startAct[0].type == "powerSwitch"
+        req.data.startAct[0].act == 0             // "off" action → act:0
+        req.data.tmgEvt instanceof Map
+        req.data.tmgEvt.clkSec == 3600
+
+        and: "Tower Fan payload fields are absent"
+        !req.data.containsKey("action")
+        !req.data.containsKey("total")
+
+        and: "Tower Fan API name was NOT used"
+        testParent.allRequests.find { it.method == "setTimer" } == null
+    }
+
+    def "setTimer(60, 'on') sends addTimerV2 with act:1 (power-on action)"() {
+        when:
+        driver.setTimer(60, "on")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "addTimerV2" }
+        req != null
+        req.data.startAct[0].act == 1             // "on" action → act:1
+        req.data.tmgEvt.clkSec == 60
     }
 
     def "setTimer(0, 'off') routes to cancelTimer (secs <= 0 short-circuit)"() {
@@ -615,9 +652,9 @@ class LevoitEverestAirSpec extends HubitatSpec {
         when:
         driver.setTimer(0, "off")
 
-        then: "clearTimer API call was made (not setTimer)"
-        testParent.allRequests.find { it.method == "clearTimer" } != null
-        testParent.allRequests.find { it.method == "setTimer" }   == null
+        then: "delTimerV2 API call was made (not addTimerV2)"
+        testParent.allRequests.find { it.method == "delTimerV2" } != null
+        testParent.allRequests.find { it.method == "addTimerV2" } == null
     }
 
     def "setTimer(null, 'off') is rejected with logWarn and no API call (BP18)"() {
@@ -626,20 +663,29 @@ class LevoitEverestAirSpec extends HubitatSpec {
 
         then:
         noExceptionThrown()
-        testParent.allRequests.findAll { it.method == "setTimer" }.isEmpty()
+        testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
+        testParent.allRequests.findAll { it.method == "setTimer" }.isEmpty()   // guard: old API name also absent
     }
 
-    def "cancelTimer with state.timerId set sends clearTimer with {id} and removes state.timerId"() {
+    def "cancelTimer with state.timerId set sends delTimerV2 with {id, subDeviceNo:0} and removes state.timerId"() {
+        // Regression guard: before fix, cancelTimer sent 'clearTimer' + {id} — Tower Fan shape.
+        // Must now be delTimerV2 + {id, subDeviceNo: 0}.
         given: "a timer id is stored in state"
         state.timerId = 42
 
         when:
         driver.cancelTimer()
 
-        then: "clearTimer was called with the stored id"
-        def req = testParent.allRequests.find { it.method == "clearTimer" }
+        then: "delTimerV2 was called (not the old Tower Fan 'clearTimer' API name)"
+        def req = testParent.allRequests.find { it.method == "delTimerV2" }
         req != null
+
+        and: "payload contains id and subDeviceNo:0"
         req.data.id == 42
+        req.data.subDeviceNo == 0
+
+        and: "Tower Fan API name was NOT used"
+        testParent.allRequests.find { it.method == "clearTimer" } == null
     }
 
     def "cancelTimer with no state.timerId is a no-op (no API call)"() {
@@ -649,7 +695,8 @@ class LevoitEverestAirSpec extends HubitatSpec {
         when:
         driver.cancelTimer()
 
-        then: "no clearTimer API call was made"
+        then: "no delTimerV2 API call was made"
+        testParent.allRequests.findAll { it.method == "delTimerV2" }.isEmpty()
         testParent.allRequests.findAll { it.method == "clearTimer" }.isEmpty()
         noExceptionThrown()
     }
@@ -663,5 +710,418 @@ class LevoitEverestAirSpec extends HubitatSpec {
         noExceptionThrown()
         testLog.warns.any { it.contains("setMode") && it.contains("null") }
         testParent.allRequests.isEmpty()
+    }
+
+    def "setDisplay(null) does not throw and emits a WARN log (BP18 — EverestAir requireNotNull added)"() {
+        // Before the BP25 fix, EverestAir's setDisplay lacked requireNotNull entirely.
+        // The BP25 fix adds requireNotNull as the first guard (before the BP25 toLowerCase fix).
+        when:
+        driver.setDisplay(null)
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+        testLog.warns.any { it.contains("setDisplay") || it.contains("null") }
+    }
+
+    def "setChildLock(null) does not throw and emits a WARN log (BP18 — EverestAir requireNotNull added)"() {
+        when:
+        driver.setChildLock(null)
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
+        testLog.warns.any { it.contains("setChildLock") || it.contains("null") }
+    }
+
+    def "setLightDetection(null) does not throw and emits a WARN log (BP18 — EverestAir requireNotNull added)"() {
+        when:
+        driver.setLightDetection(null)
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setLightDetection" }.isEmpty()
+        testLog.warns.any { it.contains("setLightDetection") || it.contains("null") }
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #25: case-sensitivity — uppercase "ON"/"OFF" input inverts payload
+    // setDisplay and setChildLock have a C3 gate (added below); setLightDetection also
+    // has a C3 gate. Test shape: seed current attribute != input so the gate does not
+    // suppress; then verify payload carries the correct integer value and event is lowercase.
+    // -------------------------------------------------------------------------
+
+    def "BP25: setDisplay('ON') sends screenSwitch:1 (not 0) and emits displayOn='on'"() {
+        // Pre-fix: ("ON" == "on") is false → screenSwitch:0 sent (display off instead of on).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → screenSwitch:1 (correct).
+        when:
+        driver.setDisplay("ON")
+
+        then: "setDisplay API call was made"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+
+        and: "payload carries screenSwitch:1 (on), NOT 0 (off)"
+        req.data.screenSwitch == 1
+
+        and: "emitted displayOn event is lowercase 'on'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25: setDisplay('OFF') sends screenSwitch:0 (not 1) and emits displayOn='off'"() {
+        when:
+        driver.setDisplay("OFF")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 0
+        lastEventValue("displayOn") == "off"
+    }
+
+    def "BP25: setChildLock('ON') sends childLockSwitch:1 (not 0) and emits childLock='on'"() {
+        // Pre-fix: ("ON" == "on") is false → childLockSwitch:0 (unlock instead of lock).
+        // Post-fix: normalize → childLockSwitch:1 (correct).
+        when:
+        driver.setChildLock("ON")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25: setLightDetection('ON') sends lightDetectionSwitch:1 (not 0) and emits lightDetection='on'"() {
+        // Pre-fix: ("ON" == "on") is false → lightDetectionSwitch:0 (off instead of on).
+        // Post-fix: normalize → lightDetectionSwitch:1 (correct).
+        when:
+        driver.setLightDetection("ON")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 1
+        lastEventValue("lightDetection") == "on"
+    }
+
+    def "BP25: setLightDetection('OFF') sends lightDetectionSwitch:0 (not 1) and emits lightDetection='off'"() {
+        when:
+        driver.setLightDetection("OFF")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 0
+        lastEventValue("lightDetection") == "off"
+    }
+
+    // -------------------------------------------------------------------------
+    // BP25-truthy: truthy-input assertions — regression guards for canon ternary.
+    // "ON" uppercase tests above prove toLowerCase() normalization. These prove
+    // the canon ternary: reverting sendEvent(canon) → sendEvent(val) would store
+    // "true" or "1" verbatim in the attribute, failing these assertions.
+    // -------------------------------------------------------------------------
+
+    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits displayOn='on' (truthy-canon)"() {
+        // Pre-canon: v="true"; sendEvent(value:"true") stored "true" verbatim — consumers fail.
+        // Post-canon: canon = ("true" in [...]) ? "on" : "off" = "on"; sendEvent(value:"on").
+        when:
+        driver.setDisplay("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('1') sends screenSwitch:1 and emits displayOn='on' (truthy-canon)"() {
+        when:
+        driver.setDisplay("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits childLock='on' (truthy-canon)"() {
+        // Pre-canon: v="true"; sendEvent(value:"true") — consumers comparing to "on" would fail.
+        // Post-canon: canon="on"; sendEvent(value:"on") — correct.
+        when:
+        driver.setChildLock("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits childLock='on' (truthy-canon)"() {
+        when:
+        driver.setChildLock("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setLightDetection('true') sends lightDetectionSwitch:1 and emits lightDetection='on' (truthy-canon)"() {
+        // Pre-canon: v="true"; sendEvent(value:"true") — consumers comparing to "on" would fail.
+        // Post-canon: canon="on"; sendEvent(value:"on") — correct.
+        when:
+        driver.setLightDetection("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 1
+        lastEventValue("lightDetection") == "on"
+    }
+
+    def "BP25-truthy: setLightDetection('1') sends lightDetectionSwitch:1 and emits lightDetection='on' (truthy-canon)"() {
+        when:
+        driver.setLightDetection("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLightDetection" }
+        req != null
+        req.data.lightDetectionSwitch == 1
+        lastEventValue("lightDetection") == "on"
+    }
+
+    // -------------------------------------------------------------------------
+    // Regression guards — v2.5 null-input and coercion fixes
+    // -------------------------------------------------------------------------
+
+    def "on() re-entrance guard: second call while turningOn=true is a no-op (Fix 1)"() {
+        // Regression guard: BP24-B fix adds state.turningOn guard to on().
+        // If ensureSwitchOn() calls on() recursively, the second call must short-circuit.
+        given:
+        state.turningOn = true
+
+        when:
+        driver.on()
+
+        then: "no setSwitch API call because re-entrance was blocked"
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "setFanSpeed(null) is rejected with logWarn and no API call (BP18 Fix 2)"() {
+        // Pre-fix: (null as Integer) -> NPE in sandbox or ?: 1 silently set speed to 1.
+        // Post-fix: requireNotNull rejects null before any coercion.
+        when:
+        driver.setFanSpeed(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+        testLog.warns.any { it.contains("setFanSpeed") || it.contains("null") }
+    }
+
+    def "setFanSpeed(2) calls ensureSwitchOn() (BP24-B Fix 2)"() {
+        // Pre-fix: setFanSpeed had no ensureSwitchOn() call — device stayed off.
+        // Post-fix: ensureSwitchOn() fires before the API write.
+        // We verify by seeding switch=off and confirming on() was called (setSwitch fired).
+        given: "device is off"
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when:
+        driver.setFanSpeed(2)
+
+        then: "setSwitch (on) AND setLevel (fan speed) both sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+        testParent.allRequests.find { it.method == "setLevel" && it.data.manualSpeedLevel == 2 } != null
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setFanSpeed with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setFanSpeed('#badInput') does not throw (safeIntArg coerces to fallback speed 1)"() {
+        // safeIntArg(speed, 1) maps non-numeric / non-integer inputs to fallback 1 (min-floor),
+        // which is a valid EverestAir speed — so a setLevel cloud call IS made for every input
+        // in this table.  The critical guarantee is that no NumberFormatException is thrown.
+        //   "abc" → "abc" not numeric → fallback 1 → speed 1 call (manualSpeedLevel=1)
+        //   ""    → empty → fallback 1 → speed 1 call (manualSpeedLevel=1)
+        //   true  → "true" not numeric → fallback 1 → speed 1 call (manualSpeedLevel=1)
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setFanSpeed is called with a non-numeric input"
+        driver.setFanSpeed(badInput)
+
+        then: "no exception thrown — pre-fix would have thrown NFE/GroovyCastException"
+        noExceptionThrown()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setFanSpeed('5.7') does not throw and makes a setLevel API call with truncated value (5 clamped to 3)"() {
+        // safeIntArg("5.7") → BigDecimal("5.7").intValue() = 5.
+        // Math.max(1, Math.min(3, 5)) = 3 (clamped to EverestAir maximum speed).
+        // manualSpeedLevel=3 sent to cloud — correct post-fix truncation behaviour.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setFanSpeed("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setLevel API call was made with manualSpeedLevel=3 (5 clamped to max speed)"
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.manualSpeedLevel == 3
+    }
+
+    def "BP26: setFanSpeed(null) is rejected with a warning and does not make a setLevel API call"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setFanSpeed(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setLevel API call was made"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // C3 idempotency gate — setDisplay / setChildLock must not re-call API when
+    // the value already matches the current attribute (EverestAir D1 fix)
+    // -------------------------------------------------------------------------
+
+    def "C3: setDisplay with already-current value makes no hubBypass call (EverestAir)"() {
+        // Regression guard: before D1 fix, EverestAir setDisplay had no C3 gate,
+        // so calling setDisplay("on") when the device was already on fired a redundant
+        // cloud call on every Rule Machine "refresh idempotency" evaluation.
+        // This test FAILS on pre-D1-fix code (gate absent → allRequests is non-empty)
+        // and PASSES with the gate present.
+        given: "displayOn attribute is already 'on'"
+        testDevice.events.add([name: "displayOn", value: "on"])
+
+        when: "setDisplay called with the same value"
+        driver.setDisplay("on")
+
+        then: "no setDisplay API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setDisplay with different value does make a hubBypass call (EverestAir)"() {
+        // Confirm the gate is a state-change guard, not a complete no-op.
+        given: "displayOn attribute is 'off'"
+        testDevice.events.add([name: "displayOn", value: "off"])
+
+        when: "setDisplay called with 'on' (different from current)"
+        driver.setDisplay("on")
+
+        then: "setDisplay API call was made"
+        testParent.allRequests.any { it.method == "setDisplay" }
+    }
+
+    def "C3: setChildLock with already-current value makes no hubBypass call (EverestAir)"() {
+        // Regression guard: parallel to the setDisplay C3 test above.
+        given: "childLock attribute is already 'on'"
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when: "setChildLock called with the same value"
+        driver.setChildLock("on")
+
+        then: "no setChildLock API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setChildLock with different value does make a hubBypass call (EverestAir)"() {
+        given: "childLock attribute is 'off'"
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when: "setChildLock called with 'on'"
+        driver.setChildLock("on")
+
+        then: "setChildLock API call was made"
+        testParent.allRequests.any { it.method == "setChildLock" }
+    }
+
+    // -------------------------------------------------------------------------
+    // C3 idempotency gate — setLightDetection must not re-call API when the value
+    // already matches the current lightDetection attribute (EverestAir)
+    // -------------------------------------------------------------------------
+
+    def "C3: setLightDetection with already-current value makes no hubBypass call (EverestAir)"() {
+        // Regression guard: before this fix, EverestAir setLightDetection had no C3 gate,
+        // so calling setLightDetection("on") when light detection was already on fired a
+        // redundant cloud call on every Rule Machine evaluation.
+        // This test FAILS on pre-fix code (gate absent → allRequests is non-empty)
+        // and PASSES with the gate present.
+        given: "lightDetection attribute is already 'on'"
+        testDevice.events.add([name: "lightDetection", value: "on"])
+
+        when: "setLightDetection called with the same value"
+        driver.setLightDetection("on")
+
+        then: "no setLightDetection API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setLightDetection" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setLightDetection with different value does make a hubBypass call (EverestAir)"() {
+        // Confirm the gate is a state-change guard, not a complete no-op.
+        given: "lightDetection attribute is 'off'"
+        testDevice.events.add([name: "lightDetection", value: "off"])
+
+        when: "setLightDetection called with 'on' (different from current)"
+        driver.setLightDetection("on")
+
+        then: "setLightDetection API call was made"
+        testParent.allRequests.any { it.method == "setLightDetection" }
+    }
+
+    // -------------------------------------------------------------------------
+    // BP26: safeIntArg regression — setTimer non-numeric RM inputs must not throw
+    // -------------------------------------------------------------------------
+
+    def "BP26: setTimer('') does not throw on empty-string input from Rule Machine (EverestAir)"() {
+        // safeIntArg("", 0) returns 0; secs<=0 routes to cancelTimer(), no addTimerV2 call.
+        // Pre-fix: (seconds as Integer) on "" threw NumberFormatException (sandbox swallowed).
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTimer("")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no addTimerV2 API call"
+        testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
+    }
+
+    def "BP26: setTimer('abc') does not throw on non-numeric input from Rule Machine (EverestAir)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTimer("abc")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no addTimerV2 API call"
+        testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
     }
 }

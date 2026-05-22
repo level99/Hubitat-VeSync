@@ -213,4 +213,89 @@ class LevoitCore200SLightSpec extends HubitatSpec {
         req != null
         req.data.night_light == "on"
     }
+
+    // -------------------------------------------------------------------------
+    // BP18 regression guard: setLevel(null) does not throw NPE
+    // -------------------------------------------------------------------------
+
+    def "BP18: setLevel(null) does not throw and logs a warn (Core 200S Light)"() {
+        // Regression guard: before this fix, null < 10 threw NPE (Groovy null arithmetic),
+        // which the Hubitat sandbox swallowed silently. Core 200S Light's setLevel routing
+        // (to setNightLight on/off/dim) has different semantics than the purifier's off() path,
+        // so we use an explicit null early-return with a logWarn instead of the coerce-to-0 idiom.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setLevel(null)
+
+        then: "no NPE thrown"
+        noExceptionThrown()
+
+        and: "no setNightLight API call was made"
+        testParent.allRequests.findAll { it.method == "setNightLight" }.isEmpty()
+
+        and: "a warning was logged"
+        testLog.warns.any { it.contains("setLevel") }
+    }
+
+    // ---- BP25: setNightLight passes raw string to API as 'night_light' field ----
+
+    def "BP25: setNightLight('ON') sends night_light:'on' (lowercase), not 'ON' (BP25 regression guard)"() {
+        // Pre-fix: mode passed raw → API receives "ON" which the VeSync cloud may reject.
+        // Post-fix: m = mode.toLowerCase() → API receives "on".
+        when:
+        driver.setNightLight("ON")
+
+        then: "setNightLight API call made with night_light:'on' (lowercase)"
+        def req = testParent.allRequests.find { it.method == "setNightLight" }
+        req != null
+        req.data.night_light == "on"
+    }
+
+    def "BP25: setNightLight('DIM') sends night_light:'dim' (lowercase) (BP25 regression guard)"() {
+        when:
+        driver.setNightLight("DIM")
+
+        then: "setNightLight API call made with night_light:'dim' (lowercase)"
+        def req = testParent.allRequests.find { it.method == "setNightLight" }
+        req != null
+        req.data.night_light == "dim"
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #26 (D2 variant): comparison-operator implicit coercion on
+    // blank Rule Machine slot — setLevel("") and setLevel("abc") must not throw
+    // -------------------------------------------------------------------------
+
+    def "BP26: setLevel('') does not throw on empty-string input from Rule Machine (Core 200S Light)"() {
+        // Before D2 fix, `level < 10` on a blank-slot "" string threw GroovyCastException
+        // (swallowed silently by the Hubitat sandbox — no log entry, no effect).
+        // After D2 fix: safeIntArg("", 0, 0, 100) returns 0; 0 < 10 → setNightLight("off").
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setLevel called with empty string (Rule Machine blank slot)"
+        driver.setLevel("")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setLevel('abc') does not throw on non-numeric string (Core 200S Light)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setLevel called with non-numeric string"
+        driver.setLevel("abc")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
 }

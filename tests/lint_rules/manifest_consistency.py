@@ -12,20 +12,7 @@ import json
 import re
 from pathlib import Path
 
-from lint_rules._helpers import is_library_file
-
-
-def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": file_str,
-        "line": lineno,
-        "context": context,
-        "why": why,
-        "fix": fix,
-    }
+from lint_rules._helpers import is_library_file, make_finding, make_finding_for_file
 
 
 # Files intentionally excluded from the manifest (not installable drivers)
@@ -45,7 +32,7 @@ def check_rule18_manifest_consistency(repo_root: Path, config: dict):
     drivers_dir = repo_root / "Drivers" / "Levoit"
 
     if not manifest_path.exists():
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="FAIL",
             rule_id="RULE18_manifest_missing",
             title="levoitManifest.json not found",
@@ -62,7 +49,7 @@ def check_rule18_manifest_consistency(repo_root: Path, config: dict):
         manifest_text = manifest_path.read_text(encoding='utf-8')
         manifest = json.loads(manifest_text)
     except json.JSONDecodeError as e:
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="FAIL",
             rule_id="RULE18_manifest_invalid_json",
             title=f"levoitManifest.json is not valid JSON: {e}",
@@ -91,7 +78,7 @@ def check_rule18_manifest_consistency(repo_root: Path, config: dict):
 
     # All .groovy files in Drivers/Levoit/
     if not drivers_dir.exists():
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="FAIL",
             rule_id="RULE18_drivers_dir_missing",
             title="Drivers/Levoit/ directory not found",
@@ -126,7 +113,7 @@ def check_rule18_manifest_consistency(repo_root: Path, config: dict):
     # Check: every driver file has a manifest entry
     for fname in sorted(expected_in_manifest):
         if fname not in manifest_filenames:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="FAIL",
                 rule_id="RULE18_driver_not_in_manifest",
                 title=f"Driver file missing from manifest: {fname}",
@@ -145,7 +132,7 @@ def check_rule18_manifest_consistency(repo_root: Path, config: dict):
         basename = loc.split('/')[-1].replace('%20', ' ')
         name = entry.get('name', '(unnamed)')
         if basename and basename not in actual_drivers:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="FAIL",
                 rule_id="RULE18_manifest_entry_missing_file",
                 title=f"Manifest entry '{name}' points to non-existent file: {basename}",
@@ -162,7 +149,7 @@ def check_rule18_manifest_consistency(repo_root: Path, config: dict):
     for i, uid in enumerate(manifest_ids):
         if not uid:
             entry_name = manifest_drivers[i].get('name', f'entry #{i}')
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="FAIL",
                 rule_id="RULE18_missing_uuid",
                 title=f"Manifest entry '{entry_name}' has no UUID",
@@ -175,7 +162,7 @@ def check_rule18_manifest_consistency(repo_root: Path, config: dict):
             ))
         elif uid in seen_ids:
             entry_name = manifest_drivers[i].get('name', f'entry #{i}')
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="FAIL",
                 rule_id="RULE18_duplicate_uuid",
                 title=f"Duplicate UUID '{uid}' in manifest (entries: '{seen_ids[uid]}' and '{entry_name}')",

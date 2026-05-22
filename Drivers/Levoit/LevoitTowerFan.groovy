@@ -92,7 +92,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Tower Fan (LTF-F422S-WUS/WUSR/KEU/WJP) — power, fan speed 1-12, modes (normal/turbo/auto/sleep), oscillation, mute, display, timer, ambient temperature; canonical pyvesync payloads",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -154,12 +154,12 @@ metadata {
 // Both routes funnel through the same sendLevel() internal helper (provided by LevoitFanLib).
 def setSpeed(spd){
     logDebug "setSpeed(${spd})"
-    if (spd == null) { logWarn "setSpeed called with null spd (likely empty Rule Machine action parameter); ignoring"; return }
+    if (!requireNonEmptyEnum(spd, "setSpeed")) return
     // Short-circuit power commands before the auto-on guard.
     // setSpeed("off") must NOT trigger ensureSwitchOn() — the intent is explicitly to turn off.
     // setSpeed("on") short-circuits here too for symmetry (on() does everything needed).
     if (!(spd instanceof Number) && !(spd instanceof String && spd.isInteger())) {
-        String early = (spd as String).toLowerCase()
+        String early = (spd as String).trim().toLowerCase()
         if (early == "off") { off(); return }
         if (early == "on")  { on(); return }
     }
@@ -179,7 +179,7 @@ def setSpeed(spd){
         return
     }
     // Enum string (FanControl capability path)
-    String s = (spd as String).toLowerCase()
+    String s = (spd as String).trim().toLowerCase()
     if (s == "auto") { setMode("auto"); return }
     Integer lvl = fanControlEnumToLevel(s)
     if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; recordError("setSpeed: unknown enum '${s}'", [method:"setLevel"]); return }
@@ -210,8 +210,8 @@ def setSpeed(spd){
 //     correct API literal --> remove the reverse-mapping and send "sleep" directly.
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    if (!requireNonEmptyEnum(mode, "setMode")) return
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["normal","turbo","auto","sleep"])) {
         logError "setMode: invalid mode '${m}' -- must be normal|turbo|auto|sleep"
         recordError("setMode: invalid mode '${m}'", [method:"setTowerFanMode"])
@@ -231,15 +231,20 @@ def setMode(mode){
 
 // ---------- Feature setters ----------
 // Public delegators for methods whose bodies live in LevoitFanLib.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setMute(o)    { doSetMuteSwitch(o) }
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(o) { doSetDisplayScreenSwitch(o) }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setOscillation(onOff){
     logDebug "setOscillation(${onOff})"
-    if (onOff == null) { logWarn "setOscillation called with null (likely empty Rule Machine action parameter); ignoring"; return }
-    String s = (onOff as String).toLowerCase()
+    if (!requireNonEmptyEnum(onOff, "setOscillation")) return
+    String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setOscillation: invalid value '${s}'"; recordError("setOscillation invalid: ${s}", [method:"setOscillationSwitch"]); return }
-    int v = (s == "on") ? 1 : 0
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("oscillation") == s) return
+    int v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setOscillationSwitch", [oscillationSwitch: v], "setOscillationSwitch(${s})")
     if (httpOk(resp)) {
         device.sendEvent(name:"oscillation", value: s)
@@ -267,10 +272,10 @@ def setOscillation(onOff){
 // used by all other fan/humidifier command methods.
 def setTimer(seconds, action="off"){
     if (!requireNotNull(seconds, "setTimer")) return
-    int secs = seconds as Integer
+    int secs = safeIntArg(seconds, 0)
     if (secs <= 0) { cancelTimer(); return }
     // action defaults to "off" in the Groovy signature; only null-guard when explicitly null
-    String act = (action != null) ? (action as String).toLowerCase() : "off"
+    String act = (action != null) ? (action as String).trim().toLowerCase() : "off"
     if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"setTimer"]); return }
     logDebug "setTimer(${secs}s, action=${act})"
     def resp = hubBypass("setTimer", [action: act, total: secs], "setTimer(${secs}s,${act})")

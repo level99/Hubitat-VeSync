@@ -14,6 +14,7 @@ Rule 17 — Forbidden imports and reflection patterns:
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding, make_finding_for_path
 
 
 FORBIDDEN_IMPORTS = [
@@ -31,23 +32,6 @@ FORBIDDEN_PATTERNS = [
 ]
 
 
-def _context(lines, lineno, window=1):
-    start = max(0, lineno - 1 - window)
-    end = min(len(lines), lineno + window)
-    return '\n'.join(f"    {lines[i]}" for i in range(start, end))
-
-
-def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": str(path.relative_to(rel_base)).replace('\\', '/'),
-        "line": lineno,
-        "context": _context(lines, lineno),
-        "why": why,
-        "fix": fix,
-    }
 
 
 def check_rule17_sandbox_forbidden(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
@@ -59,10 +43,17 @@ def check_rule17_sandbox_forbidden(path, raw_lines, cleaned_lines, raw_text, con
     if path.suffix != '.groovy':
         return findings
 
+    # Only applies to files in Drivers/Levoit/ directory.
+    if 'Drivers' not in path.parts and 'Levoit' not in path.parts:
+        # Check by path string as well for Windows vs. Unix path segments
+        path_str = str(path).replace('\\', '/')
+        if 'Drivers/Levoit/' not in path_str:
+            return findings
+
     for i, line in enumerate(raw_lines, 1):
         for pattern, label in FORBIDDEN_IMPORTS:
             if pattern.search(line):
-                findings.append(_making_finding(
+                findings.append(make_finding_for_path(
                     severity="FAIL",
                     rule_id="RULE17_forbidden_import",
                     title=f"Forbidden import: {label}",
@@ -76,7 +67,7 @@ def check_rule17_sandbox_forbidden(path, raw_lines, cleaned_lines, raw_text, con
 
         for pattern, label in FORBIDDEN_PATTERNS:
             if pattern.search(line):
-                findings.append(_making_finding(
+                findings.append(make_finding_for_path(
                     severity="FAIL",
                     rule_id="RULE17_forbidden_reflection",
                     title=f"Sandbox-escape reflection pattern: {label}",

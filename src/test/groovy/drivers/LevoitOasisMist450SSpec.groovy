@@ -477,12 +477,12 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         !req.data.containsKey("levelType")
     }
 
-    def "setMistLevel clamps values below 1 to 1"() {
-        given:
-        settings.descriptionTextEnable = false
+    def "setMistLevel(1) passes through as the minimum valid level (OasisMist 450S floor)"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
-        driver.setMistLevel(0)
+        driver.setMistLevel(1)
 
         then:
         def req = testParent.allRequests.find { it.method == "setVirtualLevel" && it.data.type == "mist" }
@@ -1973,5 +1973,315 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         then: "setSwitch(enabled:true) was sent -- Classic-family payload (auto-on via ensureSwitchOn)"
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
         onReq != null
+    }
+
+    // ---- BP25: setNightlightSwitch (RGB-variant gate-guarded, WEU variant only) ----
+
+    def "BP25: setNightlightSwitch('ON') resolves to action='on', not 'off' (BP25 regression guard)"() {
+        // Pre-fix: (value == "on") where value="ON" evaluates false → action="off" (wrong).
+        // Post-fix: toLowerCase() normalizes "ON"→"on" → action="on".
+        // setNightlightSwitch is gated behind isRgbVariant() — set state.deviceType to WEU variant.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+        state.nightlightBrightness = 80
+
+        when:
+        driver.setNightlightSwitch("ON")
+
+        then: "setLightStatus sent with action='on' (not 'off')"
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.action == "on"
+
+        and: "emitted nightlightSwitch event is 'on'"
+        lastEventValue("nightlightSwitch") == "on"
+    }
+
+    def "BP25: setNightlightSwitch('OFF') resolves to action='off' (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+
+        when:
+        driver.setNightlightSwitch("OFF")
+
+        then: "setLightStatus sent with action='off'"
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.action == "off"
+    }
+
+    def "BP26: setMistLevel('') does not throw on empty-string input from Rule Machine (OasisMist 450S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setMistLevel called with empty string (Rule Machine blank slot)"
+        driver.setMistLevel("")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setMistLevel('abc') does not throw on non-numeric input from Rule Machine (OasisMist 450S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setMistLevel called with non-numeric string"
+        driver.setMistLevel("abc")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setHumidity with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setHumidity('#badInput') does not throw and does not make a setTargetHumidity API call (OasisMist 450S)"() {
+        // safeIntArg() maps non-numeric inputs to 0; 0 triggers the p<=0 guard → logWarn + return.
+        // OasisMist 450S clamps to 40-80 range (higher floor than other humidifiers).
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setTargetHumidity API call — 0 coercion rejected by minimum-humidity guard"
+        testParent.allRequests.findAll { it.method == "setTargetHumidity" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setHumidity('5.7') does not throw and makes a setTargetHumidity API call with clamped value (40) (OasisMist 450S)"() {
+        // safeIntArg("5.7") → 5. 5 > 0 so the rejection guard is skipped;
+        // Math.max(40, Math.min(80, 5)) = 40 (clamped to OasisMist 450S minimum of 40).
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setTargetHumidity API call was made with target_humidity=40 (5 clamped to OasisMist 450S minimum)"
+        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
+        req != null
+        req.data.target_humidity == 40
+    }
+
+    // -------------------------------------------------------------------------
+    // BP26: safeIntArg regression — setWarmMistLevel / setHue / setSaturation
+    // non-null non-numeric inputs (the path that bypasses requireNotNull but
+    // reaches safeIntArg). Pre-fix: bare coercion threw before guard could fire.
+    // -------------------------------------------------------------------------
+
+    def "BP26: setWarmMistLevel('abc') does not throw on non-numeric input from Rule Machine (OasisMist 450S)"() {
+        // safeIntArg("abc", 0) returns 0; range check 0<0||0>3 is false; lvl==0 &&
+        // switch!="on" hits early-return with no API call.
+        given:
+        settings.descriptionTextEnable = false
+        // switch=off so lvl=0 early-return fires cleanly with no cloud call
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when:
+        driver.setWarmMistLevel("abc")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "BP26: setWarmMistLevel('1.7') does not throw and makes a setVirtualLevel warm API call (OasisMist 450S)"() {
+        // safeIntArg("1.7") → 1 (truncation); 1 is within 0-3; switch is on so no early-return.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setWarmMistLevel("1.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setVirtualLevel warm API call was made"
+        testParent.allRequests.any { it.method == "setVirtualLevel" && it.data.type == "warm" }
+    }
+
+    def "BP26: setHue('abc') does not throw on non-numeric input from Rule Machine (OasisMist 450S WEU)"() {
+        // safeIntArg("abc", 0, 0, 100) returns 0; setColor is called with hue=0.
+        // Requires RGB variant gate to pass (state.deviceType = WEU).
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+
+        when:
+        driver.setHue("abc")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "BP26: setSaturation('abc') does not throw on non-numeric input from Rule Machine (OasisMist 450S WEU)"() {
+        // safeIntArg("abc", 100, 0, 100) returns 100; setColor is called with sat=100.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+
+        when:
+        driver.setSaturation("abc")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern P1: requireNotNull guards on setWarmMistLevel / setHue / setSaturation
+    // Non-vacuity: removing the requireNotNull guard from each method causes its
+    // spec to fail because safeIntArg(null, ...) returns the fallback silently
+    // with no WARN — the testLog.warns assertion below raises AssertionError.
+    // Restoring the guard emits the WARN and all three assertions pass.
+    // -------------------------------------------------------------------------
+
+    def "P1: setWarmMistLevel(null) does not throw and logs a warn (OasisMist 450S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setWarmMistLevel called with null (Rule Machine blank slot)"
+        driver.setWarmMistLevel(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no API call was made"
+        testParent.allRequests.isEmpty()
+
+        and: "a warning was logged naming the method"
+        testLog.warns.any { it.contains("setWarmMistLevel") }
+    }
+
+    def "P1: setHue(null) does not throw and logs a warn (OasisMist 450S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setHue called with null (Rule Machine blank slot)"
+        driver.setHue(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no API call was made"
+        testParent.allRequests.isEmpty()
+
+        and: "a warning was logged naming the method"
+        testLog.warns.any { it.contains("setHue") }
+    }
+
+    def "P1: setSaturation(null) does not throw and logs a warn (OasisMist 450S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setSaturation called with null (Rule Machine blank slot)"
+        driver.setSaturation(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no API call was made"
+        testParent.allRequests.isEmpty()
+
+        and: "a warning was logged naming the method"
+        testLog.warns.any { it.contains("setSaturation") }
+    }
+
+    // -------------------------------------------------------------------------
+    // B2 regression guards: setColor(Map) safe Map-field coercion
+    // -------------------------------------------------------------------------
+    // These specs guard against BP26 Map-field coercion regressions inside
+    // setColor(Map colorMap).  Pre-fix: bare `colorMap?.hue as Integer` threw
+    // NumberFormatException on decimal strings, blank strings, or non-numeric Map
+    // values — the sandbox swallowed the exception leaving a silent no-op.
+    // Post-fix: safeIntArg() + null-Map guard handle all bad-input shapes.
+    //
+    // Both-ways proof: orchestrator-owned.
+
+    def "BP26: setColor(null) does not throw and logs a WARN (null Map guard)"() {
+        // Null colorMap is the Rule Machine 'Set Color' blank-slot shape.
+        // Pre-fix: no null check — null.?hue evaluated, causing NPE swallowed silently.
+        // Post-fix: null-Map guard at method entry logs WARN and returns immediately.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+
+        when: "setColor called with null (Rule Machine blank parameter slot)"
+        driver.setColor(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no API call was made — null guard short-circuited before hubBypass"
+        testParent.allRequests.findAll { it.method == "setLightStatus" }.isEmpty()
+
+        and: "a WARN was logged naming the problem"
+        testLog.warns.any { it.contains("setColor") || it.contains("null") || it.contains("colorMap") }
+    }
+
+    def "BP26: setColor([hue:'55.5']) does not throw — decimal-string hue handled by safeIntArg"() {
+        // Dashboard color-picker tiles or hub-variable bindings can produce decimal strings.
+        // Pre-fix: `colorMap?.hue as Integer` on "55.5" threw NumberFormatException (silent).
+        // Post-fix: safeIntArg("55.5", 0) → 55 (truncation); no exception.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+
+        when: "setColor called with decimal-string hue"
+        driver.setColor([hue: "55.5", saturation: 80, level: 70])
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "setLightStatus API call was made (decimal hue truncated to 55)"
+        testParent.allRequests.findAll { it.method == "setLightStatus" }.size() >= 1
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setColor([hue:'']) does not throw — blank-string hue handled by safeIntArg"() {
+        // Rule Machine 'Set Color' with a hub-variable bound to blank string.
+        // Pre-fix: `"" as Integer` threw NumberFormatException (silent no-op).
+        // Post-fix: safeIntArg("", 0) → 0 (fallback); method proceeds with hue=0.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+
+        when: "setColor called with blank-string hue"
+        driver.setColor([hue: "", saturation: 100, level: 80])
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setColor([hue:'abc']) does not throw — non-numeric hue handled by safeIntArg"() {
+        // safeIntArg("abc", 0) → 0 (non-numeric input falls back to 0, no exception).
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-O451S-WEU"
+
+        when: "setColor called with non-numeric hue string"
+        driver.setColor([hue: "abc", saturation: 100, level: 80])
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
     }
 }

@@ -53,7 +53,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Fall-through diagnostic driver for unsupported Levoit models. Provides best-effort power control and diagnostic capture for new-device-support issue filing.",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -69,6 +69,7 @@ metadata {
         attribute "mode", "string"            // best-effort mode string if present in response
         attribute "filter", "number"          // filter/wick life % if present
         attribute "airQualityIndex", "number" // numeric AQ index (required by AirQuality capability)
+        attribute "airQuality", "string"      // human-readable AQ label ("Excellent", "Good", etc.)
 
         command "captureDiagnostics"
         command "toggle"
@@ -162,10 +163,16 @@ def setLevel(val, duration) {
 }
 
 def setLevel(val){
+    if (!requireNotNull(val, "setLevel")) return   // BP18: null-guard (blank RM slot; safeIntArg is null-safe but produces 0 with no log)
     logDebug "setLevel(${val})"
+    // Intentional divergence from typed drivers: val==0 does NOT route to off() here.
+    // Typed purifier drivers (Core/Vital) treat level:0 as power-off (SwitchLevel convention).
+    // Typed humidifier drivers treat level:0 as zero-mist-level (not power-off).
+    // Since the Generic driver cannot know the device shape until captureDiagnostics runs,
+    // neither semantic can be inferred safely. Callers must use off() explicitly.
     // Record the level; we can't know which speed/mist command applies until we know
     // the device shape, so just store and emit for rules/automations.
-    device.sendEvent(name:"level", value: val as Integer)
+    device.sendEvent(name:"level", value: safeIntArg(val, 0))
     logDebug "setLevel: emitted level=${val} (no API call — unknown device shape; use captureDiagnostics)"
 }
 

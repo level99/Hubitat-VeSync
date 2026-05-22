@@ -481,4 +481,49 @@ class LevoitGenericSpec extends HubitatSpec {
         evt.size() > 0
         evt.last().value == 50
     }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #26: safeIntArg regression — non-numeric RM inputs must not throw
+    // -------------------------------------------------------------------------
+
+    def "BP26: setLevel('abc') does not throw on non-numeric input from Rule Machine (Generic)"() {
+        // Before BP26 fix, passing a non-numeric string to setLevel caused an implicit
+        // coercion attempt that could throw, swallowed silently by the Hubitat sandbox.
+        // safeIntArg("abc", 0) returns 0 safely.
+        given:
+        settings.descriptionTextEnable = false
+
+        when: "setLevel called with non-numeric string"
+        driver.setLevel("abc")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setLevel(null) is rejected via requireNotNull — no level event, logWarn (Generic, W1)"() {
+        // W1 fix: LevoitGeneric.setLevel(val) now starts with
+        // `if (!requireNotNull(val, "setLevel")) return` — null is rejected before
+        // safeIntArg is reached, so no level event is emitted and no API call is made.
+        // Pre-fix (old behavior): safeIntArg(null, 0) returned 0 and level=0 was emitted.
+        // Post-fix (W1 behavior): requireNotNull logs a WARN naming "setLevel" and returns.
+        //
+        // Both-ways: orchestrator-owned.
+        given:
+        settings.descriptionTextEnable = true
+
+        when: "setLevel called with null (Rule Machine blank parameter slot)"
+        driver.setLevel(null)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no level event was emitted — requireNotNull short-circuited before any event"
+        testDevice.allEvents("level").isEmpty()
+
+        and: "a logWarn naming 'setLevel' was emitted (requireNotNull rejection)"
+        testLog.warns.any { it.contains("setLevel") }
+    }
 }

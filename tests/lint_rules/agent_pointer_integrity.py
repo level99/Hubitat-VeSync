@@ -42,6 +42,7 @@ Section matching:
 import re
 from pathlib import Path
 from functools import lru_cache
+from lint_rules._helpers import make_finding, make_finding_for_file
 
 
 # ---------------------------------------------------------------------------
@@ -94,23 +95,6 @@ def _cached_section_headers(file_path: Path) -> frozenset:
 
 
 # ---------------------------------------------------------------------------
-# Finding builder
-# ---------------------------------------------------------------------------
-
-def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": file_str,
-        "line": lineno,
-        "context": context,
-        "why": why,
-        "fix": fix,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Rule entry point
 # ---------------------------------------------------------------------------
 
@@ -151,7 +135,7 @@ def check_rule24_agent_pointer_integrity(path, raw_lines, cleaned_lines, raw_tex
             target_path = rel_base / target_filename
 
             if not target_path.exists():
-                findings.append(_making_finding(
+                findings.append(make_finding_for_file(
                     severity="WARN",
                     rule_id="RULE24_target_file_missing",
                     title=f"Pointer to non-existent file '{target_filename}' in agent definition",
@@ -173,7 +157,7 @@ def check_rule24_agent_pointer_integrity(path, raw_lines, cleaned_lines, raw_tex
             # Check the section header exists in the target file
             headers = _cached_section_headers(target_path)
             if section_header not in headers:
-                findings.append(_making_finding(
+                findings.append(make_finding_for_file(
                     severity="FAIL",
                     rule_id="RULE24_broken_section_pointer",
                     title=f"Broken section pointer: '{section_header}' not found in {target_filename}",

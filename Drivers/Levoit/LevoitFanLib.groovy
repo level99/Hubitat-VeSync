@@ -187,11 +187,11 @@ def setLevel(val, duration) {
 // BP23: setLevel(N>0) auto-turns-on when switch is off (SwitchLevel capability convention).
 def setLevel(val) {
     logDebug "setLevel(${val})"
-    Integer pct = Math.max(0, Math.min(100, (val as Integer) ?: 0))
+    Integer pct = safeIntArg(val, 0, 0, 100)
     if (pct == 0) { off(); return }
-    // BP23: auto-on when switch is off.
-    // state.turningOn guard set in on() prevents re-entrance.
-    if (!state.turningOn && device.currentValue("switch") != "on") on()
+    // BP23: auto-on when switch is off (SwitchLevel capability convention).
+    // state.turningOn re-entrance guard is inside ensureSwitchOn().
+    ensureSwitchOn()
     Integer lvl = levelFromPercent(pct)
     // SwitchLevel spec requires emitting the level event immediately
     sendEvent(name:"level", value: pct)
@@ -271,13 +271,21 @@ private Integer levelFromPercent(Integer pct) {
 // This keeps the public method name stable while the body is shared.
 // doSetDisplayScreenSwitch uses the same name as LevoitHumidifierLib's helper — intentional.
 // No conflict arises because a driver only #includes one of the two libs.
+// Behavioral divergence from LevoitHumidifierLib's helper of the same name: this version
+// applies a strict enum-rejection gate (any value outside "on"/"off" is an error). The fan
+// line uses strict-enum validation on all feature-toggle setters; the humidifier version omits
+// that gate and relies only on truthy coercion — a permissive legacy-input choice preserved for
+// back-compat with that driver family.
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def doSetMuteSwitch(onOff) {
     logDebug "setMute(${onOff})"
-    if (!requireNotNull(onOff, "setMute")) return
-    String s = (onOff as String).toLowerCase()
+    if (!requireNonEmptyEnum(onOff, "setMute")) return
+    String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setMute: invalid value '${s}'"; recordError("setMute invalid: ${s}", [method:"setMuteSwitch"]); return }
-    int v = (s == "on") ? 1 : 0
+    // C3 idempotency gate: suppress redundant API call when attribute already matches.
+    if (device.currentValue("mute") == s) return
+    int v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setMuteSwitch", [muteSwitch: v], "setMuteSwitch(${s})")
     if (httpOk(resp)) {
         device.sendEvent(name:"mute", value: s)
@@ -287,12 +295,15 @@ def doSetMuteSwitch(onOff) {
     }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def doSetDisplayScreenSwitch(onOff) {
     logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return
-    String s = (onOff as String).toLowerCase()
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return
+    String s = (onOff as String).trim().toLowerCase()
     if (!(s in ["on","off"])) { logError "setDisplay: invalid value '${s}'"; recordError("setDisplay invalid: ${s}", [method:"setDisplay"]); return }
-    int v = (s == "on") ? 1 : 0
+    // C3 idempotency gate: suppress redundant API call when attribute already matches.
+    if (device.currentValue("displayOn") == s) return
+    int v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${s})")
     if (httpOk(resp)) {
         device.sendEvent(name:"displayOn", value: s)

@@ -52,7 +52,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S / 300S air purifiers' night light capability",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -111,21 +111,29 @@ def off() {
 	setNightLight("off")
 }
 
+// No C3 idempotency gate: this is a three-state enum setter ("on"/"off"/"dim"), not a
+// boolean on/off toggle. It is not classified as an on/off setter in the C3 gate scope.
+// Additionally, this driver uses parent.sendBypassRequest directly (not hubBypass) and
+// does not read back device.currentValue("switch") — C3 would require a different
+// attribute lookup that is not consistent with this driver's call pattern.
 def setNightLight(mode)
 {
     logDebug "setNightLight(${mode})"
-    if (!requireNotNull(mode, "setNightLight")) return false                    // BP18 null-guard
+    if (!requireNonEmptyEnum(mode, "setNightLight")) return false               // BP18 null/empty-guard
+    // BP25: normalize to lowercase so Rule Machine "ON"/"OFF"/"DIM" routes correctly.
+    // API expects literal "on"/"off"/"dim" string in night_light field.
+    String m = (mode as String).trim().toLowerCase()
 
     def result = false
 
     parent.sendBypassRequest(device, [
-                data: [ "night_light": mode ],
+                data: [ "night_light": m ],
                 "method": "setNightLight",
                 "source": "APP" ]) { resp ->
 			if (checkHttpResponse("setNightLight", resp))
 			{
-                sendLevelEvent(mode)
-                logInfo "Night light: ${mode}"
+                sendLevelEvent(m)
+                logInfo "Night light: ${m}"
 				result = true
 			}
 		}
@@ -157,9 +165,15 @@ def setLevel(level, duration) {
 
 def setLevel(level) {
     logDebug "setLevel(${level})"
-    if (level < 10) { setNightLight("off") }
-    else if (level > 75) { setNightLight("on") }
-    else setNightLight("dim");
+    // BP18: explicit null guard for the null-from-blank-RM-slot path.
+    if (!requireNotNull(level, "setLevel")) return
+    // BP26: safeIntArg safely converts the level parameter (which may be a non-numeric
+    // string such as "" or "5.7" from Rule Machine) to an integer without throwing.
+    // Range is clamped to [0, 100]; 0 maps to the night-light off path below.
+    Integer pct = safeIntArg(level, 0, 0, 100)
+    if (pct < 10) { setNightLight("off") }
+    else if (pct > 75) { setNightLight("on") }
+    else setNightLight("dim")
 }
 
 def update() {

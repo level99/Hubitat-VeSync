@@ -10,6 +10,122 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
+# Finding builder — REQUIRED for all lint rules
+# ---------------------------------------------------------------------------
+
+def make_finding(severity, rule_id, title, file_rel, lineno, raw_lines, why, fix):
+    """
+    Build a finding dict with all required keys.
+
+    Parameters
+    ----------
+    severity : str
+        'FAIL' or 'WARN'.  lint.py counts exit-status by this key — omitting it
+        produces a silently non-gating rule (false-green ``lint --strict``).
+    rule_id : str
+        Machine-readable rule identifier, e.g. ``'RULE33_case_sensitivity'``.
+    title : str
+        Short human-readable description shown in lint output.
+    file_rel : str
+        Repo-relative file path with forward slashes, e.g.
+        ``'Drivers/Levoit/LevoitVital200S.groovy'``.
+    lineno : int
+        1-based line number of the finding.
+    raw_lines : list[str]
+        The file's raw source lines (as returned by ``path.read_text().splitlines()``).
+        Used to build the context snippet; the list is never mutated.
+    why : str
+        One-sentence (or short paragraph) rationale — explains WHY this is wrong.
+    fix : str
+        Suggested corrective action — shown verbatim in lint output.
+
+    Returns
+    -------
+    dict
+        Keys: severity, rule_id, title, file, line, context, why, fix.
+    """
+    if severity not in ('FAIL', 'WARN'):
+        raise ValueError(f"make_finding: invalid severity {severity!r} (must be 'FAIL' or 'WARN')")
+    start = max(0, lineno - 2)
+    end = min(len(raw_lines), lineno + 1)
+    context = '\n'.join(f"    {raw_lines[i]}" for i in range(start, end))
+    return {
+        'severity': severity,
+        'rule_id': rule_id,
+        'title': title,
+        'file': file_rel,
+        'line': lineno,
+        'context': context,
+        'why': why,
+        'fix': fix,
+    }
+
+
+def make_finding_for_path(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
+    """
+    Convenience wrapper for rules that receive a ``pathlib.Path`` + ``rel_base``.
+
+    Converts ``path`` to a repo-relative forward-slash string, then delegates to
+    ``make_finding``.  Inherits the ``severity`` ValueError gate from ``make_finding``.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Absolute path to the source file being linted.
+    rel_base : pathlib.Path
+        Repository root — used to compute the relative path.
+    lines : list[str]
+        The file's raw source lines (same as ``make_finding``'s ``raw_lines``).
+    All other parameters: identical to ``make_finding``.
+    """
+    file_rel = str(path.relative_to(rel_base)).replace('\\', '/')
+    return make_finding(severity, rule_id, title, file_rel, lineno, lines, why, fix)
+
+
+def make_finding_for_file(severity, rule_id, title, file_str, lineno, context, why, fix):
+    """
+    Builder for repo-level rules that supply a pre-computed repo-relative file
+    string and a single-line context snippet.
+
+    Builds the finding dict **directly** — does NOT delegate to ``make_finding``
+    and does NOT use ``make_finding``'s window-range logic.  This is intentional:
+    ``make_finding``'s window uses ``range(lineno-2, min(len(raw_lines), lineno+1))``;
+    when ``raw_lines`` is a 1-element synthetic list, that range is empty for any
+    ``lineno > 2``, silently discarding the caller's context.  By storing
+    ``context`` verbatim in the dict, this function preserves the caller-supplied
+    snippet for all line numbers.
+
+    Has its own inline severity gate (mirroring ``make_finding``'s).
+    ``lint.py``'s post-collection ``_assert_all_severities_valid`` is the backstop.
+
+    Parameters
+    ----------
+    file_str : str
+        Repo-relative file path with forward slashes.
+    lineno : int
+        1-based line number of the finding.
+    context : str
+        Single-line context snippet (typically the source line at ``lineno``).
+        Stored verbatim; never passed through a window-range computation.
+    All other parameters: identical to ``make_finding``.
+    """
+    # Severity gate intentionally mirrors make_finding's gate (keep in sync);
+    # lint.py's post-collection _assert_all_severities_valid is the real backstop.
+    if severity not in ('FAIL', 'WARN'):
+        raise ValueError(f"make_finding_for_file: invalid severity {severity!r} (must be 'FAIL' or 'WARN')")
+    return {
+        'severity': severity,
+        'rule_id': rule_id,
+        'title': title,
+        'file': file_str,
+        'line': lineno,
+        'context': context if context else '',
+        'why': why,
+        'fix': fix,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Library-file detection
 # ---------------------------------------------------------------------------
 

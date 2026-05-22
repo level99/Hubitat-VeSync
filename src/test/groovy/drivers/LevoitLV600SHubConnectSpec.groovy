@@ -418,12 +418,12 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         !req.data.containsKey("type")
     }
 
-    def "setMistLevel clamps values below 1 to 1"() {
-        given:
-        settings.descriptionTextEnable = false
+    def "setMistLevel(1) passes through as the minimum valid level"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
-        driver.setMistLevel(0)
+        driver.setMistLevel(1)
 
         then:
         def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
@@ -672,6 +672,47 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP25-truthy: doSet* shared-helper path (setDisplay delegator)
+    // LV600SHubConnect.setDisplay delegates to LevoitHumidifierLib
+    // doSetDisplayScreenSwitch.  The truthy-canon ternary in the shared helper
+    // must emit "on" (not "true" or "1") and send screenSwitch:1.
+    // These specs MUST FAIL if value: canon is reverted to value: val in
+    // LevoitHumidifierLib doSetDisplayScreenSwitch.
+    // -------------------------------------------------------------------------
+
+    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("true")
+
+        then: "API call sent with screenSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('1') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("1")
+
+        then: "API call sent with screenSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw '1'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    // -------------------------------------------------------------------------
     // Auto-stop: passive read only (no setter command)
     // -------------------------------------------------------------------------
 
@@ -856,5 +897,109 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         then: "setSwitch(powerSwitch:1) was sent (auto-on via ensureSwitchOn)"
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
         onReq != null
+    }
+
+    def "BP26: setWarmMistLevel('') does not throw on empty-string input from Rule Machine (LV600S HubConnect)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setWarmMistLevel called with empty string (Rule Machine blank slot)"
+        driver.setWarmMistLevel("")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setWarmMistLevel('abc') does not throw on non-numeric input from Rule Machine (LV600S HubConnect)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setWarmMistLevel called with non-numeric string"
+        driver.setWarmMistLevel("abc")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setMistLevel with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setMistLevel('#badInput') does not throw and does not make a setVirtualLevel (mist) API call (LV600S HubConnect)"() {
+        // safeIntArg() maps non-numeric inputs to 0; 0 triggers the lvl<=0 guard → off() path.
+        // No setVirtualLevel(mist) call is made.
+        given: "device is on so the auto-on guard doesn't confuse the assertion"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setVirtualLevel (mist) API call"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" && it.data.levelType == "mist" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setMistLevel('5.7') does not throw and makes a setVirtualLevel API call with truncated value (5) (LV600S HubConnect)"() {
+        // safeIntArg("5.7") → 5 (truncation). Math.max(1, Math.min(9, 5)) = 5 → cloud call made.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setVirtualLevel API call was made with virtualLevel=5 (truncated from 5.7)"
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" && it.data.levelType == "mist" }
+        req != null
+        req.data.virtualLevel == 5
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setHumidity with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setHumidity('#badInput') does not throw and does not make a setTargetHumidity API call (LV600S HubConnect)"() {
+        // safeIntArg() maps non-numeric inputs to 0; 0 triggers the p<=0 guard → logWarn + return.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setTargetHumidity API call"
+        testParent.allRequests.findAll { it.method == "setTargetHumidity" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setHumidity('5.7') does not throw and makes a setTargetHumidity API call with clamped value (30) (LV600S HubConnect)"() {
+        // safeIntArg("5.7") → 5. 5 > 0 so the rejection guard is skipped;
+        // Math.max(30, Math.min(80, 5)) = 30 (clamped to minimum). LV600SHC uses camelCase targetHumidity.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setTargetHumidity API call was made with targetHumidity=30 (5 clamped to minimum)"
+        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
+        req != null
+        req.data.targetHumidity == 30
     }
 }

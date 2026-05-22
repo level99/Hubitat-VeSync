@@ -84,6 +84,63 @@ blocked_domains: []
 
 
 # ---------------------------------------------------------------------------
+# RULE33 — BP25 case-sensitivity per-method exemptions
+# ---------------------------------------------------------------------------
+# Each entry exempts a specific (file, method) pair from RULE33's C3-gate
+# case-sensitivity check. Use for methods where BP25 is known but deferred
+# to a separate sweep (e.g. preview drivers without live-capture hardware).
+#
+# Required fields:
+#   file     — repo-root-relative path using forward slashes
+#   method   — exact Groovy method name
+#   rationale — REQUIRED non-empty explanation
+
+# All previously-deferred sites fixed in the v2.5 class-wide BP25 sweep; no exemptions needed.
+bp25_case_sensitivity_exemptions: []
+
+
+# ---------------------------------------------------------------------------
+# RULE37 — BP26 unsafe integer coercion per-method exemptions
+# ---------------------------------------------------------------------------
+# Each entry exempts a specific (file, method) pair from RULE37's bare
+# ``as Integer`` / ``.toInteger()`` detection.  Use only when the coercion is
+# provably safe at the call site (e.g. guarded by an isinstance / isInteger()
+# precondition that the static rule cannot see).
+#
+# Required fields:
+#   file      — repo-root-relative path using forward slashes
+#   method    — exact Groovy method name
+#   rationale — REQUIRED non-empty explanation
+
+bp26_unsafe_int_coercion_exemptions:
+  - file: "Drivers/Levoit/LevoitPedestalFan.groovy"
+    method: "setSpeed"
+    rationale: >
+      `(spd as Integer)` is enclosed in the precondition
+      `if (spd instanceof Number || (spd instanceof String && spd.isInteger()))`.
+      The coercion executes only when spd is already confirmed to be a Number or
+      an isInteger()-validated String, so NumberFormatException / GroovyCastException
+      cannot be thrown.  Routing through safeIntArg would alter the FanControl
+      enum-vs-numeric dispatch: safeIntArg("5.7") → 5 → sendLevel(5), whereas the
+      current code correctly lets non-isInteger strings (incl. "5.7", "auto", "low")
+      fall through to the named-speed enum path below the if-block.  Safe by
+      construction; the RULE37 heuristic does not recognize the instanceof+isInteger
+      precondition as a safety guard.
+      TODO(v2.6+): teach RULE37 to recognise an enclosing
+      `instanceof Number || (instanceof String && isInteger())` precondition as a
+      safety guard and skip the gated `as Integer`, removing the need for this entry.
+
+  - file: "Drivers/Levoit/LevoitTowerFan.groovy"
+    method: "setSpeed"
+    rationale: >
+      Identical pattern to LevoitPedestalFan.groovy setSpeed — `(spd as Integer)`
+      inside `if (spd instanceof Number || (spd instanceof String && spd.isInteger()))`.
+      Coercion is safe by construction; safeIntArg would break the numeric-vs-enum
+      FanControl dispatch path for decimal strings like "5.7".
+      TODO(v2.6+): same precision improvement as LevoitPedestalFan.groovy setSpeed.
+
+
+# ---------------------------------------------------------------------------
 # Rule 16: PII scan — token string allow-list
 # ---------------------------------------------------------------------------
 # Specific 32-64 char alphanumeric strings that are known-safe (e.g., test
@@ -283,19 +340,19 @@ exemptions:
   - rule_id: "RULE32_auto_on_guard_missing"
     file: "Drivers/Levoit/LevoitEverestAir.groovy"
     reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 206 and setFanSpeed()
-      line 234. setFanSpeed is SHOULD-ON. setMode classification is deferred
-      pending live-capture: EverestAir uses V2 API (VeSyncAirBaseV2 class),
-      and if the V2 API rejects mode changes while off (same behaviour as Vital
-      line setMode), then setMode is SKIP-OK rather than SHOULD-ON. Remove this
-      entry when Tier-3 live-capture confirms the mode classification and the
-      BP24-B fix lands on EverestAir.
+      SKIP-OK-pending exemption: setFanSpeed() is now fixed (ensureSwitchOn() added,
+      v2.5 Tier-3 batch). Only remaining BP24-B site is setMode(), deferred pending
+      live-capture: EverestAir uses V2 API (VeSyncAirBaseV2 class); if the V2 API
+      rejects mode changes while off (same behaviour as Vital line setMode), then
+      setMode is SKIP-OK rather than SHOULD-ON. Remove this entry when Tier-3
+      live-capture confirms the mode classification and either the fix lands or
+      setMode is promoted to bp24_auto_on_exemptions.
 
   - rule_id: "RULE32_auto_on_guard_missing"
     file: "Drivers/Levoit/LevoitSproutAir.groovy"
     reason: >
-      Layer-5 scaffold exemption: BP24-B on setMode() line 188 and setFanSpeed()
-      line 212. setFanSpeed is SHOULD-ON. setMode classification deferred
-      pending live-capture (same V2-API concern as EverestAir). Remove this
-      entry when Tier-3 live-capture confirms the mode classification and the
-      BP24-B fix lands on SproutAir.
+      SKIP-OK-pending exemption: setFanSpeed() is now fixed (ensureSwitchOn() added,
+      v2.5 Tier-3 batch). Only remaining BP24-B site is setMode(), deferred pending
+      live-capture (same V2-API concern as EverestAir). Remove this entry when
+      Tier-3 live-capture confirms the mode classification and either the fix lands
+      or setMode is promoted to bp24_auto_on_exemptions.

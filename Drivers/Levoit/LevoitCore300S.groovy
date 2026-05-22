@@ -69,7 +69,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson and elfege (contributor)",
         description: "Supports controlling the Levoit 300S air purifier",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -85,6 +85,7 @@ metadata {
             attribute "timerRemain", "number";                         // Auto-off timer remaining (seconds; 0 when no timer)
             attribute "pm25", "number";                                // Raw PM2.5 reading (µg/m³)
             attribute "airQualityIndex", "number";                     // Levoit categorical AQ index (1-4); distinct from computed US-AQI 'aqi'
+            attribute "airQuality", "number";                          // US-AQI (0-500); type="number" on Core 300S/400S/600S, "string" on Vital 100S/200S — families diverge. Use airQualityIndex for cross-family comparisons.
 
             attribute "aqi", "number";                                 // AQI (0-500)
             attribute "aqiDanger", "string";                           // AQI danger level
@@ -212,26 +213,32 @@ def setLevel(value, duration)
 def setLevel(value)
 {
     logDebug "setLevel $value"
+    // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
+    Integer pct = safeIntArg(value, 0, 0, 100)
     // SwitchLevel convention: setLevel(0) means off (Z-Wave dimmer platform expectation).
-    if (value == 0) { off(); return }
+    if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off (SwitchLevel capability convention).
-    // state.turningOn guard prevents recursive on()->setSpeed()->setLevel() loop.
-    if (!state.turningOn && device.currentValue("switch") != "on") on()
+    // state.turningOn re-entrance guard is inside ensureSwitchOn().
+    ensureSwitchOn()
     def speed = 0
     setMode("manual") // always manual if setLevel() cmd was called
 
-    if(value < 33) speed = 1
-    if(value >= 33 && value < 66) speed = 2
-    if(value >= 66) speed = 3
+    if(pct < 33) speed = 1
+    if(pct >= 33 && pct < 66) speed = 2
+    if(pct >= 66) speed = 3
 
-    device.sendEvent(name: "level", value: value)
+    device.sendEvent(name: "level", value: pct)
     setSpeed(speed)
 }
 
 def setSpeed(speed) {
     logDebug "setSpeed(${speed})"
-    if (!requireNotNull(speed, "setSpeed")) return false                        // BP18 null-guard
-    String s = (speed as String).toLowerCase()
+    if (!requireNonEmptyEnum(speed, "setSpeed")) return false                   // BP18 null/empty-guard
+    String s = (speed as String).trim().toLowerCase()
+    // Remap integer-string values from setLevel() path to named speed strings.
+    // setLevel() passes Integer 1/2/3; (speed as String) yields "1"/"2"/"3".
+    // Emit named speeds ("low"/"medium"/"high") for attribute consistency.
+    if (s in ["1", "2", "3"]) s = mapIntegerStringToSpeed(s)
     // Power short-circuits BEFORE ensureSwitchOn — setSpeed("off") must NOT auto-on first
     if (s == "off") { off(); return }
     ensureSwitchOn()                                                             // BP24-B auto-on (after short-circuit)
@@ -257,12 +264,28 @@ def setSpeed(speed) {
         handleEvent("speed", s)
         logInfo "Speed: ${s}"
     }
+    else {
+        // Recover: unknown or null state.mode (e.g. fresh device, pre-first-poll).
+        // Guard against on() re-entrancy: when state.turningOn is set we are inside on()'s
+        // own setSpeed call — skip mode establishment to avoid issuing a spurious
+        // setPurifierMode that would clobber a concurrently-dispatched setMode command.
+        // on() will call setMode(state.mode) or update() after this setSpeed returns.
+        if (!state.turningOn) {
+            handleMode("manual")
+            state.mode = "manual"
+            handleEvent("mode", "manual")
+        }
+        handleSpeed(s)
+        state.speed = s
+        handleEvent("speed", s)
+        logInfo "Speed: ${s}"
+    }
 }
 
 def setMode(mode) {
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return false                          // BP18 null-guard
-    String m = (mode as String).toLowerCase()
+    if (!requireNonEmptyEnum(mode, "setMode")) return false                     // BP18 null/empty-guard
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["manual", "sleep", "auto"])) {                                  // reject invalid BEFORE auto-on
         logWarn "setMode: invalid mode '${m}' -- must be one of: manual, sleep, auto; ignoring"
         return false

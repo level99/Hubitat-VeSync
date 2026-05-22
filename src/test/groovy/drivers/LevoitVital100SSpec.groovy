@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestParent
 
@@ -787,5 +788,179 @@ class LevoitVital100SSpec extends HubitatSpec {
 
         and: "logWarn fired with the method name"
         testLog.warns.any { it.contains("setRoomSize") }
+    }
+
+    // ---- BP25: setPetMode (VitalPurifierLib shared) ----
+
+    def "BP25: setPetMode('ON') sends setPurifierMode with workMode:'pet', not 'auto' (BP25 regression guard)"() {
+        // Pre-fix: (onOff=="on") where onOff="ON" evaluates false → setMode("auto") instead of "pet".
+        // Post-fix: toLowerCase() normalizes "ON"→"on" → setMode("pet").
+        // setMode has an off-state guard; seed switch='on' so the guard passes.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setPetMode("ON")
+
+        then: "setPurifierMode sent with workMode:'pet' (not 'auto')"
+        def req = testParent.allRequests.find { it.method == "setPurifierMode" }
+        req != null
+        req.data.workMode == "pet"
+    }
+
+    def "BP25: setPetMode('OFF') sends setPurifierMode with workMode:'auto' (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setPetMode("OFF")
+
+        then: "setPurifierMode sent with workMode:'auto'"
+        def req = testParent.allRequests.find { it.method == "setPurifierMode" }
+        req != null
+        req.data.workMode == "auto"
+    }
+
+    def "BP25: setSpeed('OFF') routes to off() sending setSwitch powerSwitch:0 (BP25 regression guard)"() {
+        // Pre-fix: (spd=="off") where spd="OFF" evaluates false → proceeds to mapSpeedToInteger("OFF")
+        //          which returns a default/wrong speed level instead of powering off the device.
+        // Post-fix: toLowerCase() normalizes "OFF"→"off" → early return via off().
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setSpeed("OFF")
+
+        then: "setSwitch sent with powerSwitch:0 (device off command via off())"
+        def req = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 }
+        req != null
+        req.data.switchIdx == 0
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: LevoitVitalPurifierLib.setLevel — numeric coercion (Vital 100S)
+    // Both-ways: revert safeIntArg in LevoitVitalPurifierLib.setLevel → FAILs; restore → PASSes.
+    // -----------------------------------------------------------------------
+
+    @Unroll
+    def "BP26: setLevel('#badInput') does not throw and does not make a setLevel API call (Vital 100S fallback=0 → off)"() {
+        // safeIntArg maps "abc", "", true to 0. 0 → pct==0 → off() path; no setLevel API call.
+        given: "device is on so the auto-on guard does not confuse the assertion"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setLevel (speed) API call — 0 coercion routes to off()"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setLevel('5.7') does not throw and makes a setLevel API call (Vital 100S)"() {
+        // safeIntArg("5.7") → 5. 5% < 20% → manualSpeedLevel=1. API call made.
+        // This test fails if safeIntArg is removed from LevoitVitalPurifierLib.setLevel.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setLevel API call was made with manualSpeedLevel=1"
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.manualSpeedLevel == 1
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: LevoitVitalPurifierLib.setRoomSize — numeric coercion (Vital 100S)
+    // Both-ways: revert safeIntArg in setRoomSize → FAILs; restore → PASSes.
+    // -----------------------------------------------------------------------
+
+    @Unroll
+    def "BP26: setRoomSize('#badInput') does not throw and makes setAutoPreference API call (Vital 100S)"() {
+        // safeIntArg maps non-numeric to 0; the method sends 0 to the API (no floor on setRoomSize).
+        // Pre-fix: (sz as Integer) on non-numeric threw before the guard could fire.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setRoomSize(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setAutoPreference API call was made (not a silent no-op)"
+        testParent.allRequests.find { it.method == "setAutoPreference" } != null
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setRoomSize('5.7') does not throw and makes setAutoPreference with roomSize=5 (Vital 100S)"() {
+        // safeIntArg("5.7") → 5. setAutoPreference API called with roomSize=5.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setRoomSize("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setAutoPreference API call was made with roomSize=5"
+        def req = testParent.allRequests.find { it.method == "setAutoPreference" }
+        req != null
+        req.data.roomSize == 5
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: LevoitVitalPurifierLib.setTimer — numeric coercion (Vital 100S)
+    // Both-ways: revert safeIntArg in setTimer → FAILs; restore → PASSes.
+    // -----------------------------------------------------------------------
+
+    @Unroll
+    def "BP26: setTimer('#badInput') does not throw and does not make an addTimerV2 API call (Vital 100S fallback=0)"() {
+        // safeIntArg maps non-numeric to 0; 0 → cancelTimer path; no addTimerV2 call.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTimer(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no addTimerV2 API call"
+        testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setTimer('5.7') does not throw and makes an addTimerV2 API call (Vital 100S)"() {
+        // safeIntArg("5.7") → 5. 5 > 0 → addTimerV2 called with clkSec=300 (5×60).
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTimer("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "an addTimerV2 API call was made"
+        testParent.allRequests.find { it.method == "addTimerV2" } != null
     }
 }

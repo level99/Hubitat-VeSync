@@ -17,7 +17,7 @@ import support.TestParent
  *   Toggle          -- reads state.lastSwitchSet to avoid read-after-write race (BP#7 protection)
  *   Mist level      -- setMistLevel(1) produces setVirtualLevel with {id:0, level:1, type:'mist'}
  *   Mist level      -- setMistLevel(2) produces setVirtualLevel with {id:0, level:2, type:'mist'}
- *   Mist clamping   -- setMistLevel(0) clamped to 1 (range floor)
+ *   Mist clamping   -- setMistLevel(0) routes to off() (SwitchLevel setLevel(0) convention)
  *   Mist clamping   -- setMistLevel(3+) clamped to 2 (range ceiling; NOT 9 like Classic 300S)
  *   Mode write-path -- setMode("auto") canonical-accept: payload="auto", cached as "std"
  *                   -- setMode("auto") canonical-reject, alt-accept: falls back to "humidity", cached as "alt"
@@ -364,12 +364,12 @@ class LevoitDual200SSpec extends HubitatSpec {
         req.data.level == 2
     }
 
-    def "setMistLevel clamps values below 1 to 1 (Dual 200S range floor)"() {
-        given:
-        settings.descriptionTextEnable = false
+    def "setMistLevel(1) passes through as the minimum valid level (Dual 200S range floor)"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
-        driver.setMistLevel(0)
+        driver.setMistLevel(1)
 
         then:
         def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
@@ -784,6 +784,45 @@ class LevoitDual200SSpec extends HubitatSpec {
         onReq != null
     }
 
+    // -------------------------------------------------------------------------
+    // Bug Pattern #25: C3 gate case-sensitivity — uppercase "ON"/"OFF" input
+    // -------------------------------------------------------------------------
+
+    def "BP25: setAutoStop('ON') uppercase makes the API call and sends enabled:true (not false)"() {
+        // Pre-fix: ("ON" == "on") is false → enabled:false sent (disable auto-stop instead of enable).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → enabled:true (correct).
+        given: "autoStopEnabled is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopEnabled", value: "off"])
+
+        when: "setAutoStop is called with uppercase 'ON'"
+        driver.setAutoStop("ON")
+
+        then: "setAutomaticStop API call was made"
+        def req = testParent.allRequests.find { it.method == "setAutomaticStop" }
+        req != null
+
+        and: "payload carries enabled:true (enable auto-stop), NOT false (disable)"
+        req.data.enabled == true
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("autoStopEnabled") == "on"
+    }
+
+    def "BP25: setAutoStop('ON') when autoStopEnabled is already 'on' is a no-op (C3 gate works with uppercase)"() {
+        // Pre-fix: ("on" == "ON") is false → gate bypassed, redundant API call made.
+        // Post-fix: toLowerCase() yields "on" == "on" → gate fires, no API call.
+        given: "autoStopEnabled is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopEnabled", value: "on"])
+
+        when: "setAutoStop called with uppercase 'ON' (idempotent)"
+        driver.setAutoStop("ON")
+
+        then: "no API call was made"
+        testParent.allRequests.find { it.method == "setAutomaticStop" } == null
+    }
+
     def "setMode('auto') from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
         given: "device is off, turningOn flag not set"
         settings.descriptionTextEnable = false
@@ -802,5 +841,68 @@ class LevoitDual200SSpec extends HubitatSpec {
         then: "setSwitch(enabled:true) was sent (auto-on via ensureSwitchOn)"
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
         onReq != null
+    }
+
+    def "BP26: setMistLevel('') does not throw on empty-string input from Rule Machine (Dual 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setMistLevel called with empty string (Rule Machine blank slot)"
+        driver.setMistLevel("")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setMistLevel('abc') does not throw on non-numeric input from Rule Machine (Dual 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setMistLevel called with non-numeric string"
+        driver.setMistLevel("abc")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setHumidity with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setHumidity('#badInput') does not throw and does not make a setTargetHumidity API call (fallback=0 → rejected)"() {
+        // safeIntArg() maps non-numeric inputs to 0; 0 triggers the p<=0 guard → logWarn + return.
+        // Pre-fix: (percent as Integer) on these inputs threw before the guard could fire.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setTargetHumidity API call — 0 coercion rejected by minimum-humidity guard"
+        testParent.allRequests.findAll { it.method == "setTargetHumidity" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setHumidity('5.7') does not throw and makes a setTargetHumidity API call with clamped value (30)"() {
+        // safeIntArg("5.7") → 5 (truncation). 5 > 0 so the rejection guard is skipped;
+        // Math.max(30, Math.min(80, 5)) = 30 (clamped to minimum). A valid cloud call is made.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setTargetHumidity API call was made with target_humidity=30 (5 clamped to minimum)"
+        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
+        req != null
+        req.data.target_humidity == 30
     }
 }

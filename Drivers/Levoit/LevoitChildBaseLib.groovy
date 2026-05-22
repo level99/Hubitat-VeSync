@@ -89,3 +89,83 @@ boolean requireNotNull(arg, String methodName) {
     }
     return true
 }
+
+// BP18 extended null-guard for string-enum setters: intercepts both null AND empty/whitespace-only
+// string, so that a blank Rule Machine parameter slot (which arrives as "" not null) does not leak
+// into the value-emission path and produce an empty-value INFO log.
+//
+// Usage: replace requireNotNull with requireNonEmptyEnum at the top of any string-enum setter
+// (setMode, setSpeed, setDisplay, setChildLock, setDryingMode, set*, etc.) — NOT for numeric
+// setters (setLevel, setMistLevel, setTargetHumidity, etc.) which use safeIntArg instead.
+//
+//   def setMode(mode) {
+//       if (!requireNonEmptyEnum(mode, "setMode")) return
+//       String m = (mode as String).trim().toLowerCase()
+//       // ... rest of method ...
+//   }
+//
+// Returns false (caller should return) when arg is null or empty/whitespace-only.
+// Returns true  (caller should continue) when arg contains a non-whitespace value.
+// Null input:         logs WARN (same as requireNotNull, visible for debugging)
+// Empty/blank input:  returns false SILENTLY (RM blank-slot convention; double-warning undesirable)
+boolean requireNonEmptyEnum(arg, String methodName) {
+    if (arg == null) {
+        logWarn "${methodName} called with null arg (likely empty Rule Machine action parameter); ignoring"
+        return false
+    }
+    if ((arg as String).trim().isEmpty()) {
+        // Silent per design: empty string is RM blank-slot equivalent of null.
+        // requireNotNull already handles null with a WARN; a second WARN here is undesirable.
+        return false
+    }
+    return true
+}
+
+// BP26 safe numeric coercion: convert any command-arg type to Integer without
+// ever throwing. Rule Machine and dashboard tiles can pass String, GString,
+// BigDecimal, Boolean, or null. Plain `(x as Integer)` throws
+// NumberFormatException/GroovyCastException on non-numeric/decimal/empty/boolean
+// input BEFORE the ?: fallback can intercept it — the Hubitat sandbox swallows
+// the exception silently, leaving the command a no-op with no log entry.
+//
+// Decimal strings/BigDecimals truncate toward zero (matches Groovy native int()
+// semantics and is spec-asserted by LevoitCore200SSpec.groovy:796).
+//
+// W1 guard: BigDecimal values outside [Integer.MIN_VALUE, Integer.MAX_VALUE] fall
+// back instead of bit-wrapping (BigDecimal.intValue() silently narrows on overflow).
+//
+// W2 warn: non-null, non-empty inputs that cannot be parsed log a one-line WARN
+// before returning fallback. Null and empty-string inputs are silently → fallback
+// (the routine Rule Machine blank-slot path; requireNotNull already handles null warn).
+//
+// Belt-and-suspenders with requireNotNull: keep the null-guard at call sites,
+// use safeIntArg to handle the non-null-but-non-numeric vector.
+private Integer safeIntArg(raw, Integer fallback = 0) {
+    if (raw == null) return fallback
+    try {
+        String s = raw.toString().trim()
+        if (s.isEmpty()) return fallback
+        if (s.isInteger()) return s.toInteger()
+        if (s.isBigDecimal()) {
+            BigDecimal bd = s.toBigDecimal()
+            if (bd > Integer.MAX_VALUE || bd < Integer.MIN_VALUE) {
+                logWarn "safeIntArg: out-of-range input ${raw} -> using fallback ${fallback}"
+                return fallback
+            }
+            return bd.intValue()
+        }
+        logWarn "safeIntArg: non-numeric input ${raw} -> using fallback ${fallback}"
+        return fallback
+    } catch (ignored) {
+        logWarn "safeIntArg: non-numeric input ${raw} -> using fallback ${fallback}"
+        return fallback
+    }
+}
+
+// 4-arg clamp overload: coerce raw to Integer (W1/W2-hardened), then clamp to [lo, hi].
+// Collapses Math.max(lo, Math.min(hi, safeIntArg(x, fallback))) to one call.
+// Clamp is applied AFTER coercion and AFTER fallback — fallback is the pre-clamp value.
+private Integer safeIntArg(raw, Integer fallback, Integer lo, Integer hi) {
+    Integer v = safeIntArg(raw, fallback)
+    return Math.max(lo, Math.min(hi, v))
+}

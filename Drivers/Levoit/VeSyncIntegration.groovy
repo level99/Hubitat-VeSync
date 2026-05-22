@@ -135,7 +135,7 @@ SOFTWARE.
 //                  Non-multiples of 60 (e.g. 90s) fire at floor(90/60)=1 min and emit
 //                  a WARN so the user can correct. Recommended values (30/60/120/300)
 //                  all divide evenly. Maintainer live-verify was on default 30s (< 60),
-//                  so the breakage was not caught before release. (PR #4, Gemini review.)
+//                  so the breakage was not caught before release.
 // 2026-04-27: v2.2+ Hub-reboot poll-chain recovery (Bug Pattern #14).
 //                  - Replaced recursive runIn() chain with schedule()-based cron job.
 //                    schedule() persists across hub reboots; runIn() does not, causing
@@ -199,12 +199,12 @@ SOFTWARE.
 //                  ([]) is a valid VeSync response (zero-device account), not an
 //                  error. Changed `!resp.data.result.list` to `== null` so the
 //                  success path completes for accounts with no devices.
-// 2026-04-25: v2.0+ Parent-driver NIT fixes (Issues 2, 3, Pattern 2):
-//                  - Issue 2: removed unused `result =` assignment in updateDevices()
+// 2026-04-25: v2.0+ Parent-driver fixes:
+//                  - removed unused `result =` assignment in updateDevices()
 //                    (was causing MissingPropertyException on every poll cycle)
-//                  - Issue 3: getDevices() now retries with re-auth on token expiry
+//                  - getDevices() now retries with re-auth on token expiry
 //                    (same effectiveClosure pattern as sendBypassRequest)
-//                  - Pattern 2: extracted hardcoded API metadata to @Field constants
+//                  - extracted hardcoded API metadata to @Field constants
 //                    (APP_VERSION, DEFAULT_TRACE_ID, DEFAULT_TIME_ZONE);
 //                    timeZone now derived from hub location with fallback to DEFAULT_TIME_ZONE.
 //                    NOTE: regional API routing (US→smartapi.vesync.com / EU→smartapi.vesync.eu)
@@ -272,7 +272,7 @@ import groovy.transform.Field
 // (per pyvesync const.py). Implemented in v2.2 via deviceRegion preference + getApiHost() helper.
 
 // Poll-method routing is handled by deviceMethodFor(child) below.
-// TYPENAME_TO_METHOD and DEFAULT_POLL_METHOD were removed in v2.3 (issue #3 AC #3):
+// TYPENAME_TO_METHOD and DEFAULT_POLL_METHOD were removed in v2.3:
 // substring matching on typeName was fragile and untestable. Routing is now dtype-based
 // via deviceType() + the dtype→method switch in deviceMethodFor().
 
@@ -282,7 +282,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson (original); Dan Cox (fork: Vital 200S, Superior 6000S, parent fixes); elfege (contributor)",
         description: "Integrates Levoit air purifiers and humidifiers with Hubitat Elevation via VeSync cloud API",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"
@@ -496,7 +496,10 @@ private void ensurePollHealth() {
     if (!state.consecutiveEmpty) return
     int threshold = 5
 
-    state.consecutiveEmpty.each { String dni, countRaw ->
+    // Iterate over a snapshot so in-loop mutation of state.consecutiveEmpty
+    // (via counts.remove + state.consecutiveEmpty = counts) does not cause
+    // ConcurrentModificationException when >=2 devices hit the threshold in the same cycle.
+    new LinkedHashMap(state.consecutiveEmpty ?: [:]).each { String dni, countRaw ->
         int count = countRaw as Integer
         if (count < threshold) return  // not yet a concern
 
@@ -850,10 +853,22 @@ Boolean login() {
         def result = false
         httpPost(params) { resp ->
             if (checkHttpResponse("login", resp)) {
-                state.token = resp.data.result.token
-                state.accountID = resp.data.result.accountID
-                logInfo "Logged in to VeSync (${getDeviceRegion()} region: ${getApiHost()})"
-                result = true
+                if (resp.data?.result?.token) {
+                    state.token = resp.data.result.token
+                    state.accountID = resp.data.result.accountID
+                    logInfo "Logged in to VeSync (${getDeviceRegion()} region: ${getApiHost()})"
+                    result = true
+                } else {
+                    // VeSync returned HTTP 200 without a result body — typically signals
+                    // an inner authentication failure (account-level bot detection,
+                    // concurrent-session rejection, IP-based rate limit, or a
+                    // verification-required flow). Surface the inner code + msg so
+                    // the failure is diagnosable from logs.
+                    def innerCode = resp.data?.code
+                    def innerMsg  = resp.data?.msg
+                    logError "login: HTTP 200 but no result body — VeSync inner code=${innerCode} msg='${innerMsg}'"
+                    recordError("login: inner failure code=${innerCode} msg='${innerMsg}'", [site:"login"])
+                }
             }
         }
         return result
@@ -929,8 +944,13 @@ def Boolean updateDevices()
         logDebug "BP22: probing updateDevices cycle for network recovery (last probe ${(int)(sinceLastProbe / 1000)}s ago)"
     }
 
-    // Stop if driver is reloading
+    // Stop if driver is reloading.
+    // Clear networkProbeInFlight before returning: the flag was set above (if a probe
+    // interval elapsed), but the try/finally that normally clears it begins AFTER this
+    // guard.  Without the clear, the flag stays true for the rest of the outage,
+    // permanently disarming the per-call circuit-breaker in sendBypassRequest().
     if (state.driverReloading) {
+        state.remove('networkProbeInFlight')
         logDebug "Skipping updateDevices - driver reloading"
         return false
     }
@@ -992,7 +1012,7 @@ def Boolean updateDevices()
             // Branch the API method by device type. The VeSync API uses different read methods
             // for each device family; calling the wrong method returns code:-1 with empty result.
             // Routing is dtype-based via deviceMethodFor() (v2.3: replaced the old
-            // TYPENAME_TO_METHOD substring-matching approach that failed issue #3 AC #3).
+            // TYPENAME_TO_METHOD substring-matching approach that was fragile and untestable).
             String method = deviceMethodFor(dev)
             def command = [
                 "method": method,
@@ -1038,6 +1058,16 @@ def Boolean updateDevices()
                             def counts = state.consecutiveEmpty as Map
                             counts.remove(dni)
                             state.consecutiveEmpty = counts
+                        }
+                        // BP21: reset selfHealAttempts on every successful poll, unconditionally.
+                        // Without this, a device that hits the empty threshold, gets a Resync,
+                        // and recovers BEFORE the MAX cap never resets its counter.  After enough
+                        // flap cycles the counter reaches MAX and the device is incorrectly marked
+                        // offline with zero remaining Resync attempts.
+                        if (state.selfHealAttempts?.containsKey(dni)) {
+                            def healMap = state.selfHealAttempts as Map
+                            healMap.remove(dni)
+                            state.selfHealAttempts = healMap
                         }
                         // BP21: if device was previously marked offline, mark it back online now.
                         if (state.deviceOfflineSince?.containsKey(dni)) {
@@ -1096,7 +1126,7 @@ def Boolean updateDevices()
  * Primary routing is dtype-based: reads the raw model code from the child's stored
  * deviceType dataValue, maps it through deviceType() to a dtype string, then
  * dispatches dtype → method via switch. This eliminates the old TYPENAME_TO_METHOD
- * substring-matching approach (issue #3 AC #3) which could silently mis-route if a
+ * substring-matching approach which could silently mis-route if a
  * driver's metadata name changed or a new driver's name didn't contain the expected
  * substring.
  *

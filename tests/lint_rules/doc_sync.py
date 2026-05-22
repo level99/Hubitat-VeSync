@@ -14,7 +14,7 @@ or just the bare filename in a markdown link.
 import re
 from pathlib import Path
 
-from lint_rules._helpers import is_library_file
+from lint_rules._helpers import is_library_file, make_finding, make_finding_for_file
 
 
 # Files intentionally excluded from the readme table check.
@@ -23,19 +23,6 @@ from lint_rules._helpers import is_library_file
 README_EXCLUDED = {
     "Notification Tile.groovy",  # not a VeSync device driver, documented separately if needed
 }
-
-
-def _making_finding(severity, rule_id, title, file_str, lineno, context, why, fix):
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": file_str,
-        "line": lineno,
-        "context": context,
-        "why": why,
-        "fix": fix,
-    }
 
 
 def check_rule19_doc_sync(repo_root: Path, config: dict):
@@ -49,7 +36,7 @@ def check_rule19_doc_sync(repo_root: Path, config: dict):
     drivers_dir = repo_root / "Drivers" / "Levoit"
 
     if not readme_path.exists():
-        findings.append(_making_finding(
+        findings.append(make_finding_for_file(
             severity="FAIL",
             rule_id="RULE19_readme_missing",
             title="Drivers/Levoit/readme.md not found",
@@ -83,7 +70,7 @@ def check_rule19_doc_sync(repo_root: Path, config: dict):
     for fname in sorted(expected_in_readme):
         # Check for the filename (case-insensitive) anywhere in the readme
         if fname.lower() not in readme_lower:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_file(
                 severity="FAIL",
                 rule_id="RULE19_driver_not_in_readme",
                 title=f"Driver not mentioned in readme.md: {fname}",

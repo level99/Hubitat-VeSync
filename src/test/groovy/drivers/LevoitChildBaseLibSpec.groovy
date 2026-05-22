@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 
 /**
@@ -23,6 +24,8 @@ import support.HubitatSpec
  *                            skips on() when switch is already "on"
  *   requireNotNull (BP18) — returns false + logs WARN when null;
  *                            returns true silently when non-null
+ *   safeIntArg (BP26)     — null/empty/blank/non-numeric/over-range/decimal contract;
+ *                            4-arg clamp overload; W2 warn fires only on non-null/non-empty failures
  */
 class LevoitChildBaseLibSpec extends HubitatSpec {
 
@@ -388,5 +391,189 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
 
         then: "logAlways has no pref gate — null pref does not suppress it"
         testLog.infos.contains("probe result pref null")
+    }
+
+    // -------------------------------------------------------------------------
+    // safeIntArg (BP26) — 2-arg contract
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "safeIntArg: #desc -> #expected (no exception, correct return)"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.safeIntArg(input, 99) == expected
+
+        where:
+        desc                         | input                     | expected
+        "null → fallback"            | null                      | 99
+        "empty string → fallback"    | ""                        | 99
+        "blank string → fallback"    | "  "                      | 99
+        "integer string '5'"         | "5"                       | 5
+        "negative string '-5'"       | "-5"                      | -5
+        "zero string '0'"            | "0"                       | 0
+        "decimal '5.7' truncates"    | "5.7"                     | 5
+        "decimal '-5.7' truncates"   | "-5.7"                    | -5
+        "decimal '5.0' = 5"          | "5.0"                     | 5
+        "integer 7 (boxed)"          | 7                         | 7
+        "integer -3 (boxed)"         | -3                        | -3
+    }
+
+    def "safeIntArg: non-numeric non-empty string returns fallback"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.safeIntArg("abc", 99) == 99
+    }
+
+    def "safeIntArg: boolean 'true' string returns fallback"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.safeIntArg("true", 99) == 99
+    }
+
+    def "safeIntArg: over-range BigDecimal returns fallback (W1 — no bit-narrowing)"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        // A value larger than Integer.MAX_VALUE (2147483647)
+        String overRange = "999999999999999999999"
+
+        expect:
+        driver.safeIntArg(overRange, 99) == 99
+    }
+
+    def "safeIntArg W2: non-numeric non-empty input logs a WARN"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.safeIntArg("abc", 99)
+
+        then: "a WARN was emitted for the non-parseable input"
+        testLog.warns.any { it.contains("safeIntArg") && it.contains("abc") }
+    }
+
+    def "safeIntArg W2: over-range input logs a WARN"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.safeIntArg("999999999999999999999", 99)
+
+        then: "a WARN was emitted for the out-of-range input"
+        testLog.warns.any { it.contains("safeIntArg") && it.contains("out-of-range") }
+    }
+
+    def "safeIntArg W2: null input does NOT log a WARN (silent fallback)"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.safeIntArg(null, 99)
+
+        then: "null is the requireNotNull path — safeIntArg does not double-warn"
+        testLog.warns.isEmpty()
+    }
+
+    def "safeIntArg W2: empty string input does NOT log a WARN (silent fallback)"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.safeIntArg("", 99)
+
+        then: "empty string is the Rule Machine blank-slot path — safeIntArg does not warn"
+        testLog.warns.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // safeIntArg (BP26) — 4-arg clamp overload (I1)
+    // -------------------------------------------------------------------------
+
+    def "safeIntArg 4-arg: value within range is returned unchanged"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.safeIntArg("5", 1, 1, 9) == 5
+    }
+
+    def "safeIntArg 4-arg: value below lo is clamped to lo"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.safeIntArg("0", 1, 1, 9) == 1
+    }
+
+    def "safeIntArg 4-arg: value above hi is clamped to hi"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.safeIntArg("99", 1, 1, 9) == 9
+    }
+
+    def "safeIntArg 4-arg: fallback is used for non-numeric input before clamping"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        // fallback=5 is within [1,9] → result is 5
+        expect:
+        driver.safeIntArg("abc", 5, 1, 9) == 5
+    }
+
+    def "safeIntArg 4-arg: fallback outside range is clamped after non-numeric input"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        // fallback=0 is below lo=1 → result is clamped to 1
+        expect:
+        driver.safeIntArg("abc", 0, 1, 9) == 1
+    }
+
+    def "safeIntArg 4-arg: null input uses fallback then clamps"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.safeIntArg(null, 3, 1, 9) == 3
+    }
+
+    def "safeIntArg 4-arg: boundary value at lo is returned as-is"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.safeIntArg("1", 5, 1, 9) == 1
+    }
+
+    def "safeIntArg 4-arg: boundary value at hi is returned as-is"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.safeIntArg("9", 5, 1, 9) == 9
     }
 }

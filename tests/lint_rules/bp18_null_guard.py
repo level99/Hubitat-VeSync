@@ -21,7 +21,7 @@ Detection algorithm:
     1. Extract arg name from the signature.
     2. Read the method body (brace-balanced, from opening `{` to matching `}`).
     3. Scan the body for vulnerable patterns where the arg is used in a normalization
-       call: ``(arg as String).<method>``, ``arg.<normalizing-method>()``.
+       call or arithmetic comparison without a preceding null check.
     4. For each vulnerable hit, check whether there is an EARLIER position in the same
        method body that contains EITHER accepted guard form (see below).
     5. If neither guard form is present before the vulnerable call → FAIL.
@@ -43,6 +43,18 @@ Vulnerable normalization patterns detected (on the param name `arg`):
   - ``(arg as String).toLowerCase()`` / ``.toUpperCase()`` / ``.trim()``
   - ``arg.toLowerCase()`` / ``.toUpperCase()`` / ``.toInteger()`` / ``.toLong()`` / ``.toDouble()``
 
+Vulnerable arithmetic-on-null patterns detected (v2.5+ extension):
+  - ``if (arg < N)``  ``if (arg > N)``  ``if (arg <= N)``  ``if (arg >= N)``
+  - ``if (arg == 0)``  ``if (arg == N)``  ``if (arg != null)`` (used as surrogate check)
+  where ``N`` is a numeric literal and ``arg`` is the raw parameter name without coercion.
+
+  Rationale: ``(level as Integer)`` coercion on a null param in Groovy/Hubitat sandbox
+  yields ``null`` (not 0), so ``if (level < 1)`` on null throws NullPointerException
+  silently.  The v2.5 sweep found 6 latent sites of this shape (setMistLevel,
+  setTargetHumidity, setLevel across 6 humidifier drivers) that passed the original
+  string-normalization-only RULE27.  All 6 were fixed; this extended rule
+  prevents the pattern from re-appearing in new drivers.
+
 Scope: all .groovy files under Drivers/Levoit/ — including library files.
 
 Library-aware (inherent): this rule does not call ``is_library_file()`` and
@@ -55,6 +67,7 @@ Exemptions: use the standard lint_config.yaml exemptions mechanism.
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding
 
 # Only check .groovy driver files.
 DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
@@ -71,15 +84,28 @@ SET_METHOD_RE = re.compile(
 
 def _make_vuln_re(arg: str) -> re.Pattern:
     """
-    Build a regex that matches any string-normalization call on ``arg``.
+    Build a regex that matches any string-normalization call OR arithmetic comparison
+    on ``arg`` where null-coercion would cause NullPointerException.
 
-    Matches:
+    String-normalization patterns:
       (arg as String).toLowerCase()    (arg as String).toUpperCase()    (arg as String).trim()
       arg.toLowerCase()    arg.toUpperCase()    arg.toInteger()    arg.toLong()    arg.toDouble()
 
+    Arithmetic-on-null patterns (v2.5+ extension — catches setMistLevel/setLevel NPE class):
+      if (arg < N)   if (arg > N)   if (arg <= N)   if (arg >= N)   if (arg == 0)   if (arg == N)
+      where N is a numeric literal and arg is the raw parameter name.
+
+      Rationale: in Groovy, ``(level as Integer)`` where level is null yields null (not 0).
+      Any arithmetic comparison on the unconverted param therefore hits NPE silently.
+      The guard forms ``requireNotNull`` / ``if (arg == null)`` satisfy the check because
+      they appear BEFORE the comparison — the conversion ``Integer lvl = (level as Integer)``
+      that would happen post-guard is safe.
+
     Does NOT match calls on local variables or state properties that happen to share
     the arg name (uses negative lookbehind for `.` on the direct pattern, preventing
-    ``state.mode.toLowerCase()`` from matching when arg is ``mode``).
+    ``state.mode.toLowerCase()`` from matching when arg is ``mode``; and word-boundary
+    anchoring on arithmetic patterns prevents `setPercentage` arg matching `percent`
+    substring of `targetPercent`).
     """
     a = re.escape(arg)
     cast_pattern = (
@@ -90,7 +116,14 @@ def _make_vuln_re(arg: str) -> re.Pattern:
     direct_pattern = (
         rf'(?<!\.)\b{a}\s*\.\s*(?:toLowerCase|toUpperCase|toInteger|toLong|toDouble)\s*\(\s*\)'
     )
-    return re.compile(rf'(?:{cast_pattern}|{direct_pattern})')
+    # Arithmetic-on-null: if (arg <op> <numericLiteral>) where op is a comparison operator.
+    # Positive lookahead ensures the right-hand side is a number, preventing matches on
+    # non-numeric comparisons like `if (mode == "on")` (those are string guards, not arithmetic).
+    # Negative lookbehind prevents matching state.level or similar prefixed names.
+    arithmetic_pattern = (
+        rf'(?<![.\w])\b{a}\b\s*(?:[<>]=?|==)\s*\d+(?!\w)'
+    )
+    return re.compile(rf'(?:{cast_pattern}|{direct_pattern}|{arithmetic_pattern})')
 
 
 def _make_guard_re(arg: str) -> re.Pattern:
@@ -111,20 +144,25 @@ def _make_guard_re(arg: str) -> re.Pattern:
 
 def _make_require_not_null_re(arg: str) -> re.Pattern:
     """
-    Build a regex that matches a ``requireNotNull(arg, ...)`` helper call on ``arg``.
+    Build a regex that matches a ``requireNotNull(arg, ...)`` or
+    ``requireNonEmptyEnum(arg, ...)`` helper call on ``arg``.
 
     Matches:
       requireNotNull(arg, "setDisplay")
       if (!requireNotNull(arg, "setDisplay")) return false
       requireNotNull( arg , "methodName")
+      requireNonEmptyEnum(arg, "setMode")
+      if (!requireNonEmptyEnum(arg, "setMode")) return
 
-    The helper (from LevoitChildBaseLib) checks for null, logs a WARN, and returns
-    false.  Its presence before a normalization call satisfies the BP18 guard
-    requirement (Form 2 — see module docstring).
+    Both helpers (from LevoitChildBaseLib) check for null, log a WARN, and return
+    false; requireNonEmptyEnum additionally silently rejects empty/whitespace-only
+    strings (for string-enum setters where blank Rule Machine slots produce "").
+    Either form before a normalization call satisfies the BP18 guard requirement
+    (Form 2 — see module docstring).
     """
     a = re.escape(arg)
     return re.compile(
-        rf'requireNotNull\s*\(\s*{a}\s*,'
+        rf'require(?:NotNull|NonEmptyEnum)\s*\(\s*{a}\s*,'
     )
 
 
@@ -217,32 +255,29 @@ def check_rule27_bp18_null_guard(path, raw_lines, cleaned_lines, raw_text, confi
             abs_vuln_pos = brace_start + vuln_pos_in_body
             vuln_line = _line_of(raw_text, abs_vuln_pos)
 
-            # Pull the raw line for context
-            raw_line = raw_lines[vuln_line - 1] if 0 < vuln_line <= len(raw_lines) else ""
-
-            findings.append({
-                "severity": "FAIL",
-                "rule_id": "RULE27_bp18_null_guard",
-                "title": (
-                    f"{method_name}({arg_name}) uses normalization on parameter "
-                    f"without a preceding null-guard (Bug Pattern #18)"
+            findings.append(make_finding(
+                severity="FAIL",
+                rule_id="RULE27_bp18_null_guard",
+                title=(
+                    f"{method_name}({arg_name}) uses parameter without a preceding "
+                    f"null-guard (string-normalization or arithmetic-on-null — Bug Pattern #18)"
                 ),
-                "file": file_rel,
-                "line": vuln_line,
-                "context": f"    {raw_line}",
-                "why": (
+                file_rel=file_rel,
+                lineno=vuln_line,
+                raw_lines=raw_lines,
+                why=(
                     f"Rule Machine 'Run Custom Action' with an empty/unset parameter "
-                    f"passes null to the driver method. `({arg_name} as String)` returns null "
-                    f"when `{arg_name}` is null, and `.toLowerCase()` / similar on null throws "
-                    f"NullPointerException. Hubitat's driver sandbox discards driver exceptions "
-                    f"silently — the user sees nothing: no attribute change, no log entry, no "
-                    f"error. See Bug Pattern #18 in vesync-driver-qa.md for full context."
+                    f"passes null to the driver method. String coercions like `({arg_name} as String)` "
+                    f"and arithmetic comparisons like `if ({arg_name} < N)` both throw "
+                    f"NullPointerException when `{arg_name}` is null. Hubitat's driver sandbox "
+                    f"discards driver exceptions silently — the user sees nothing: no attribute "
+                    f"change, no log entry, no error. See Bug Pattern #18 in CLAUDE.md."
                 ),
-                "fix": (
-                    f"Add a null-guard at the top of {method_name}(), immediately before the "
-                    f"normalization line. Two accepted forms: "
+                fix=(
+                    f"Add a null-guard at the top of {method_name}(), before the first use of "
+                    f"the parameter. Two accepted forms: "
                     f"(1) helper (canonical): "
-                    f"`if (!requireNotNull({arg_name}, \"{method_name}\")) return false` "
+                    f"`if (!requireNotNull({arg_name}, \"{method_name}\")) return` "
                     f"(requires LevoitChildBaseLib #include); "
                     f"(2) inline: "
                     f"`if ({arg_name} == null) {{ logWarn \"{method_name} called with null "
@@ -251,7 +286,7 @@ def check_rule27_bp18_null_guard(path, raw_lines, cleaned_lines, raw_text, confi
                     f"with a wrong value. Also ensure `def logWarn(msg){{ log.warn msg }}` is "
                     f"defined in the driver (or included via LevoitChildBaseLib)."
                 ),
-            })
+            ))
 
     return findings
 

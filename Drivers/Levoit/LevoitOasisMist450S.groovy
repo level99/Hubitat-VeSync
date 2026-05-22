@@ -127,7 +127,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.2] Levoit OasisMist 450S/600S US+EU (LUH-O451S-WUS/-WUSR/-WEU, LUH-O601S-WUS/-KUS) — mist 1-9, warm mist 0-3, target humidity 40-80%, auto/sleep/manual modes, auto-stop, display; LUH-O451S-WEU (EU) adds RGB nightlight (ColorControl); canonical pyvesync payloads; RGB based on pyvesync PR #502 (preview)",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -251,8 +251,8 @@ def off(){
 // payload: {mode: <value>} -- NOT {workMode: <value>} (Superior 6000S style)
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    if (!requireNonEmptyEnum(mode, "setMode")) return
+    String m = (mode as String).trim().toLowerCase()
     // Validate BEFORE ensureSwitchOn() so invalid input does not auto-turn on an off device.
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     ensureSwitchOn()
@@ -308,15 +308,18 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
 // NOTE: field names id/level/type -- NOT levelIdx/virtualLevel/levelType (Superior 6000S)
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    if (!requireNotNull(level, "setMistLevel")) return
+    Integer lvl = safeIntArg(level, 0)
+    if (lvl <= 0) { off(); return }
+    Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
-    def resp = hubBypass("setVirtualLevel", [id: 0, level: lvl, type: "mist"], "setVirtualLevel(mist,${lvl})")
+    def resp = hubBypass("setVirtualLevel", [id: 0, level: clamped, type: "mist"], "setVirtualLevel(mist,${clamped})")
     if (httpOk(resp)) {
-        state.mistLevel = lvl
-        device.sendEvent(name:"mistLevel", value: lvl)
-        logInfo "Mist level: ${lvl}"
+        state.mistLevel = clamped
+        device.sendEvent(name:"mistLevel", value: clamped)
+        logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
+        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -340,7 +343,8 @@ def setMistLevel(level){
 // Valid range: 0-3 (0 = warm mist off; 1-3 = warm intensity levels)
 def setWarmMistLevel(level){
     logDebug "setWarmMistLevel(${level})"
-    Integer lvl = (level as Integer) ?: 0
+    if (!requireNotNull(level, "setWarmMistLevel")) return
+    Integer lvl = safeIntArg(level, 0)   // BP26: safeIntArg never throws on non-numeric RM input
     if (lvl < 0 || lvl > 3) {
         logError "Invalid warm mist level ${lvl} -- must be 0-3 (0=off, 1-3=warm intensity)"
         recordError("Invalid warm mist level ${lvl}", [method:"setVirtualLevel"])
@@ -380,7 +384,10 @@ def setWarmMistLevel(level){
 // setTargetHumidity payload: {target_humidity: N} -- note snake_case (not camelCase)
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
-    Integer p = Math.max(40, Math.min(80, (percent as Integer) ?: 50))
+    if (!requireNotNull(percent, "setHumidity")) return
+    Integer p = safeIntArg(percent, 0)
+    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
+    p = Math.max(40, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [target_humidity: p], "setTargetHumidity(${p})")
     if (httpOk(resp)) {
         state.targetHumidity = p
@@ -393,16 +400,19 @@ def setHumidity(percent){
 
 // ---------- Display ----------
 // setDisplay payload: {state: bool} -- NOT {screenSwitch: int} (Superior 6000S)
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return false
-    String val = (onOff as String).toLowerCase()
-    if (device.currentValue("displayOn") == val) return true
-    Boolean v = (val == "on")
-    def resp = hubBypass("setDisplay", [state: v], "setDisplay(${val})")
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return false
+    String val = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("displayOn") == canon) return true
+    Boolean v = (canon == "on")
+    def resp = hubBypass("setDisplay", [state: v], "setDisplay(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: val)
-        logInfo "Display: ${val}"
+        device.sendEvent(name:"displayOn", value: canon)
+        logInfo "Display: ${canon}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
@@ -423,10 +433,17 @@ private boolean isRgbVariant(){
 
 // setNightlightSwitch: turn RGB nightlight on or off, keeping last-known color + brightness.
 // Sends setLightStatus with action="on"|"off" and brightness from state (default 100).
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setNightlightSwitch(value){
     logDebug "setNightlightSwitch(${value})"
+    if (!requireNonEmptyEnum(value, "setNightlightSwitch")) return
     if (!isRgbVariant()) return
-    String action = (value == "on") ? "on" : "off"
+    // BP25: normalize to lowercase so Rule Machine "ON"/"OFF" routes correctly.
+    // No C3 idempotency gate: setNightlightSwitch preserves the last-known color and
+    // brightness from state. Two calls with the same on/off value may differ in the
+    // color/brightness payload actually sent (e.g. state changed between calls), so
+    // comparing only the on/off attribute would incorrectly suppress legitimate writes.
+    String action = ((value as String).trim().toLowerCase() == "on") ? "on" : "off"
     // Keep last color + brightness when toggling -- pull from state or use defaults
     Integer brightness = (state.nightlightBrightness as Integer) ?: 100
     Integer hue = (state.nightlightHue as Integer) ?: 0          // degrees 0-360
@@ -455,16 +472,19 @@ def setNightlightSwitch(value){
 // colorMap is the standard Hubitat map: {hue: 0-100, saturation: 0-100, level: 0-100}.
 // Hubitat ColorControl hue is 0-100 (percentage of full circle), NOT 0-360 degrees.
 // Convert hue 0-100 -> 0-360 for internal HSV calculations.
+// BP26: colorMap field coercions use safeIntArg to avoid NumberFormatException/GroovyCastException
+// when RM or dashboard tiles pass decimal strings ("55.5"), blank (""), or non-numeric values.
 def setColor(Map colorMap){
     logDebug "setColor(${colorMap})"
+    if (colorMap == null) { logWarn "setColor called with null colorMap (likely blank Rule Machine slot); ignoring"; return }
     if (!isRgbVariant()) return
-    Integer hue100  = Math.max(0, Math.min(100, (colorMap?.hue  as Integer) ?: 0))
-    Integer sat100  = Math.max(0, Math.min(100, (colorMap?.saturation as Integer) ?: 100))
+    Integer hue100  = Math.max(0, Math.min(100, safeIntArg(colorMap?.hue,  0)))
+    Integer sat100  = Math.max(0, Math.min(100, safeIntArg(colorMap?.saturation, 100)))
     // colorMap.level is Hubitat's SwitchLevel (0-100) -- use as brightness if provided.
     // brightness must be in range 40-100 (firmware floor at 40 per pyvesync PR #502).
     Integer brightness = (colorMap?.level != null)
-        ? Math.max(40, Math.min(100, colorMap.level as Integer))
-        : ((state.nightlightBrightness as Integer) ?: 100)
+        ? Math.max(40, Math.min(100, safeIntArg(colorMap.level, 100)))
+        : safeIntArg(state.nightlightBrightness, 100)
     // Raw (pre-brightness) RGB from hue/sat at full value -- used for colorSliderLocation.
     def (Integer rawR, Integer rawG, Integer rawB) = hsvToRgb(hue100 / 100.0, sat100 / 100.0, 1.0)
     // Brightness-adjusted RGB for the actual payload.
@@ -498,8 +518,9 @@ def setColor(Map colorMap){
 // hue is 0-100 (Hubitat convention).
 def setHue(hue){
     logDebug "setHue(${hue})"
+    if (!requireNotNull(hue, "setHue")) return
     if (!isRgbVariant()) return
-    Integer hue100 = Math.max(0, Math.min(100, (hue as Integer) ?: 0))
+    Integer hue100 = safeIntArg(hue, 0, 0, 100)   // BP26 + I1
     Integer sat100 = (state.nightlightSaturation as Integer) ?: 100
     Integer brightness = (state.nightlightBrightness as Integer) ?: 100
     setColor([hue: hue100, saturation: sat100, level: brightness])
@@ -509,11 +530,12 @@ def setHue(hue){
 // saturation is 0-100 (Hubitat convention).
 def setSaturation(saturation){
     logDebug "setSaturation(${saturation})"
+    if (!requireNotNull(saturation, "setSaturation")) return
     if (!isRgbVariant()) return
     // Convert stored internal hue (0-360) back to Hubitat hue (0-100) for setColor round-trip.
     Integer hueInternal = (state.nightlightHue as Integer) ?: 0  // 0-360
     Integer hue100      = (hueInternal * 100 / 360) as Integer   // -> 0-100
-    Integer sat100      = Math.max(0, Math.min(100, (saturation as Integer) ?: 100))
+    Integer sat100      = safeIntArg(saturation, 100, 0, 100)   // BP26 + I1
     Integer brightness  = (state.nightlightBrightness as Integer) ?: 100
     setColor([hue: hue100, saturation: sat100, level: brightness])
 }
@@ -661,16 +683,19 @@ def probeNightLight(){
 
 // ---------- Auto-stop ----------
 // setAutomaticStop payload: {enabled: bool} -- NOT {autoStopSwitch: int} (Superior 6000S)
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
-    if (!requireNotNull(onOff, "setAutoStop")) return false
-    String val = (onOff as String).toLowerCase()
-    if (device.currentValue("autoStopEnabled") == val) return true
-    Boolean v = (val == "on")
-    def resp = hubBypass("setAutomaticStop", [enabled: v], "setAutomaticStop(${val})")
+    if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
+    String val = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("autoStopEnabled") == canon) return true
+    Boolean v = (canon == "on")
+    def resp = hubBypass("setAutomaticStop", [enabled: v], "setAutomaticStop(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: val)
-        logInfo "Auto-stop: ${val}"
+        device.sendEvent(name:"autoStopEnabled", value: canon)
+        logInfo "Auto-stop: ${canon}"
     } else {
         logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
     }

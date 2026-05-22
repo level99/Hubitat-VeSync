@@ -193,19 +193,21 @@ def setLevel(val, duration) {
 
 // SwitchLevel convention: setLevel(0) turns the device off (matches Z-Wave dimmer platform expectation).
 // BP23: setLevel(N>0) auto-turns-on when switch is off (SwitchLevel capability convention).
+// BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
 def setLevel(val) {
     logDebug "setLevel $val"
-    if (val == 0) { off(); return }
+    Integer pct = safeIntArg(val, 0, 0, 100)
+    if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off.
     // state.turningOn is set by on() while configureOnState() runs async;
     // skip the redundant on() call if a turn-on cycle is already in flight.
     ensureSwitchOn()
     Integer lvl
-    if (val < 20) lvl=1
-    else if (val < 40) lvl=2
-    else if (val < 60) lvl=3
+    if (pct < 20) lvl=1
+    else if (pct < 40) lvl=2
+    else if (pct < 60) lvl=3
     else lvl=4
-    sendEvent(name:"level", value: val)
+    sendEvent(name:"level", value: pct)
     def ok = setSpeedLevel(lvl)
     if (ok) {
         // setLevel establishes manual mode + speed atomically (V2 quirk); emit mode events here.
@@ -214,28 +216,30 @@ def setLevel(val) {
         state.mode = "manual"
         device.sendEvent(name:"mode", value: "manual")
         device.sendEvent(name:"petMode", value: "off")
-        logInfo "Level: ${val}% (fan level ${lvl})"
+        logInfo "Level: ${pct}% (fan level ${lvl})"
     }
 }
 
 def setSpeed(spd) {
     logDebug "setSpeed(${spd})"
-    if (!requireNotNull(spd, "setSpeed")) return
-    if (spd=="off") return off()
-    if (spd=="sleep") { setMode("sleep"); device.sendEvent(name:"speed", value:"on"); return }
+    if (!requireNonEmptyEnum(spd, "setSpeed")) return
+    // BP25: normalize to lowercase so Rule Machine "OFF"/"SLEEP" route correctly.
+    String s = (spd as String).trim().toLowerCase()
+    if (s == "off") return off()
+    if (s == "sleep") { setMode("sleep"); device.sendEvent(name:"speed", value:"on"); return }
 
     ensureSwitchOn()
 
     // setLevel establishes manual mode + speed atomically; no setMode("manual") pre-call needed (V2 quirk)
-    def lvl = mapSpeedToInteger(spd)
+    def lvl = mapSpeedToInteger(s)
     def ok = setSpeedLevel(lvl)
     if (ok) {
-        state.speed = spd
+        state.speed = s
         state.mode = "manual"
-        device.sendEvent(name:"speed", value: spd)
+        device.sendEvent(name:"speed", value: s)
         device.sendEvent(name:"mode", value: "manual")
         device.sendEvent(name:"petMode", value: "off")
-        logInfo "Speed: ${spd}"
+        logInfo "Speed: ${s}"
     }
 }
 
@@ -253,7 +257,7 @@ def setSpeedLevel(level) {
 //   auto/sleep/pet: use setPurifierMode with {workMode: <mode>}.
 def setMode(mode) {
     logDebug "setMode(${mode})"
-    if (!requireNotNull(mode, "setMode")) return false
+    if (!requireNonEmptyEnum(mode, "setMode")) return false
 
     // Only check power if we're not already turning on
     if (!state.turningOn && device.currentValue("switch") != "on") {
@@ -294,58 +298,75 @@ def setMode(mode) {
 // ---- Feature setters ----
 
 def setPetMode(onOff) {
-    if (!requireNotNull(onOff, "setPetMode")) return
-    setMode(onOff=="on" ? "pet" : "auto")
+    if (!requireNonEmptyEnum(onOff, "setPetMode")) return
+    // BP25: normalize to lowercase before mode selection.
+    String v = (onOff as String).trim().toLowerCase()
+    setMode(v == "on" ? "pet" : "auto")
 }
 
 def setAutoPreference(pref) {
     logDebug "setAutoPreference(${pref})"
-    if (!requireNotNull(pref, "setAutoPreference")) return
-    def resp = hubBypass("setAutoPreference", [autoPreferenceType: pref, roomSize: state.roomSize ?: 600], "setAutoPreference")
+    if (!requireNonEmptyEnum(pref, "setAutoPreference")) return
+    def resp = hubBypass("setAutoPreference", [autoPreference: pref, roomSize: state.roomSize ?: 600], "setAutoPreference")
     if (httpOk(resp)) { state.autoPreference = pref; device.sendEvent(name:"autoPreference", value: pref) }
 }
 
 def setRoomSize(sz) {
     logDebug "setRoomSize(${sz})"
     if (!requireNotNull(sz, "setRoomSize")) return
-    def resp = hubBypass("setAutoPreference", [autoPreferenceType: state.autoPreference ?: "default", roomSize: sz], "setAutoPreference(roomSize)")
-    if (httpOk(resp)) { state.roomSize = sz as Integer; device.sendEvent(name:"roomSize", value: sz as Integer) }
+    Integer roomSz = safeIntArg(sz, 600)   // BP26: safeIntArg never throws on non-numeric RM input
+    def resp = hubBypass("setAutoPreference", [autoPreference: state.autoPreference ?: "default", roomSize: roomSz], "setAutoPreference(roomSize)")
+    if (httpOk(resp)) { state.roomSize = roomSz; device.sendEvent(name:"roomSize", value: roomSz) }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff) {
     logDebug "setChildLock(${onOff})"
-    if (!requireNotNull(onOff, "setChildLock")) return
+    if (!requireNonEmptyEnum(onOff, "setChildLock")) return
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    // Without this, "ON" bypasses the gate (gate compares against "on") AND the payload
+    // coercion evaluates ("ON" == "on") as false → sends childLockSwitch:0 (unlock) when
+    // the caller intended to lock. Both the gate and the coercion must see the same form.
+    String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
-    if (device.currentValue("childLock") == onOff) return
-    def resp = hubBypass("setChildLock", [childLockSwitch: onOff=="on" ? 1:0], "setChildLock")
+    if (device.currentValue("childLock") == canon) return
+    def resp = hubBypass("setChildLock", [childLockSwitch: canon == "on" ? 1 : 0], "setChildLock")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: onOff)
-        logInfo "Child lock: ${onOff}"
+        device.sendEvent(name:"childLock", value: canon)
+        logInfo "Child lock: ${canon}"
     }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff) {
     logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return
+    // BP25: normalize to lowercase before C3 gate and payload coercion (same rationale as setChildLock).
+    String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
-    if (device.currentValue("display") == onOff) return
-    def resp = hubBypass("setDisplay", [screenSwitch: onOff=="on" ? 1:0], "setDisplay")
+    if (device.currentValue("display") == canon) return
+    def resp = hubBypass("setDisplay", [screenSwitch: canon == "on" ? 1 : 0], "setDisplay")
     if (httpOk(resp)) {
-        device.sendEvent(name:"display", value: onOff)
-        logInfo "Display: ${onOff}"
+        device.sendEvent(name:"display", value: canon)
+        logInfo "Display: ${canon}"
     }
 }
 
 def resetFilter() {
     logDebug "resetFilter()"
-    def resp = hubBypass("resetFilterLife", [:], "resetFilterLife")
+    def resp = hubBypass("resetFilter", [:], "resetFilter")
     if (httpOk(resp)) logDebug "Filter reset requested"
 }
 
 // ---- Timer (V2-line uses addTimerV2 / delTimerV2) ----
 
 def setTimer(minutes) {
-    int n = (minutes as Integer) ?: 0
+    if (!requireNotNull(minutes, "setTimer")) return   // BP18: null-guard (RM blank slot)
+    int n = safeIntArg(minutes, 0)                     // BP26: safeIntArg never throws on non-numeric RM input
     logDebug "setTimer(${n} min)"
     if (n <= 0) { cancelTimer(); return }
     int secs = n * 60

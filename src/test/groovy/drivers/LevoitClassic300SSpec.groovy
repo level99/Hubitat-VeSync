@@ -353,12 +353,12 @@ class LevoitClassic300SSpec extends HubitatSpec {
         !req.data.containsKey("levelType")
     }
 
-    def "setMistLevel clamps values below 1 to 1"() {
-        given:
-        settings.descriptionTextEnable = false
+    def "setMistLevel(1) passes through as the minimum valid level"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
 
         when:
-        driver.setMistLevel(0)
+        driver.setMistLevel(1)
 
         then:
         def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
@@ -836,5 +836,174 @@ class LevoitClassic300SSpec extends HubitatSpec {
 
         and: "an error was logged (invalid mode rejection)"
         testLog.errors.any { it.contains("Invalid mode") || it.contains("turbo") }
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #25: C3 gate case-sensitivity — uppercase "ON"/"OFF" input
+    // -------------------------------------------------------------------------
+
+    def "BP25: setAutoStop('ON') uppercase makes the API call and sends enabled:true (not false)"() {
+        // Pre-fix: ("ON" == "on") is false → enabled:false sent (disable instead of enable).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → enabled:true (correct).
+        given: "autoStopEnabled is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopEnabled", value: "off"])
+
+        when:
+        driver.setAutoStop("ON")
+
+        then: "setAutomaticStop API call was made"
+        def req = testParent.allRequests.find { it.method == "setAutomaticStop" }
+        req != null
+
+        and: "payload carries enabled:true (enable auto-stop), NOT false (disable)"
+        req.data.enabled == true
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("autoStopEnabled") == "on"
+    }
+
+    def "BP25: setAutoStop('ON') when already 'on' is a no-op (C3 gate works with uppercase)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopEnabled", value: "on"])
+
+        when:
+        driver.setAutoStop("ON")
+
+        then: "no API call was made"
+        testParent.allRequests.find { it.method == "setAutomaticStop" } == null
+    }
+
+    // -------------------------------------------------------------------------
+    // Regression guards — setMistLevel null/0/valid input handling
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel(null) is rejected with logWarn and no API call (BP18 Fix 4)"() {
+        // Pre-fix: (null as Integer) ?: 1 silently set level to 1; no warning.
+        // Post-fix: requireNotNull rejects null before coercion.
+        when:
+        driver.setMistLevel(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+        testLog.warns.any { it.contains("setMistLevel") || it.contains("null") }
+    }
+
+    def "setMistLevel(0) routes to off() (Fix 4 — SwitchLevel setLevel(0) convention)"() {
+        // Pre-fix: 0 was clamped to 1 via Math.max(1, ...) — device stayed on at level 1.
+        // Post-fix: lvl <= 0 → off() called.
+        when:
+        driver.setMistLevel(0)
+
+        then: "setSwitch powerSwitch=0 (off) was sent"
+        def req = testParent.allRequests.find { it.method == "setSwitch" }
+        req != null
+        req.data.enabled == false  // Classic 300S uses {enabled: bool, id: 0}
+        and: "no setVirtualLevel was sent"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+    }
+
+    def "setMistLevel(3) sends setVirtualLevel with id:0, level:3, type:'mist'"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(3)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
+        req != null
+        req.data.id    == 0
+        req.data.level == 3
+        req.data.type  == "mist"
+        lastEventValue("mistLevel") == 3
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setMistLevel with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setMistLevel('#badInput') does not throw and does not make a setVirtualLevel API call (fallback=0 → off)"() {
+        // Inputs that safeIntArg() maps to 0: "abc", "" (empty), true ("true" is not numeric).
+        // 0 → lvl<=0 → off() path; no setVirtualLevel call made.
+        // Pre-fix: (level as Integer) on any of these threw before the guard could fire.
+        given: "device is on so the auto-on guard doesn't confuse the assertion"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setVirtualLevel API call — 0 coercion routes to off()"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setMistLevel('5.7') does not throw and makes a setVirtualLevel API call with truncated value (5)"() {
+        // safeIntArg("5.7") → BigDecimal("5.7").intValue() = 5.  5 > 0 so the off() early-return
+        // is skipped; 5 is clamped to Math.max(1, Math.min(9, 5)) = 5 and sent to the cloud.
+        // Truncation is the correct post-fix behaviour — matches Groovy's native (5.7 as Integer).
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setVirtualLevel API call was made with level=5 (truncated from 5.7)"
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
+        req != null
+        req.data.level == 5
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setHumidity with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setHumidity('#badInput') does not throw and does not make a setTargetHumidity API call (fallback=0 → rejected)"() {
+        // safeIntArg() maps non-numeric inputs to 0; 0 triggers the p<=0 guard → logWarn + return.
+        // Pre-fix: (percent as Integer) on these inputs threw before the guard could fire.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setTargetHumidity API call — 0 coercion rejected by minimum-humidity guard"
+        testParent.allRequests.findAll { it.method == "setTargetHumidity" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setHumidity('5.7') does not throw and makes a setTargetHumidity API call with clamped value (30)"() {
+        // safeIntArg("5.7") → 5 (truncation). 5 > 0 so the rejection guard is skipped;
+        // Math.max(30, Math.min(80, 5)) = 30 (clamped to minimum). A valid cloud call is made.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setTargetHumidity API call was made with target_humidity=30 (5 clamped to minimum)"
+        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
+        req != null
+        req.data.target_humidity == 30
     }
 }

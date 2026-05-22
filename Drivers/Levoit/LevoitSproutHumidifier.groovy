@@ -104,7 +104,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Sprout Humidifier (LEH-B381S-WUS/-WEU) — mist 1-2, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display, child lock, drying mode, nightlight (brightness + color temp). pyvesync VeSyncSproutHumid class; V2-style payloads. Auto mode wire value: 'autoPro' (not 'auto' — contrast OasisMist 1000S).",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -189,8 +189,8 @@ def off(){
 // In reverse: workMode='autoPro' from API response maps back to user-facing 'auto'.
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    if (!requireNonEmptyEnum(mode, "setMode")) return
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     // Wire-value mapping: auto -> 'autoPro' (device_map.py mist_modes for Sprout)
     String wire = (m == "auto") ? "autoPro" : m
@@ -210,15 +210,18 @@ def setMode(mode){
 // Range: 1-2 only (mist_levels=[1,2] per device_map.py — Sprout is a 2-level device).
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    Integer lvl = Math.max(1, Math.min(2, (level as Integer) ?: 1))
+    if (!requireNotNull(level, "setMistLevel")) return
+    Integer lvl = safeIntArg(level, 0)
+    if (lvl <= 0) { off(); return }
+    Integer clamped = Math.max(1, Math.min(2, lvl))
     ensureSwitchOn()
-    def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "setVirtualLevel(mist,${lvl})")
+    def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: clamped, levelType: "mist"], "setVirtualLevel(mist,${clamped})")
     if (httpOk(resp)) {
-        state.mistLevel = lvl
-        device.sendEvent(name:"mistLevel", value: lvl)
-        logInfo "Mist level: ${lvl}"
+        state.mistLevel = clamped
+        device.sendEvent(name:"mistLevel", value: clamped)
+        logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
+        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -227,7 +230,10 @@ def setMistLevel(level){
 // Range: 30-80 % per device_map.py target_minmax=(30,80).
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
-    Integer p = Math.max(30, Math.min(80, (percent as Integer) ?: 50))
+    if (!requireNotNull(percent, "setHumidity")) return
+    Integer p = safeIntArg(percent, 0)
+    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
+    p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [targetHumidity: p], "setTargetHumidity(${p})")
     if (httpOk(resp)) {
         state.targetHumidity = p
@@ -239,38 +245,52 @@ def setHumidity(percent){
 }
 
 // V2-line shared body via lib; delegator preserves method-presence semantics.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
 
 // ---------- Child lock ----------
 // VeSyncSproutHumid toggle_child_lock: {childLockSwitch: int}
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    if (!requireNotNull(onOff, "setChildLock")) return false
-    String val = (onOff as String).toLowerCase()
-    if (device.currentValue("childLock") == val) return true
-    Integer v = (val == "on") ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${val})")
+    if (!requireNonEmptyEnum(onOff, "setChildLock")) return false
+    // BP25: derive canonical on/off for sendEvent and C3 gate — never emit raw "true"/"1"/"yes".
+    String val = (onOff as String).trim().toLowerCase()
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("childLock") == canon) return true
+    Integer v = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: val)
-        logInfo "Child lock: ${val}"
+        device.sendEvent(name:"childLock", value: canon)
+        logInfo "Child lock: ${canon}"
     } else {
         logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 
 // ---------- Drying mode ----------
 // VeSyncSproutHumid toggle_drying_mode: {autoDryingSwitch: int}
 // Drying mode runs the fan without mist after humidification to dry out the internals.
+// The dryingEnabled attribute reflects the user-controlled preference flag (autoDryingSwitch),
+// not hardware runtime state, so a C3 idempotency gate is valid here.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
-    if (!requireNotNull(onOff, "setDryingMode")) return false
-    Integer v = ((onOff as String).toLowerCase() == "on") ? 1 : 0
-    def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
+    if (!requireNonEmptyEnum(onOff, "setDryingMode")) return false
+    // BP25: normalize to lowercase, then derive canonical on/off for sendEvent and C3 gate.
+    // Attribute always emits "on" or "off"; the C3 gate compares canonical vs canonical.
+    String v = (onOff as String).trim().toLowerCase()
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("dryingEnabled") == canon) return true
+    Integer sw = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setDryingMode", [autoDryingSwitch: sw], "setDryingMode(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"dryingEnabled", value: onOff)
-        logInfo "Drying mode: ${onOff}"
+        device.sendEvent(name:"dryingEnabled", value: canon)
+        logInfo "Drying mode: ${canon}"
     } else {
         logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"])
     }
@@ -283,17 +303,26 @@ def setDryingMode(onOff){
 // nightLightSwitch=1 when on, 0 when off.
 // brightness=0 with nightLightSwitch=0 means off.
 // NOTE: colorTemperature is optional — defaults to prior state (or 3500 if unknown).
+//
+// No C3 idempotency gate: the payload carries brightness and colorTemperature in addition
+// to the on/off switch. Two calls with the same on/off value but different brightness or
+// color-temperature arguments send different payloads, so comparing only nightlightOn
+// would incorrectly suppress legitimate brightness or color-temperature updates.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setNightlight(onOff, brightness = null, colorTemp = null){
     logDebug "setNightlight(${onOff}, ${brightness}, ${colorTemp})"
-    Integer br   = (brightness  != null) ? Math.max(0, Math.min(100, (brightness as Integer) ?: 0))    : null
-    Integer ct   = (colorTemp   != null) ? Math.max(2000, Math.min(3500, (colorTemp as Integer) ?: 3500)) : null
-    if (onOff == "off") { br = 0; ct = ct ?: 3500 }
+    if (!requireNonEmptyEnum(onOff, "setNightlight")) return
+    // BP25: normalize to lowercase before all comparisons.
+    String nl = (onOff as String).trim().toLowerCase()
+    Integer br   = (brightness  != null) ? Math.max(0, Math.min(100, safeIntArg(brightness, 0)))       : null   // BP26
+    Integer ct   = (colorTemp   != null) ? Math.max(2000, Math.min(3500, safeIntArg(colorTemp, 3500))) : null   // BP26
+    if (nl == "off") { br = 0; ct = ct ?: 3500 }
     else {
         // on: if no brightness supplied default to 100; clamp floor to 1
         br = (br == null) ? 100 : (br == 0 ? 50 : br)
         ct = ct ?: 3500
     }
-    Integer nlSwitch = (onOff == "on" && br > 0) ? 1 : 0
+    Integer nlSwitch = (nl == "on" && br > 0) ? 1 : 0
     def resp = hubBypass("setLightStatus",
         [brightness: br, colorTemperature: ct, nightLightSwitch: nlSwitch],
         "setLightStatus(br=${br},ct=${ct},nl=${nlSwitch})")

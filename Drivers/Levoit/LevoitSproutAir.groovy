@@ -93,7 +93,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Sprout Air Purifier (LAP-B851S-WUS/-WEU/-AEUR/-AUS/-WNA, LAP-BAY-MAX01S) — fan 1-3, auto/sleep/manual modes, AQ sensors (AQLevel/PM2.5/PM1/PM10/AQI/VOC/CO2), child lock, display, nightlight (on/off/dim). pyvesync VeSyncAirSprout class (VeSyncAirBaseV2). V2-style payloads. No timer.",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -159,9 +159,17 @@ def initialize(){ logDebug "Initializing" }
 // Different from VeSyncAirBypass (Core line): {switch: 'on'/'off', id: 0}
 def on(){
     logDebug "on()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
-    if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-    else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    // Re-entrance guard: ensureSwitchOn() → on() → setFanSpeed() → ensureSwitchOn() would recurse
+    // without this. state.turningOn matches the pattern used in humidifier drivers (e.g. Sup6000S).
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
+        if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
 }
 
 def off(){
@@ -186,8 +194,8 @@ def toggle(){
 // This driver mirrors that: setMode("manual") calls setFanSpeed(1) instead.
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    if (!requireNonEmptyEnum(mode, "setMode")) return
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setPurifierMode"]); return }
     if (m == "manual") {
         // Manual established by setting fan speed (same as pyvesync VeSyncAirBaseV2.set_mode(MANUAL))
@@ -210,7 +218,12 @@ def setMode(mode){
 // Setting a fan speed implicitly sets mode to manual.
 def setFanSpeed(speed){
     logDebug "setFanSpeed(${speed})"
-    Integer spd = Math.max(1, Math.min(3, (speed as Integer) ?: 1))
+    // BP18: null-guard — Rule Machine blank slots pass null; silent coercion to speed 1 is wrong.
+    if (!requireNotNull(speed, "setFanSpeed")) return
+    Integer spd = safeIntArg(speed, 1, 1, 3)
+    // BP24-B: auto-on from off-state. on() re-entrance guard (state.turningOn) prevents recursion
+    // when setMode("manual") delegates here and on() calls setFanSpeed internally.
+    ensureSwitchOn()
     def resp = hubBypass("setLevel", [levelIdx: 0, manualSpeedLevel: spd, levelType: "wind"], "setLevel(wind,${spd})")
     if (httpOk(resp)) {
         state.lastFanSpeed = spd
@@ -225,13 +238,22 @@ def setFanSpeed(speed){
 
 // ---------- Display ----------
 // VeSyncAirBaseV2 toggle_display: {screenSwitch: int}
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${onOff})")
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return
+    // BP25: normalize to lowercase, then derive a canonical on/off string from the truthy test.
+    // sendEvent always emits "on" or "off" — never the raw input ("true", "1", "yes").
+    // The C3 gate compares canonical vs canonical so truthy-variant input cannot defeat it.
+    String v = (onOff as String).trim().toLowerCase()
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("displayOn") == canon) return
+    Integer sw = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setDisplay", [screenSwitch: sw], "setDisplay(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: onOff)
-        logInfo "Display: ${onOff}"
+        device.sendEvent(name:"displayOn", value: canon)
+        logInfo "Display: ${canon}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
@@ -239,13 +261,20 @@ def setDisplay(onOff){
 
 // ---------- Child lock ----------
 // VeSyncAirBaseV2 toggle_child_lock: {childLockSwitch: int}
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    Integer v = (onOff == "on") ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${onOff})")
+    if (!requireNonEmptyEnum(onOff, "setChildLock")) return
+    // BP25: normalize to lowercase, then derive canonical on/off for sendEvent and C3 gate.
+    String v = (onOff as String).trim().toLowerCase()
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("childLock") == canon) return
+    Integer sw = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: sw], "setChildLock(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: onOff)
-        logInfo "Child lock: ${onOff}"
+        device.sendEvent(name:"childLock", value: canon)
+        logInfo "Child lock: ${canon}"
     } else {
         logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
     }
@@ -257,10 +286,15 @@ def setChildLock(onOff){
 // Purifier nightlight: setNightLight with string enum {'on', 'off', 'dim'}.
 // Humidifier nightlight: setLightStatus with {brightness, colorTemperature, nightLightSwitch}.
 // These are different inherited methods from different base classes.
+//
+// No C3 idempotency gate: this is a three-state enum setter ("on"/"off"/"dim"), not a
+// boolean on/off toggle. The nightlightOn attribute stores all three states, so same-state
+// suppression would require comparing the full enum value — which is valid in principle
+// but this method is not classified as an on/off setter in the C3 gate scope.
 def setNightlightMode(nlMode){
     logDebug "setNightlightMode(${nlMode})"
-    if (nlMode == null) { logWarn "setNightlightMode called with null nlMode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (nlMode as String).toLowerCase()
+    if (!requireNonEmptyEnum(nlMode, "setNightlightMode")) return
+    String m = (nlMode as String).trim().toLowerCase()
     if (!(m in ["on","off","dim"])) { logError "Invalid nightlight mode: ${m} -- must be: on, off, dim"; recordError("Invalid nightlight mode: ${m}", [method:"setNightLight"]); return }
     def resp = hubBypass("setNightLight", [night_light: m], "setNightLight(${m})")
     if (httpOk(resp)) {

@@ -85,6 +85,7 @@ using the lib file's repo-relative path (e.g.
 
 import re
 from pathlib import Path
+from lint_rules._helpers import make_finding
 
 
 DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
@@ -241,20 +242,17 @@ def check_rule32_auto_on_guard_missing(
 
         if not has_guard:
             # BP24-B: no guard at all
-            findings.append({
-                "severity": "FAIL",
-                "rule_id": "RULE32_auto_on_guard_missing",
-                "title": (
+            findings.append(make_finding(
+                severity="FAIL",
+                rule_id="RULE32_auto_on_guard_missing",
+                title=(
                     f"{method_name}() makes API call without auto-on guard "
                     "(Bug Pattern #24-B)"
                 ),
-                "file": file_rel,
-                "line": method_start_line,
-                "context": (
-                    f"    {raw_lines[method_start_line - 1]}"
-                    if 0 < method_start_line <= len(raw_lines) else ""
-                ),
-                "why": (
+                file_rel=file_rel,
+                lineno=method_start_line,
+                raw_lines=raw_lines,
+                why=(
                     f"Bug Pattern #24-B: ``{method_name}()`` sends a command to the VeSync "
                     "cloud but does not check whether the device is on first. Calling this "
                     "method from automation on an off-state device causes the cloud to accept "
@@ -262,7 +260,7 @@ def check_rule32_auto_on_guard_missing(
                     "real device state diverge. SwitchLevel / FanControl / configure-style "
                     "command convention: SHOULD-ON methods must auto-turn-on before commanding."
                 ),
-                "fix": (
+                fix=(
                     f"Add ``ensureSwitchOn()`` at the top of ``{method_name}()`` (after "
                     "parameter validation, before the API call). ``ensureSwitchOn()`` is "
                     "provided by LevoitChildBaseLib and handles both the currentValue check "
@@ -274,25 +272,22 @@ def check_rule32_auto_on_guard_missing(
                     "to the ``bp24_auto_on_exemptions`` list in tests/lint_config.yaml with a "
                     "substantive ``rationale`` explaining why auto-on is undesirable here."
                 ),
-            })
+            ))
         elif needs_reentrance_check and not has_turning_on:
             # BP24-C: inline currentValue guard present but no state.turningOn re-entrance flag.
             # Does NOT fire when ensureSwitchOn() is the guard — that helper encapsulates
             # the re-entrance check internally.
-            findings.append({
-                "severity": "FAIL",
-                "rule_id": "RULE32_auto_on_guard_missing",
-                "title": (
+            findings.append(make_finding(
+                severity="FAIL",
+                rule_id="RULE32_auto_on_guard_missing",
+                title=(
                     f"{method_name}() inline auto-on guard is missing the state.turningOn "
                     "re-entrance flag (Bug Pattern #24-C)"
                 ),
-                "file": file_rel,
-                "line": method_start_line,
-                "context": (
-                    f"    {raw_lines[method_start_line - 1]}"
-                    if 0 < method_start_line <= len(raw_lines) else ""
-                ),
-                "why": (
+                file_rel=file_rel,
+                lineno=method_start_line,
+                raw_lines=raw_lines,
+                why=(
                     f"Bug Pattern #24-C: ``{method_name}()`` has a "
                     "``device.currentValue('switch') != 'on'`` guard but lacks the "
                     "``!state.turningOn`` re-entrance check. Without the flag, if ``on()`` "
@@ -300,7 +295,7 @@ def check_rule32_auto_on_guard_missing(
                     "turn-on), the method calls ``on()`` again recursively, causing a stack "
                     "overflow or double-initialization."
                 ),
-                "fix": (
+                fix=(
                     f"Replace the inline guard in ``{method_name}()`` with ``ensureSwitchOn()`` "
                     "(canonical preferred form, provided by LevoitChildBaseLib — handles "
                     "re-entrance internally). Or prefix the existing guard with the re-entrance "
@@ -310,7 +305,7 @@ def check_rule32_auto_on_guard_missing(
                     "recursive call when ``on()`` internally triggers a speed or mode command "
                     "during its own initialization sequence."
                 ),
-            })
+            ))
         # else: guard is ensureSwitchOn() (complete, re-entrance handled in helper),
         #       OR inline guard + state.turningOn both present — correct, no finding
 

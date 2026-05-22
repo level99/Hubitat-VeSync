@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 from .groovy_lite import clean_source, find_method_bodies
 from ._helpers import included_lib_texts
+from lint_rules._helpers import make_finding, make_finding_for_path
 
 PARENT_DRIVER = "VeSyncIntegration.groovy"
 
@@ -31,23 +32,6 @@ DRIVERS_WITH_DEBUG_PREF = {
 }
 
 
-def _context(lines, lineno, window=1):
-    start = max(0, lineno - 1 - window)
-    end = min(len(lines), lineno + window)
-    return '\n'.join(f"    {lines[i]}" for i in range(start, end))
-
-
-def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": str(path.relative_to(rel_base)).replace('\\', '/'),
-        "line": lineno,
-        "context": _context(lines, lineno),
-        "why": why,
-        "fix": fix,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +96,7 @@ def check_rule13_direct_log_in_parent(path, raw_lines, cleaned_lines, raw_text, 
                 if DIRECT_LOG_PATTERN.search(line):
                     # Also allow if sanitize() appears on the same line (belt-and-suspenders)
                     if not SANITIZE_ON_SAME_LINE.search(line):
-                        findings.append(_making_finding(
+                        findings.append(make_finding_for_path(
                             severity="FAIL",
                             rule_id="RULE13_direct_log_in_parent",
                             title="Direct log.X call in parent driver (bypasses sanitize())",
@@ -148,11 +132,18 @@ def check_rule14_bare_settings_ref(path, raw_lines, cleaned_lines, raw_text, con
     if path.suffix != '.groovy':
         return findings
 
+    # Only applies to files in Drivers/Levoit/ directory.
+    if 'Drivers' not in path.parts and 'Levoit' not in path.parts:
+        # Check by path string as well for Windows vs. Unix path segments
+        path_str = str(path).replace('\\', '/')
+        if 'Drivers/Levoit/' not in path_str:
+            return findings
+
     for i, line in enumerate(cleaned_lines, 1):
         m = BARE_PREF_PATTERN.search(line)
         if m:
             pref = m.group('pref')
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="RULE14_bare_settings_ref",
                 title=f"Bare preference reference '{pref}' missing 'settings?.' prefix",
@@ -210,7 +201,7 @@ def check_rule15_auto_disable_wiring(path, raw_lines, cleaned_lines, raw_text, c
             if re.search(r'\bdef\s+updated\s*\(\s*\)', line):
                 lineno = i
                 break
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="RULE15_missing_runin_1800",
             title="Missing runIn(1800, ...) auto-disable in updated()",
@@ -221,7 +212,7 @@ def check_rule15_auto_disable_wiring(path, raw_lines, cleaned_lines, raw_text, c
         ))
 
     if not has_logdebugoff_def:
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="RULE15_missing_logdebugoff_method",
             title="Missing logDebugOff() / logsOff() method definition",

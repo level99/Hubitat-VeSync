@@ -63,7 +63,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Vital 100S (LAP-V102S) — power, fan speed, mode, timer, AQ/PM2.5, filter health; canonical pyvesync payloads",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -76,6 +76,7 @@ metadata {
         attribute "mode", "string"
         attribute "pm25", "number"
         attribute "airQualityIndex", "number"
+        attribute "airQuality", "string"      // categorical label ("good"/"moderate"/etc.); type="string" on Vital line, "number" on Core 300S/400S/600S — families diverge. Use airQualityIndex for cross-family numeric comparisons.
         attribute "petMode", "string"
         attribute "autoPreference", "string"
         attribute "roomSize", "number"

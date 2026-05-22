@@ -514,4 +514,264 @@ class LevoitSproutAirSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setNightlightMode") && it.contains("null") }
         testParent.allRequests.isEmpty()
     }
+
+    // ---- BP25: setDisplay and setChildLock ----
+
+    def "BP25: setDisplay('ON') sends screenSwitch:1, not 0 (BP25 regression guard)"() {
+        // Pre-fix: (onOff == "on") where onOff="ON" evaluates false → screenSwitch:0 (wrong).
+        // Post-fix: toLowerCase() normalizes "ON"→"on" → screenSwitch:1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("ON")
+
+        then: "setDisplay sent with screenSwitch:1 (display on)"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25: setDisplay('OFF') sends screenSwitch:0 (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("OFF")
+
+        then: "setDisplay sent with screenSwitch:0 (display off)"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 0
+
+        and: "emitted event value is lowercase 'off'"
+        lastEventValue("displayOn") == "off"
+    }
+
+    def "BP25: setChildLock('ON') sends childLockSwitch:1, not 0 (BP25 regression guard)"() {
+        // Pre-fix: (onOff == "on") where onOff="ON" → childLockSwitch:0 (unlocks instead of locks).
+        // Post-fix: toLowerCase() → childLockSwitch:1.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("ON")
+
+        then: "setChildLock sent with childLockSwitch:1 (locked)"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25: setChildLock('OFF') sends childLockSwitch:0 (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("OFF")
+
+        then: "setChildLock sent with childLockSwitch:0 (unlocked)"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 0
+    }
+
+    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits 'on' (truthy-canon)"() {
+        // Pre-fix: v = "true".toLowerCase() = "true"; sendEvent(value:"true") stored truthy variant.
+        // Post-fix: canon = ("true" in [...]) ? "on" : "off" = "on"; sendEvent(value:"on").
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("true")
+
+        then: "API call sent with screenSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('1') sends screenSwitch:1 and emits 'on' (truthy-canon)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits 'on' (truthy-canon)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("true")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits 'on' (truthy-canon)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.childLockSwitch == 1
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: C3 gate suppresses setDisplay when attribute already 'on' and input is 'true'"() {
+        // Regression guard: C3 gate uses canon (not raw 'true'), so 'true' input with
+        // attribute already 'on' correctly triggers gate suppression.
+        given:
+        testDevice.events.add([name: "displayOn", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("true")
+
+        then: "C3 gate suppressed the call because canon=='on'==currentValue"
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // Regression guards — v2.5 null-input and coercion fixes
+    // -------------------------------------------------------------------------
+
+    def "on() re-entrance guard: second call while turningOn=true is a no-op (Fix 1)"() {
+        // Regression guard: BP24-B fix adds state.turningOn guard to on().
+        // If ensureSwitchOn() calls on() recursively, the second call must short-circuit.
+        given:
+        state.turningOn = true
+
+        when:
+        driver.on()
+
+        then: "no setSwitch API call because re-entrance was blocked"
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "setFanSpeed(null) is rejected with logWarn and no API call (BP18 Fix 2)"() {
+        // Pre-fix: (null as Integer) -> NPE in sandbox.
+        // Post-fix: requireNotNull rejects null before any coercion.
+        when:
+        driver.setFanSpeed(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+        testLog.warns.any { it.contains("setFanSpeed") || it.contains("null") }
+    }
+
+    def "setFanSpeed(2) calls ensureSwitchOn() when device is off (BP24-B Fix 2)"() {
+        // Pre-fix: setFanSpeed had no ensureSwitchOn() call — device stayed off.
+        // Post-fix: ensureSwitchOn() fires before the API write.
+        given: "device is off"
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when:
+        driver.setFanSpeed(2)
+
+        then: "setSwitch (on) AND setLevel (fan speed) both sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+        testParent.allRequests.find { it.method == "setLevel" && it.data.manualSpeedLevel == 2 } != null
+    }
+
+    def "BP26: setFanSpeed('') does not throw on empty-string input from Rule Machine (Sprout Air)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setFanSpeed called with empty string (Rule Machine blank slot)"
+        driver.setFanSpeed("")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "BP26: setFanSpeed('abc') does not throw on non-numeric input from Rule Machine (Sprout Air)"() {
+        given:
+        settings.descriptionTextEnable = false
+        when: "setFanSpeed called with non-numeric string"
+        driver.setFanSpeed("abc")
+        then: "no exception thrown"
+        noExceptionThrown()
+        and: "no error logged"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // C3 idempotency gate — setDisplay / setChildLock must not re-call API when
+    // the value already matches the current attribute (Sprout Air D1 fix)
+    // -------------------------------------------------------------------------
+
+    def "C3: setDisplay with already-current value makes no hubBypass call (Sprout Air)"() {
+        // Regression guard: before D1 fix, Sprout Air setDisplay had no C3 gate.
+        // This test FAILS on pre-D1-fix code and PASSES with the gate present.
+        given: "displayOn attribute is already 'on'"
+        testDevice.events.add([name: "displayOn", value: "on"])
+
+        when: "setDisplay called with the same value"
+        driver.setDisplay("on")
+
+        then: "no setDisplay API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setDisplay with different value does make a hubBypass call (Sprout Air)"() {
+        given: "displayOn attribute is 'off'"
+        testDevice.events.add([name: "displayOn", value: "off"])
+
+        when: "setDisplay called with 'on'"
+        driver.setDisplay("on")
+
+        then: "setDisplay API call was made"
+        testParent.allRequests.any { it.method == "setDisplay" }
+    }
+
+    def "C3: setChildLock with already-current value makes no hubBypass call (Sprout Air)"() {
+        given: "childLock attribute is already 'on'"
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when: "setChildLock called with the same value"
+        driver.setChildLock("on")
+
+        then: "no setChildLock API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
+        noExceptionThrown()
+    }
+
+    def "C3: setChildLock with different value does make a hubBypass call (Sprout Air)"() {
+        given: "childLock attribute is 'off'"
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when: "setChildLock called with 'on'"
+        driver.setChildLock("on")
+
+        then: "setChildLock API call was made"
+        testParent.allRequests.any { it.method == "setChildLock" }
+    }
 }

@@ -35,6 +35,22 @@ jobs:
         # --strict: treats WARN as FAIL in CI; any finding blocks the PR
         # --json: structured output for potential future annotations step
 
+      - name: Run lint pytest suite
+        run: PYTHONIOENCODING=utf-8 uv run --python 3.12 --with pytest --with pyyaml -m pytest tests/lint_test.py -q
+        # Catches rule-logic regressions: must-catch and must-not-catch fixtures for every rule
+
+      - name: Run BP24 classification verifier
+        run: uv run --python 3.12 tests/check_bp24_classification.py
+        # Exits nonzero if any on/off setter is missing its BP24 classification comment
+
+      - name: Run C3 gate coverage verifier
+        run: uv run --python 3.12 tests/check_c3_gate_coverage.py
+        # Exits nonzero if any on/off setter that emits an attribute is missing the C3 idempotency gate
+
+      - name: Run BP26 spec coverage verifier
+        run: uv run --python 3.12 tests/check_bp26_spec_coverage.py
+        # Exits nonzero if any safeIntArg command method is missing a Spock regression spec
+
       - name: Upload lint output
         if: always()
         uses: actions/upload-artifact@v4

@@ -113,6 +113,7 @@ The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing
 | Attribute | Values | Description |
 | --- | --- | --- |
 | online | true, false | Offline detection state managed by the parent. Set to `false` after 3 consecutive failed self-heal attempts; returns to `true` on the next successful poll. Use in Rule Machine to detect chronically-offline devices and trigger an alert. |
+| diagnostics | markdown | One-click bug-report data. Click the **captureDiagnostics** command on the device page to populate. Contains driver version, device metadata, recent error history, and an attribute snapshot, plus a pre-filled GitHub issue link. Does not capture account credentials, token, or email. |
 
 ### Core 200S
 
@@ -145,6 +146,7 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 | timerRemain | seconds | Auto-off timer remaining (0 if no timer set). |
 | pm25 | µg/m³ | Real-time PM2.5 reading. |
 | airQualityIndex | 1-4 | Levoit's categorical air-quality (1=excellent, 4=very bad). Distinct from the driver-computed US AQI (`aqi` attribute). |
+| airQuality | 0-500 | US-formula AQI (same value as `aqi`). This is an **additional convenience attribute** under the conventional name — it does NOT satisfy the Hubitat AirQuality capability requirement. The AirQuality capability requires the `airQualityIndex` attribute (the row above), which this driver populates with Levoit's native 1–4 categorical scale. Bind either attribute in automations; the capability requirement is met by `airQualityIndex`. |
 | aqi | 0-500 | US-formula AQI |
 | aqiDanger | string | Risk level for tile display |
 | aqiColor | hex | Color for HTML |
@@ -157,6 +159,8 @@ Commands: `setDisplay`, `setSpeed`, `setMode`, `setAutoMode`, `setChildLock`, `s
 Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
 
 **Timer units:** `setTimer` accepts seconds for Core line (matches the Levoit V1 API). The Vital line's `setTimer` accepts minutes — be aware if you have both device families.
+
+**`airQuality` attribute type differs by family:** on Core 300S/400S/600S the `airQuality` attribute is a **number** (US AQI, 0–500). On Vital 100S/200S and the Generic driver it is a **string** (a categorical label such as "good" or "poor"). A Rule Machine condition or dashboard binding that compares `airQuality` numerically (e.g., `airQuality > 100`) will work correctly on Core devices but will not behave as expected on Vital or Generic devices — and vice versa for string comparisons. Do not copy automations that reference `airQuality` across the Core ↔ Vital boundary without updating the comparison type.
 
 ### Core 400S
 
@@ -187,7 +191,7 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 | filter | 0-100 | Filter life (%) |
 | pm25 | µg/m³ | Real-time PM2.5 reading |
 | airQualityIndex | 1-4 | Levoit-internal AQ index |
-| airQuality | good, moderate, poor, very poor, unknown | Categorical AQ |
+| airQuality | good, moderate, poor, very poor, unknown | Categorical AQ label; index 0=unknown, 1=good, 2=moderate, 3=poor, 4=very poor |
 | autoPreference | default, efficient, quiet | Auto-mode preference |
 | roomSize | sq ft | User-configured room size for auto mode |
 | lightDetection | on, off | Whether light-detection is enabled |
@@ -213,6 +217,7 @@ Same V2 platform as Vital 200S. Differs in one capability: **no light-detection*
 | filter | 0-100 | Filter life (%) |
 | pm25 | µg/m³ | Real-time PM2.5 reading |
 | airQualityIndex | 1-4 | Levoit-internal AQ index |
+| airQuality | good, moderate, poor, very poor, unknown | Categorical AQ label; index 0=unknown, 1=good, 2=moderate, 3=poor, 4=very poor |
 | autoPreference | default, efficient, quiet | Auto-mode preference |
 | roomSize | sq ft | User-configured room size for auto mode |
 | childLock | on, off | Child-lock state |
@@ -562,7 +567,7 @@ Commands: `setMode`, `setSpeed` (1-12), `setOscillation`, `setMute`, `setDisplay
 
 ### Pedestal Fan (LPF-R432S)
 
-2-axis oscillation (horizontal + vertical, controlled separately). Mode `sleep` maps to `advancedSleep` like Tower Fan; mode `eco` is the Pedestal Fan's auto-equivalent (Tower Fan has `auto`; do not confuse). `childLock` is read-only — pyvesync has no setter and ST/HB community drivers also expose no write path. Timer is omitted in v2.1 (no community-confirmed payload).
+2-axis oscillation (horizontal + vertical, controlled separately). Mode `sleep` maps to `advancedSleep` like Tower Fan; mode `eco` is the Pedestal Fan's auto-equivalent (Tower Fan has `auto`; do not confuse). `childLock` became writable in v2.4 (live-hardware verified). Timer is omitted (no community-confirmed payload).
 
 Covers LPF-R432S-AEU, LPF-R432S-AUS, and LPF-R432S-AUK (UK market variant, v2.3). (pyvesync's fixture filename is a typo — `LPF-R423S.yaml` — but real device codes are `LPF-R432S`.)
 
@@ -583,12 +588,17 @@ Covers LPF-R432S-AEU, LPF-R432S-AUS, and LPF-R432S-AUK (UK market variant, v2.3)
 | mute | on, off | Mute state |
 | displayOn | on, off | Front-panel display state |
 | temperature | °F | Ambient temperature (raw / 10) |
-| childLock | on, off | **Read-only** — pyvesync has no setter, no command exposed |
+| childLock | on, off | Child-lock state *(writable since v2.4)* |
 | errorCode | int | Device error code (0 = healthy) |
 | sleepPreferenceType | string | Read-only nested response field |
+| oscillationCalibrationState | idle, calibrating | Oscillation auto-calibration state *(v2.4)* |
+| oscillationCalibrationProgress | 0-100 | Calibration progress percentage *(v2.4)* |
+| highTemperature | °F | User-set high-temperature alert threshold *(v2.4)* |
+| highTemperatureReminder | on, off | High-temperature reminder enabled *(v2.4)* |
+| smartCleaningReminder | on, off | Smart-cleaning reminder enabled *(v2.4)* |
 | info | HTML | Tile summary |
 
-Commands: `setMode`, `setSpeed` (1-12), `setHorizontalOscillation`, `setVerticalOscillation`, `setHorizontalRange` (left + right), `setVerticalRange` (top + bottom), `setMute`, `setDisplay`, `toggle`. (No `setChildLock`, no timer commands in v2.1.)
+Commands: `setMode`, `setSpeed` (1-12), `setHorizontalOscillation`, `setVerticalOscillation`, `setHorizontalRange` (left + right), `setVerticalRange` (top + bottom), `setMute`, `setDisplay`, `setChildLock` *(v2.4)*, `setSmartCleaningReminder` *(v2.4)*, `toggle`. (No timer commands — no community-confirmed payload.)
 
 ### Generic Device (any unrecognized model)
 

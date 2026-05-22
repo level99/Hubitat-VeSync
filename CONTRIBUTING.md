@@ -275,6 +275,7 @@ The Spock harness + 22 lint rules catch a long tail of regressions. Most of thes
 | **BP23 — `setLevel` auto-on guard** | Convention | `setLevel(N>0)` on a SwitchLevel-implementing driver must auto-turn-on the device when switch is off (SwitchLevel capability convention). Guard pattern: `if (!state.turningOn && device.currentValue("switch") != "on") on()` at top of `setLevel`, immediately after the `if (val == 0) { off(); return }` early-return. The `state.turningOn` re-entrance flag (set by `on()` in a try/finally block) prevents recursion if `on()` internally re-enters the speed/level path. Affects every dimmer-style Levoit driver: Core 200S/300S/400S/600S, Vital 100S/200S, Tower Fan, Pedestal Fan. Superior 6000S has the equivalent guard inside `setMistLevel`. |
 | **BP24-A — Dead `state.switch` guard** | RULE31 | `state.switch` is never written in any driver (power state is tracked via `device.sendEvent(name:"switch",...)` and read via `device.currentValue("switch")`). Any conditional that reads `state.switch` (e.g. `if (state.switch == "off") { on() }`) is a permanently-dead branch — the guard never fires. Flag: any `state.switch` read in a conditional anywhere in `Drivers/Levoit/*.groovy`. Fix: replace with the canonical `if (!state.turningOn && device.currentValue("switch") != "on") on()` guard. |
 | **BP24-B/C — Auto-on guard missing on configure-style commands** | RULE32 | SHOULD-ON configure-style command methods (`cycleSpeed`, `setSpeed`, `setMistLevel`, `setWarmMistLevel`, `setFanSpeed`, `setMode` on most device families) must check `device.currentValue("switch") != "on"` before making API calls, and must also include the `!state.turningOn` re-entrance flag. Methods without any guard (BP24-B) or with guard but missing `state.turningOn` (BP24-C) fail the rule. SKIP-OK and NO-ON methods are excluded via `bp24_auto_on_exemptions` in `tests/lint_config.yaml`. See "from-off Spock test pattern" below for the required regression test shape. |
+| **Hubitat AirQuality capability vs. `airQuality` attribute** | Convention | The Hubitat `AirQuality` capability's required attribute is `airQualityIndex`. There is no standard Hubitat capability whose required attribute is named `airQuality`. The `airQuality` attribute added to Core 300S/400S/600S and declared on Vital 100S/200S is an additive convenience attribute under the conventional name — it does NOT satisfy a capability requirement. The AirQuality capability is satisfied by the already-present `airQualityIndex`, which the driver populates with Levoit's native 1–4 categorical scale. Both attributes work in dashboards and Rule Machine. `Drivers/Levoit/readme.md` line 149 documents this correctly and should not be re-flagged. |
 
 ### from-off Spock test pattern (required for SHOULD-ON commands)
 
@@ -312,6 +313,47 @@ The order assertion (`findIndexOf < findIndexOf`) is the load-bearing check — 
 ### Full lint rule list
 
 `tests/lint_rules/` has one Python module per rule. Run `uv run --python 3.12 tests/lint.py --strict` to see all rule IDs. Each finding includes the rule ID, file path, line number, and a `fix:` hint.
+
+### Writing a new lint rule
+
+**Lint rules MUST emit findings via `lint_rules._helpers.make_finding(severity=..., ...)`.** Never hand-construct a finding dict inline. `tests/lint.py` counts failures by the `severity` key — an inline dict that omits `severity` produces a silently non-gating rule (false-green `lint --strict`). The shared helper makes the `severity` argument positional and required, preventing omission.
+
+```python
+from lint_rules._helpers import make_finding
+
+findings.append(make_finding(
+    severity='FAIL',       # or 'WARN'
+    rule_id='RULE99_example',
+    title='Short description of the violation',
+    file_rel=file_rel,     # repo-relative path with forward slashes
+    lineno=line_number,    # 1-based
+    raw_lines=raw_lines,   # full source lines list, for context snippet
+    why='One-sentence rationale explaining why this is wrong.',
+    fix='Suggested corrective action shown verbatim in lint output.',
+))
+```
+
+Every new rule's test in `tests/lint_test.py` must also assert that at least one finding has `severity == 'FAIL'` on its bad-case fixture:
+
+```python
+assert any(f['severity'] == 'FAIL' for f in findings), \
+    "Rule produced no FAIL finding — check that make_finding is called with severity='FAIL'"
+```
+
+This assertion catches severity regressions (e.g., accidental removal of the `severity` argument) in the rule's own test, before CI runs against real driver files.
+
+**Completeness of "migrate all X" tasks MUST be proven by a mechanical zero-result check, not by agent self-report.** When a task says "migrate every rule to the shared helper" or "add a null-guard to every set* method," the completion claim must be backed by a grep or static check that produces an empty result. For example, after eliminating all raw finding dicts, the proof is:
+
+```bash
+grep -rn 'findings.append({' tests/lint_rules/
+# must produce no output
+```
+
+Two real instances where self-report failed and mechanical proof would have caught it early: (1) BP26 v2.6 initial sweep reported all `safeIntArg` sites migrated, but a third site in Tower Fan was missed — caught only because a subsequent lint rule (RULE37) also flagged bare `as Integer` forms; (2) the v2.6 lint-helper migration reported all rules using `make_finding`, but 6 rules still emitted raw inline dicts — missed because the migration relied on manual tracking rather than a grep. The grep-to-zero standard closes both gaps in the same review cycle.
+
+**Any regression guard or fix proof-of-concept MUST be proven empirically both ways** — observed FAILING when the fix is absent/reverted, AND observed PASSING on the correct tree. Theoretical QA review is not sufficient. The canonical failure: a lint-infrastructure dead-gate choke-point call-site guard was reviewed as sound twice but was empirically vacuous — a `SystemExit(1)` from incidental WARN findings in strict mode satisfied its `code != 0` discriminator regardless of whether the choke-point call was present. See `CLAUDE.md` "Empirical both-ways proof for regression guards and fix PoCs" for the full 5-step protocol.
+
+**Sweep-orchestration: coverage audits committed HEAD, not the working tree.** When a full QA sweep fans adversarial (which mutate-restores source for empirical tests) in parallel with coverage (which inspects git state), coverage MUST read committed HEAD via `git show HEAD:<file>` — a dirty working tree is the expected signature of a sibling adversarial agent's in-flight test, not a code regression. See `CLAUDE.md` "Sweep-orchestration: coverage audits committed HEAD, not the working tree" for the full protocol and canonical incident.
 
 ### Bug-pattern catalog references
 
@@ -404,6 +446,22 @@ docs(readme): correct VeSync Integration install path -- it's a driver, not an a
 manifest: cumulate releaseNotes across versions (HPM convention) + harden cut-release spec
 v2.1: 5 new drivers + first fan support (preview)
 ```
+
+### Comment-scrub pre-flight
+
+Before pushing any PR, run the linter in strict mode — RULE38 enforces the process-token scrub:
+
+```bash
+uv run --python 3.12 tests/lint.py --strict
+```
+
+RULE38 flags pipeline-internal labels (`T21-A`, `Tier 22`, `Sweep #14`, `PR #167`, `Lead-Finding-N`, Gemini bot name) in code and test comments.  These tokens become meaningless after the corresponding cycle closes; strip them and replace with the behavioral invariant the code or test enforces.
+
+Bug Pattern catalog citations (`Bug Pattern #N`, `BP24`, `RULE37`) are fine in comments — those are durable catalog identifiers, not process tokens.  External-provenance references (pyvesync PR/issue citations, HA integration notes, NiklasGustafsson upstream refs) are explicitly allowed by RULE38 and must not be changed.
+
+RULE38 scans `Drivers/Levoit/` and `tests/`.  Spock specs under `src/test/groovy/` are **not** scanned by canonical `lint --strict` (adding that path causes false-positive cascades from RULE20).  Process-token scrubbing of Spock specs is enforced by design-lane sweep discipline and pre-flight review — not by this rule.
+
+One further RULE38 boundary: QA-style finding enumeration in driver `//` comments — `// - Issue N:`, `// (Issues N, M)`, `// Pattern N:` — IS a this-fork process token and must be scrubbed in pre-flight, but is deliberately **not** RULE38-detected on `.groovy` files (the no-`#` `Issue N` form is indistinguishable from natural-language "issue" as a noun in driver source; catching it would require a Groovy external-provenance allowlist to avoid false-positives on legitimate no-`#` upstream citations).  Scrub it manually — the design-lane sweep is the enforcing mechanism for this form, not `lint --strict`.
 
 ### One concern per PR
 

@@ -196,6 +196,14 @@ When a diff is tagged with a Bug Pattern catalog entry — either via the orches
 
 **Lives alongside Section A correctness checks** — those scrutinize the diff's content; this section scrutinizes the diff's **scope** against a named pattern.
 
+### L. Vacuity is the empirical layer's verdict, not yours
+
+For any change whose value is "this test/guard fails when the bug regresses" (regression guards, lint choke-point call-site tests, PoC mutation proofs, any assertion whose stated purpose is "fails if the fix is removed"):
+
+- **Do NOT certify the guard is non-vacuous by reading it.** Static review cannot detect vacuity-by-construction. T11-1's choke-point guard was QA-APPROVED "sound" on two separate passes and was empirically proven hollow afterward (it passed identically with the guarded call present or deleted). Reading more carefully would not have caught it; only running it both ways does.
+- **Defer the vacuity verdict explicitly.** Review scope, correctness, wording, cross-pattern interaction — then state in your report: *"Non-vacuity is the orchestrator-driven both-ways proof's verdict, not QA's; APPROVE is conditional on that proof being supplied/green."* Never write "this guard correctly fails on regression" as a QA conclusion — you cannot know that from the diff.
+- This is a deliberate division of labor (see `CLAUDE.md` → "Empirical both-ways proof … Ownership & division of labor"). It is not a gap in your review; asserting a vacuity verdict you cannot support is the gap.
+
 ---
 
 ## Known bug patterns (catalog from v2.0 community-fork debugging)
@@ -882,6 +890,92 @@ def on() {
 Vital 100S/200S `cycleSpeed` already has the correct guard (community-fork-era code, written after the concept was understood). Vital `setMode` is intentionally SKIP-OK.
 
 **Tier-1 in-Phase-2 fix:** Core line `cycleSpeed` (BP24-A, 4 drivers) + Fan `cycleSpeed`/`setSpeed`/`setMode` (BP24-B, 2 drivers) — same drivers as Phase 2 Core extraction OR adjacent enough to bundle. **Tier-2 separate sweep:** humidifier line. **Tier-3 deferred:** EverestAir/SproutAir `setMode` pending live-capture of API behavior while off.
+
+---
+
+### BP25: C3 gate case-sensitivity — uppercase on/off input bypasses gate and inverts payload
+
+**Fix scope:** class-wide — every on/off setter that (1) performs a `== "on"` or `== "off"` comparison and (2) does not already have a `toLowerCase()` normalization before both the C3 gate and the payload coercion.
+
+**Root cause:** VeSync attribute values are stored and compared as lowercase (`"on"` / `"off"`). Rule Machine passes string command arguments as-typed by the user; dashboard tiles may pass `"ON"` / `"OFF"` from capability string normalization. When input arrives in any case other than lowercase, two bugs fire simultaneously: (a) C3 idempotency gate evaluates `"on" == "ON"` as `false` — bypass fires and a redundant cloud call is made even when state matches; (b) payload coercion evaluates `"ON" == "on"` as `false` — the OPPOSITE command value is sent (e.g., `childLockSwitch:0` when user requested lock, `enabled:false` when user requested enable). Both sub-bugs compound on every uppercase invocation; the device silently receives the wrong command.
+
+**Detection (RULE33a):** grep for `onOff == "on"` or `value == "on"` or `(onOff == "off")` patterns in setter methods. Each match that does not have a preceding `String v = (... as String).toLowerCase()` on the raw parameter is a RULE33a site. `LevoitHumidifierLib.groovy` `doSetDisplayScreenSwitch` / `doSetAutoStopSwitch` are the canonical reference; audit any driver or lib that diverges from the truthy-canon ternary pattern.
+
+**Detection (RULE33b):** grep for `set\w+` AND `doSet\w+` methods that call `toLowerCase()` but whose `sendEvent(name:"attr", value: X)` has `X` assigned via `.toLowerCase()` without a `? "on" : "off"` ternary assignment. These emit raw-normalized values that store `"true"` / `"1"` / `"yes"` as-is in the attribute. RULE33b in `tests/lint_rules/bp25_case_sensitivity.py` flags these automatically; exempts methods with a strict enum-rejection gate (`in ["on","off"]`); covers doSet* shared helpers so blessed-reference regressions are detectable.
+
+**Canonical fix pattern** (from `LevoitHumidifierLib.groovy`'s `doSetDisplayScreenSwitch`):
+```groovy
+def setSomething(onOff) {
+    if (!requireNotNull(onOff, "setSomething")) return
+    String val   = (onOff as String).trim().toLowerCase()              // normalize FIRST
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"    // truthy-coerce to canonical
+    if (device.currentValue("attr") == canon) return                   // C3 gate uses canon
+    Integer v = (canon == "on") ? 1 : 0                               // payload uses canon
+    ...
+    device.sendEvent(name:"attr", value: canon)                        // event emits canon
+}
+```
+
+**Why canon, not val:** emitting `val` directly stores truthy inputs (`"true"`, `"1"`, `"yes"`) as-is in the attribute. Consumers that read `device.currentValue("attr")` and compare against `"on"` would fail. The `canon` derivation normalizes ALL truthy forms to `"on"` before storage. RULE33b (`tests/lint_rules/bp25_case_sensitivity.py`) enforces this on both `set*` AND `doSet*` shared-helper definitions; methods of either form that normalize with `toLowerCase()` but emit the raw-normalized variable in `sendEvent` (without a `? "on" : "off"` assignment) are flagged as FAIL. The doSet* coverage is required so regressions in the blessed reference implementation itself (LevoitHumidifierLib `doSetDisplayScreenSwitch` / `doSetAutoStopSwitch`) are caught. LevoitFanLib's strict-enum `doSet*` helpers are correctly exempted via `_STRICT_GATE_RE`.
+
+**Var-name note:** the `val`/`canon`/`v` trio in the canonical pattern (`val` = normalize, `canon` = canonical, `v` = payload Integer) matches `doSetDisplayScreenSwitch`'s variable names, where an explicitly-named Integer payload var is needed for `[screenSwitch: v]`. Per-driver inline implementations that coerce the payload inline (e.g., `Integer v = (canon == "on") ? 1 : 0`) may legitimately use `v` as the normalize String without naming conflict. RULE33b validates emit correctness, not variable names — a per-driver method that normalizes to `v`, derives `canon`, and emits `canon` is correct even though `v` is the normalize var.
+
+**Two behavioral exceptions:**
+- `LevoitFanLib` (`doSetMuteSwitch`, `doSetDisplayScreenSwitch`) and fan-line per-driver setters use a strict enum-rejection gate (`if (!(s in ["on","off"])) return`) that rejects truthy variants outright. After the gate, `s` is bounded to "on"/"off" so emitting `s` is canonical. RULE33b skips these via `_STRICT_GATE_RE` exemption.
+- Multi-state enum setters (`setNightLight` on Classic 300S — three states "off"/"dim"/"bright") are not boolean on/off setters; BP25 does not apply.
+
+**Known sites in v2.5 (all fixed in same diff as catalog entry):**
+| Driver / Library | Method | Sub-bug |
+|---|---|---|
+| `LevoitVitalPurifierLib.groovy` | `setChildLock` | C3 bypass + payload inversion |
+| `LevoitVitalPurifierLib.groovy` | `setDisplay` | C3 bypass + payload inversion |
+| `LevoitCorePurifierLib.groovy` | `setChildLock` | C3 bypass + payload inversion |
+| `LevoitCorePurifierLib.groovy` | `setDisplay` (via `handleDisplayOn`) | C3 bypass + payload inversion |
+| `LevoitClassic200S.groovy` | `setAutoStop` | C3 bypass + payload inversion |
+| `LevoitClassic300S.groovy` | `setAutoStop` | C3 bypass + payload inversion |
+| `LevoitDual200S.groovy` | `setAutoStop` | C3 bypass + payload inversion |
+| `LevoitEverestAir.groovy` | `setDisplay` | payload inversion (no C3 gate) + missing requireNotNull |
+| `LevoitEverestAir.groovy` | `setChildLock` | payload inversion (no C3 gate) + missing requireNotNull |
+| `LevoitEverestAir.groovy` | `setLightDetection` | payload inversion (no C3 gate) + missing requireNotNull |
+
+**Out of scope (already correct):** `LevoitHumidifierLib` `doSetDisplayScreenSwitch` + `doSetAutoStopSwitch` already use the canonical truthy-coercion pattern; fan-line setters use a strict enum-rejection gate (truthy variants rejected at the gate; RULE33b skips via `_STRICT_GATE_RE`).
+
+**Regression guard:** Spock spec for each site must include: (a) `"ON"` (uppercase) test case confirming the API call is made when state differs and the emitted event value is `"on"`; (b) truthy-input test cases (`"true"`, `"1"`) confirming the API payload is `1` and the emitted event value is `"on"` (not `"true"` or `"1"`); (c) C3 suppression test confirming no API call when the attribute already matches the canonical derived value.
+
+**Lint enforcement:** RULE33a (original) flags raw parameter comparison without prior `toLowerCase()`. RULE33b flags methods that normalize with `toLowerCase()` but emit the raw-normalized variable in `sendEvent` without a truthy-canon ternary assignment. Both run on every `tests/lint.py --strict` pass.
+
+**Shipped:** v2.5.x (2026-05-14) across 10 sites in 5 files. Truthy-coercion re-bless (RULE33b + canon ternary) shipped v2.6.
+
+---
+
+### BP26: unsafe integer coercion on command parameters — `as Integer` throws before `?:` fallback
+
+**Fix scope:** class-wide — every command method that coerces a user-supplied numeric parameter via `(x as Integer)`, `(x as int)`, or `.toInteger()` anywhere in the command-parameter handling path.
+
+**Root cause:** In Groovy 2.5.23 (Hubitat sandbox), `(x as Integer)` and `.toInteger()` throw `NumberFormatException` / `GroovyCastException` when `x` is a non-numeric string (`""`, `"abc"`, `"5.7"`, `"true"`). The `?:` Elvis operator catches `null` but NOT thrown exceptions — so `(x as Integer) ?: 0` does NOT produce `0` on `"abc"` input; it propagates the exception. The Hubitat sandbox silently swallows it, leaving the command a no-op with no log entry and no user feedback. Sources of non-numeric args in practice: Rule Machine parameter slot left blank (passes `""` — note: NOT `null`), dashboard numeric tile sends decimal strings (`"5.7"`), hub variable binding passes `"true"` or `"1"`.
+
+**Detection:** grep for `\((\w+) as Integer\)` or `\.toInteger\(\)` in command method parameter paths (i.e., within `def set\w+` / `def cycle\w+` method bodies, before the arg is validated). Filter out sites where the arg is already typed Integer/Number from the Groovy signature (only `Object` / untyped params can receive non-numeric values from Rule Machine).
+
+**Canonical fix:** replace every command-param coercion site with `safeIntArg(x, fallback)` from `LevoitChildBaseLib`:
+```groovy
+// BEFORE (throws on "abc" / "" / "5.7" before ?: can rescue)
+Integer lvl = (level as Integer) ?: 0
+
+// AFTER (never throws; fallback is explicitly stated)
+Integer lvl = safeIntArg(level, 0)
+```
+Fallback semantics: use `0` where 0 maps to an off/reject downstream guard (e.g., `setMistLevel(0) → off()`); use `1` where 1 is a min-floor (e.g., `setFanSpeed` default to lowest speed, not off).
+
+**Known sites (all fixed in v2.6 sweep):** `setLevel` / `setMistLevel` / `setWarmMistLevel` / `setTargetHumidity` / `setHumidity` / `setFanSpeed` / `setTimer` / `setHorizontalRange` / `setVerticalRange` across Core 200S/300S/400S/600S, LevoitCorePurifierLib, LevoitVitalPurifierLib, LevoitFanLib, Superior 6000S, Classic 200S/300S, Dual 200S, LV600S, LV600S HubConnect, OasisMist 450S/1000S, Sprout Humidifier, EverestAir, Sprout Air, Pedestal Fan (~20 sites, 14 files).
+
+**Regression guard:** Spock spec must cover: `setX("abc")`, `setX("")`, `setX("5.7")`, `setX(true)` — each asserts `noExceptionThrown()` AND no API call was made (bad arg rejected cleanly by downstream guard). Required for the 5 representative drivers listed in ITEM 11 of the v2.6 sweep; backfill for others on next per-driver touch.
+
+**Lint enforcement:** RULE37 (`tests/lint_rules/bp26_unsafe_int_coercion.py`) flags bare `as Integer` / `as int` / `.toInteger()` in command-param coercion paths of `set*` / `doSet*` / `cycle*` methods. Two passes:
+
+- **Pass 1 (scalar params):** scalar typed params (`Integer level`, `Number n`) are safe — the Hubitat sandbox enforces the declared type at dispatch, so non-numeric inputs never reach the body. Scalar UNtyped params are unsafe. `doSet*` shared-helper definitions are in scope (they receive the same user-supplied input the public `set*` delegates through unchanged).
+- **Pass 2 (Map-field coercions):** `set*(Map mapParam)` / `set*(colorMap)` (untyped Map-looking param) — Map field values are always `String` at runtime. Canonical case: `setColor(Map colorMap)` on OasisMist 450S. **Partially-guarded methods are still flagged:** `safeIntArg` on one Map field does NOT exempt the whole method — any unguarded field in the same body is still flagged.
+
+**Shipped:** v2.6 (2026-05-14) — ~20 sites across 14 driver/lib files.
 
 ---
 

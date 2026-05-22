@@ -415,15 +415,38 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
         !call.data.containsKey("type")  // NOT {type: 'mist'}
     }
 
-    def "setMistLevel clamps to 1-9 range"() {
+    def "setMistLevel(0) routes to off() (SwitchLevel setLevel(0) convention)"() {
         when:
-        driver.setMistLevel(0)    // below min → 1
+        driver.setMistLevel(0)
+
+        then: "setSwitch off was sent, no virtualLevel call"
+        testParent.allRequests.findAll { it.method == "virtualLevel" }.isEmpty()
+    }
+
+    def "setMistLevel(1) passes through as the minimum valid level (OasisMist 1000S floor)"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(1)
+
+        then:
+        def calls = testParent.allRequests.findAll { it.method == "virtualLevel" }
+        calls.size() == 1
+        calls[0].data.virtualLevel == 1
+    }
+
+    def "setMistLevel(10) clamps to 9 (OasisMist 1000S ceiling)"() {
+        given: "device is on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
         driver.setMistLevel(10)   // above max → 9
 
         then:
         def calls = testParent.allRequests.findAll { it.method == "virtualLevel" }
-        calls[0].data.virtualLevel == 1
-        calls[1].data.virtualLevel == 9
+        calls.size() == 1
+        calls[0].data.virtualLevel == 9
     }
 
     // -------------------------------------------------------------------------
@@ -744,5 +767,229 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 }
         onReq != null
         onReq.data.switchIdx == 0
+    }
+
+    // ---- BP25: setNightlight toggle path (nightlight-variant gate-guarded) ----
+
+    def "BP25: setNightlight('ON') toggle path sends nightLightSwitch:1, not 0 (BP25 regression guard)"() {
+        // Pre-fix: (onOff == "on") where onOff="ON" evaluates false → nlSwitch=0 (wrong).
+        // Post-fix: toLowerCase() normalizes "ON"→"on" → nlSwitch=1.
+        // setNightlight is gated behind isNightlightVariant(): requires state.deviceType == "LUH-M101S-WEUR".
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-M101S-WEUR"
+
+        when: "toggle-only path (no brightness arg)"
+        driver.setNightlight("ON")
+
+        then: "setNightLightStatus sent with nightLightSwitch:1 (on)"
+        def req = testParent.allRequests.find { it.method == "setNightLightStatus" }
+        req != null
+        req.data.nightLightSwitch == 1
+
+        and: "emitted nightlightOn event is 'on'"
+        lastEventValue("nightlightOn") == "on"
+    }
+
+    def "BP25: setNightlight('OFF') toggle path sends nightLightSwitch:0 (BP25 regression guard)"() {
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-M101S-WEUR"
+
+        when:
+        driver.setNightlight("OFF")
+
+        then: "setNightLightStatus sent with nightLightSwitch:0 (off)"
+        def req = testParent.allRequests.find { it.method == "setNightLightStatus" }
+        req != null
+        req.data.nightLightSwitch == 0
+    }
+
+    // -------------------------------------------------------------------------
+    // BP26: safe numeric coercion — setNightlight brightness (2nd param)
+    // RULE37 is first-param-only by design; non-first-param coercions are gated
+    // by Spock regression specs instead of lint. setNightlight brightness is the
+    // canonical worked example of this pattern.
+    // -------------------------------------------------------------------------
+
+    def "BP26: setNightlight('on', 50) happy path — numeric brightness reaches API unchanged"() {
+        // Baseline: confirms the brightness path works correctly with a valid numeric input.
+        // safeIntArg(50, 0) → 50; Math.max(0, Math.min(100, 50)) = 50; nlSwitch = 1.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-M101S-WEUR"
+
+        when:
+        driver.setNightlight("on", 50)
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness      == 50
+        req.data.nightLightSwitch == 1
+    }
+
+    def "BP26: setNightlight('on', '#badBr') does not throw; brightness coerces to 0, nightLightSwitch=0"() {
+        // safeIntArg("abc"/""/true → fallback 0) → Math.max(0,Math.min(100,0)) = 0.
+        // nl="on", br=0 → nlSwitch = (0>0)?1:0 = 0. setLightStatus called with brightness=0.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-M101S-WEUR"
+
+        when:
+        driver.setNightlight("on", badBr)
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness       == 0
+        req.data.nightLightSwitch == 0
+
+        where:
+        badBr << ["abc", "", true]
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setMistLevel with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setMistLevel('#badInput') does not throw and does not make a virtualLevel API call (OasisMist 1000S)"() {
+        // safeIntArg() maps non-numeric inputs to 0; 0 triggers the lvl<=0 guard → off() path.
+        // OasisMist 1000S uses API method name 'virtualLevel' (not 'setVirtualLevel').
+        given: "device is on so the auto-on guard doesn't confuse the assertion"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no virtualLevel API call — 0 coercion routes to off() path"
+        testParent.allRequests.findAll { it.method == "virtualLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setMistLevel('5.7') does not throw and makes a virtualLevel API call with truncated value (5) (OasisMist 1000S)"() {
+        // safeIntArg("5.7") → 5 (truncation). Math.max(1, Math.min(9, 5)) = 5 → cloud call made.
+        // OasisMist 1000S uses API method 'virtualLevel', payload {levelIdx, virtualLevel, levelType}.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMistLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a virtualLevel API call was made with virtualLevel=5 (truncated from 5.7)"
+        def req = testParent.allRequests.find { it.method == "virtualLevel" }
+        req != null
+        req.data.virtualLevel == 5
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setHumidity with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    def "BP26: setHumidity('#badInput') does not throw and does not make a setTargetHumidity API call (OasisMist 1000S)"() {
+        // safeIntArg() maps non-numeric inputs to 0; 0 triggers the p<=0 guard → logWarn + return.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setTargetHumidity API call"
+        testParent.allRequests.findAll { it.method == "setTargetHumidity" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setHumidity('5.7') does not throw and makes a setTargetHumidity API call with clamped value (30) (OasisMist 1000S)"() {
+        // safeIntArg("5.7") → 5. 5 > 0 so the rejection guard is skipped;
+        // Math.max(30, Math.min(80, 5)) = 30 (clamped to minimum). OasisMist 1000S uses camelCase.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setHumidity("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setTargetHumidity API call was made with targetHumidity=30 (5 clamped to minimum)"
+        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
+        req != null
+        req.data.targetHumidity == 30
+    }
+
+    def "BP26: setNightlight('on', '55.7') does not throw; brightness truncates to 55, nightLightSwitch=1"() {
+        // safeIntArg("55.7", 0) → BigDecimal("55.7").intValue() = 55 (truncation).
+        // Math.max(0, Math.min(100, 55)) = 55. nlSwitch = (55>0)?1:0 = 1.
+        given:
+        settings.descriptionTextEnable = false
+        state.deviceType = "LUH-M101S-WEUR"
+
+        when:
+        driver.setNightlight("on", "55.7")
+
+        then:
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLightStatus" }
+        req != null
+        req.data.brightness       == 55
+        req.data.nightLightSwitch == 1
+    }
+
+    // -------------------------------------------------------------------------
+    // BP25-truthy: doSet* shared-helper path (setDisplay / setAutoStop delegators)
+    // These methods delegate to LevoitHumidifierLib doSetDisplayScreenSwitch /
+    // doSetAutoStopSwitch.  The truthy-canon ternary in the shared helpers must
+    // emit "on" (not "true") and send the correct integer payload.
+    // These specs MUST FAIL if value: canon is reverted to value: val in
+    // LevoitHumidifierLib doSetDisplayScreenSwitch or doSetAutoStopSwitch.
+    // -------------------------------------------------------------------------
+
+    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("true")
+
+        then: "API call sent with screenSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.screenSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "BP25-truthy: setAutoStop('true') sends autoStopSwitch:1 and emits 'on' (doSet* path)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setAutoStop("true")
+
+        then: "API call sent with autoStopSwitch:1"
+        def req = testParent.allRequests.find { it.method == "setAutoStopSwitch" }
+        req != null
+        req.data.autoStopSwitch == 1
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("autoStopEnabled") == "on"
     }
 }

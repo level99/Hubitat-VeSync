@@ -74,7 +74,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.2] Levoit Dual 200S (LUH-D301S-WUSR/-WJP/-WEU/-KEUR + 'Dual200S' literal) -- mist 1-2 (2-level only), target humidity 30-80%, auto/manual modes, auto-stop, display; canonical pyvesync VeSyncHumid200300S payloads. No night-light command (feature flag absent); no sleep mode (not in device_map.py mist_modes). Night-light brightness read passively if API returns it.",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -194,8 +194,8 @@ def off(){
 // Payload: {mode: <value>} -- NOT {workMode: <value>} (Superior 6000S difference)
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }
-    String m = (mode as String).toLowerCase()
+    if (!requireNonEmptyEnum(mode, "setMode")) return
+    String m = (mode as String).trim().toLowerCase()
     // CROSS-CHECK: only auto and manual are valid for Dual 200S (no sleep per device_map.py)
     // Validate BEFORE ensureSwitchOn() so invalid input does not auto-turn on an off device.
     if (!(m in ["auto","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, manual (sleep not supported on Dual 200S)"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
@@ -261,15 +261,18 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
 // NOTE: field names id/level/type -- NOT levelIdx/virtualLevel/levelType (Superior 6000S)
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    Integer lvl = Math.max(1, Math.min(2, (level as Integer) ?: 1))
+    if (!requireNotNull(level, "setMistLevel")) return
+    Integer lvl = safeIntArg(level, 0)
+    if (lvl <= 0) { off(); return }
+    Integer clamped = Math.max(1, Math.min(2, lvl))
     ensureSwitchOn()
-    def resp = hubBypass("setVirtualLevel", [id: 0, level: lvl, type: "mist"], "setVirtualLevel(${lvl})")
+    def resp = hubBypass("setVirtualLevel", [id: 0, level: clamped, type: "mist"], "setVirtualLevel(${clamped})")
     if (httpOk(resp)) {
-        state.mistLevel = lvl
-        device.sendEvent(name:"mistLevel", value: lvl)
-        logInfo "Mist level: ${lvl}"
+        state.mistLevel = clamped
+        device.sendEvent(name:"mistLevel", value: clamped)
+        logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${lvl}"; recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
+        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -284,7 +287,10 @@ def setMistLevel(level){
 // setTargetHumidity payload: {target_humidity: N} -- note snake_case (not camelCase)
 def setHumidity(percent){
     logDebug "setHumidity(${percent})"
-    Integer p = Math.max(30, Math.min(80, (percent as Integer) ?: 50))
+    if (!requireNotNull(percent, "setHumidity")) return
+    Integer p = safeIntArg(percent, 0)
+    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
+    p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [target_humidity: p], "setTargetHumidity(${p})")
     if (httpOk(resp)) {
         state.targetHumidity = p
@@ -298,16 +304,19 @@ def setHumidity(percent){
 // ---------- Display ----------
 // setDisplay payload: {state: bool} -- NOT {screenSwitch: int} (Superior 6000S)
 // Same as Classic 300S, OasisMist 450S, LV600S (all VeSyncHumid200300S class)
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDisplay(onOff){
     logDebug "setDisplay(${onOff})"
-    if (!requireNotNull(onOff, "setDisplay")) return false
-    String val = (onOff as String).toLowerCase()
-    if (device.currentValue("displayOn") == val) return  // C3 state-change gate
-    Boolean v = (val == "on")
-    def resp = hubBypass("setDisplay", [state: v], "setDisplay(${val})")
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return false
+    String val = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("displayOn") == canon) return  // C3 state-change gate
+    Boolean v = (canon == "on")
+    def resp = hubBypass("setDisplay", [state: v], "setDisplay(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: val)
-        logInfo "Display: ${val}"
+        device.sendEvent(name:"displayOn", value: canon)
+        logInfo "Display: ${canon}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
@@ -316,15 +325,21 @@ def setDisplay(onOff){
 // ---------- Auto-stop ----------
 // setAutomaticStop payload: {enabled: bool} -- NOT {autoStopSwitch: int} (Superior 6000S)
 // Same as Classic 300S, OasisMist 450S, LV600S (all VeSyncHumid200300S class)
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff){
     logDebug "setAutoStop(${onOff})"
-    if (!requireNotNull(onOff, "setAutoStop")) return false
-    if (device.currentValue("autoStopEnabled") == onOff) return  // C3 state-change gate
-    Boolean v = (onOff == "on")
-    def resp = hubBypass("setAutomaticStop", [enabled: v], "setAutomaticStop(${onOff})")
+    if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    // "ON" from Rule Machine bypasses the gate and evaluates ("ON"=="on") as false
+    // → sets enabled:false (disables auto-stop) when the intent was to enable it.
+    String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("autoStopEnabled") == canon) return  // C3 state-change gate
+    def resp = hubBypass("setAutomaticStop", [enabled: (canon == "on")], "setAutomaticStop(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: onOff)
-        logInfo "Auto-stop: ${onOff}"
+        device.sendEvent(name:"autoStopEnabled", value: canon)
+        logInfo "Auto-stop: ${canon}"
     } else {
         logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
     }

@@ -3,6 +3,7 @@ bug_patterns.py — lint rules derived from the VeSync driver bug-pattern catalo
 
 Rules implemented here:
   BP1  — Missing 2-arg update(status, nightLight) on child drivers
+         (also enforces 1-arg and 0-arg overloads — all three required per BP1)
   BP2  — Hardcoded getPurifierStatus in parent's updateDevices()
   BP3  — Missing envelope-peel while-loop in V2-line drivers
   BP4  — V201S/V2-line setLevel payload field-name mismatch
@@ -16,14 +17,28 @@ Rules implemented here:
 Child drivers: all .groovy files in Drivers/Levoit/ except VeSyncIntegration.groovy
                and files not in the known-driver set (e.g. Notification Tile.groovy
                is excluded from BP1/BP3 checks — it is not a polled child).
-V2-line drivers: LevoitVital200S.groovy, LevoitSuperior6000S.groovy
-                 (and future LAP-/LEH- new-model files detected heuristically).
+
+Driver family classification (source: pyvesync device_map.py + CLAUDE.md):
+  V2-line (bypassV2 double-envelope peel required):
+    Vital purifiers (VeSyncAirBaseV2): Vital 100S, Vital 200S
+    V2 fans (VeSyncAirBaseV2): EverestAir, Sprout Air
+    V2 humidifiers (VeSyncHumid1000S, VeSyncSproutHumid, LV600SHubConnect variant):
+      LV600S HubConnect, OasisMist 1000S, Sprout Humidifier, Superior 6000S
+    Generic: LevoitGeneric
+  V2-purifier (V2-style setLevel field names — levelIdx/manualSpeedLevel/levelType):
+    Vital 100S, Vital 200S, EverestAir, Sprout Air
+    (NOT humidifiers — they use setVirtualLevel / virtualLevel fields)
+  Classic-line (VeSyncAirBypass older payload conventions):
+    Core 200S/300S/400S/600S, Core 200S Light
+  Classic-humidifier (VeSyncHumid200300S — enabled:bool/target_humidity snake_case):
+    Classic 200S/300S, Dual 200S, LV600S, OasisMist 450S
 """
 
 import re
 from pathlib import Path
 from .groovy_lite import clean_source, find_method_bodies, get_definition_block
 from ._helpers import included_lib_texts
+from lint_rules._helpers import make_finding, make_finding_for_path
 
 
 # ---------------------------------------------------------------------------
@@ -36,51 +51,81 @@ NOTIFICATION_TILE = "Notification Tile.groovy"
 # Drivers that are polled children and must declare all three update() signatures.
 # When a driver delegates its method bodies to a shared library via #include, the
 # regex search is expanded to include the library text (see check_bp1_missing_2arg_update).
+# Includes all currently-shipping child drivers; libs (LevoitChildBaseLib, etc.) excluded
+# because library() files are not polled by the parent directly.
 POLLED_CHILD_DRIVERS = {
+    # Core purifier line (VeSyncAirBypass)
     "LevoitCore200S.groovy",
     "LevoitCore200S Light.groovy",
     "LevoitCore300S.groovy",
     "LevoitCore400S.groovy",
     "LevoitCore600S.groovy",
+    # Vital purifier line (VeSyncAirBaseV2)
     "LevoitVital100S.groovy",
     "LevoitVital200S.groovy",
+    # V2 fan/purifier line (VeSyncAirBaseV2)
+    "LevoitEverestAir.groovy",
+    "LevoitSproutAir.groovy",
+    # Fan line
+    "LevoitTowerFan.groovy",
+    "LevoitPedestalFan.groovy",
+    # Humidifier drivers — all 9 humidifier models
+    "LevoitClassic200S.groovy",
+    "LevoitClassic300S.groovy",
+    "LevoitDual200S.groovy",
+    "LevoitLV600S.groovy",
+    "LevoitLV600SHubConnect.groovy",
+    "LevoitOasisMist450S.groovy",
+    "LevoitOasisMist1000S.groovy",
+    "LevoitSproutHumidifier.groovy",
     "LevoitSuperior6000S.groovy",
+    # Generic catch-all
     "LevoitGeneric.groovy",
 }
 
-# V2-line drivers that must have the envelope-peel while loop
+# V2-line drivers that must have the envelope-peel while loop in their per-driver applyStatus().
+# Source: pyvesync device_map.py class membership + CLAUDE.md family table.
+# NOTE: humidifier drivers (Classic200S, Classic300S, Dual200S, LV600S, LV600SHubConnect,
+#   OasisMist450S, OasisMist1000S, SproutHumidifier, Superior6000S) also use V2-style
+#   envelopes but share their applyStatus peel via LevoitHumidifierLib — the lib carries
+#   the peel and is not directly checkable here. These are intentionally excluded from
+#   BP3 scope to avoid false-positive "missing peel" findings on drivers that inherit it
+#   from the library. BP3 expansion to humidifier drivers is tracked in ROADMAP.md.
 V2_LINE_DRIVERS = {
+    # Vital purifier line (VeSyncAirBaseV2)
+    "LevoitVital100S.groovy",
     "LevoitVital200S.groovy",
+    # V2 fan/purifier line (VeSyncAirBaseV2)
+    "LevoitEverestAir.groovy",
+    "LevoitSproutAir.groovy",
+    # V2 humidifier drivers with per-driver applyStatus (no lib peel)
     "LevoitSuperior6000S.groovy",
+    # Generic catch-all (VeSyncAirBaseV2 compatible)
     "LevoitGeneric.groovy",
 }
 
-# V2-line drivers where setLevel field names are enforced (Vital line, not Core)
+# V2-purifier drivers where setLevel field names are enforced (BP4).
+# These use: levelIdx (not switchIdx), levelType (not type), manualSpeedLevel (not level).
+# Source: pyvesync VeSyncAirBaseV2.set_fan_speed() canonical payload.
+# Does NOT include humidifier V2 drivers — they use setVirtualLevel/virtualLevel fields.
 V2_PURIFIER_DRIVERS = {
+    "LevoitVital100S.groovy",
     "LevoitVital200S.groovy",
+    "LevoitEverestAir.groovy",
+    "LevoitSproutAir.groovy",
+}
+
+# BP5-specific scope: only Vital 200S has the quirk where setPurifierMode("manual") fails.
+# EverestAir and Sprout Air are VeSyncAirBaseV2-class drivers that correctly use
+# setPurifierMode for ALL modes including manual — the BP5 quirk is V201S-specific.
+BP5_MANUAL_MODE_DRIVERS = {
+    "LevoitVital200S.groovy",
+    "LevoitVital100S.groovy",
 }
 
 FORK_DOC_DOMAIN = "github.com/level99/Hubitat-VeSync"
 
 
-def _context(lines, lineno, window=1):
-    """Return up to (window) lines of context around lineno (1-based)."""
-    start = max(0, lineno - 1 - window)
-    end = min(len(lines), lineno + window)
-    return '\n'.join(f"    {lines[i]}" for i in range(start, end))
-
-
-def _making_finding(severity, rule_id, title, path, rel_base, lineno, lines, why, fix):
-    return {
-        "severity": severity,
-        "rule_id": rule_id,
-        "title": title,
-        "file": str(path.relative_to(rel_base)).replace('\\', '/'),
-        "line": lineno,
-        "context": _context(lines, lineno),
-        "why": why,
-        "fix": fix,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +166,7 @@ def check_bp1_missing_2arg_update(path, raw_lines, cleaned_lines, raw_text, conf
             if re.search(r'\bdef\s+update\s*\(', line):
                 lineno = i
                 break
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP1_missing_2arg_update",
             title="Missing 2-arg update(status, nightLight) signature",
@@ -131,13 +176,31 @@ def check_bp1_missing_2arg_update(path, raw_lines, cleaned_lines, raw_text, conf
             fix='Add: def update(status, nightLight) { applyStatus(status); return true }',
         ))
 
+    if has_2arg and not has_1arg:
+        lineno = 1
+        for i, line in enumerate(raw_lines, 1):
+            if re.search(r'\bdef\s+update\s*\(', line):
+                lineno = i
+                break
+        findings.append(make_finding_for_path(
+            severity="FAIL",
+            rule_id="BP1_missing_1arg_update",
+            title="Missing 1-arg update(status) defensive delegator signature",
+            path=path, rel_base=rel_base, lineno=lineno, lines=raw_lines,
+            why="Bug Pattern #1: all three update() overloads are required. The 1-arg form "
+                "is called when the parent dispatches with a single argument (rare but real). "
+                "Missing it throws MissingMethodException silently. "
+                "Canonical form: def update(status) { update(status, null) }",
+            fix='Add: def update(status) { update(status, null) }',
+        ))
+
     if has_2arg and not has_0arg:
         lineno = 1
         for i, line in enumerate(raw_lines, 1):
             if re.search(r'\bdef\s+update\s*\(', line):
                 lineno = i
                 break
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP1_missing_0arg_update",
             title="Missing no-arg update() self-fetch signature",
@@ -181,7 +244,7 @@ def check_bp2_hardcoded_purifier_method(path, raw_lines, cleaned_lines, raw_text
     for (start_line, body) in bodies:
         has_helper_call = bool(re.search(r'\bdeviceMethodFor\s*\(', body))
         if not has_helper_call:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="BP2_missing_deviceMethodFor_call",
                 title="updateDevices() does not call deviceMethodFor() for API-method routing",
@@ -231,7 +294,7 @@ def check_bp3_envelope_peel(path, raw_lines, cleaned_lines, raw_text, config, re
     bodies = find_method_bodies(raw_text, "applyStatus")
     if not bodies:
         # applyStatus missing entirely — flag
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP3_no_applyStatus",
             title="applyStatus() method not found",
@@ -243,7 +306,7 @@ def check_bp3_envelope_peel(path, raw_lines, cleaned_lines, raw_text, config, re
 
     for (start_line, body) in bodies:
         if not PEEL_PATTERN.search(body):
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="BP3_missing_envelope_peel",
                 title="Missing envelope-peel while-loop in applyStatus()",
@@ -289,7 +352,7 @@ def check_bp4_setlevel_field_names(path, raw_lines, cleaned_lines, raw_text, con
         window = '\n'.join(cleaned_lines[window_start:window_end])
 
         if re.search(r'\bswitchIdx\b', window):
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="BP4_switchIdx_in_setLevel",
                 title="Non-canonical field 'switchIdx' in setLevel payload",
@@ -301,7 +364,7 @@ def check_bp4_setlevel_field_names(path, raw_lines, cleaned_lines, raw_text, con
 
         # Check for 'type:' without 'levelType' nearby
         if re.search(r'\btype\s*:', window) and not re.search(r'\blevelType\b', window):
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="BP4_type_instead_of_levelType",
                 title="Non-canonical field 'type:' instead of 'levelType' in setLevel payload",
@@ -320,11 +383,16 @@ def check_bp4_setlevel_field_names(path, raw_lines, cleaned_lines, raw_text, con
 
 def check_bp5_manual_via_setPurifierMode(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
     """
-    In V201S (and V2 purifier) drivers, setPurifierMode with workMode:"manual"
-    always returns inner code -1. Manual mode must be established via setLevel.
+    In the Vital 200S / Vital 100S (VeSyncAirBaseV2 LAP-V201S family), setPurifierMode
+    with workMode:"manual" always returns inner code -1. Manual mode must be established
+    via setLevel with a speed value.
+
+    Scope: BP5_MANUAL_MODE_DRIVERS only (Vital 200S, Vital 100S).
+    EverestAir and Sprout Air (also VeSyncAirBaseV2) correctly use setPurifierMode for
+    ALL modes including "manual" — the quirk is V201S-firmware-specific, not class-wide.
     """
     findings = []
-    if path.name not in V2_PURIFIER_DRIVERS:
+    if path.name not in BP5_MANUAL_MODE_DRIVERS:
         return findings
 
     # Look for setPurifierMode with "manual" nearby
@@ -336,7 +404,7 @@ def check_bp5_manual_via_setPurifierMode(path, raw_lines, cleaned_lines, raw_tex
         window_end = min(len(cleaned_lines), i + 3)
         window = '\n'.join(cleaned_lines[window_start:window_end])
         if re.search(r'"manual"', window) or re.search(r"'manual'", window):
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="BP5_manual_via_setPurifierMode",
                 title="V201S manual mode set via setPurifierMode (always fails)",
@@ -381,7 +449,7 @@ def check_bp7_currentvalue_race(path, raw_lines, cleaned_lines, raw_text, config
             else:
                 check_line = bline
             if re.search(r'device\.currentValue\s*\(', check_line):
-                findings.append(_making_finding(
+                findings.append(make_finding_for_path(
                     severity="WARN",
                     rule_id="BP7_currentvalue_race",
                     title="device.currentValue() inside applyStatus() may race with sendEvent()",
@@ -427,7 +495,7 @@ def check_bp9_driver_name_frozen(path, raw_lines, cleaned_lines, raw_text, confi
     actual_name = m.group(1)
     if actual_name != expected_name:
         lineno = raw_text[:m.start()].count('\n') + 1
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP9_driver_name_changed",
             title=f"Driver metadata name changed (was: '{expected_name}', now: '{actual_name}')",
@@ -465,7 +533,7 @@ def check_bp10_smartthings_icons(path, raw_lines, cleaned_lines, raw_text, confi
     for i, line in enumerate(raw_lines, 1):
         for pat in ST_ICON_PATTERNS:
             if pat.search(line):
-                findings.append(_making_finding(
+                findings.append(make_finding_for_path(
                     severity="FAIL",
                     rule_id="BP10_smartthings_icon",
                     title="SmartThings-era metadata artifact (icon URL or 'My Apps' category)",
@@ -500,7 +568,7 @@ def check_bp11_documentation_link(path, raw_lines, cleaned_lines, raw_text, conf
             continue
         url = m.group(1)
         if FORK_DOC_DOMAIN not in url:
-            findings.append(_making_finding(
+            findings.append(make_finding_for_path(
                 severity="FAIL",
                 rule_id="BP11_wrong_documentation_link",
                 title=f"documentationLink points to wrong project: {url!r}",
@@ -526,8 +594,17 @@ BP12_INSERTION_POINTS = {
     "Notification Tile.groovy": "deviceNotification",
 }
 BP12_APPLY_STATUS_DRIVERS = {
+    # V2 purifier line — applyStatus is the pref-seed insertion point
+    "LevoitVital100S.groovy",
     "LevoitVital200S.groovy",
+    "LevoitEverestAir.groovy",
+    "LevoitSproutAir.groovy",
+    # V2 humidifier drivers with per-driver applyStatus
+    "LevoitLV600SHubConnect.groovy",
+    "LevoitOasisMist1000S.groovy",
+    "LevoitSproutHumidifier.groovy",
     "LevoitSuperior6000S.groovy",
+    # Generic
     "LevoitGeneric.groovy",
 }
 # Core drivers use update(status, nightLight) as insertion point
@@ -564,7 +641,7 @@ def check_bp12_pref_seed(path, raw_lines, cleaned_lines, raw_text, config, rel_b
         else:
             method = "update (2-arg form)"
 
-        findings.append(_making_finding(
+        findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP12_missing_pref_seed",
             title="Missing state.prefsSeeded self-healing block",

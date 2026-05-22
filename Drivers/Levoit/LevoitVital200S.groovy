@@ -55,7 +55,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Levoit Vital 200S / 200S-P (LAP-V201S) — power, fan speed, mode, timer, AQ/PM2.5, filter health; canonical pyvesync payloads",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -68,6 +68,7 @@ metadata {
         attribute "mode", "string"
         attribute "pm25", "number"
         attribute "airQualityIndex", "number"
+        attribute "airQuality", "string"      // categorical label ("good"/"moderate"/etc.); type="string" on Vital line, "number" on Core 300S/400S/600S — families diverge. Use airQualityIndex for cross-family numeric comparisons.
         attribute "petMode", "string"
         attribute "autoPreference", "string"
         attribute "roomSize", "number"
@@ -107,10 +108,18 @@ metadata {
 // ---------- V200S-only setter ----------
 // setLightDetection is present on V200S but NOT V100S (LIGHT_DETECT feature flag distinction).
 // Not extracted to the shared library because it is per-driver-only.
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setLightDetection(onOff) {
     logDebug "setLightDetection(${onOff})"
-    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: onOff=="on" ? 1:0], "setLightDetection")
-    if (httpOk(resp)) device.sendEvent(name:"lightDetection", value: onOff)
+    if (!requireNonEmptyEnum(onOff, "setLightDetection")) return
+    // BP25: normalize to lowercase before C3 gate and payload coercion.
+    String v = (onOff as String).trim().toLowerCase()
+    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
+    if (device.currentValue("lightDetection") == canon) return
+    def resp = hubBypass("setLightDetection", [lightDetectionSwitch: (canon == "on") ? 1 : 0], "setLightDetection(${canon})")
+    if (httpOk(resp)) device.sendEvent(name:"lightDetection", value: canon)
 }
 
 def applyStatus(status) {

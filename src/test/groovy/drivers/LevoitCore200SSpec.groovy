@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 
 /**
@@ -319,20 +320,54 @@ class LevoitCore200SSpec extends HubitatSpec {
     // SwitchLevel 2-arg overload
     // -------------------------------------------------------------------------
 
-    def "setLevel(50) 1-arg sends Core-line setLevel API call"() {
-        // Baseline: confirm 1-arg setLevel routes to the speed API.
-        given: "device is on"
+    def "setLevel(20) maps to speed 1 (low band: pct < 33)"() {
+        // Regression guard: before the Fix 3 band-mapping fix, mapSpeedToInteger("1") returned 3
+        // (default branch) so setLevel(20) → setLevel(50) → setLevel(80) all sent speed 3 (high).
+        given: "device is on and in manual mode"
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
 
-        when: "setLevel(50) is called -- maps to speed 2 (33 <= 50 < 66)"
-        driver.setLevel(50)
+        when: "setLevel(20) is called -- falls in pct < 33 band → speed 1"
+        driver.setLevel(20)
 
-        then: "Core-line setLevel request was sent with {level, id, type}"
+        then: "Core-line setLevel request was sent with level=1"
         noExceptionThrown()
         def req = testParent.allRequests.find { it.method == "setLevel" }
         req != null
-        req.data.containsKey("level")
+        req.data.level == 1
+    }
+
+    def "setLevel(50) maps to speed 2 (mid band: 33 <= pct < 66)"() {
+        given: "device is on and in manual mode"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when: "setLevel(50) is called -- 33 <= 50 < 66 → speed 2"
+        driver.setLevel(50)
+
+        then: "Core-line setLevel request was sent with level=2"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.level == 2
+    }
+
+    def "setLevel(80) maps to speed 3 (high band: pct >= 66)"() {
+        given: "device is on and in manual mode"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when: "setLevel(80) is called -- pct >= 66 → speed 3"
+        driver.setLevel(80)
+
+        then: "Core-line setLevel request was sent with level=3"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.level == 3
     }
 
     def "setLevel(50, 30) 2-arg form delegates to 1-arg (SwitchLevel standard signature)"() {
@@ -341,6 +376,7 @@ class LevoitCore200SSpec extends HubitatSpec {
         given: "device is on"
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
 
         when: "setLevel is called with two args (level=50, duration=30)"
         driver.setLevel(50, 30)
@@ -349,7 +385,40 @@ class LevoitCore200SSpec extends HubitatSpec {
         noExceptionThrown()
         def req = testParent.allRequests.find { it.method == "setLevel" }
         req != null
-        req.data.containsKey("level")
+        req.data.level == 2   // 50 → speed 2
+    }
+
+    def "BP18: setLevel(null) does not throw and does not send a speed command"() {
+        // Regression guard: before this fix, null < 33 threw NPE (Groovy null arithmetic),
+        // which the Hubitat sandbox swallowed silently. Now coerces null → 0 → off() path.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(null)
+
+        then: "no NPE thrown"
+        noExceptionThrown()
+
+        and: "no setLevel (speed) API call was made — null coerces to 0, routes to off()"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
+
+    def "setSpeed emits named speed attribute ('low'/'medium'/'high'), not integer string"() {
+        // Regression guard for Fix 3 secondary bug: setLevel→setSpeed passed integer 1/2/3;
+        // state.speed and speed attribute were set to "1"/"2"/"3" instead of "low"/"medium"/"high".
+        given: "device is on and in manual mode"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when: "setSpeed(1) is called (as setLevel would invoke it internally)"
+        driver.setSpeed(1)
+
+        then: "speed attribute is emitted as 'low', not '1'"
+        def speedEvt = testDevice.events.findAll { it.name == "speed" }.last()
+        speedEvt.value == "low"
     }
 
     // -------------------------------------------------------------------------
@@ -606,6 +675,156 @@ class LevoitCore200SSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setMode") }
     }
 
+    def "W3: setSpeed null state.mode — device turns on AND speed is recovered, not dropped (Core 200S)"() {
+        // W3 regression guard: when state.mode is null/unset (fresh device, pre-first-poll),
+        // setSpeed("high") must:
+        //   1. auto-on (ensureSwitchOn fires before the mode dispatch),
+        //   2. RECOVER by calling setMode("manual") and applying the speed — NOT warn+drop.
+        //      The Tier-24 form (warn+drop) was adversarially proven to turn the device on
+        //      but discard the requested speed: user sees device powered but wrong speed.
+        // Pre-fix: else { logWarn "cannot apply speed"; return } — speed was lost.
+        // Post-fix (Tier-25): else { setMode("manual"); handleSpeed(s); ... } — speed applied.
+        //
+        // Distinct from BP18 spec: that spec passes null as the *argument*;
+        // this spec passes a valid speed string but leaves *state.mode* null.
+        // Distinct from BP24-B spec: that spec seeds state.mode="manual"; this spec
+        // deliberately omits state.mode to exercise the recover-else branch.
+        //
+        // Both-ways: orchestrator-owned.
+        given: "device is off and state.mode is null (fresh device, pre-first-poll)"
+        settings.descriptionTextEnable = true
+        // state.mode intentionally NOT set — simulates a fresh/pre-poll device
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when: "setSpeed is called with a valid non-off speed"
+        driver.setSpeed("high")
+
+        then: "on() was called — ensureSwitchOn turned the device on before the mode dispatch"
+        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
+        onReq != null
+
+        and: "a setPurifierMode API call was made to set manual mode (recover path fired)"
+        def modeReq = testParent.allRequests.find { it.method == "setPurifierMode" }
+        modeReq != null
+
+        and: "a setLevel (speed) API call was made — speed was NOT dropped"
+        def speedReq = testParent.allRequests.find { it.method == "setLevel" }
+        speedReq != null
+
+        and: "the speed attribute was emitted with the requested value"
+        lastEventValue("speed") == "high"
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+
+        and: "no 'cannot apply speed' warning was emitted (recover path replaces warn+drop)"
+        !testLog.warns.any { it.contains("cannot apply speed") }
+    }
+
+    def "re-entrancy guard: setSpeed from on() does not issue setPurifierMode (Core 200S)"() {
+        // Regression guard for the `if (!state.turningOn) { handleMode("manual"); ... }`
+        // wrapper in setSpeed's recover-else branch.
+        //
+        // When on() calls setSpeed() internally (as part of its startup sequence),
+        // state.turningOn is already set.  The guard must suppress the setPurifierMode
+        // call — otherwise on() and setSpeed race each other with two concurrent cloud
+        // calls that can clobber each other.  The speed command itself (handleSpeed /
+        // setLevel) must STILL fire even when state.turningOn is set.
+        //
+        // Goes RED if the `if (!state.turningOn)` wrapper is removed:
+        //   without the guard, setPurifierMode IS issued, failing the assertion below.
+        //
+        // Both-ways: orchestrator-owned.
+        given: "state.turningOn is set (we are inside on()'s startup path) and mode is null"
+        settings.descriptionTextEnable = false
+        state.turningOn = true
+        state.mode = null  // null mode triggers the recover-else branch
+
+        when: "setSpeed is called (as on() would call it internally)"
+        driver.setSpeed("high")
+
+        then: "no setPurifierMode request was issued — re-entrancy guard suppressed it"
+        testParent.allRequests.findAll { it.method == "setPurifierMode" }.isEmpty()
+
+        and: "a setLevel (speed) API call WAS made — speed is still applied"
+        !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        and: "no exception was thrown"
+        noExceptionThrown()
+    }
+
+    // -------------------------------------------------------------------------
+    // Bug Pattern #25: C3 gate case-sensitivity — uppercase "ON"/"OFF" input
+    // -------------------------------------------------------------------------
+
+    def "BP25: setChildLock('ON') uppercase makes the API call and sends child_lock:true (not false)"() {
+        // Pre-fix: ("ON" == "on") is false → child_lock:false sent (unlock instead of lock).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → child_lock:true (correct).
+        given: "childLock is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "off"])
+
+        when: "setChildLock is called with uppercase 'ON'"
+        driver.setChildLock("ON")
+
+        then: "API call was made"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+
+        and: "payload carries child_lock:true (lock), NOT false (unlock)"
+        req.data.child_lock == true
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25: setChildLock('ON') when childLock is already 'on' is a no-op (C3 gate works with uppercase)"() {
+        // Pre-fix: ("on" == "ON") is false → gate bypassed, redundant API call made.
+        // Post-fix: toLowerCase() yields "on" == "on" → gate fires, no API call.
+        given: "childLock is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "childLock", value: "on"])
+
+        when: "setChildLock called with uppercase 'ON'"
+        driver.setChildLock("ON")
+
+        then: "no API call was made (C3 gate worked correctly)"
+        testParent.allRequests.find { it.method == "setChildLock" } == null
+    }
+
+    def "BP25: setDisplay('ON') uppercase makes the API call and sends state:true (not false)"() {
+        // Pre-fix: ("ON" == "on") is false → state:false sent (turn off instead of on).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → state:true (correct).
+        given: "display is currently 'off' so the C3 gate does not block"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "off"])
+
+        when: "setDisplay is called with uppercase 'ON'"
+        driver.setDisplay("ON")
+
+        then: "API call was made"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+
+        and: "payload carries state:true (on), NOT false (off)"
+        req.data.state == true
+
+        and: "emitted event value is lowercase 'on'"
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25: setDisplay('ON') when display is already 'on' is a no-op (C3 gate works with uppercase)"() {
+        given: "display is already 'on'"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "display", value: "on"])
+
+        when:
+        driver.setDisplay("ON")
+
+        then: "no API call was made"
+        testParent.allRequests.find { it.method == "setDisplay" } == null
+    }
+
     def "BP24-B + invalid mode: setMode('badvalue') from off-state does NOT auto-on (Core 200S)"() {
         // Invalid mode is rejected BEFORE ensureSwitchOn() fires — so a typo from Rule Machine
         // does not accidentally power on the device. Regression guard for the Fix-2 ordering.
@@ -624,5 +843,276 @@ class LevoitCore200SSpec extends HubitatSpec {
 
         and: "a warning was logged mentioning the invalid mode"
         testLog.warns.any { it.contains("invalid mode") || it.contains("badvalue") }
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: safe numeric coercion — setLevel with non-numeric inputs
+    // -----------------------------------------------------------------------
+
+    @Unroll
+    def "BP26: setLevel('#badInput') does not throw and does not make a setLevel API call (fallback=0 → off)"() {
+        // Inputs that safeIntArg() maps to 0: "abc" (not numeric), "" (empty), true ("true"
+        // is not a valid integer string).  0 → pct==0 → off() path; no setLevel speed call.
+        // Pre-fix: (level as Integer) on any of these threw before the guard could fire.
+        given: "device is on so the auto-on guard doesn't confuse the assertion"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setLevel (speed) API call — 0 coercion routes to off()"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setLevel('5.7') does not throw and makes a setLevel API call with truncated value (5 → speed 1)"() {
+        // safeIntArg("5.7") → BigDecimal("5.7").intValue() = 5 (truncation, not rounding).
+        // 5% < 33% → speed band 1.  setLevel(5) is a legitimate near-valid call — truncating
+        // matches Groovy's native (5.7 as Integer) and is the correct post-fix behaviour.
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "a setLevel (speed) API call was made with level corresponding to speed 1"
+        !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
+
+    // -----------------------------------------------------------------------
+    // BP26: LevoitCorePurifierLib.setTimer — numeric coercion (Core 200S)
+    // Both-ways: revert safeIntArg in setTimer → this spec FAILs; restore → PASSes.
+    // -----------------------------------------------------------------------
+
+    @Unroll
+    def "BP26: setTimer('#badInput') does not throw and does not make an addTimer API call (Core 200S fallback=0 → cancelTimer)"() {
+        // safeIntArg maps "abc" and "" to 0; the 0 path routes to cancelTimer, not addTimer.
+        // Pre-fix: (seconds as Integer) on non-numeric input threw NumberFormatException (sandbox-swallowed).
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTimer(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no addTimer API call — 0 coercion routes to cancelTimer path"
+        testParent.allRequests.findAll { it.method == "addTimer" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
+    def "BP26: setTimer('5.7') does not throw and makes an addTimer API call with truncated value (5 seconds)"() {
+        // safeIntArg("5.7") → 5. 5 > 0 → addTimer called with total=5.
+        // This test fails if safeIntArg is removed from LevoitCorePurifierLib.setTimer
+        // (bare `seconds as Integer` throws on "5.7" before the guard fires).
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setTimer("5.7")
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "an addTimer API call was made with total=5 (truncated from 5.7)"
+        def req = testParent.allRequests.find { it.method == "addTimer" }
+        req != null
+        req.data.total == 5
+    }
+
+    // -----------------------------------------------------------------------
+    // BP25-truthy: CorePurifierLib setChildLock and setDisplay truthy-canon emission
+    // -----------------------------------------------------------------------
+
+    def "BP25-truthy: setChildLock('true') sends child_lock:true and emits 'on' (Core 200S)"() {
+        // Pre-fix: v = "true"; sendEvent(value:"true"). Post-fix: canon="on"; sendEvent(value:"on").
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("true")
+
+        then: "API call sent with child_lock:true"
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.child_lock == true
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('true') sends state:true and emits 'on' (Core 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("true")
+
+        then: "API call sent with state:true"
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.state == true
+
+        and: "emitted attribute is canonical 'on', not raw 'true'"
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25-truthy: setChildLock('1') sends child_lock:true and emits 'on' (Core 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        req != null
+        req.data.child_lock == true
+        lastEventValue("childLock") == "on"
+    }
+
+    def "BP25-truthy: setDisplay('1') sends state:true and emits 'on' (Core 200S)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("1")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.state == true
+        lastEventValue("display") == "on"
+    }
+
+    def "BP25-truthy: C3 gate suppresses setChildLock when childLock='on' and input is 'true'"() {
+        given:
+        testDevice.events.add([name: "childLock", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setChildLock("true")
+
+        then: "C3 gate suppressed the call because canon=='on'==currentValue"
+        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // BUG #213: requireNonEmptyEnum — empty-string from Rule Machine blank slot
+    // These tests MUST FAIL on pre-fix code and PASS on post-fix code.
+    // Pre-fix: requireNotNull("") returned true; "" was processed, producing an
+    //   INFO log like "Speed: " or passing "" to the enum-check WARN path.
+    // Post-fix: requireNonEmptyEnum("") returns false silently.
+    // -------------------------------------------------------------------------
+
+    def "BUG #213: setSpeed('') silently exits without API call or log (Core 200S)"() {
+        given:
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+        int infosBefore  = testLog.infos.size()
+        int warnsBefore  = testLog.warns.size()
+
+        when:
+        driver.setSpeed("")
+
+        then: "no API call"
+        testParent.allRequests.size() == 0
+
+        and: "no new INFO or WARN log (empty string is silently rejected)"
+        testLog.infos.size() == infosBefore
+        testLog.warns.size() == warnsBefore
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "BUG #213: setMode('') silently exits without API call or log (Core 200S)"() {
+        given:
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+        int infosBefore  = testLog.infos.size()
+        int warnsBefore  = testLog.warns.size()
+
+        when:
+        driver.setMode("")
+
+        then: "no API call"
+        testParent.allRequests.size() == 0
+
+        and: "no new INFO or WARN log (empty string is silently rejected)"
+        testLog.infos.size() == infosBefore
+        testLog.warns.size() == warnsBefore
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "BUG #213: setSpeed(null) still warns (null path unchanged by fix) (Core 200S)"() {
+        given:
+        testParent.allRequests.clear()
+
+        when:
+        driver.setSpeed(null)
+
+        then: "WARN logged for null"
+        testLog.warns.any { it.contains("setSpeed") }
+
+        and: "no API call"
+        testParent.allRequests.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // NIT 4: setAutoMode string-enum guard upgraded to requireNonEmptyEnum
+    // setAutoMode(mode, roomSize): the `mode` param is a user-callable string enum.
+    // Empty "" slipped past the former requireNotNull guard and reached the cloud.
+    // -------------------------------------------------------------------------
+
+    def "NIT 4: setAutoMode('') silently exits without API call (empty-string RM blank slot) (Core 200S/CorePurifierLib)"() {
+        // Pre-fix: requireNotNull("") returned true; "" was sent as mode to the cloud.
+        // Post-fix: requireNonEmptyEnum("") returns false silently; no API call.
+        given:
+        testParent.allRequests.clear()
+        int warnsBefore = testLog.warns.size()
+
+        when:
+        driver.setAutoMode("")
+
+        then: "no API call for setAutoMode or setLevel or autoPreference"
+        testParent.allRequests.isEmpty()
+
+        and: "no WARN logged (empty string is the RM blank-slot path — silent)"
+        testLog.warns.size() == warnsBefore
+
+        and: "no exception thrown"
+        noExceptionThrown()
+    }
+
+    def "NIT 4: setAutoMode(null) still warns (null path unchanged) (Core 200S/CorePurifierLib)"() {
+        given:
+        testParent.allRequests.clear()
+
+        when:
+        driver.setAutoMode(null)
+
+        then: "WARN logged for null"
+        testLog.warns.any { it.toLowerCase().contains("setautomode") }
+
+        and: "no API call"
+        testParent.allRequests.isEmpty()
     }
 }

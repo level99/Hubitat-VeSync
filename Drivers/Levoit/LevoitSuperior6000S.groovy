@@ -63,7 +63,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Levoit Superior 6000S (LEH-S601S) evaporative humidifier — mist 1-9, target humidity, modes, drying mode, auto-stop, water pump cleaning, ambient temp; canonical pyvesync payloads",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -140,8 +140,8 @@ def off(){
 // ---------- Mode ----------
 def setMode(mode){
     logDebug "setMode(${mode})"
-    if (mode == null) { logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"; return }  // no recordError — not an error, just a guard
-    String m = (mode as String).toLowerCase()
+    if (!requireNonEmptyEnum(mode, "setMode")) return
+    String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","manual","sleep"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     // autoPro is the canonical API value for "auto" on Superior 6000S
     String apiMode = (m == "auto") ? "autoPro" : m
@@ -159,17 +159,26 @@ def setMode(mode){
 // ---------- Mist level ----------
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
-    Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    if (!requireNotNull(level, "setMistLevel")) return
+    // BUG #212: Sup6000S V2 firmware rejects setVirtualLevel during sleep mode (inner code -1).
+    // BP24: NO-ON — preference setter; firmware-rejects during sleep mode (Sup6000S V2 constraint).
+    if (device.currentValue("mode") == "sleep") {
+        logInfo "Skipping setMistLevel during sleep mode (Sup6000S firmware rejects preference writes in sleep mode; change mode first)"
+        return
+    }
+    Integer lvl = safeIntArg(level, 0)
+    if (lvl <= 0) { off(); return }
+    Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
-    def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: lvl, levelType: "mist"], "setVirtualLevel(${lvl})")
+    def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: clamped, levelType: "mist"], "setVirtualLevel(${clamped})")
     if (httpOk(resp)) {
-        state.virtualLevel = lvl
-        device.sendEvent(name:"virtualLevel", value: lvl)
-        device.sendEvent(name:"level", value: percentFromLevel(lvl))
-        logInfo "Mist level: ${lvl}"
+        state.virtualLevel = clamped
+        device.sendEvent(name:"virtualLevel", value: clamped)
+        device.sendEvent(name:"level", value: percentFromLevel(clamped))
+        logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${lvl}"
-        recordError("Mist level write failed: ${lvl}", [method:"setVirtualLevel"])
+        logError "Mist level write failed: ${clamped}"
+        recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -190,7 +199,7 @@ def setLevel(val, duration) {
 // turns an off device ON at level 1 — inverted behaviour.
 def setLevel(val){
     logDebug "setLevel(${val})"
-    Integer pct = Math.max(0, Math.min(100, (val as Integer) ?: 0))
+    Integer pct = safeIntArg(val, 0, 0, 100)
     if (pct == 0) { off(); return }
     Integer lvl = levelFromPercent(pct)
     sendEvent(name:"level", value: pct)
@@ -200,7 +209,10 @@ def setLevel(val){
 // ---------- Target humidity ----------
 def setTargetHumidity(percent){
     logDebug "setTargetHumidity(${percent})"
-    Integer p = Math.max(30, Math.min(80, (percent as Integer) ?: 50))
+    if (!requireNotNull(percent, "setTargetHumidity")) return
+    Integer p = safeIntArg(percent, 0)
+    if (p <= 0) { logWarn "setTargetHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
+    p = Math.max(30, Math.min(80, p))
     def resp = hubBypass("setTargetHumidity", [targetHumidity: p], "setTargetHumidity(${p})")
     if (httpOk(resp)) {
         state.targetHumidity = p
@@ -214,26 +226,45 @@ def setTargetHumidity(percent){
 
 // ---------- Feature setters ----------
 // V2-line shared bodies via lib; delegators preserve method-presence semantics.
-def setDisplay(onOff) { doSetDisplayScreenSwitch(onOff) }
+// BP24: NO-ON — configures a device preference; powering on is not implied.
+// BUG #212: Sup6000S V2 firmware rejects setDisplay during sleep mode (inner code -1).
+// Skip with an INFO explanation rather than logging a false-positive ERROR.
+def setDisplay(onOff) {
+    if (!requireNonEmptyEnum(onOff, "setDisplay")) return false
+    if (device.currentValue("mode") == "sleep") {
+        logInfo "Skipping setDisplay during sleep mode (Sup6000S firmware rejects preference writes in sleep mode; change mode first)"
+        return true
+    }
+    doSetDisplayScreenSwitch(onOff)
+}
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoStop(onOff) { doSetAutoStopSwitch(onOff) }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
-    if (!requireNotNull(onOff, "setChildLock")) return false
-    String val = (onOff as String).toLowerCase()
-    if (device.currentValue("childLock") == val) return true
-    Integer v = (val == "on") ? 1 : 0
-    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${val})")
+    if (!requireNonEmptyEnum(onOff, "setChildLock")) return false
+    // BP25: derive canonical on/off for sendEvent and C3 gate — never emit raw "true"/"1"/"yes".
+    String val = (onOff as String).trim().toLowerCase()
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    if (device.currentValue("childLock") == canon) return true
+    Integer v = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${canon})")
     if (httpOk(resp)) {
-        device.sendEvent(name:"childLock", value: val)
-        logInfo "Child lock: ${val}"
+        device.sendEvent(name:"childLock", value: canon)
+        logInfo "Child lock: ${canon}"
     } else { logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"]) }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setDryingMode(onOff){
     logDebug "setDryingMode(${onOff})"
-    if (!requireNotNull(onOff, "setDryingMode")) return false
-    Integer v = ((onOff as String).toLowerCase() == "on") ? 1 : 0
+    if (!requireNonEmptyEnum(onOff, "setDryingMode")) return false
+    // No C3 idempotency gate: the dryingMode attribute reflects the hardware's current drying
+    // state (active/complete/idle/off), not the autoDryingSwitch user preference that this
+    // method writes. Comparing against dryingMode would incorrectly suppress the write when
+    // the device is mid-cycle (state="active", user-pref="on").
+    Integer v = ((onOff as String).trim().toLowerCase() in ["on","true","1","yes"]) ? 1 : 0
     def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
     if (httpOk(resp)) logInfo "Drying mode auto-switch set: ${onOff}"
     else { logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"]) }
