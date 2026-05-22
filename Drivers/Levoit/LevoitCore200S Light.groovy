@@ -52,7 +52,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S / 300S air purifiers' night light capability",
-        version: "2.5",
+        version: "2.6",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"

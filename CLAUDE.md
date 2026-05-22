@@ -368,6 +368,14 @@ Avoidance: don't deploy uncommitted working-tree code via MCP to the maintainer'
 
 This is a **maintainer-only** scenario; end users never trip this because they only get drivers via HPM. Mention this in the cut-release post-flight if HPM testing is part of the verification step.
 
+### HPM library-duplicate trap
+
+`install_library` on a hub that already has the same name+namespace library (typically from an HPM bundle install) creates a SECOND copy at a different ID. Both coexist; Hubitat `#include` binds drivers to ONE — usually the HPM-installed (lower-ID) one. `update_library_code` on the other copy then reports `success:true` but dependents still throw `MissingMethodException` for the new methods. Hub reboot does NOT fix it; this is parse-time binding, not cache.
+
+**Pre-`install_library` check:** enumerate existing libraries by name first (scan `/library/ajax/code?id=N` IDs 1–200 via curl, ~10s). If a library with the same name+namespace exists, use `update_library_code` against that ID instead of installing a new one. If duplicates already exist, update ALL of them.
+
+**Post-deploy validation (cheap):** spawn a fresh dependent-driver child and exercise a new-method code path. `update_library_code` returning `success:true` is necessary but not sufficient — only a runtime method call proves the binding propagated.
+
 ---
 
 ## QA dispatch: model selection
