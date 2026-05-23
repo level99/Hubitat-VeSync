@@ -26,6 +26,25 @@ SOFTWARE.
 
 // History:
 //
+// 2026-05-23: v2.7  Auth-flow refinements from the v2.7 final-review skill.
+//                  - Restored atomic state.token + state.accountID pair invariant: Stage 1
+//                    no longer writes state.accountID; the value is buffered through to
+//                    Stage 2 and committed alongside state.token. A Stage 2 failure now
+//                    leaves both fields untouched (pre-v2.7 atomic-pair behavior).
+//                  - forceReinitialize() preserves state.terminalId across state.clear()
+//                    so the per-install identifier stays stable for VeSync anti-abuse
+//                    heuristics across full re-pair cycles.
+//                  - Cross-region response with empty/blank countryCode now emits a WARN
+//                    and falls through to retry-with-current-country instead of silently
+//                    cycling to retry-depth exhaustion with a confusing error.
+//                  - Stage 1 cross-region (-11260022) detected explicitly: emits an
+//                    actionable ERROR telling the user to toggle the deviceRegion
+//                    preference. No automatic recovery is possible at Stage 1 (no
+//                    bizToken handshake exists).
+//                  - state.traceSeq counter clamped via modulo so a 33-year-old install
+//                    can't overflow Integer.MAX_VALUE on its 2.1B-th traceId.
+//                  - sanitize() now redacts state.terminalId in log lines (consistent
+//                    with the captureDiagnosticsFor truncation policy).
 // 2026-05-22: v2.7  pyvesync 3.4.1 two-stage OAuth login migration.
 //                  - login() replaced: legacy single-step POST /cloud/v1/user/login
 //                    (method "login") -> two-stage flow:
@@ -909,23 +928,33 @@ private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCal
  */
 Boolean login() {
     return retryableHttp("login", 3) {
-        String authCode = getAuthorizationCode()
-        if (!authCode) {
+        Map stage1 = getAuthorizationCode()
+        if (!stage1?.authCode) {
             // getAuthorizationCode() logged the failure detail via logError + recordError.
             return false
         }
-        return exchangeAuthCode(authCode, null, null, 0)
+        // Pass stage 1's accountID through to stage 2; exchangeAuthCode() commits both
+        // state.token AND state.accountID atomically on success. If stage 2 fails,
+        // state.accountID stays untouched (preserving the pre-v2.7 atomic-pair invariant
+        // "both state.token and state.accountID are set, or both are absent").
+        return exchangeAuthCode(stage1.authCode, stage1.stage1AccountID, null, null, 0)
     }
 }
 
 /**
  * Stage 1 of the v2.7 two-stage login: exchange email + password for an
- * authorizeCode. Returns the opaque code string on success, null on failure.
+ * authorizeCode. Returns ``[authCode: <opaque code>, stage1AccountID: <numeric str>]``
+ * on success, null on failure.
  *
- * Side effects on success: state.accountID is set from the response.
+ * IMPORTANT: this method does NOT write state.accountID. The atomic-pair
+ * invariant (state.token + state.accountID set together or both absent) is
+ * preserved by writing state.accountID only in exchangeAuthCode() alongside
+ * state.token. Stage 1 success followed by Stage 2 failure must NOT leave a
+ * stale state.accountID on disk.
+ *
  * Side effects on failure: logError + recordError describe the failure mode.
  */
-private String getAuthorizationCode() {
+private Map getAuthorizationCode() {
     String hashedPw = MD5(password)
     String terminalId = ensureTerminalId()
     String userCountry = deriveUserCountryCode()
@@ -970,14 +999,32 @@ private String getAuthorizationCode() {
 
     logDebug "getAuthorizationCode: ${params.uri}"
 
-    // authCode is written from inside the httpPost closure on success — see
+    // result is written from inside the httpPost closure on success — see
     // the analogous comment in exchangeAuthCode() for the closure-reassign rule.
-    def authCode = null
+    // Encoded as a Map so the caller can pass both the authCode AND the stage 1
+    // accountID through to exchangeAuthCode() without writing state.accountID
+    // mid-flow (atomic-pair invariant — see method docblock above).
+    def result = null
     httpPost(params) { resp ->
         if (!checkHttpResponse("getAuthorizationCode", resp)) {
             return
         }
         def innerCode = resp.data?.code
+
+        // Cross-region rejection at Stage 1: per pyvesync, the -11260022 code
+        // CAN appear at Stage 1 (not just Stage 2). The user's account is
+        // registered in a different VeSync region than the deviceRegion
+        // preference selects. There is no automatic recovery at Stage 1 (Stage 1
+        // has no bizToken handshake) — the user must toggle the preference and
+        // try again. Surface that explicitly instead of falling through to the
+        // generic "VeSync inner code=" message.
+        if (innerCode == CROSS_REGION_ERROR_CODE) {
+            logError "getAuthorizationCode: Account is registered in a different VeSync region. Toggle the deviceRegion preference between US and EU and try again."
+            recordError("getAuthorizationCode: cross-region at Stage 1 — toggle deviceRegion preference",
+                        [site:"getAuthorizationCode"])
+            return
+        }
+
         if (innerCode != 0) {
             def innerMsg = resp.data?.msg
             logError "getAuthorizationCode: VeSync inner code=${innerCode} msg='${innerMsg}'"
@@ -991,16 +1038,18 @@ private String getAuthorizationCode() {
         def respAuthCode = resp.data?.result?.authorizeCode
         def respAcctId   = resp.data?.result?.accountID
         if (respAuthCode && respAcctId) {
-            state.accountID = respAcctId
-            authCode = respAuthCode
-            logDebug "getAuthorizationCode: stage 1 OK (accountID set, authorizeCode acquired)"
+            // Do NOT write state.accountID here — that would break the atomic
+            // pair invariant on a Stage 2 failure. The caller commits both
+            // state.token AND state.accountID together after Stage 2 succeeds.
+            result = [authCode: respAuthCode, stage1AccountID: respAcctId]
+            logDebug "getAuthorizationCode: stage 1 OK (authorizeCode acquired; accountID buffered for Stage 2 commit)"
         } else {
             logError "getAuthorizationCode: HTTP 200 + code=0 but missing authorizeCode/accountID — VeSync API shape changed?"
             recordError("getAuthorizationCode: missing result fields (HTTP 200 + code=0)",
                         [site:"getAuthorizationCode"])
         }
     }
-    return authCode
+    return result
 }
 
 /**
@@ -1008,13 +1057,21 @@ private String getAuthorizationCode() {
  * token. Handles VeSync's cross-region rejection (-11260022) by retrying with
  * bizToken + regionChange="lastRegion", bounded by MAX_CROSS_REGION_RETRIES.
  *
- * @param authCode      authorizeCode from getAuthorizationCode()
- * @param bizToken      cross-region retry token from a prior -11260022 response, or null
- * @param regionChange  "lastRegion" on cross-region retry, or null on initial call
- * @param retryDepth    current retry depth (caller passes 0; increments on cross-region retry)
+ * On success, commits state.token AND state.accountID atomically: state.accountID
+ * comes from stage 2's response if present, else from the buffered stage1AccountID.
+ * On any failure path (inner-code != 0, missing token, retry exhaustion), state.token
+ * AND state.accountID are BOTH left untouched — preserving the atomic-pair invariant.
+ *
+ * @param authCode          authorizeCode from getAuthorizationCode()
+ * @param stage1AccountID   accountID returned by Stage 1, used as the canonical accountID
+ *                          to commit on success (Stage 2's response usually echoes the same
+ *                          value; we prefer it if present, fall back to this if not)
+ * @param bizToken          cross-region retry token from a prior -11260022 response, or null
+ * @param regionChange      "lastRegion" on cross-region retry, or null on initial call
+ * @param retryDepth        current retry depth (caller passes 0; increments on cross-region retry)
  * @return true if state.token + state.accountID were set; false otherwise
  */
-private Boolean exchangeAuthCode(String authCode, String bizToken, String regionChange, int retryDepth) {
+private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String bizToken, String regionChange, int retryDepth) {
     if (retryDepth >= MAX_CROSS_REGION_RETRIES) {
         logError "exchangeAuthCode: cross-region retry depth ${retryDepth} exceeded MAX_CROSS_REGION_RETRIES=${MAX_CROSS_REGION_RETRIES} — giving up"
         recordError("exchangeAuthCode: cross-region retry depth exceeded", [site:"exchangeAuthCode"])
@@ -1087,8 +1144,16 @@ private Boolean exchangeAuthCode(String authCode, String bizToken, String region
         if (innerCode == CROSS_REGION_ERROR_CODE) {
             def newBizToken = resp.data?.result?.bizToken
             def newCountry  = resp.data?.result?.countryCode
-            if (newCountry) {
+            // Empty-string-vs-null discrimination: VeSync has been observed to
+            // return countryCode:"" with a populated bizToken. Treat empty/blank
+            // as "no corrective code supplied" — proceed with the retry using the
+            // CURRENT state.countryCode (it's bounded by MAX_CROSS_REGION_RETRIES,
+            // so the worst case is retry-exhaustion which itself surfaces a clear
+            // error). Emit a WARN so the failure mode is diagnosable in logs.
+            if (newCountry && !((newCountry as String).trim().isEmpty())) {
                 state.countryCode = newCountry
+            } else if (newBizToken) {
+                logWarn "exchangeAuthCode: cross-region response with no corrective countryCode; retrying with current country=${state.countryCode}"
             }
             if (newBizToken) {
                 logInfo "exchangeAuthCode: cross-region — retrying with corrected country=${newCountry ?: '(unset)'}"
@@ -1118,8 +1183,13 @@ private Boolean exchangeAuthCode(String authCode, String bizToken, String region
         String acctId       = resp.data?.result?.accountID
         String countryCode  = resp.data?.result?.countryCode
         if (token) {
-            state.token = token
-            if (acctId)      state.accountID  = acctId
+            // Atomic-pair commit: write state.token AND state.accountID together.
+            // Prefer Stage 2's accountID if present (Stage 2 is the authoritative
+            // response for the bearer-token session); fall back to Stage 1's
+            // buffered accountID otherwise. At least one is guaranteed non-null
+            // because Stage 1 already validated respAcctId before returning.
+            state.token     = token
+            state.accountID = acctId ?: stage1AccountID
             if (countryCode) state.countryCode = countryCode
             logInfo "Logged in to VeSync (${getDeviceRegion()} region: ${getApiHost()})"
             outcome = 1
@@ -1133,7 +1203,7 @@ private Boolean exchangeAuthCode(String authCode, String bizToken, String region
     // Recurse OUTSIDE the httpPost closure to keep call-stack depth flat
     // and avoid any closure-local-binding surprises in the sandbox.
     if (outcome == 2) {
-        return exchangeAuthCode(retryAuthCode, retryBizToken, "lastRegion", retryDepth + 1)
+        return exchangeAuthCode(retryAuthCode, stage1AccountID, retryBizToken, "lastRegion", retryDepth + 1)
     }
     return outcome == 1
 }
@@ -1195,7 +1265,13 @@ private String generateTraceId() {
     String tid = state.terminalId ?: ensureTerminalId()
     String suffix = tid.length() >= 5 ? tid[-5..-2] : tid
     Long epoch = (now() / 1000) as Long
-    Integer seq = ((state.traceSeq ?: 0) as Integer) + 1
+    // Wrap at 99999 so the %05d format string always renders exactly 5 digits.
+    // An unbounded increment would overflow Integer.MAX_VALUE after ~2.1B logins
+    // (theoretically reachable on a long-lived install) AND would silently produce
+    // >5-digit suffixes well before that. The modulo + 1 form keeps the counter
+    // in the [1..99999] inclusive range so the resulting traceId stays 5 digits.
+    Integer prev = ((state.traceSeq ?: 0) as Integer) % 99999
+    Integer seq = prev + 1
     state.traceSeq = seq
     return "APP${suffix}${epoch}-${String.format('%05d', seq)}"
 }
@@ -2763,14 +2839,23 @@ def forceReinitialize() {
   try {
     logDebug "forceReinitialize()"
     logInfo "Force reinitializing VeSync integration"
-    
-    // Clear state and reschedule
+
+    // state.clear() wipes EVERY state key — including state.terminalId, which
+    // is a per-install stable identifier that pyvesync's design (and VeSync's
+    // anti-abuse heuristics) expect to stay consistent across the lifetime
+    // of an install. Regenerating it on every forceReinitialize() makes this
+    // Hubitat install look like a different device on each pair-cycle, which
+    // increases the chance of being flagged as suspicious / rate-limited.
+    //
+    // Preserve the terminalId across the clear: stash, clear, restore.
+    String preservedTid = state.terminalId
     state.clear()
+    if (preservedTid) state.terminalId = preservedTid
     unschedule()
-    
+
     // Wait longer for connection pool
     pauseExecution(5000)
-    
+
     initialize()
   }
   catch (Exception e) {
@@ -2912,7 +2997,8 @@ def logWarn(msg) {
 }
 
 // Auto-sanitize log messages so debug captures shared by users in community threads / GitHub
-// issues don't leak the VeSync account email, accountID, auth token, or hashed password.
+// issues don't leak the VeSync account email, accountID, auth token, hashed password, or
+// the v2.7 per-install terminalId.
 // Strips the values from any log message (regardless of which call site emitted it).
 private String sanitize(msg) {
     if (msg == null) return msg
@@ -2924,6 +3010,13 @@ private String sanitize(msg) {
     // Known sensitive values from current state (exact-match replace, fast and safe)
     if (state?.accountID) s = s.replace(state.accountID as String, '[accountID-redacted]')
     if (state?.token)     s = s.replace(state.token as String,     '[token-redacted]')
+
+    // v2.7 per-install identifier — captureDiagnosticsFor truncates this for privacy
+    // before user-visible display; log lines that incidentally carry the full value
+    // (e.g. a verboseDebug dump of an auth request body) get the same treatment here
+    // so the two privacy paths are consistent. The terminalId is non-credential but
+    // is per-install-stable, so redacting it removes a cross-report correlation key.
+    if (state?.terminalId) s = s.replace(state.terminalId as String, '[terminalId-redacted]')
 
     // Password should never be in logs but defensively redact if a settings dump leaks it
     if (settings?.password) s = s.replace(settings.password as String, '[password-redacted]')

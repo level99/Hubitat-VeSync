@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **VeSync login flow updated to match the current mobile app.** The previous single-step login endpoint is rejected by VeSync's backend for some newly-created accounts, causing "Login failed - check credentials" even when credentials are correct. The driver now uses the same two-stage flow as the VeSync mobile app: first stage exchanges email and password for an authorization code, second stage exchanges the authorization code for a bearer token. Cross-region rejections are auto-corrected. Backwards-compatible — existing installs with valid cached tokens are unaffected; only fresh logins, token-expiry re-auth, and "Force Reinitialize" exercise the new path.
 
+### Fixed
+
+- **"Login failed" with a misleading "different VeSync region" symptom is now actionable.** When a VeSync account is registered in a different region than the driver's deviceRegion preference selects, the login attempt now logs a clear ERROR telling you to toggle the deviceRegion preference between US and EU and try again. Previously the only signal was a generic numeric error code.
+- **"Force Reinitialize" no longer regenerates the per-install identifier.** The internal terminalId fingerprint is now preserved across "Force Reinitialize" runs (it's only generated once per install). This makes the driver look like the same Hubitat install to VeSync's anti-abuse heuristics across full re-pair cycles, reducing the chance of rate-limit / suspicious-activity flags. No user-visible behavior change unless you have been hitting VeSync rate limits after repeated reinit runs.
+- **Login failure now never leaves a phantom partial-credential state on disk.** When Stage 1 of the two-stage login succeeds but Stage 2 fails (rare — typically a network blip between the two requests), the driver previously wrote a "Stage 1 accountID" to state without a matching token. The atomic-pair invariant "both state.token and state.accountID are set, or both are absent" is now preserved across all failure paths.
+- **Cross-region login with an empty corrective country code now emits a visible WARN.** When VeSync's cross-region rejection response carries an empty (blank) `countryCode` but a valid bizToken, the driver previously cycled through the retry-depth limit and surfaced a confusing exhaustion error. It now logs a WARN identifying the empty-country case and retries with the current country code, surfacing the underlying API behavior so the failure mode is diagnosable from logs.
+
 ## [2.6] - 2026-05-22
 
 ### Fixed
