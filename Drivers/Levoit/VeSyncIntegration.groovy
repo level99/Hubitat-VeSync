@@ -67,9 +67,10 @@ SOFTWARE.
 //                  - Backwards-compatible: state.token + state.accountID field names
 //                    unchanged; existing cached tokens continue to work. New flow only
 //                    fires on fresh login / BP13 re-auth / forceReinitialize.
-//                  - getDevices() and sendBypassRequest() unchanged — they still use
-//                    DEFAULT_TRACE_ID + the legacy User-Agent path; only the auth flow
-//                    moves to dynamic traceId + okhttp UA. Out-of-scope for v2.7.
+//                  - getDevices() and sendBypassRequest() still use DEFAULT_TRACE_ID and the
+//                    legacy User-Agent path — only the auth flow moves to dynamic traceId +
+//                    okhttp UA. Out-of-scope for v2.7. phoneBrand is now sourced from the
+//                    PHONE_BRAND constant on all three call sites (auth, getDevices, bypassV2).
 //                  - updated() region-change handler now also clears state.countryCode
 //                    so deriveUserCountryCode() re-picks the right default for the new
 //                    region. state.terminalId is NOT cleared (region-independent).
@@ -1185,7 +1186,7 @@ private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String
                 logWarn "exchangeAuthCode: cross-region response with no corrective countryCode; retrying with current country=${state.countryCode}"
             }
             if (newBizToken) {
-                logInfo "exchangeAuthCode: cross-region — retrying with corrected country=${newCountry ?: '(unset)'}"
+                logDebug "exchangeAuthCode: cross-region — retrying with corrected country=${newCountry ?: '(unset)'}"
                 retryAuthCode = authCode
                 retryBizToken = newBizToken
                 outcome = 2  // signal retry needed
@@ -1804,7 +1805,7 @@ private Boolean getDevices() {
                 "timeZone": getLocationTimeZone(),
                 "acceptLanguage": "en",
                 "appVersion": APP_VERSION,
-                "phoneBrand": "SM N9005",
+                "phoneBrand": PHONE_BRAND,
                 "phoneOS": "Android",
                 "traceId": DEFAULT_TRACE_ID,
                 "accountID": state.accountID,
@@ -2698,7 +2699,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
             "timeZone": getLocationTimeZone(),
             "acceptLanguage": "en",
             "appVersion": APP_VERSION,
-            "phoneBrand": "SM N9005",
+            "phoneBrand": PHONE_BRAND,
             "phoneOS": "Android",
             "traceId": DEFAULT_TRACE_ID,
             "cid": equipment.getDataValue("cid"),

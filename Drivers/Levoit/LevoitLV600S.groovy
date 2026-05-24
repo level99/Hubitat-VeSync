@@ -313,6 +313,8 @@ def setWarmMistLevel(level){
 //     (LUH-A602S HumidifierMap entry -- no humidity_min override).
 //   Refutation: community user with LUH-A602S reports values below 40 are rejected
 //     with API error 11003000 --> raise floor to 40 (matches OasisMist 450S behavior).
+//   Resolution: floor kept at 30 (pre-v2.7 behavior preserved) pending a second community
+//     confirmation. To act on the refutation, change to doSetTargetHumidity(percent, 40, 80).
 // Shared body via lib; delegator preserves method-presence semantics.
 def setHumidity(percent) { doSetTargetHumidity(percent) }
 

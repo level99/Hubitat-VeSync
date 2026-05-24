@@ -222,6 +222,7 @@ def doSetAutoStopSwitch(onOff) {
 // setTargetHumidity payload: {target_humidity: N} -- snake_case key (V1 humidifier convention).
 // Floor/ceiling parameterized: most drivers use 30/80; OasisMist 450S uses 40/80 (firmware
 // floor per pyvesync issue #296). Caller passes overrides via the optional floor/ceiling args.
+// BP24: NO-ON — configures a device preference (humidity target); powering on is not implied.
 def doSetTargetHumidity(percent, Integer floor = 30, Integer ceiling = 80) {
     logDebug "setHumidity(${percent})"
     if (!requireNotNull(percent, "setHumidity")) return

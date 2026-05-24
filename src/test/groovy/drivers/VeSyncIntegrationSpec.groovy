@@ -1013,6 +1013,28 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         capturedBypassBodies[0].deviceRegion == "US"
     }
 
+    def "sendBypassRequest body carries current APP_VERSION (regression guard against silent appVersion drift)"() {
+        // Pins the contract that the bypassV2 request body carries the current APP_VERSION
+        // constant. VeSync periodically tightens server-side appVersion validation; a silent
+        // bump (or a drift across call-sites) is a class of regression worth pinning. The
+        // canonical value lives in @Field static final APP_VERSION in the parent driver --
+        // if that constant changes, this spec must be updated in the same diff.
+        given: "a valid auth state and the bypassV2 capture wiring (from wireSandbox())"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.token     = "tok-appv"
+        state.accountID = "acc-appv"
+        def equip = new TestDevice()
+        capturedBypassBodies.clear()
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "the request body carries the current APP_VERSION value"
+        capturedBypassBodies.size() == 1
+        capturedBypassBodies[0].appVersion == "5.6.60"
+    }
+
     // -------------------------------------------------------------------------
     // Pattern 2 — getLocationTimeZone() honours hub timezone in sendBypassRequest
     // -------------------------------------------------------------------------
@@ -4934,17 +4956,58 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         // pyvesync uses the Python slice TERMINAL_ID[-5:-1] which is exclusive-stop
         // and yields exactly 4 chars (the 5th-from-last through the 2nd-from-last).
         // Groovy's inclusive range [-5..-1] would yield 5 chars (wrong); the correct
-        // Groovy equivalent is [-5..-2]. This assertion guards against the off-by-one
-        // regression by computing the expected 4-char suffix from state.terminalId
-        // and asserting the traceId carries exactly that substring.
+        // Groovy equivalent is [-5..-2]. The traceId format is "APP<4chars><10-digit-epoch>-<5-digit-seq>".
+        //
+        // The load-bearing discriminator is the dash POSITION, not a substring check:
+        //   Correct tree (4-char suffix): dash at index 3+4+10 = 17
+        //   Buggy tree   (5-char suffix): dash at index 3+5+10 = 18
+        // The startsWith() assertion remains as a positive sanity check on the suffix,
+        // but is NOT load-bearing on its own — a buggy 5-char output's first 4 chars
+        // are identical to the correct 4-char slice, so startsWith() alone is vacuous
+        // against the off-by-one. The dash-position assertion catches it cleanly.
         String expectedSuffix = (state.terminalId as String)[-5..-2]
         expectedSuffix.length() == 4
-        (stage1Body.traceId as String).contains(expectedSuffix)
-        // And explicitly: the 5-char inclusive slice MUST NOT appear (would mean
-        // the suffix was 5 chars, the original bug).
-        String fiveCharSlice = (state.terminalId as String)[-5..-1]
-        fiveCharSlice.length() == 5
-        !(stage1Body.traceId as String).contains(fiveCharSlice)
+        (stage1Body.traceId as String).startsWith("APP${expectedSuffix}")
+        (stage1Body.traceId as String).indexOf('-') == 17
+    }
+
+    def "V27.8b auth flow httpPost suppresses 'Expect: 100-continue' header via explicit empty Expect value"() {
+        // Pins the workaround for Apache HttpClient 4.x's auto-injected 'Expect: 100-continue'
+        // header on the VeSync OAuth endpoints. VeSync's auth middleware returns inner code
+        // -11102086 'internal error' for requests carrying Expect: 100-continue. The fix is
+        // to set Expect: "" explicitly in the headers map (alongside the body pre-serialization
+        // that suppresses chunked encoding). A regression that drops or alters this header
+        // value re-introduces silent auth failures on accounts that exercise the new flow.
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "US"
+        Map stage1Params = null
+        Map stage2Params = null
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                stage1Params = params.clone() as Map
+                callback.call(authByPWDStage1Success())
+            } else if (params.uri.contains("loginByAuthorizeCode4Vesync")) {
+                stage2Params = params.clone() as Map
+                callback.call(exchangeStage2Success())
+            }
+        }
+
+        when:
+        driver.login()
+
+        then: "Stage 1 (authByPWDOrOTM) httpPost carries an explicit empty Expect header"
+        stage1Params != null
+        stage1Params.headers != null
+        stage1Params.headers.containsKey("Expect")
+        stage1Params.headers["Expect"] == ""
+
+        and: "Stage 2 (loginByAuthorizeCode4Vesync) httpPost carries an explicit empty Expect header"
+        stage2Params != null
+        stage2Params.headers != null
+        stage2Params.headers.containsKey("Expect")
+        stage2Params.headers["Expect"] == ""
     }
 
     def "V27.9 Stage 2 cross-region thrash exhausts MAX_CROSS_REGION_RETRIES — returns false with ERROR + recordError, no stack overflow"() {

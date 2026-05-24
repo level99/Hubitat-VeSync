@@ -284,6 +284,8 @@ def setMistLevel(level){
 //   Source: pyvesync device_map.py LUH-D301S HumidifierMap (commit c98729c, no humidity_min).
 //   Refutation: community user with Dual 200S reports values below 40 are rejected with
 //     API error 11003000 --> raise floor to 40 (same as OasisMist 450S).
+//   Resolution: floor kept at 30 (pre-v2.7 behavior preserved) pending a second community
+//     confirmation. To act on the refutation, change to doSetTargetHumidity(percent, 40, 80).
 // Shared body via lib; delegator preserves method-presence semantics.
 def setHumidity(percent) { doSetTargetHumidity(percent) }
 
