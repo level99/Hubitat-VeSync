@@ -344,7 +344,7 @@ import groovy.transform.Field
 @Field static final String CLIENT_TYPE               = "vesyncApp"
 @Field static final String AUTH_PROTOCOL_TYPE        = "generic"
 @Field static final String USER_AGENT_BYPASS         = "okhttp/3.12.1"
-@Field static final String PHONE_BRAND               = "Hubitat"
+@Field static final String PHONE_BRAND               = "pyvesync"
 @Field static final String PHONE_OS                  = "Android"
 @Field static final int    MAX_CROSS_REGION_RETRIES  = 2
 @Field static final int    CROSS_REGION_ERROR_CODE   = -11260022
@@ -981,19 +981,22 @@ private Map getAuthorizationCode() {
         "traceId"           : generateTraceId()
     ]
 
+    // Auth endpoint: pre-serialize body to a String and override headers Apache
+    // HttpClient 4.x would otherwise auto-inject. VeSync's v2 auth middleware
+    // returns inner code -11102086 'internal error' for requests carrying
+    // `Transfer-Encoding: chunked` (Apache's default when body size isn't
+    // pre-computed) or `Expect: 100-continue`. Pre-serializing the body to a
+    // String makes Content-Length computable and suppresses chunked encoding;
+    // explicit `Expect: ""` neutralises the Expect header.
+    String bodyJson = new groovy.json.JsonBuilder(body).toString()
     Map params = [
         uri               : "https://${getApiHost()}/globalPlatform/api/accountAuth/v1/authByPWDOrOTM",
         contentType       : "application/json",
         requestContentType: "application/json",
-        body              : body,
+        body              : bodyJson,
         headers           : [
-            "Accept"        : "application/json",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection"    : "keep-alive",
-            "User-Agent"    : USER_AGENT_BYPASS,
-            "accept-language": "en",
-            "appVersion"    : APP_VERSION,
-            "tz"            : tz
+            "Content-Type": "application/json; charset=UTF-8",
+            "Expect"      : ""
         ]
     ]
 
@@ -1125,19 +1128,17 @@ private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String
     if (bizToken) body["bizToken"] = bizToken
     if (regionChange) body["regionChange"] = regionChange
 
+    // Auth endpoint: see comment in getAuthorizationCode() for the rationale on
+    // pre-serializing the body to a String + neutralising the Expect header.
+    String bodyJson = new groovy.json.JsonBuilder(body).toString()
     Map params = [
         uri               : "https://${getApiHost()}/user/api/accountManage/v1/loginByAuthorizeCode4Vesync",
         contentType       : "application/json",
         requestContentType: "application/json",
-        body              : body,
+        body              : bodyJson,
         headers           : [
-            "Accept"        : "application/json",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Connection"    : "keep-alive",
-            "User-Agent"    : USER_AGENT_BYPASS,
-            "accept-language": "en",
-            "appVersion"    : APP_VERSION,
-            "tz"            : tz
+            "Content-Type": "application/json; charset=UTF-8",
+            "Expect"      : ""
         ]
     ]
 

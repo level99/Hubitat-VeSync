@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Verbose API logging now covers the auth path.** When the parent driver's `verboseDebug` preference is enabled, the two-stage login request and response bodies are also dumped to debug logs (alongside the existing bypassV2 dumps). Auth-material fields — password hash, authorization code, bearer token, accountID, bizToken — are filtered out of the dump; emails, state.token, state.accountID, and state.terminalId are additionally redacted by `sanitize()`. Useful when diagnosing login failures against a VeSync API change.
+- **Verbose API logging now covers the auth path.** When the parent driver's `verboseDebug` preference is enabled, the two-stage login request and response bodies are also dumped to debug logs (alongside the existing bypassV2 dumps). Auth-material fields — password hash, authorization code, bearer token, accountID, bizToken — are filtered out of the dump; emails, account-IDs, tokens, and terminal-IDs are additionally redacted at log time. Useful when diagnosing login failures against a VeSync API change.
 
 ### Changed
 
