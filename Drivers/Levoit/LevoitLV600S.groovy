@@ -313,64 +313,22 @@ def setWarmMistLevel(level){
 //     (LUH-A602S HumidifierMap entry -- no humidity_min override).
 //   Refutation: community user with LUH-A602S reports values below 40 are rejected
 //     with API error 11003000 --> raise floor to 40 (matches OasisMist 450S behavior).
-// setTargetHumidity payload: {target_humidity: N} -- note snake_case (not camelCase)
-def setHumidity(percent){
-    logDebug "setHumidity(${percent})"
-    if (!requireNotNull(percent, "setHumidity")) return
-    Integer p = safeIntArg(percent, 0)
-    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
-    p = Math.max(30, Math.min(80, p))
-    def resp = hubBypass("setTargetHumidity", [target_humidity: p], "setTargetHumidity(${p})")
-    if (httpOk(resp)) {
-        state.targetHumidity = p
-        device.sendEvent(name:"targetHumidity", value: p)
-        logInfo "Target humidity: ${p}%"
-    } else {
-        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
-    }
-}
+// Shared body via lib; delegator preserves method-presence semantics.
+def setHumidity(percent) { doSetTargetHumidity(percent) }
 
 // ---------- Display ----------
-// setDisplay payload: {state: bool} -- NOT {screenSwitch: int} (Superior 6000S)
-// Same as Classic 300S and OasisMist 450S (all VeSyncHumid200300S class)
+// setDisplay payload: {state: bool} -- NOT {screenSwitch: int} (Superior 6000S).
+// Same as Classic 300S and OasisMist 450S (all VeSyncHumid200300S class).
+// Shared body via lib; delegator preserves method-presence semantics.
 // BP24: NO-ON — configures a device preference; powering on is not implied.
-def setDisplay(onOff){
-    logDebug "setDisplay(${onOff})"
-    if (!requireNonEmptyEnum(onOff, "setDisplay")) return false
-    String val = (onOff as String).trim().toLowerCase()
-    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
-    if (device.currentValue("displayOn") == canon) return true
-    Boolean v = (canon == "on")
-    def resp = hubBypass("setDisplay", [state: v], "setDisplay(${canon})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: canon)
-        logInfo "Display: ${canon}"
-    } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
-    }
-}
+def setDisplay(onOff) { doSetDisplayStateSwitch(onOff) }
 
 // ---------- Auto-stop ----------
-// setAutomaticStop payload: {enabled: bool} -- NOT {autoStopSwitch: int} (Superior 6000S)
-// Same as Classic 300S and OasisMist 450S (all VeSyncHumid200300S class)
+// setAutomaticStop payload: {enabled: bool} -- NOT {autoStopSwitch: int} (Superior 6000S).
+// Same as Classic 300S and OasisMist 450S (all VeSyncHumid200300S class).
+// Shared body via lib; delegator preserves method-presence semantics.
 // BP24: NO-ON — configures a device preference; powering on is not implied.
-def setAutoStop(onOff){
-    logDebug "setAutoStop(${onOff})"
-    if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
-    String val = (onOff as String).trim().toLowerCase()
-    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
-    if (device.currentValue("autoStopEnabled") == canon) return true
-    Boolean v = (canon == "on")
-    def resp = hubBypass("setAutomaticStop", [enabled: v], "setAutomaticStop(${canon})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: canon)
-        logInfo "Auto-stop: ${canon}"
-    } else {
-        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
-    }
-}
+def setAutoStop(onOff) { doSetAutoStopEnabled(onOff) }
 
 
 // ---------- applyStatus ----------

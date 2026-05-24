@@ -1006,4 +1006,166 @@ class LevoitClassic300SSpec extends HubitatSpec {
         req != null
         req.data.target_humidity == 30
     }
+
+    // -------------------------------------------------------------------------
+    // doSetTargetHumidity (shared-helper) — direct-call coverage at the helper API.
+    // Drivers that delegate via setHumidity already exercise the helper body; these
+    // specs target the helper directly so a regression in the helper signature
+    // (e.g. dropping the optional floor/ceiling overload) is caught even if every
+    // call site delegates.
+    // -------------------------------------------------------------------------
+
+    def "doSetTargetHumidity: happy path uses default floor=30 / ceiling=80"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.doSetTargetHumidity(55)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
+        req != null
+        req.data.target_humidity == 55
+        lastEventValue("targetHumidity") == 55
+    }
+
+    def "doSetTargetHumidity: explicit floor override (40) clamps 25 to 40 (OasisMist 450S firmware floor)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.doSetTargetHumidity(25, 40, 80)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
+        req != null
+        req.data.target_humidity == 40
+    }
+
+    def "doSetTargetHumidity(null): BP18 null-guard — no API call, no NPE"() {
+        when:
+        driver.doSetTargetHumidity(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setTargetHumidity" }.isEmpty()
+        testLog.warns.any { it.contains("setHumidity") && it.contains("null") }
+    }
+
+    // -------------------------------------------------------------------------
+    // setDisplay (delegates to doSetDisplayStateSwitch in the lib) coverage —
+    // happy path, BP25 case-sensitivity, C3 idempotency, BP18 null-guard.
+    // -------------------------------------------------------------------------
+
+    def "setDisplay('on') sends setDisplay with {state:true} via shared helper (NOT screenSwitch)"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("on")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.state == true
+        !req.data.containsKey("screenSwitch")
+
+        and: "emitted event value is canonical 'on'"
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "setDisplay('off') sends setDisplay with {state:false}"() {
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setDisplay("off")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.state == false
+    }
+
+    def "BP25: setDisplay('ON') uppercase normalizes to canonical 'on' (case-sensitivity guard)"() {
+        // Pre-fix would have sent state:false; post-fix sends state:true and emits 'on'.
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "displayOn", value: "off"])  // ensure C3 gate does not block
+
+        when:
+        driver.setDisplay("ON")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        req != null
+        req.data.state == true
+        lastEventValue("displayOn") == "on"
+    }
+
+    def "setDisplay('on') when already 'on' is a no-op (C3 gate via shared helper)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "displayOn", value: "on"])
+
+        when:
+        driver.setDisplay("on")
+
+        then: "no API call was made"
+        testParent.allRequests.find { it.method == "setDisplay" } == null
+    }
+
+    def "setDisplay(null): BP18 null-guard — no API call, no NPE"() {
+        when:
+        driver.setDisplay(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // setAutoStop (delegates to doSetAutoStopEnabled in the lib) coverage —
+    // happy path; existing specs above already cover BP25, C3 idempotency.
+    // Adding a happy-path lowercase 'on' spec to confirm delegation produces
+    // the {enabled: bool} payload via "setAutomaticStop".
+    // -------------------------------------------------------------------------
+
+    def "setAutoStop('on') sends setAutomaticStop with {enabled:true} via shared helper (NOT autoStopSwitch)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopEnabled", value: "off"])  // C3 gate clear
+
+        when:
+        driver.setAutoStop("on")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setAutomaticStop" }
+        req != null
+        req.data.enabled == true
+        !req.data.containsKey("autoStopSwitch")
+    }
+
+    def "setAutoStop('off') sends setAutomaticStop with {enabled:false}"() {
+        given:
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "autoStopEnabled", value: "on"])  // C3 gate clear
+
+        when:
+        driver.setAutoStop("off")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setAutomaticStop" }
+        req != null
+        req.data.enabled == false
+    }
+
+    def "setAutoStop(null): BP18 null-guard — no API call, no NPE"() {
+        when:
+        driver.setAutoStop(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setAutomaticStop" }.isEmpty()
+    }
 }
