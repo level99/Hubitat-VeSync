@@ -2218,6 +2218,140 @@ class TestRule37BP26SafeIntArgFallbackCoercion:
             f"RULE37 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
         )
 
+    # ---- Style-variation regression guards ----
+    # Each shape below was historically NOT flagged by SAFEINTARG_COERCION_FALLBACK_RE
+    # and is a plausible authoring form. The regex must catch every shape that lets
+    # an unsafe coercion ride inside a safeIntArg() fallback argument: any first-arg
+    # form (identifier, dotted chain, optional-chain, bracket access, method call)
+    # paired with any throwing coercion form (as Integer/int/Long/long, .toInteger(),
+    # Integer.parseInt, Long.parseLong) in the fallback position.
+
+    # Method-call first arg + coercion fallback — must flag.
+    BAD_METHOD_CALL_FIRST_ARG = textwrap.dedent("""\
+        def setAutoMode(mode, roomSize) {
+            Integer sz = safeIntArg(getFanSpeed(), (state.room_size ?: 800) as Integer)
+        }
+    """)
+
+    # Bracket-access first arg + coercion fallback — must flag.
+    BAD_BRACKET_ACCESS_FIRST_ARG = textwrap.dedent("""\
+        def setAutoMode(mode, roomSize) {
+            Integer sz = safeIntArg(state.list[0], (state.room_size ?: 800) as Integer)
+        }
+    """)
+
+    # Optional-chain first arg + coercion fallback — must flag.
+    BAD_OPTIONAL_CHAIN_FIRST_ARG = textwrap.dedent("""\
+        def setAutoMode(mode, roomSize) {
+            Integer sz = safeIntArg(state.config?.size, (state.room_size ?: 800) as Integer)
+        }
+    """)
+
+    # `as Long` fallback — must flag (same throw-on-non-numeric shape as `as Integer`).
+    BAD_FALLBACK_AS_LONG = textwrap.dedent("""\
+        def setAutoMode(mode, roomSize) {
+            Long sz = safeIntArg(roomSize, (state.room_size ?: 800L) as Long)
+        }
+    """)
+
+    # `as long` lowercase fallback — must flag.
+    BAD_FALLBACK_AS_LONG_LOWERCASE = textwrap.dedent("""\
+        def setAutoMode(mode, roomSize) {
+            long sz = safeIntArg(roomSize, (state.room_size ?: 800L) as long)
+        }
+    """)
+
+    # `Integer.parseInt(...)` fallback — must flag.
+    BAD_FALLBACK_PARSEINT = textwrap.dedent("""\
+        def setAutoMode(mode, roomSize) {
+            Integer sz = safeIntArg(roomSize, Integer.parseInt(state.room_size_str))
+        }
+    """)
+
+    # `Long.parseLong(...)` fallback — must flag.
+    BAD_FALLBACK_PARSELONG = textwrap.dedent("""\
+        def setAutoMode(mode, roomSize) {
+            Long sz = safeIntArg(roomSize, Long.parseLong(state.room_size_str))
+        }
+    """)
+
+    # Good: method-call first arg with NESTED safeIntArg fallback — must NOT flag.
+    GOOD_METHOD_CALL_FIRST_ARG_NESTED = textwrap.dedent("""\
+        def setAutoMode(mode, roomSize) {
+            Integer sz = safeIntArg(getFanSpeed(), safeIntArg(state.room_size, 800))
+        }
+    """)
+
+    # Good: bracket-access first arg with literal fallback — must NOT flag.
+    GOOD_BRACKET_FIRST_ARG_LITERAL = textwrap.dedent("""\
+        def setAutoMode(mode, roomSize) {
+            Integer sz = safeIntArg(state.list[0], 800)
+        }
+    """)
+
+    def test_method_call_first_arg_fallback_fails(self):
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_METHOD_CALL_FIRST_ARG)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Method-call first arg with coercion fallback must flag, got: {findings}"
+        )
+
+    def test_bracket_access_first_arg_fallback_fails(self):
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_BRACKET_ACCESS_FIRST_ARG)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Bracket-access first arg with coercion fallback must flag, got: {findings}"
+        )
+
+    def test_optional_chain_first_arg_fallback_fails(self):
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_OPTIONAL_CHAIN_FIRST_ARG)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Optional-chain first arg with coercion fallback must flag, got: {findings}"
+        )
+
+    def test_fallback_as_long_fails(self):
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_FALLBACK_AS_LONG)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"`as Long` fallback must flag (same throw shape as `as Integer`), got: {findings}"
+        )
+
+    def test_fallback_as_long_lowercase_fails(self):
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_FALLBACK_AS_LONG_LOWERCASE)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"`as long` lowercase fallback must flag, got: {findings}"
+        )
+
+    def test_fallback_parseint_fails(self):
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_FALLBACK_PARSEINT)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Integer.parseInt(...) fallback must flag, got: {findings}"
+        )
+
+    def test_fallback_parselong_fails(self):
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_FALLBACK_PARSELONG)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Long.parseLong(...) fallback must flag, got: {findings}"
+        )
+
+    def test_method_call_first_arg_with_nested_safeintarg_passes(self):
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_METHOD_CALL_FIRST_ARG_NESTED)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Method-call first arg with nested safeIntArg fallback must NOT flag, got: {findings}"
+        )
+
+    def test_bracket_first_arg_with_literal_passes(self):
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_BRACKET_FIRST_ARG_LITERAL)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Bracket-access first arg with literal fallback must NOT flag, got: {findings}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # RULE37 extension — BP26 relational-comparison implicit coercion

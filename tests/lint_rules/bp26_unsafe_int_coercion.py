@@ -148,20 +148,36 @@ TYPED_LOCAL_RE = re.compile(r'\bInteger\s+(\w+)\s*=')
 # Detects a forbidden coercion expression in the *fallback* position of a safeIntArg() call.
 #
 # Invariant: the fallback argument to safeIntArg() must be either a safe literal/constant
-# or another safeIntArg() call. Any expression containing `as Integer`, `as int`, or
-# `.toInteger()` in the fallback position throws before safeIntArg's try/catch can
-# intercept it — safeIntArg's protection does not extend to its own arguments.
+# or another safeIntArg() call. Any expression containing `as Integer`/`as int`/`as Long`/
+# `as long`, `.toInteger()`, `Integer.parseInt(...)`, or `Long.parseLong(...)` in the
+# fallback position throws before safeIntArg's try/catch can intercept it — safeIntArg's
+# protection does not extend to its own arguments.
 # Correct nested form: safeIntArg(x, safeIntArg(y, N)) — the inner call is the guard.
 #
-# Pattern: safeIntArg(<first_arg>, <fallback>) where fallback is NOT immediately another
-# safeIntArg( call, and fallback contains a coercion cast.
-# The `(?:[^()]*|\([^)]*\))*` segment permits one level of nested parens in the fallback
+# First-arg shapes accepted (Pass 1 input space):
+#   simple identifier:    safeIntArg(level, ...)
+#   dotted chain:         safeIntArg(state.room_size, ...)
+#   optional chain:       safeIntArg(map?.field, ...)
+#   bracket access:       safeIntArg(state.list[0], ...)
+#   method call:          safeIntArg(getFanSpeed(), ...)
+#   nested method call:   safeIntArg(state.foo.bar(), ...)
+#
+# The fallback-body segment `(?:[^()]*|\([^)]*\))*` permits one level of nested parens
 # (e.g. `(state.room_size ?: 800)`) without crossing the outer safeIntArg closing paren.
+# Cast-form alternation covers Integer/int/Long/long, .toInteger(), Integer.parseInt(),
+# Long.parseLong() — the four idioms that throw on non-numeric strings.
 SAFEINTARG_COERCION_FALLBACK_RE = re.compile(
-    r'safeIntArg\s*\(\s*\w[\w.]*\s*,'    # safeIntArg(<arg1>,
-    r'\s*(?!safeIntArg\s*\()'             # NOT immediately followed by another safeIntArg(
-    r'(?:[^()]*|\([^)]*\))*'             # fallback body: non-paren chars OR one paren group
-    r'\b(?:as\s+(?:Integer|int)\b|toInteger\s*\(\s*\))',  # coercion present in fallback
+    r'safeIntArg\s*\('                                              # safeIntArg(
+    r'\s*\w[\w]*(?:\??\.\w+|\[[^\]]+\])*(?:\(\s*[\w.,\s\'"]*\s*\))?'  # first arg shapes
+    r'\s*,'                                                         # ,
+    r'\s*(?!safeIntArg\s*\()'                                       # NOT a nested safeIntArg
+    r'(?:[^()]*|\([^)]*\))*'                                        # fallback body
+    r'\b(?:'                                                        # coercion forms:
+    r'as\s+(?:Integer|int|Long|long)\b'                             #   as Integer / int / Long / long
+    r'|toInteger\s*\(\s*\)'                                         #   .toInteger()
+    r'|Integer\.parseInt\s*\('                                      #   Integer.parseInt(...)
+    r'|Long\.parseLong\s*\('                                        #   Long.parseLong(...)
+    r')',
 )
 
 
