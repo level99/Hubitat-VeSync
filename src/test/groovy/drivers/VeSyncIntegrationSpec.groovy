@@ -5021,6 +5021,95 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         state.countryCode == "FR"
     }
 
+    def "V27.10 generateTraceId modulo-99999 clamps state.traceSeq at the wraparound boundary"() {
+        // Regression guard for the traceSeq modulo clamp in generateTraceId():
+        //   Integer prev = ((state.traceSeq ?: 0) as Integer) % 99999
+        //   Integer seq  = prev + 1
+        // Without the modulo, a long-lived install would eventually overflow
+        // Integer.MAX_VALUE on its ~2.1B-th traceId. The clamp keeps state.traceSeq in
+        // [1..99999] inclusive so the 5-digit suffix in the generated traceId stays
+        // well-formed across the wraparound boundary.
+        //
+        // login() calls generateTraceId twice (Stage 1 + Stage 2). Starting from
+        // state.traceSeq = 99999, the two successive values must be 1 then 2 — proving
+        // both that the modulo wrapped 99999 to 0 (then 0+1=1) and that the next call
+        // wrapped 1 to 1 (then 1+1=2).
+        given: "state.traceSeq sits at the modulo boundary (99999)"
+        wireV27Credentials()
+        state.traceSeq = 99999
+        List<String> traceIdsSeen = []
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            traceIdsSeen << (params.body.traceId as String)
+            if (params.uri.contains("authByPWDOrOTM")) {
+                callback.call(authByPWDStage1Success())
+            } else {
+                callback.call(exchangeStage2Success())
+            }
+        }
+
+        when: "login is called (Stage 1 + Stage 2 each generate one traceId)"
+        driver.login()
+
+        then: "state.traceSeq wrapped to a small value (NOT 100001 or higher)"
+        state.traceSeq == 2
+
+        and: "Stage 1 traceId ends with the wrapped 5-digit suffix -00001"
+        traceIdsSeen.size() == 2
+        traceIdsSeen[0].endsWith("-00001")
+
+        and: "Stage 2 traceId increments by 1 (still in the 5-digit range)"
+        traceIdsSeen[1].endsWith("-00002")
+    }
+
+    def "V27.11 Stage 2 response without accountID falls back to stage1 accountID (W1 atomic-pair invariant)"() {
+        // Regression guard for the acctId fallback branch in exchangeAuthCode():
+        //   state.accountID = acctId ?: stage1AccountID
+        // Stage 2's response normally echoes the same accountID that Stage 1 returned,
+        // but if Stage 2 ever omits the field (server-side anomaly), this fork commits
+        // the buffered stage1AccountID value so the atomic-pair invariant (state.token
+        // and state.accountID are both set or both absent) holds. Without the fallback,
+        // state.accountID would be null and the first device-list poll would silently
+        // fail authorization.
+        given:
+        wireV27Credentials()
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                callback.call(authByPWDStage1Success("auth-fallback", "acct-from-stage1"))
+            } else {
+                // Stage 2 response: token + countryCode present, accountID field OMITTED
+                Expando r = new Expando()
+                r.status = 200
+                r.data = [
+                    traceId: "test-trace-stage2-no-acctid",
+                    code:    0,
+                    msg:     "OK",
+                    result:  [
+                        // NO accountID field — server returned an anomalous shape
+                        acceptLanguage: "en",
+                        countryCode: "US",
+                        token:       "bearer-fallback",
+                        bizToken:    "",
+                        currentRegion: ""
+                    ]
+                ]
+                callback.call(r)
+            }
+        }
+
+        when:
+        driver.login()
+
+        then: "state.token is set from Stage 2's response"
+        state.token == "bearer-fallback"
+
+        and: "state.accountID falls back to the value Stage 1 buffered (NOT null)"
+        state.accountID == "acct-from-stage1"
+
+        and: "no error logged — graceful fallback path"
+        testLog.errors.isEmpty()
+    }
+
     // -------------------------------------------------------------------------
     // captureDiagnosticsFor() — privacy-relevant truncation of state.terminalId
     //
