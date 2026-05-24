@@ -998,6 +998,11 @@ private Map getAuthorizationCode() {
     ]
 
     logDebug "getAuthorizationCode: ${params.uri}"
+    if (settings?.verboseDebug) {
+        // Dump request body for VeSync auth-shape diagnostics. Excludes the hashed
+        // password field; sanitize() further redacts email/token at log time.
+        logDebug "getAuthorizationCode request body: ${body.findAll { it.key != 'password' }}"
+    }
 
     // result is written from inside the httpPost closure on success — see
     // the analogous comment in exchangeAuthCode() for the closure-reassign rule.
@@ -1006,6 +1011,21 @@ private Map getAuthorizationCode() {
     // mid-flow (atomic-pair invariant — see method docblock above).
     def result = null
     httpPost(params) { resp ->
+        if (settings?.verboseDebug) {
+            // Filter transient + long-lived auth material from the response dump.
+            // sanitize() further redacts state.token/state.accountID/state.terminalId,
+            // but on a fresh login those state fields are NULL — explicit filter closes
+            // that window. result.code + result.msg + result.traceId remain visible.
+            def safeResp = resp?.data
+            if (safeResp instanceof Map) {
+                Set<String> auth_material_keys = ["accountID", "authorizeCode", "token", "bizToken"]
+                def safeResult = safeResp.result instanceof Map
+                    ? (safeResp.result as Map).findAll { !(it.key in auth_material_keys) }
+                    : safeResp.result
+                safeResp = (safeResp as Map) + [result: safeResult]
+            }
+            logDebug "getAuthorizationCode response: status=${resp?.status} body=${safeResp}"
+        }
         if (!checkHttpResponse("getAuthorizationCode", resp)) {
             return
         }
@@ -1122,6 +1142,14 @@ private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String
     ]
 
     logDebug "exchangeAuthCode: ${params.uri} (retryDepth=${retryDepth}${regionChange ? ', regionChange=lastRegion' : ''})"
+    if (settings?.verboseDebug) {
+        // Dump request body for VeSync auth-shape diagnostics. authorizeCode +
+        // bizToken are transient one-time auth credentials and are excluded from
+        // the dump; sanitize() further redacts email/token/accountID/terminalId
+        // at log time.
+        Set<String> auth_credential_keys = ["authorizeCode", "bizToken"]
+        logDebug "exchangeAuthCode request body: ${body.findAll { !(it.key in auth_credential_keys) }}"
+    }
 
     // outcome / retryAuthCode / retryBizToken are written from inside the httpPost
     // closure. Groovy closures CAN reassign enclosing non-final locals (verified

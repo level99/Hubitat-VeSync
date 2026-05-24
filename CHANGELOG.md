@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Verbose API logging now covers the auth path.** When the parent driver's `verboseDebug` preference is enabled, the two-stage login request and response bodies are also dumped to debug logs (alongside the existing bypassV2 dumps). Auth-material fields — password hash, authorization code, bearer token, accountID, bizToken — are filtered out of the dump; emails, state.token, state.accountID, and state.terminalId are additionally redacted by `sanitize()`. Useful when diagnosing login failures against a VeSync API change.
+
 ### Changed
 
 - **VeSync login flow updated to match the current mobile app.** The previous single-step login endpoint is rejected by VeSync's backend for some newly-created accounts, causing "Login failed - check credentials" even when credentials are correct. The driver now uses the same two-stage flow as the VeSync mobile app: first stage exchanges email and password for an authorization code, second stage exchanges the authorization code for a bearer token. Cross-region rejections are auto-corrected. Backwards-compatible — existing installs with valid cached tokens are unaffected; only fresh logins, token-expiry re-auth, and "Force Reinitialize" exercise the new path.
