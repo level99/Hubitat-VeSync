@@ -4540,7 +4540,11 @@ class VeSyncIntegrationSpec extends HubitatSpec {
                 callback.call(authByPWDStage1Success("authcode-xregion", "acct-xregion"))
             } else if (params.uri.contains("loginByAuthorizeCode4Vesync")) {
                 stage2Calls++
-                stage2Bodies << (params.body as Map)
+                // Auth-flow body is pre-serialized to a JSON String (commit 058ac2f workaround
+                // for Apache HttpClient chunked-encoding rejection on VeSync's OAuth endpoint);
+                // parse it back to a Map for the body-shape assertion.
+                Map parsedBody = new groovy.json.JsonSlurper().parseText(params.body as String) as Map
+                stage2Bodies << parsedBody
                 if (stage2Calls == 1) {
                     // First stage 2: cross-region rejection
                     callback.call(exchangeStage2CrossRegion("biz-retry-001", "FR"))
@@ -4814,8 +4818,12 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         List<String> terminalIdsSeen = []
 
         driver.metaClass.httpPost = { Map params, Closure callback ->
+            // Auth-flow body is pre-serialized to a JSON String (commit 058ac2f workaround
+            // for Apache HttpClient chunked-encoding rejection on VeSync's OAuth endpoint);
+            // parse it back to a Map to read the terminalId field.
+            Map parsedBody = new groovy.json.JsonSlurper().parseText(params.body as String) as Map
             // Capture the terminalId from EVERY request body
-            terminalIdsSeen << (params.body.terminalId as String)
+            terminalIdsSeen << (parsedBody.terminalId as String)
             if (params.uri.contains("authByPWDOrOTM")) {
                 callback.call(authByPWDStage1Success())
             } else {
@@ -4887,7 +4895,10 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         driver.metaClass.httpPost = { Map params, Closure callback ->
             if (params.uri.contains("authByPWDOrOTM")) {
-                stage1Body = params.body as Map
+                // Auth-flow body is pre-serialized to a JSON String (commit 058ac2f workaround
+                // for Apache HttpClient chunked-encoding rejection on VeSync's OAuth endpoint);
+                // parse it back to a Map for the body-shape assertion.
+                stage1Body = new groovy.json.JsonSlurper().parseText(params.body as String) as Map
                 callback.call(authByPWDStage1Success())
             } else {
                 callback.call(exchangeStage2Success())
@@ -4910,7 +4921,9 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         (stage1Body.terminalId as String).length() == 33
         stage1Body.userCountryCode == "US"
         stage1Body.osInfo == "Android"
-        stage1Body.clientInfo == "Hubitat"
+        // clientInfo is the pyvesync identity string (PHONE_BRAND constant) — the parent
+        // driver intentionally fingerprints as pyvesync for VeSync anti-abuse compatibility.
+        stage1Body.clientInfo == "pyvesync"
 
         and: "stage 1 traceId is dynamic (NOT the legacy DEFAULT_TRACE_ID 1634265366)"
         stage1Body.traceId != null
@@ -5039,7 +5052,11 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         state.traceSeq = 99999
         List<String> traceIdsSeen = []
         driver.metaClass.httpPost = { Map params, Closure callback ->
-            traceIdsSeen << (params.body.traceId as String)
+            // Auth-flow body is pre-serialized to a JSON String (commit 058ac2f workaround
+            // for Apache HttpClient chunked-encoding rejection on VeSync's OAuth endpoint);
+            // parse it back to a Map to read the traceId field.
+            Map parsedBody = new groovy.json.JsonSlurper().parseText(params.body as String) as Map
+            traceIdsSeen << (parsedBody.traceId as String)
             if (params.uri.contains("authByPWDOrOTM")) {
                 callback.call(authByPWDStage1Success())
             } else {

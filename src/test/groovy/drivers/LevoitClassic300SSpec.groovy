@@ -1052,6 +1052,32 @@ class LevoitClassic300SSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setHumidity") && it.contains("null") }
     }
 
+    def "BP26: doSetTargetHumidity('#badInput') direct-helper call — safe coercion (no NumberFormatException), no API call"() {
+        // Direct-helper coverage for the BP26 fix in LevoitHumidifierLib.doSetTargetHumidity:
+        //   Integer p = safeIntArg(percent, 0)
+        //   if (p <= 0) { logWarn ...; return }
+        // Pre-fix would have used `(percent as Integer)` and thrown NumberFormatException
+        // / GroovyCastException before the rejection guard could fire. This spec exercises
+        // the helper at its public entry (the shared-library API used by Classic 200S/300S,
+        // Dual 200S, LV600S/LV600S HubConnect, OasisMist 450S/1000S, Sprout Humidifier,
+        // and Superior 6000S) so a regression in the helper itself is caught even if every
+        // public-command call site delegates correctly.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.doSetTargetHumidity(badInput)
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "no setTargetHumidity API call — 0 coercion rejected by minimum-humidity guard"
+        testParent.allRequests.findAll { it.method == "setTargetHumidity" }.isEmpty()
+
+        where:
+        badInput << ["abc", "", true]
+    }
+
     // -------------------------------------------------------------------------
     // setDisplay (delegates to doSetDisplayStateSwitch in the lib) coverage —
     // happy path, BP25 case-sensitivity, C3 idempotency, BP18 null-guard.
