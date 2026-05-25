@@ -188,12 +188,14 @@ def doSetDisplayScreenSwitch(onOff) {
     if (device.currentValue("displayOn") == canon) return true
     Integer v = (canon == "on") ? 1 : 0
     def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${canon})")
-    if (httpOk(resp)) {
+    Boolean ok = httpOk(resp)
+    if (ok) {
         device.sendEvent(name:"displayOn", value: canon)
         logInfo "Display: ${canon}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
+    return ok
 }
 
 // BP24: NO-ON — configures a device preference; powering on is not implied.
@@ -206,12 +208,14 @@ def doSetAutoStopSwitch(onOff) {
     if (device.currentValue("autoStopEnabled") == canon) return true
     Integer v = (canon == "on") ? 1 : 0
     def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${canon})")
-    if (httpOk(resp)) {
+    Boolean ok = httpOk(resp)
+    if (ok) {
         device.sendEvent(name:"autoStopEnabled", value: canon)
         logInfo "Auto-stop: ${canon}"
     } else {
         logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"])
     }
+    return ok
 }
 
 // ---- Classic-family shared feature setters ----
@@ -225,18 +229,20 @@ def doSetAutoStopSwitch(onOff) {
 // BP24: NO-ON — configures a device preference (humidity target); powering on is not implied.
 def doSetTargetHumidity(percent, Integer floor = 30, Integer ceiling = 80) {
     logDebug "setHumidity(${percent})"
-    if (!requireNotNull(percent, "setHumidity")) return
+    if (!requireNotNull(percent, "setHumidity")) return false
     Integer p = safeIntArg(percent, 0)
-    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
+    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return false }
     p = Math.max(floor, Math.min(ceiling, p))
     def resp = hubBypass("setTargetHumidity", [target_humidity: p], "setTargetHumidity(${p})")
-    if (httpOk(resp)) {
+    Boolean ok = httpOk(resp)
+    if (ok) {
         state.targetHumidity = p
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
         logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
     }
+    return ok
 }
 
 // setDisplay payload: {state: bool} -- boolean form used by Classic 300S, Dual 200S, LV600S,
@@ -254,12 +260,14 @@ def doSetDisplayStateSwitch(onOff) {
     if (device.currentValue("displayOn") == canon) return true
     Boolean v = (canon == "on")
     def resp = hubBypass("setDisplay", [state: v], "setDisplay(${canon})")
-    if (httpOk(resp)) {
+    Boolean ok = httpOk(resp)
+    if (ok) {
         device.sendEvent(name:"displayOn", value: canon)
         logInfo "Display: ${canon}"
     } else {
         logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
     }
+    return ok
 }
 
 // setAutomaticStop payload: {enabled: bool} -- distinct from V2-line setAutoStopSwitch
@@ -274,10 +282,12 @@ def doSetAutoStopEnabled(onOff) {
     if (device.currentValue("autoStopEnabled") == canon) return true
     Boolean v = (canon == "on")
     def resp = hubBypass("setAutomaticStop", [enabled: v], "setAutomaticStop(${canon})")
-    if (httpOk(resp)) {
+    Boolean ok = httpOk(resp)
+    if (ok) {
         device.sendEvent(name:"autoStopEnabled", value: canon)
         logInfo "Auto-stop: ${canon}"
     } else {
         logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
     }
+    return ok
 }
