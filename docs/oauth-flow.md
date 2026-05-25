@@ -41,7 +41,7 @@ User installs parent driver → enters email + password + deviceRegion → Save 
 
 At this point: `state.token`, `state.terminalId`, `state.accountID`, `state.countryCode`, `state.traceSeq` are all **null/unset**.
 
-### Stage 0 — `login()` (line 930)
+### Stage 0 — `login()`
 
 Wraps the two-stage flow in `retryableHttp("login", 3)` — catches transient Apache HttpClient `IllegalStateException("Connection pool shut down")` errors, up to 3 retries. The two API calls happen serially inside that retry envelope.
 
