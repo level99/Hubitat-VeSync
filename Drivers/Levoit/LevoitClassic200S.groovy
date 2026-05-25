@@ -84,7 +84,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Classic 200S (literal deviceType 'Classic200S') — mist 1-9, target humidity 30-80%, auto/manual modes only (no sleep), auto-stop, display (via setIndicatorLightSwitch -- different from Classic 300S). No warm mist. Night-light brightness passive read-only. pyvesync VeSyncHumid200S class. CROSS-CHECK: different from Classic 300S (VeSyncHumid200300S).",
-        version: "2.6",
+        version: "2.7",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -226,23 +226,8 @@ def setMistLevel(level){
 // CROSS-CHECK [pyvesync device_map.py Classic200S entry]:
 //   No humidity_min override in device_map.py Classic200S entry -- inherits base class 30.
 //   Floor 30, ceiling 80 (same as Classic 300S and LV600S; different from OasisMist 450S floor 40).
-// setTargetHumidity payload: {target_humidity: N} -- snake_case key
-def setHumidity(percent){
-    logDebug "setHumidity(${percent})"
-    if (!requireNotNull(percent, "setHumidity")) return
-    Integer p = safeIntArg(percent, 0)
-    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
-    p = Math.max(30, Math.min(80, p))
-    def resp = hubBypass("setTargetHumidity", [target_humidity: p], "setTargetHumidity(${p})")
-    if (httpOk(resp)) {
-        state.targetHumidity = p
-        device.sendEvent(name:"targetHumidity", value: p)
-        logInfo "Target humidity: ${p}%"
-    } else {
-        logError "Target humidity write failed: ${p}"
-        recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
-    }
-}
+// Shared body via lib; delegator preserves method-presence semantics.
+def setHumidity(percent) { doSetTargetHumidity(percent) }
 
 // ---------- Display ----------
 // CROSS-CHECK [pyvesync VeSyncHumid200S.toggle_display() -- the ONE override in VeSyncHumid200S]:
@@ -274,27 +259,10 @@ def setDisplay(onOff){
 }
 
 // ---------- Auto-stop ----------
-// setAutomaticStop payload: {enabled: bool} -- same as Classic 300S / Dual 200S (VeSyncHumid200300S base)
+// setAutomaticStop payload: {enabled: bool} -- same as Classic 300S / Dual 200S (VeSyncHumid200300S base).
+// Shared body via lib; delegator preserves method-presence semantics.
 // BP24: NO-ON — configures a device preference; powering on is not implied.
-def setAutoStop(onOff){
-    logDebug "setAutoStop(${onOff})"
-    if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
-    // BP25: normalize to lowercase before C3 gate and payload coercion.
-    // "ON" from Rule Machine bypasses the gate and evaluates ("ON"=="on") as false
-    // → sets enabled:false (disables auto-stop) when the intent was to enable it.
-    String v = (onOff as String).trim().toLowerCase()
-    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
-    if (device.currentValue("autoStopEnabled") == canon) return  // C3 state-change gate
-    def resp = hubBypass("setAutomaticStop", [enabled: (canon == "on")], "setAutomaticStop(${canon})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: canon)
-        logInfo "Auto-stop: ${canon}"
-    } else {
-        logError "Auto-stop write failed"
-        recordError("Auto-stop write failed", [method:"setAutomaticStop"])
-    }
-}
+def setAutoStop(onOff) { doSetAutoStopEnabled(onOff) }
 
 // ---------- applyStatus ----------
 def applyStatus(status){

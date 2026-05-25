@@ -26,6 +26,58 @@ SOFTWARE.
 
 // History:
 //
+// 2026-05-23: v2.7  Auth-flow refinements from the v2.7 final-review skill.
+//                  - Restored atomic state.token + state.accountID pair invariant: Stage 1
+//                    no longer writes state.accountID; the value is buffered through to
+//                    Stage 2 and committed alongside state.token. A Stage 2 failure now
+//                    leaves both fields untouched (pre-v2.7 atomic-pair behavior).
+//                  - forceReinitialize() preserves state.terminalId across state.clear()
+//                    so the per-install identifier stays stable for VeSync anti-abuse
+//                    heuristics across full re-pair cycles.
+//                  - Cross-region response with empty/blank countryCode now emits a WARN
+//                    and falls through to retry-with-current-country instead of silently
+//                    cycling to retry-depth exhaustion with a confusing error.
+//                  - Stage 1 cross-region (-11260022) detected explicitly: emits an
+//                    actionable ERROR telling the user to toggle the deviceRegion
+//                    preference. No automatic recovery is possible at Stage 1 (no
+//                    bizToken handshake exists).
+//                  - state.traceSeq counter clamped via modulo so a 33-year-old install
+//                    can't overflow Integer.MAX_VALUE on its 2.1B-th traceId.
+//                  - sanitize() now redacts state.terminalId in log lines (consistent
+//                    with the captureDiagnosticsFor truncation policy).
+// 2026-05-22: v2.7  pyvesync 3.4.1 two-stage OAuth login migration.
+//                  - login() replaced: legacy single-step POST /cloud/v1/user/login
+//                    (method "login") -> two-stage flow:
+//                    Stage 1: POST /globalPlatform/api/accountAuth/v1/authByPWDOrOTM
+//                             (getAuthorizationCode) -> authorizeCode + accountID
+//                    Stage 2: POST /user/api/accountManage/v1/loginByAuthorizeCode4Vesync
+//                             (exchangeAuthCode) -> token + accountID + countryCode
+//                  - Cross-region rejection (-11260022) handled with bizToken +
+//                    regionChange="lastRegion" retry, bounded by MAX_CROSS_REGION_RETRIES.
+//                  - APP_VERSION bumped "2.5.1" -> "5.6.60" (pyvesync 3.4.1 parity).
+//                  - New constants: APP_ID, CLIENT_TYPE, AUTH_PROTOCOL_TYPE,
+//                    USER_AGENT_BYPASS, PHONE_BRAND, PHONE_OS, MAX_CROSS_REGION_RETRIES,
+//                    CROSS_REGION_ERROR_CODE.
+//                  - New state: state.terminalId (per-install stable ID, generated once),
+//                    state.countryCode (derived from deviceRegion; updated on cross-region).
+//                  - New helpers: ensureTerminalId(), deriveUserCountryCode(),
+//                    generateTraceId().
+//                  - User-Agent on auth calls switched from "Hubitat Elevation" to
+//                    "okhttp/3.12.1" (BYPASS_HEADER_UA in pyvesync const.py).
+//                  - Backwards-compatible: state.token + state.accountID field names
+//                    unchanged; existing cached tokens continue to work. New flow only
+//                    fires on fresh login / BP13 re-auth / forceReinitialize.
+//                  - getDevices() and sendBypassRequest() still use DEFAULT_TRACE_ID and the
+//                    legacy User-Agent path — only the auth flow moves to dynamic traceId +
+//                    okhttp UA. Out-of-scope for v2.7. phoneBrand is now sourced from the
+//                    PHONE_BRAND constant on all three call sites (auth, getDevices, bypassV2).
+//                  - updated() region-change handler now also clears state.countryCode
+//                    so deriveUserCountryCode() re-picks the right default for the new
+//                    region. state.terminalId is NOT cleared (region-independent).
+//                  - Login null-guard invariant preserved: both getAuthorizationCode()
+//                    and exchangeAuthCode() defensively log the inner code+msg on
+//                    HTTP 200 + missing result fields, instead of NPE'ing on
+//                    resp.data.result.token / .authorizeCode dereferences.
 // 2026-05-01: v2.4  Bug Pattern #22 — HTTP-error log spam and poll-cycle stalls during
 //                  network outages eliminated.
 //                  - isNetworkException() classifies 8 exception classes (4 JDK + 4 Apache
@@ -262,12 +314,42 @@ import groovy.transform.Field
 #include level99.LevoitDiagnostics
 
 // VeSync API metadata constants — centralised here so version/ID changes are one-line fixes.
-// DO NOT change DEFAULT_TRACE_ID to a dynamic value — pyvesync uses "1634265366" verbatim
-// and changing it risks triggering VeSync anti-bot detection.
-@Field static final String APP_VERSION       = "2.5.1"
-@Field static final String DEFAULT_TRACE_ID  = "1634265366"
-@Field static final String DEFAULT_TIME_ZONE = "America/Los_Angeles"
-@Field static final int    MAX_HEAL_ATTEMPTS = 3   // BP21: cap self-heal Resyncs before marking offline
+//
+// APP_VERSION bumped from "2.5.1" → "5.6.60" in v2.7 to match pyvesync 3.4.1's value
+// (pyvesync/const.py APP_VERSION). The two-stage OAuth login flow added in v2.7
+// requires the modern app-version string; using the legacy "2.5.1" against the new
+// endpoints causes VeSync to reject the auth request.
+//
+// DEFAULT_TRACE_ID is retained as the static traceId for getDevices() and
+// sendBypassRequest() — pyvesync uses "1634265366" verbatim for those calls and
+// changing it risks triggering VeSync anti-bot detection. The NEW login flow
+// (getAuthorizationCode / exchangeAuthCode) uses a dynamic traceId via
+// generateTraceId() to match pyvesync 3.4.1's auth.py behavior.
+@Field static final String APP_VERSION         = "5.6.60"
+@Field static final String DEFAULT_TRACE_ID    = "1634265366"
+@Field static final String DEFAULT_TIME_ZONE   = "America/Los_Angeles"
+@Field static final int    MAX_HEAL_ATTEMPTS   = 3   // BP21: cap self-heal Resyncs before marking offline
+
+// v2.7 auth-flow constants (pyvesync 3.4.1 parity).
+// APP_ID / CLIENT_TYPE / AUTH_PROTOCOL_TYPE: required by the new authByPWDOrOTM +
+// loginByAuthorizeCode4Vesync endpoints. Values sourced verbatim from
+// pyvesync/const.py (APP_ID = "eldodkfj", CLIENT_TYPE = "vesyncApp").
+// USER_AGENT_BYPASS: pyvesync uses "okhttp/3.12.1" for all VeSync API calls
+// (BYPASS_HEADER_UA in const.py). The legacy login used "Hubitat Elevation";
+// the new flow sends the okhttp UA to match what the mobile app sends.
+// MAX_CROSS_REGION_RETRIES: bound recursion in exchangeAuthCode() — VeSync's
+// -11260022 (cross-region) response triggers a single retry with bizToken +
+// regionChange="lastRegion". Two retries is a safety ceiling; one should be
+// enough in normal operation.
+@Field static final String APP_ID                    = "eldodkfj"
+@Field static final String CLIENT_TYPE               = "vesyncApp"
+@Field static final String AUTH_PROTOCOL_TYPE        = "generic"
+@Field static final String USER_AGENT_BYPASS         = "okhttp/3.12.1"
+@Field static final String PHONE_BRAND               = "pyvesync"
+@Field static final String PHONE_OS                  = "Android"
+@Field static final int    MAX_CROSS_REGION_RETRIES  = 2
+@Field static final int    CROSS_REGION_ERROR_CODE   = -11260022
+
 // Regional routing is binary: US → smartapi.vesync.com, EU → smartapi.vesync.eu
 // (per pyvesync const.py). Implemented in v2.2 via deviceRegion preference + getApiHost() helper.
 
@@ -282,7 +364,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson (original); Dan Cox (fork: Vital 200S, Superior 6000S, parent fixes); elfege (contributor)",
         description: "Integrates Levoit air purifiers and humidifiers with Hubitat Elevation via VeSync cloud API",
-        version: "2.6",
+        version: "2.7",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"
@@ -319,11 +401,15 @@ def updated() {
 
     // Region-change detection: if the user switched US <-> EU, cross-region tokens are invalid.
     // Clear stored auth credentials and force re-login via initialize() below.
+    // state.countryCode is also cleared so deriveUserCountryCode() re-picks the right
+    // default ("US" for US region, "DE" for EU region) on the next login. state.terminalId
+    // is NOT cleared — it's a stable per-install identifier independent of region.
     String newRegion = settings?.deviceRegion ?: "US"
     if (state.lastRegion != null && state.lastRegion != newRegion) {
         logInfo "VeSync API region changed from ${state.lastRegion} to ${newRegion} -- clearing stored token and forcing re-login"
         state.remove('token')
         state.remove('accountID')
+        state.remove('countryCode')
     }
     state.lastRegion = newRegion
 
@@ -816,63 +902,411 @@ private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCal
     return false
 }
 
+/**
+ * v2.7 two-stage OAuth login flow (pyvesync 3.4.1 parity).
+ *
+ * Replaces the legacy single-step POST /cloud/v1/user/login (method "login").
+ * The legacy endpoint still exists on VeSync's backend but rejects fresh-install
+ * logins with "app version is too low" (inner code -11012022) on accounts that
+ * have been gated to the newer flow. The mobile app and pyvesync 3.4.1 both use
+ * the two-stage flow below:
+ *
+ *   1. POST /globalPlatform/api/accountAuth/v1/authByPWDOrOTM
+ *        → authorizeCode + accountID
+ *   2. POST /user/api/accountManage/v1/loginByAuthorizeCode4Vesync
+ *        → token + accountID + countryCode
+ *
+ * Backwards-compatible: state.token / state.accountID field names DO NOT change.
+ * Existing installs with valid cached tokens never call login() and are unaffected.
+ * Only fresh logins / BP13 re-auth / forceReinitialize exercise the new path.
+ *
+ * Cross-region (code -11260022): VeSync's regional sharding may reject the first
+ * stage-2 attempt if the account's home region differs from the request region.
+ * The response carries bizToken + corrected countryCode; we retry stage 2 with
+ * those plus regionChange="lastRegion" (bounded by MAX_CROSS_REGION_RETRIES).
+ *
+ * Sources: pyvesync/auth.py, models/vesync_models.py, const.py.
+ *
+ * Detailed walkthrough + troubleshooting/symptom-to-root-cause table:
+ *   docs/oauth-flow.md
+ */
 Boolean login() {
     return retryableHttp("login", 3) {
-        def logmd5 = MD5(password)
-
-        def params = [
-            uri: "https://${getApiHost()}/cloud/v1/user/login",
-            contentType: "application/json",
-            requestContentType: "application/json",
-            body: [
-                "timeZone": getLocationTimeZone(),
-                "acceptLanguage": "en",
-                "appVersion": APP_VERSION,
-                "phoneBrand": "SM N9005",
-                "phoneOS": "Android",
-                "traceId": DEFAULT_TRACE_ID,
-                "email": email,
-                "password": logmd5,
-                "devToken": "",
-                "userType": "1",
-                "method": "login"
-            ],
-            headers: [
-                "Accept": "application/json",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Connection": "keep-alive",
-                "User-Agent": "Hubitat Elevation",
-                "accept-language": "en",
-                "appVersion": APP_VERSION,
-                "tz": getLocationTimeZone()
-            ]
-        ]
-
-        logDebug "login: ${params.uri}"
-
-        def result = false
-        httpPost(params) { resp ->
-            if (checkHttpResponse("login", resp)) {
-                if (resp.data?.result?.token) {
-                    state.token = resp.data.result.token
-                    state.accountID = resp.data.result.accountID
-                    logInfo "Logged in to VeSync (${getDeviceRegion()} region: ${getApiHost()})"
-                    result = true
-                } else {
-                    // VeSync returned HTTP 200 without a result body — typically signals
-                    // an inner authentication failure (account-level bot detection,
-                    // concurrent-session rejection, IP-based rate limit, or a
-                    // verification-required flow). Surface the inner code + msg so
-                    // the failure is diagnosable from logs.
-                    def innerCode = resp.data?.code
-                    def innerMsg  = resp.data?.msg
-                    logError "login: HTTP 200 but no result body — VeSync inner code=${innerCode} msg='${innerMsg}'"
-                    recordError("login: inner failure code=${innerCode} msg='${innerMsg}'", [site:"login"])
-                }
-            }
+        Map stage1 = getAuthorizationCode()
+        if (!stage1?.authCode) {
+            // getAuthorizationCode() logged the failure detail via logError + recordError.
+            return false
         }
-        return result
+        // Pass stage 1's accountID through to stage 2; exchangeAuthCode() commits both
+        // state.token AND state.accountID atomically on success. If stage 2 fails,
+        // state.accountID stays untouched (preserving the pre-v2.7 atomic-pair invariant
+        // "both state.token and state.accountID are set, or both are absent").
+        return exchangeAuthCode(stage1.authCode, stage1.stage1AccountID, null, null, 0)
     }
+}
+
+/**
+ * Stage 1 of the v2.7 two-stage login: exchange email + password for an
+ * authorizeCode. Returns ``[authCode: <opaque code>, stage1AccountID: <numeric str>]``
+ * on success, null on failure.
+ *
+ * IMPORTANT: this method does NOT write state.accountID. The atomic-pair
+ * invariant (state.token + state.accountID set together or both absent) is
+ * preserved by writing state.accountID only in exchangeAuthCode() alongside
+ * state.token. Stage 1 success followed by Stage 2 failure must NOT leave a
+ * stale state.accountID on disk.
+ *
+ * Side effects on failure: logError + recordError describe the failure mode.
+ */
+private Map getAuthorizationCode() {
+    String hashedPw = MD5(password)
+    String terminalId = ensureTerminalId()
+    String userCountry = deriveUserCountryCode()
+    String tz = getLocationTimeZone()
+
+    Map body = [
+        "email"             : email,
+        "method"            : "authByPWDOrOTM",
+        "password"          : hashedPw,
+        "acceptLanguage"    : "en",
+        "accountID"         : "",
+        "authProtocolType"  : AUTH_PROTOCOL_TYPE,
+        "clientInfo"        : PHONE_BRAND,
+        "clientType"        : CLIENT_TYPE,
+        "clientVersion"     : "VeSync ${APP_VERSION}",
+        "debugMode"         : false,
+        "osInfo"            : PHONE_OS,
+        "terminalId"        : terminalId,
+        "timeZone"          : tz,
+        "token"             : "",
+        "userCountryCode"   : userCountry,
+        "appID"             : APP_ID,
+        "sourceAppID"       : APP_ID,
+        "traceId"           : generateTraceId()
+    ]
+
+    // Auth endpoint: pre-serialize body to a String and override headers Apache
+    // HttpClient 4.x would otherwise auto-inject. VeSync's v2 auth middleware
+    // returns inner code -11102086 'internal error' for requests carrying
+    // `Transfer-Encoding: chunked` (Apache's default when body size isn't
+    // pre-computed) or `Expect: 100-continue`. Pre-serializing the body to a
+    // String makes Content-Length computable and suppresses chunked encoding;
+    // explicit `Expect: ""` neutralises the Expect header.
+    String bodyJson = new groovy.json.JsonBuilder(body).toString()
+    Map params = [
+        uri               : "https://${getApiHost()}/globalPlatform/api/accountAuth/v1/authByPWDOrOTM",
+        contentType       : "application/json",
+        requestContentType: "application/json",
+        body              : bodyJson,
+        headers           : [
+            "Content-Type": "application/json; charset=UTF-8",
+            "Expect"      : ""
+        ]
+    ]
+
+    logDebug "getAuthorizationCode: ${params.uri}"
+    if (settings?.verboseDebug) {
+        // Dump request body for VeSync auth-shape diagnostics. Excludes the hashed
+        // password field; sanitize() further redacts email/token at log time.
+        logDebug "getAuthorizationCode request body: ${body.findAll { it.key != 'password' }}"
+    }
+
+    // result is written from inside the httpPost closure on success — see
+    // the analogous comment in exchangeAuthCode() for the closure-reassign rule.
+    // Encoded as a Map so the caller can pass both the authCode AND the stage 1
+    // accountID through to exchangeAuthCode() without writing state.accountID
+    // mid-flow (atomic-pair invariant — see method docblock above).
+    def result = null
+    httpPost(params) { resp ->
+        if (settings?.verboseDebug) {
+            // Filter transient + long-lived auth material from the response dump.
+            // sanitize() further redacts state.token/state.accountID/state.terminalId,
+            // but on a fresh login those state fields are NULL — explicit filter closes
+            // that window. result.code + result.msg + result.traceId remain visible.
+            def safeResp = resp?.data
+            if (safeResp instanceof Map) {
+                Set<String> auth_material_keys = ["accountID", "authorizeCode", "token", "bizToken"]
+                def safeResult = safeResp.result instanceof Map
+                    ? (safeResp.result as Map).findAll { !(it.key in auth_material_keys) }
+                    : safeResp.result
+                safeResp = (safeResp as Map) + [result: safeResult]
+            }
+            logDebug "getAuthorizationCode response: status=${resp?.status} body=${safeResp}"
+        }
+        if (!checkHttpResponse("getAuthorizationCode", resp)) {
+            return
+        }
+        def innerCode = resp.data?.code
+
+        // Cross-region rejection at Stage 1: per pyvesync, the -11260022 code
+        // CAN appear at Stage 1 (not just Stage 2). The user's account is
+        // registered in a different VeSync region than the deviceRegion
+        // preference selects. There is no automatic recovery at Stage 1 (Stage 1
+        // has no bizToken handshake) — the user must toggle the preference and
+        // try again. Surface that explicitly instead of falling through to the
+        // generic "VeSync inner code=" message.
+        if (innerCode == CROSS_REGION_ERROR_CODE) {
+            logError "getAuthorizationCode: Account is registered in a different VeSync region. Toggle the deviceRegion preference between US and EU and try again."
+            recordError("getAuthorizationCode: cross-region at Stage 1 — toggle deviceRegion preference",
+                        [site:"getAuthorizationCode"])
+            return
+        }
+
+        if (innerCode != 0) {
+            def innerMsg = resp.data?.msg
+            logError "getAuthorizationCode: VeSync inner code=${innerCode} msg='${innerMsg}'"
+            recordError("getAuthorizationCode: inner failure code=${innerCode} msg='${innerMsg}'",
+                        [site:"getAuthorizationCode"])
+            return
+        }
+        // Inner code == 0 — extract result fields. Defensive against missing fields:
+        // HTTP 200 + code=0 + no result body must surface a diagnostic ERROR rather
+        // than NPE on resp.data.result.authorizeCode / .accountID dereferences.
+        def respAuthCode = resp.data?.result?.authorizeCode
+        def respAcctId   = resp.data?.result?.accountID
+        if (respAuthCode && respAcctId) {
+            // Do NOT write state.accountID here — that would break the atomic
+            // pair invariant on a Stage 2 failure. The caller commits both
+            // state.token AND state.accountID together after Stage 2 succeeds.
+            result = [authCode: respAuthCode, stage1AccountID: respAcctId]
+            logDebug "getAuthorizationCode: stage 1 OK (authorizeCode acquired; accountID buffered for Stage 2 commit)"
+        } else {
+            logError "getAuthorizationCode: HTTP 200 + code=0 but missing authorizeCode/accountID — VeSync API shape changed?"
+            recordError("getAuthorizationCode: missing result fields (HTTP 200 + code=0)",
+                        [site:"getAuthorizationCode"])
+        }
+    }
+    return result
+}
+
+/**
+ * Stage 2 of the v2.7 two-stage login: exchange the authorizeCode for a bearer
+ * token. Handles VeSync's cross-region rejection (-11260022) by retrying with
+ * bizToken + regionChange="lastRegion", bounded by MAX_CROSS_REGION_RETRIES.
+ *
+ * On success, commits state.token AND state.accountID atomically: state.accountID
+ * comes from stage 2's response if present, else from the buffered stage1AccountID.
+ * On any failure path (inner-code != 0, missing token, retry exhaustion), state.token
+ * AND state.accountID are BOTH left untouched — preserving the atomic-pair invariant.
+ *
+ * @param authCode          authorizeCode from getAuthorizationCode()
+ * @param stage1AccountID   accountID returned by Stage 1, used as the canonical accountID
+ *                          to commit on success (Stage 2's response usually echoes the same
+ *                          value; we prefer it if present, fall back to this if not)
+ * @param bizToken          cross-region retry token from a prior -11260022 response, or null
+ * @param regionChange      "lastRegion" on cross-region retry, or null on initial call
+ * @param retryDepth        current retry depth (caller passes 0; increments on cross-region retry)
+ * @return true if state.token + state.accountID were set; false otherwise
+ */
+private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String bizToken, String regionChange, int retryDepth) {
+    if (retryDepth >= MAX_CROSS_REGION_RETRIES) {
+        logError "exchangeAuthCode: cross-region retry depth ${retryDepth} exceeded MAX_CROSS_REGION_RETRIES=${MAX_CROSS_REGION_RETRIES} — giving up"
+        recordError("exchangeAuthCode: cross-region retry depth exceeded", [site:"exchangeAuthCode"])
+        return false
+    }
+
+    String terminalId = ensureTerminalId()
+    String userCountry = deriveUserCountryCode()
+    String tz = getLocationTimeZone()
+
+    Map body = [
+        "method"            : "loginByAuthorizeCode4Vesync",
+        "authorizeCode"     : authCode,
+        "acceptLanguage"    : "en",
+        "accountID"         : "",
+        "clientInfo"        : PHONE_BRAND,
+        "clientType"        : CLIENT_TYPE,
+        "clientVersion"     : "VeSync ${APP_VERSION}",
+        "debugMode"         : false,
+        "emailSubscriptions": false,
+        "osInfo"            : PHONE_OS,
+        "terminalId"        : terminalId,
+        "timeZone"          : tz,
+        "token"             : "",
+        "userCountryCode"   : userCountry,
+        "traceId"           : generateTraceId()
+    ]
+    // bizToken + regionChange are only present on cross-region retry — pyvesync's
+    // model uses __post_serialize__ to strip them when null. We mirror that by
+    // conditionally inserting.
+    if (bizToken) body["bizToken"] = bizToken
+    if (regionChange) body["regionChange"] = regionChange
+
+    // Auth endpoint: see comment in getAuthorizationCode() for the rationale on
+    // pre-serializing the body to a String + neutralising the Expect header.
+    String bodyJson = new groovy.json.JsonBuilder(body).toString()
+    Map params = [
+        uri               : "https://${getApiHost()}/user/api/accountManage/v1/loginByAuthorizeCode4Vesync",
+        contentType       : "application/json",
+        requestContentType: "application/json",
+        body              : bodyJson,
+        headers           : [
+            "Content-Type": "application/json; charset=UTF-8",
+            "Expect"      : ""
+        ]
+    ]
+
+    logDebug "exchangeAuthCode: ${params.uri} (retryDepth=${retryDepth}${regionChange ? ', regionChange=lastRegion' : ''})"
+    if (settings?.verboseDebug) {
+        // Dump request body for VeSync auth-shape diagnostics. authorizeCode +
+        // bizToken are transient one-time auth credentials and are excluded from
+        // the dump; sanitize() further redacts email/token/accountID/terminalId
+        // at log time.
+        Set<String> auth_credential_keys = ["authorizeCode", "bizToken"]
+        logDebug "exchangeAuthCode request body: ${body.findAll { !(it.key in auth_credential_keys) }}"
+    }
+
+    // outcome / retryAuthCode / retryBizToken are written from inside the httpPost
+    // closure. Groovy closures CAN reassign enclosing non-final locals (verified
+    // against the legacy login() pattern which used `def result = false` the same
+    // way for years in production).
+    // outcome encoding: 0 = failure path taken, 1 = success path taken,
+    // 2 = cross-region retry needed.
+    def outcome = 0
+    def retryAuthCode = null
+    def retryBizToken = null
+
+    httpPost(params) { resp ->
+        if (!checkHttpResponse("exchangeAuthCode", resp)) {
+            return
+        }
+        def innerCode = resp.data?.code
+
+        // Cross-region: re-call stage 2 with bizToken + regionChange="lastRegion".
+        // pyvesync's CROSS_REGION_ERROR is -11260022.
+        if (innerCode == CROSS_REGION_ERROR_CODE) {
+            def newBizToken = resp.data?.result?.bizToken
+            def newCountry  = resp.data?.result?.countryCode
+            // Empty-string-vs-null discrimination: VeSync has been observed to
+            // return countryCode:"" with a populated bizToken. Treat empty/blank
+            // as "no corrective code supplied" — proceed with the retry using the
+            // CURRENT state.countryCode (it's bounded by MAX_CROSS_REGION_RETRIES,
+            // so the worst case is retry-exhaustion which itself surfaces a clear
+            // error). Emit a WARN so the failure mode is diagnosable in logs.
+            if (newCountry && !((newCountry as String).trim().isEmpty())) {
+                state.countryCode = newCountry
+            } else if (newBizToken) {
+                logWarn "exchangeAuthCode: cross-region response with no corrective countryCode; retrying with current country=${state.countryCode}"
+            }
+            if (newBizToken) {
+                logDebug "exchangeAuthCode: cross-region — retrying with corrected country=${newCountry ?: '(unset)'}"
+                retryAuthCode = authCode
+                retryBizToken = newBizToken
+                outcome = 2  // signal retry needed
+            } else {
+                logError "exchangeAuthCode: cross-region (code=${innerCode}) but no bizToken in response — cannot retry"
+                recordError("exchangeAuthCode: cross-region without bizToken (code=${innerCode})",
+                            [site:"exchangeAuthCode"])
+            }
+            return
+        }
+
+        if (innerCode != 0) {
+            def innerMsg = resp.data?.msg
+            logError "exchangeAuthCode: VeSync inner code=${innerCode} msg='${innerMsg}'"
+            recordError("exchangeAuthCode: inner failure code=${innerCode} msg='${innerMsg}'",
+                        [site:"exchangeAuthCode"])
+            return
+        }
+
+        // Inner code == 0 — extract token + accountID + countryCode.
+        // Defensive against missing fields: HTTP 200 + code=0 + no result.token
+        // must surface a diagnostic ERROR rather than NPE on the token dereference.
+        String token        = resp.data?.result?.token
+        String acctId       = resp.data?.result?.accountID
+        String countryCode  = resp.data?.result?.countryCode
+        if (token) {
+            // Atomic-pair commit: write state.token AND state.accountID together.
+            // Prefer Stage 2's accountID if present (Stage 2 is the authoritative
+            // response for the bearer-token session); fall back to Stage 1's
+            // buffered accountID otherwise. At least one is guaranteed non-null
+            // because Stage 1 already validated respAcctId before returning.
+            state.token     = token
+            state.accountID = acctId ?: stage1AccountID
+            if (countryCode) state.countryCode = countryCode
+            logInfo "Logged in to VeSync (${getDeviceRegion()} region: ${getApiHost()})"
+            outcome = 1
+        } else {
+            logError "exchangeAuthCode: HTTP 200 + code=0 but missing token — VeSync API shape changed?"
+            recordError("exchangeAuthCode: missing token in result (HTTP 200 + code=0)",
+                        [site:"exchangeAuthCode"])
+        }
+    }
+
+    // Recurse OUTSIDE the httpPost closure to keep call-stack depth flat
+    // and avoid any closure-local-binding surprises in the sandbox.
+    if (outcome == 2) {
+        return exchangeAuthCode(retryAuthCode, stage1AccountID, retryBizToken, "lastRegion", retryDepth + 1)
+    }
+    return outcome == 1
+}
+
+/**
+ * Return the persisted terminalId for this install, generating one if needed.
+ * Matches pyvesync's shape: "2" + 32 hex chars (total 33 chars). Persisted in
+ * state.terminalId so it survives reboots / driver code updates.
+ *
+ * The terminalId is treated as a stable per-install identifier by VeSync's
+ * backend; regenerating on every login would look suspicious.
+ */
+private String ensureTerminalId() {
+    if (!state.terminalId) {
+        String hex = UUID.randomUUID().toString().replaceAll("-", "")
+        state.terminalId = "2" + hex
+    }
+    return state.terminalId
+}
+
+/**
+ * Return the ISO country code to send as userCountryCode. Cached in
+ * state.countryCode after first derivation OR after a cross-region response
+ * corrects it. Defaults: US region → "US"; EU region → "DE" (Germany — a
+ * reasonable EU starting point; cross-region retry corrects if wrong).
+ */
+private String deriveUserCountryCode() {
+    if (!state.countryCode) {
+        state.countryCode = (settings?.deviceRegion == "EU") ? "DE" : "US"
+    }
+    return state.countryCode
+}
+
+/**
+ * Build a per-call traceId for the v2.7 auth flow.
+ *
+ * pyvesync 3.4.1 builds traceId as a dynamic value per request (auth.py) using
+ * the Python slice ``TERMINAL_ID[-5:-1]`` — that slice is exclusive on the stop
+ * index, so it yields exactly FOUR characters (the 5th-from-last through the
+ * 2nd-from-last; the trailing char is dropped). The Groovy equivalent is the
+ * inclusive range ``tid[-5..-2]``, which yields the same four characters.
+ *
+ * Our format: "APP" + 4-char terminalId suffix + epoch seconds + "-" + 5-digit seq.
+ * The terminalId-suffix component ties traces back to this Hubitat install if
+ * VeSync ever surfaces them in a support ticket.
+ *
+ * Guard: ``tid.length() >= 5`` is required so the ``[-5..-2]`` slice has a valid
+ * lower index. terminalId is always 33 chars in normal operation (per
+ * ensureTerminalId), so the guard only matters in test environments where a
+ * caller injects a stub state.terminalId; in that case we fall back to the raw
+ * value (whatever it is) and produce a usable-but-non-canonical traceId.
+ *
+ * NOTE: only the new auth endpoints use this dynamic traceId. getDevices() and
+ * sendBypassRequest() continue to use the static DEFAULT_TRACE_ID — those calls
+ * have not been observed to require dynamic values, and changing them is
+ * out-of-scope for v2.7.
+ */
+private String generateTraceId() {
+    String tid = state.terminalId ?: ensureTerminalId()
+    String suffix = tid.length() >= 5 ? tid[-5..-2] : tid
+    Long epoch = (now() / 1000) as Long
+    // Wrap at 99999 so the %05d format string always renders exactly 5 digits.
+    // An unbounded increment would overflow Integer.MAX_VALUE after ~2.1B logins
+    // (theoretically reachable on a long-lived install) AND would silently produce
+    // >5-digit suffixes well before that. The modulo + 1 form keeps the counter
+    // in the [1..99999] inclusive range so the resulting traceId stays 5 digits.
+    Integer prev = ((state.traceSeq ?: 0) as Integer) % 99999
+    Integer seq = prev + 1
+    state.traceSeq = seq
+    return "APP${suffix}${epoch}-${String.format('%05d', seq)}"
 }
 
 def Boolean updateDevices()
@@ -1374,7 +1808,7 @@ private Boolean getDevices() {
                 "timeZone": getLocationTimeZone(),
                 "acceptLanguage": "en",
                 "appVersion": APP_VERSION,
-                "phoneBrand": "SM N9005",
+                "phoneBrand": PHONE_BRAND,
                 "phoneOS": "Android",
                 "traceId": DEFAULT_TRACE_ID,
                 "accountID": state.accountID,
@@ -2268,7 +2702,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
             "timeZone": getLocationTimeZone(),
             "acceptLanguage": "en",
             "appVersion": APP_VERSION,
-            "phoneBrand": "SM N9005",
+            "phoneBrand": PHONE_BRAND,
             "phoneOS": "Android",
             "traceId": DEFAULT_TRACE_ID,
             "cid": equipment.getDataValue("cid"),
@@ -2438,14 +2872,23 @@ def forceReinitialize() {
   try {
     logDebug "forceReinitialize()"
     logInfo "Force reinitializing VeSync integration"
-    
-    // Clear state and reschedule
+
+    // state.clear() wipes EVERY state key — including state.terminalId, which
+    // is a per-install stable identifier that pyvesync's design (and VeSync's
+    // anti-abuse heuristics) expect to stay consistent across the lifetime
+    // of an install. Regenerating it on every forceReinitialize() makes this
+    // Hubitat install look like a different device on each pair-cycle, which
+    // increases the chance of being flagged as suspicious / rate-limited.
+    //
+    // Preserve the terminalId across the clear: stash, clear, restore.
+    String preservedTid = state.terminalId
     state.clear()
+    if (preservedTid) state.terminalId = preservedTid
     unschedule()
-    
+
     // Wait longer for connection pool
     pauseExecution(5000)
-    
+
     initialize()
   }
   catch (Exception e) {
@@ -2587,7 +3030,8 @@ def logWarn(msg) {
 }
 
 // Auto-sanitize log messages so debug captures shared by users in community threads / GitHub
-// issues don't leak the VeSync account email, accountID, auth token, or hashed password.
+// issues don't leak the VeSync account email, accountID, auth token, hashed password, or
+// the v2.7 per-install terminalId.
 // Strips the values from any log message (regardless of which call site emitted it).
 private String sanitize(msg) {
     if (msg == null) return msg
@@ -2599,6 +3043,13 @@ private String sanitize(msg) {
     // Known sensitive values from current state (exact-match replace, fast and safe)
     if (state?.accountID) s = s.replace(state.accountID as String, '[accountID-redacted]')
     if (state?.token)     s = s.replace(state.token as String,     '[token-redacted]')
+
+    // v2.7 per-install identifier — captureDiagnosticsFor truncates this for privacy
+    // before user-visible display; log lines that incidentally carry the full value
+    // (e.g. a verboseDebug dump of an auth request body) get the same treatment here
+    // so the two privacy paths are consistent. The terminalId is non-credential but
+    // is per-install-stable, so redacting it removes a cross-report correlation key.
+    if (state?.terminalId) s = s.replace(state.terminalId as String, '[terminalId-redacted]')
 
     // Password should never be in logs but defensively redact if a settings dump leaks it
     if (settings?.password) s = s.replace(settings.password as String, '[password-redacted]')
@@ -2644,6 +3095,19 @@ Map captureDiagnosticsFor(String childDni) {
         // configModule from state.deviceList — the bypassV2 routing key
         def devList = state.deviceList as Map ?: [:]
         ctx["configModule"] = devList[childDni] ?: "(unknown)"
+
+        // v2.7 auth-flow state (parent-global, surfaced per-child for diagnostic visibility):
+        //   countryCode — non-sensitive 2-letter ISO code (US/DE/etc.); surfaced verbatim
+        //   terminalId  — 33-char per-install stable fingerprint; truncated to first 8 chars
+        //                 to retain "is this consistent across reports" diagnostic value
+        //                 without leaking the full per-install identifier
+        ctx["countryCode"] = state.countryCode ?: "(not set)"
+        if (state.terminalId) {
+            String tid = state.terminalId as String
+            ctx["terminalId"] = tid.take(8) + "…"
+        } else {
+            ctx["terminalId"] = "(not set)"
+        }
 
         // Last error from the ring buffer for this DNI
         def history = (state.errorHistory as Map ?: [:])

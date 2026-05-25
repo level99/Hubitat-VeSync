@@ -553,10 +553,10 @@ The maintainer (or a contributor) iterates on the driver based on your evidence.
 
 ### What's still gappy in shipped previews
 
-`ROADMAP.md` tracks known gaps in preview drivers — typically setter payloads we couldn't determine without hardware. Examples from v2.1:
+`ROADMAP.md` tracks known gaps in preview drivers — typically setter payloads we couldn't determine without hardware. Current examples:
 
-- Pedestal Fan: `setDisplay` / `setMute` / `setChildLock` are read-only attributes (no setter exposed; pyvesync has none, no community evidence)
-- Pedestal Fan: timer support omitted
+- Tower Fan write-path commands (`setChildLock`, `setSmartCleaningReminder`, `setMute`, `setDisplay`): not yet ported from the live-verified Pedestal Fan setters — awaiting a Tower Fan owner to volunteer for live-verification
+- Pedestal Fan timer support: API capture refuted; `setTimer` / `cancelTimer` payloads guessed-wrong (see ROADMAP "Refuted attempts")
 - Tower Fan `displayingType`: read-only diagnostic of unknown semantics
 
 If you have hardware and can capture the missing payloads (e.g., toggle the field in the Levoit mobile app while watching a packet capture, or build a debug driver that probes payload variants and inspects whether the next status poll reflects the change), that's a fast path to a setter implementation. File a new-device-support issue with the captures and the maintainer or another contributor can write the driver method.

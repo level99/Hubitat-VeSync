@@ -307,6 +307,37 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // buildDiagnosticBlock: v2.7 auth-flow state surfaced via parentCtx
+    // (terminalId truncated; countryCode verbatim; both rendered as generic
+    //  parentCtx rows by the existing each-loop)
+    // -------------------------------------------------------------------------
+    def "buildDiagnosticBlock renders v2.7 auth-flow fields when present in parentCtx"() {
+        given:
+        seedDni("AUTH_FLOW_DNI")
+
+        when: "parentCtx carries countryCode (verbatim) and terminalId (truncated)"
+        String block = driver.buildDiagnosticBlock([
+            driverName:    "Levoit Vital 200S",
+            driverVersion: "2.7",
+            modelCode:     "LAP-V201S-AUSA",
+            hubFw:         "2.5.0.126",
+            dni:           "AUTH_FLOW_DNI",
+            parentCtx:     [
+                "configModule": "WiFiBTOnboardingNotify_AirPurifier_LAP-V201S-AUSA",
+                "countryCode":  "US",
+                "terminalId":   "2a1b3c4d…"
+            ],
+            isParent:      false,
+            errors:        [],
+            attrSnap:      [:]
+        ])
+
+        then: "both auth-flow rows render in the parent-state section"
+        block.contains("| countryCode | `US` |")
+        block.contains("| terminalId | `2a1b3c4d…` |")
+    }
+
+    // -------------------------------------------------------------------------
     // buildIssueUrl: title fallback logic
     // -------------------------------------------------------------------------
 

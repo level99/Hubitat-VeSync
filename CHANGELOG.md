@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7] - 2026-05-24
+
+### Added
+
+- **Verbose API logging now covers the auth path.** When the parent driver's `verboseDebug` preference is enabled, the login request and response bodies are also dumped to debug logs (in addition to device-control API call dumps already covered by this setting). Auth-material credentials and tokens are filtered from the dump before logging; email addresses and account identifiers are additionally redacted at log time. Useful when diagnosing login failures against a VeSync API change.
+
+### Changed
+
+- **VeSync login flow updated to match the current mobile app.** The previous single-step login endpoint is rejected by VeSync's backend for some newly-created accounts, causing "Login failed - check credentials" even when credentials are correct. The driver now uses the same authentication method as the VeSync mobile app. Cross-region rejections are auto-corrected. Backwards-compatible — existing installs with valid cached tokens are unaffected; only fresh logins, token-expiry re-auth, and "Force Reinitialize" exercise the new path.
+- **Heads-up — existing users will receive a "new device login" email from VeSync on first poll after this update.** The new auth flow identifies the integration as "pyvesync" — the device name that appears in the VeSync email — and uses a stable per-install fingerprint introduced in this release. To VeSync's anti-abuse system this looks like a fresh login from a new device, so the standard account-activity notification email is triggered. The login is legitimate — no action required. Future re-pairs from the same Hubitat hub won't re-trigger the email (the fingerprint is now preserved across re-pair cycles).
+
+### Fixed
+
+- **"Login failed" with a misleading "different VeSync region" symptom is now actionable.** When a VeSync account is registered in a different region than the driver's deviceRegion preference selects, the login attempt now logs a clear ERROR telling you to toggle the deviceRegion preference between US and EU and try again. Previously the only signal was a generic numeric error code.
+- **"Force Reinitialize" no longer regenerates the per-install identifier.** A per-install identifier that tells VeSync "this is the same Hubitat hub" is now preserved across "Force Reinitialize" runs — it's generated once at install time and never reset. This reduces the chance of VeSync rate-limit or suspicious-activity flags after repeated re-pair cycles. No user-visible behavior change unless you have been hitting VeSync rate limits after repeated reinit runs.
+- **Login failure now never leaves a phantom partial-credential state on disk.** If the login process is interrupted mid-way by a brief network error (rare), the driver previously saved a partial credential to persistent state, which could cause confusing behavior on the next attempt. Credentials are now always saved atomically — either the full login succeeds and both are stored, or neither is, ensuring a clean retry.
+- **Cross-region login with an empty corrective country code now emits a visible WARN.** When VeSync indicates your account is in a different region but does not specify which region (an edge case in VeSync's cross-region handoff), the driver previously cycled through its retry limit and surfaced a confusing exhaustion error. It now logs a WARN identifying the empty-country case and retries with the current country code, surfacing the underlying API behavior so the failure mode is diagnosable from logs.
+
 ## [2.6] - 2026-05-22
 
 ### Fixed

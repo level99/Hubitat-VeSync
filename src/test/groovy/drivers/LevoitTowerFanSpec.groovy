@@ -1066,6 +1066,50 @@ class LevoitTowerFanSpec extends HubitatSpec {
         testLog.errors.isEmpty()
     }
 
+    def "cycleSpeed() with state.fanLevel unset (null) falls back to 1 (advances to 2)"() {
+        // Regression guard for the Elvis fallback in LevoitFanLib.cycleSpeed():
+        //   Integer cur = state.fanLevel as Integer ?: 1
+        // On a fresh install where state.fanLevel was never written, cur defaults to 1 and next
+        // becomes 2. Without the ?: fallback, (null + 1) would throw NPE that the Hubitat sandbox
+        // silently swallows, leaving the device at level 0 with no log signal.
+        given: "device is on and state.fanLevel was never set (null)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.cycleSpeed()
+
+        then: "setLevel was sent with manualSpeedLevel=2 (1 default + 1)"
+        def levelReq = testParent.allRequests.find { it.method == "setLevel" }
+        levelReq != null
+        levelReq.data.manualSpeedLevel == 2
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
+    def "cycleSpeed() with state.fanLevel = 12 (max) wraps to 1"() {
+        // Regression guard for the wraparound branch in LevoitFanLib.cycleSpeed():
+        //   Integer next = (cur >= 12) ? 1 : (cur + 1)
+        // At level 12 (max for V2 fans), advancing wraps back to 1 rather than overflowing past
+        // the device's physical 1-12 range.
+        given: "device is on at max level (12)"
+        settings.descriptionTextEnable = false
+        state.fanLevel = 12
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.cycleSpeed()
+
+        then: "setLevel was sent with manualSpeedLevel=1 (wrap)"
+        def levelReq = testParent.allRequests.find { it.method == "setLevel" }
+        levelReq != null
+        levelReq.data.manualSpeedLevel == 1
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
     // -------------------------------------------------------------------------
     // C3 idempotency gate: setOscillation suppresses redundant API calls
     // Both-ways: remove the C3 gate in setOscillation → these specs FAIL; restore → PASS.

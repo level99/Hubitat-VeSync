@@ -127,7 +127,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.2] Levoit OasisMist 450S/600S US+EU (LUH-O451S-WUS/-WUSR/-WEU, LUH-O601S-WUS/-KUS) — mist 1-9, warm mist 0-3, target humidity 40-80%, auto/sleep/manual modes, auto-stop, display; LUH-O451S-WEU (EU) adds RGB nightlight (ColorControl); canonical pyvesync payloads; RGB based on pyvesync PR #502 (preview)",
-        version: "2.6",
+        version: "2.7",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -381,42 +381,15 @@ def setWarmMistLevel(level){
 //     minHumidityLevel:40).
 //   Refutation: community user confirms values 30-39 are accepted by their device -->
 //     restore the 30 floor (or make it model-code conditional).
-// setTargetHumidity payload: {target_humidity: N} -- note snake_case (not camelCase)
-def setHumidity(percent){
-    logDebug "setHumidity(${percent})"
-    if (!requireNotNull(percent, "setHumidity")) return
-    Integer p = safeIntArg(percent, 0)
-    if (p <= 0) { logWarn "setHumidity called with ${p} -- 0% is not a valid target humidity; ignoring"; return }
-    p = Math.max(40, Math.min(80, p))
-    def resp = hubBypass("setTargetHumidity", [target_humidity: p], "setTargetHumidity(${p})")
-    if (httpOk(resp)) {
-        state.targetHumidity = p
-        device.sendEvent(name:"targetHumidity", value: p)
-        logInfo "Target humidity: ${p}%"
-    } else {
-        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
-    }
-}
+// Shared body via lib; delegator preserves method-presence semantics.
+// Floor=40 override per the firmware floor documented above.
+def setHumidity(percent) { doSetTargetHumidity(percent, 40, 80) }
 
 // ---------- Display ----------
-// setDisplay payload: {state: bool} -- NOT {screenSwitch: int} (Superior 6000S)
+// setDisplay payload: {state: bool} -- NOT {screenSwitch: int} (Superior 6000S).
+// Shared body via lib; delegator preserves method-presence semantics.
 // BP24: NO-ON — configures a device preference; powering on is not implied.
-def setDisplay(onOff){
-    logDebug "setDisplay(${onOff})"
-    if (!requireNonEmptyEnum(onOff, "setDisplay")) return false
-    String val = (onOff as String).trim().toLowerCase()
-    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
-    if (device.currentValue("displayOn") == canon) return true
-    Boolean v = (canon == "on")
-    def resp = hubBypass("setDisplay", [state: v], "setDisplay(${canon})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"displayOn", value: canon)
-        logInfo "Display: ${canon}"
-    } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
-    }
-}
+def setDisplay(onOff) { doSetDisplayStateSwitch(onOff) }
 
 // ---------- RGB nightlight (LUH-O451S-WEU only -- runtime-gated) ----------
 // All commands in this section check state.deviceType == "LUH-O451S-WEU" at runtime.
@@ -682,24 +655,10 @@ def probeNightLight(){
 }
 
 // ---------- Auto-stop ----------
-// setAutomaticStop payload: {enabled: bool} -- NOT {autoStopSwitch: int} (Superior 6000S)
+// setAutomaticStop payload: {enabled: bool} -- NOT {autoStopSwitch: int} (Superior 6000S).
+// Shared body via lib; delegator preserves method-presence semantics.
 // BP24: NO-ON — configures a device preference; powering on is not implied.
-def setAutoStop(onOff){
-    logDebug "setAutoStop(${onOff})"
-    if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
-    String val = (onOff as String).trim().toLowerCase()
-    // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
-    if (device.currentValue("autoStopEnabled") == canon) return true
-    Boolean v = (canon == "on")
-    def resp = hubBypass("setAutomaticStop", [enabled: v], "setAutomaticStop(${canon})")
-    if (httpOk(resp)) {
-        device.sendEvent(name:"autoStopEnabled", value: canon)
-        logInfo "Auto-stop: ${canon}"
-    } else {
-        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
-    }
-}
+def setAutoStop(onOff) { doSetAutoStopEnabled(onOff) }
 
 
 // ---------- applyStatus ----------

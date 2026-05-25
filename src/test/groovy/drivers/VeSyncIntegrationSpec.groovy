@@ -199,6 +199,25 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         !testLog.infos.any { it.contains("mySecretToken999") }
     }
 
+    def "sanitize() redacts state.terminalId from log messages (v2.7 — consistent with captureDiagnostics truncation)"() {
+        // The captureDiagnosticsFor path truncates terminalId to first 8 chars + ellipsis
+        // for privacy. sanitize() must do equivalent redaction in log lines so the two
+        // privacy paths stay consistent — a verboseDebug dump of an auth-request body
+        // would otherwise leak the full 33-char identifier into shared log captures.
+        given:
+        settings.descriptionTextEnable = true
+        state.terminalId = "2abcdef0123456789abcdef0123456789"
+
+        when:
+        driver.logInfo("Outgoing auth body: terminalId=2abcdef0123456789abcdef0123456789 traceId=APP00001")
+
+        then: "the log line contains the redaction marker"
+        testLog.infos.any { it.contains("[terminalId-redacted]") }
+
+        and: "the full terminalId does NOT appear verbatim anywhere in the log line"
+        !testLog.infos.any { it.contains("2abcdef0123456789abcdef0123456789") }
+    }
+
     def "sanitize() redacts settings.password from log messages"() {
         given:
         settings.descriptionTextEnable = true
@@ -992,6 +1011,28 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         then: "the request body carries deviceRegion 'US' (Elvis fallback -- no preference set)"
         capturedBypassBodies.size() == 1
         capturedBypassBodies[0].deviceRegion == "US"
+    }
+
+    def "sendBypassRequest body carries current APP_VERSION (regression guard against silent appVersion drift)"() {
+        // Pins the contract that the bypassV2 request body carries the current APP_VERSION
+        // constant. VeSync periodically tightens server-side appVersion validation; a silent
+        // bump (or a drift across call-sites) is a class of regression worth pinning. The
+        // canonical value lives in @Field static final APP_VERSION in the parent driver --
+        // if that constant changes, this spec must be updated in the same diff.
+        given: "a valid auth state and the bypassV2 capture wiring (from wireSandbox())"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.token     = "tok-appv"
+        state.accountID = "acc-appv"
+        def equip = new TestDevice()
+        capturedBypassBodies.clear()
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "the request body carries the current APP_VERSION value"
+        capturedBypassBodies.size() == 1
+        capturedBypassBodies[0].appVersion == "5.6.60"
     }
 
     // -------------------------------------------------------------------------
@@ -4297,5 +4338,893 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         and: "state.token is NOT set"
         !state.containsKey('token') || state.token == null
+    }
+
+    // -------------------------------------------------------------------------
+    // v2.7 two-stage OAuth login (pyvesync 3.4.1 parity)
+    //
+    // Migration from single-step POST /cloud/v1/user/login to:
+    //   Stage 1: POST /globalPlatform/api/accountAuth/v1/authByPWDOrOTM
+    //            -> returns authorizeCode + accountID
+    //   Stage 2: POST /user/api/accountManage/v1/loginByAuthorizeCode4Vesync
+    //            -> returns token + accountID + countryCode
+    //
+    // Cross-region rejection (-11260022) triggers a single Stage 2 retry with
+    // bizToken + regionChange="lastRegion", bounded by MAX_CROSS_REGION_RETRIES.
+    //
+    // The httpPost mock routes by URL path so each spec can simulate
+    // independent stage 1 and stage 2 responses without ordering pitfalls.
+    // -------------------------------------------------------------------------
+
+    /** Stage 1 success response — returns authorizeCode + accountID. */
+    private Expando authByPWDStage1Success(String authCode = "auth-code-XYZ", String acctId = "acct-V27") {
+        Expando r = new Expando()
+        r.status = 200
+        r.data = [
+            traceId: "test-trace-stage1",
+            code:    0,
+            msg:     "OK",
+            result:  [accountID: acctId, authorizeCode: authCode]
+        ]
+        return r
+    }
+
+    /** Stage 2 success response — returns token + accountID + countryCode. */
+    private Expando exchangeStage2Success(String token = "bearer-token-XYZ", String acctId = "acct-V27", String country = "US") {
+        Expando r = new Expando()
+        r.status = 200
+        r.data = [
+            traceId: "test-trace-stage2",
+            code:    0,
+            msg:     "OK",
+            result:  [
+                accountID:   acctId,
+                acceptLanguage: "en",
+                countryCode: country,
+                token:       token,
+                bizToken:    "",
+                currentRegion: ""
+            ]
+        ]
+        return r
+    }
+
+    /** Stage 2 cross-region rejection — returns -11260022 + corrected country + bizToken. */
+    private Expando exchangeStage2CrossRegion(String bizToken = "biz-retry-token", String correctedCountry = "DE") {
+        Expando r = new Expando()
+        r.status = 200
+        r.data = [
+            traceId: "test-trace-stage2-xregion",
+            code:    -11260022,
+            msg:     "Cross region error",
+            result:  [countryCode: correctedCountry, currentRegion: "EU", bizToken: bizToken]
+        ]
+        return r
+    }
+
+    private void wireV27Credentials() {
+        driver.metaClass.getEmail    = { -> "test@example.com" }
+        driver.metaClass.getPassword = { -> "p4ssw0rd" }
+    }
+
+    def "V27.1 happy path — Stage 1 + Stage 2 both succeed; state.token + accountID populated"() {
+        given: "fresh-install state and valid credentials"
+        wireV27Credentials()
+        settings.deviceRegion = "US"
+        List<String> urisCalled = []
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            urisCalled << (params.uri as String)
+            if (params.uri.contains("/globalPlatform/api/accountAuth/v1/authByPWDOrOTM")) {
+                callback.call(authByPWDStage1Success("authcode-happy", "acct-happy"))
+            } else if (params.uri.contains("/user/api/accountManage/v1/loginByAuthorizeCode4Vesync")) {
+                callback.call(exchangeStage2Success("token-happy", "acct-happy", "US"))
+            } else {
+                throw new RuntimeException("V27.1: unexpected URI: ${params.uri}")
+            }
+        }
+
+        when:
+        Boolean ok = driver.login()
+
+        then: "login returns true"
+        ok == true
+
+        and: "Stage 1 endpoint was hit then Stage 2 endpoint"
+        urisCalled.size() == 2
+        urisCalled[0].endsWith("/globalPlatform/api/accountAuth/v1/authByPWDOrOTM")
+        urisCalled[1].endsWith("/user/api/accountManage/v1/loginByAuthorizeCode4Vesync")
+
+        and: "state.token + state.accountID + state.countryCode are populated"
+        state.token == "token-happy"
+        state.accountID == "acct-happy"
+        state.countryCode == "US"
+
+        and: "an INFO log surfaces successful login"
+        testLog.infos.any { it.contains("Logged in to VeSync") }
+    }
+
+    def "V27.2 Stage 1 invalid credentials (inner code != 0) — no token set, ERROR with code+msg"() {
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "US"
+        int stage1Calls = 0
+        int stage2Calls = 0
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                stage1Calls++
+                Expando r = new Expando()
+                r.status = 200
+                r.data = [traceId: "t", code: -11201000, msg: "Invalid password", result: null]
+                callback.call(r)
+            } else {
+                stage2Calls++
+                throw new RuntimeException("V27.2: Stage 2 must not be called when Stage 1 fails")
+            }
+        }
+
+        when:
+        Boolean ok = driver.login()
+
+        then: "login returns false"
+        ok == false
+
+        and: "Stage 1 hit, Stage 2 never hit"
+        stage1Calls == 1
+        stage2Calls == 0
+
+        and: "ERROR log carries the inner code and msg"
+        testLog.errors.any {
+            it.contains("inner code=-11201000") && it.contains("msg='Invalid password'")
+        }
+
+        and: "state.token is NOT set"
+        !state.containsKey('token') || state.token == null
+    }
+
+    def "V27.2b Stage 1 -11260022 emits actionable region-mismatch ERROR (not generic inner-code message)"() {
+        // Pins the Stage 1 cross-region branch: per pyvesync, -11260022 CAN appear
+        // at Stage 1. Stage 1 has no bizToken handshake, so there is no automatic
+        // recovery — the user must toggle the deviceRegion preference. The ERROR
+        // message must tell them that explicitly, not fall through to the generic
+        // "VeSync inner code=" path (which gives the same info but is harder for
+        // a non-expert to act on).
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "US"
+        int stage1Calls = 0
+        int stage2Calls = 0
+        state.errorHistory = [:]
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                stage1Calls++
+                Expando r = new Expando()
+                r.status = 200
+                // Cross-region rejection AT Stage 1 (no result.bizToken — Stage 1 doesn't issue one)
+                r.data = [traceId: "t", code: -11260022, msg: "Cross region error", result: [countryCode: "FR"]]
+                callback.call(r)
+            } else {
+                stage2Calls++
+                throw new RuntimeException("V27.2b: Stage 2 must not be called when Stage 1 hits cross-region")
+            }
+        }
+
+        when:
+        Boolean ok = driver.login()
+
+        then: "login returns false"
+        ok == false
+
+        and: "Stage 1 hit exactly once; Stage 2 never hit"
+        stage1Calls == 1
+        stage2Calls == 0
+
+        and: "ERROR log identifies cross-region AND tells the user to toggle deviceRegion"
+        // Quoted verbatim from the source's logError in getAuthorizationCode:
+        //   "getAuthorizationCode: Account is registered in a different VeSync region. Toggle the deviceRegion preference between US and EU and try again."
+        // Both substrings must appear together — a generic "code=-11260022" log would not satisfy
+        // this assertion, which is exactly the discrimination we want.
+        testLog.errors.any {
+            it.contains("different VeSync region") &&
+            it.contains("Toggle the deviceRegion preference")
+        }
+
+        and: "the ERROR is NOT just the generic inner-code message"
+        // The Stage 1 cross-region branch returns BEFORE reaching the generic
+        // "VeSync inner code=" path; assert that path was NOT taken.
+        !testLog.errors.any { it.contains("VeSync inner code=-11260022") }
+
+        and: "recordError was invoked with site='getAuthorizationCode' AND the cross-region tag"
+        Map history = state.errorHistory as Map
+        def slot = (history["test-device-001"] ?: []) as List
+        slot.any { entry ->
+            (entry.ctx as Map)?.site == "getAuthorizationCode" &&
+            (entry.msg as String).contains("cross-region at Stage 1")
+        }
+
+        and: "state.token NOT set"
+        !state.containsKey('token') || state.token == null
+    }
+
+    def "V27.3 Stage 2 cross-region (-11260022) — retried with bizToken + regionChange; success populates state"() {
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "EU"
+        int stage1Calls = 0
+        int stage2Calls = 0
+        List<Map> stage2Bodies = []
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                stage1Calls++
+                callback.call(authByPWDStage1Success("authcode-xregion", "acct-xregion"))
+            } else if (params.uri.contains("loginByAuthorizeCode4Vesync")) {
+                stage2Calls++
+                // Auth-flow body is pre-serialized to a JSON String (commit 058ac2f workaround
+                // for Apache HttpClient chunked-encoding rejection on VeSync's OAuth endpoint);
+                // parse it back to a Map for the body-shape assertion.
+                Map parsedBody = new groovy.json.JsonSlurper().parseText(params.body as String) as Map
+                stage2Bodies << parsedBody
+                if (stage2Calls == 1) {
+                    // First stage 2: cross-region rejection
+                    callback.call(exchangeStage2CrossRegion("biz-retry-001", "FR"))
+                } else {
+                    // Second stage 2: success after retry
+                    callback.call(exchangeStage2Success("token-xregion", "acct-xregion", "FR"))
+                }
+            }
+        }
+
+        when:
+        Boolean ok = driver.login()
+
+        then: "login eventually returns true"
+        ok == true
+
+        and: "Stage 1 hit once, Stage 2 hit twice (initial + cross-region retry)"
+        stage1Calls == 1
+        stage2Calls == 2
+
+        and: "the first Stage 2 call did NOT include bizToken / regionChange"
+        !stage2Bodies[0].containsKey("bizToken")
+        !stage2Bodies[0].containsKey("regionChange")
+
+        and: "the retry Stage 2 call DID include bizToken + regionChange=lastRegion"
+        stage2Bodies[1].bizToken == "biz-retry-001"
+        stage2Bodies[1].regionChange == "lastRegion"
+
+        and: "state.countryCode is corrected from response"
+        state.countryCode == "FR"
+
+        and: "state.token is populated from the retry's response"
+        state.token == "token-xregion"
+        state.accountID == "acct-xregion"
+    }
+
+    def "V27.3b Stage 2 cross-region with empty countryCode emits WARN but still retries"() {
+        // Pins the empty-countryCode-vs-null discrimination in the cross-region branch.
+        // VeSync has been observed to return countryCode:"" with a populated bizToken;
+        // a naive `if (newCountry)` truthy check would skip the country update and
+        // silently cycle to retry-depth exhaustion. Fix: detect empty/blank explicitly,
+        // emit a WARN (so the failure mode is diagnosable from logs), and proceed
+        // with the retry using the CURRENT state.countryCode — retry is bounded by
+        // MAX_CROSS_REGION_RETRIES so worst case is the exhaustion path (which itself
+        // surfaces a clear ERROR).
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "EU"
+        // Pre-seed state.countryCode so the WARN message carries a meaningful current value.
+        state.countryCode = "DE"
+        int stage1Calls = 0
+        int stage2Calls = 0
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                stage1Calls++
+                callback.call(authByPWDStage1Success("empty-cc-authcode", "empty-cc-acct"))
+            } else if (params.uri.contains("loginByAuthorizeCode4Vesync")) {
+                stage2Calls++
+                if (stage2Calls == 1) {
+                    // First stage 2: cross-region rejection with empty countryCode + populated bizToken
+                    Expando r = new Expando()
+                    r.status = 200
+                    r.data = [traceId: "t", code: -11260022, msg: "Cross region error",
+                              result: [countryCode: "", bizToken: "biz-retry-empty"]]
+                    callback.call(r)
+                } else {
+                    // Second stage 2: success after retry
+                    callback.call(exchangeStage2Success("token-empty-cc", "empty-cc-acct", "DE"))
+                }
+            }
+        }
+
+        when:
+        Boolean ok = driver.login()
+
+        then: "login eventually returns true (retry succeeded)"
+        ok == true
+
+        and: "Stage 1 hit once, Stage 2 hit twice (initial + cross-region retry)"
+        stage1Calls == 1
+        stage2Calls == 2
+
+        and: "a WARN was emitted identifying the empty-corrective-countryCode case"
+        // Quoted verbatim from the source:
+        //   "exchangeAuthCode: cross-region response with no corrective countryCode; retrying with current country=DE"
+        testLog.warns.any {
+            it.contains("cross-region response with no corrective countryCode") &&
+            it.contains("retrying with current country=DE")
+        }
+
+        and: "state.countryCode was NOT overwritten with the empty string"
+        state.countryCode == "DE"
+
+        and: "state.token is populated from the retry's response"
+        state.token == "token-empty-cc"
+    }
+
+    def "V27.4 Stage 2 invalid authCode (inner code != 0, not cross-region) — no token, ERROR logged"() {
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "US"
+        int stage2Calls = 0
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                callback.call(authByPWDStage1Success())
+            } else {
+                stage2Calls++
+                Expando r = new Expando()
+                r.status = 200
+                r.data = [traceId: "t", code: -11260011, msg: "Invalid authorization code", result: null]
+                callback.call(r)
+            }
+        }
+
+        when:
+        Boolean ok = driver.login()
+
+        then: "login returns false"
+        ok == false
+
+        and: "Stage 2 was hit exactly once (no cross-region retry, code != -11260022)"
+        stage2Calls == 1
+
+        and: "ERROR log carries the inner code and msg"
+        testLog.errors.any {
+            it.contains("inner code=-11260011") && it.contains("msg='Invalid authorization code'")
+        }
+
+        and: "state.token NOT set"
+        !state.containsKey('token') || state.token == null
+    }
+
+    def "V27.4b Stage 1 success + Stage 2 failure leaves state.accountID unpopulated (atomic-pair invariant)"() {
+        // Pins the atomic-pair invariant for state.token + state.accountID:
+        // pre-v2.7 single-step login wrote both fields together. The two-stage
+        // refactor must preserve "both set together, or both absent" — a Stage 1
+        // success followed by Stage 2 failure must NOT leave a stale state.accountID
+        // on disk (it would be a phantom credential the BP13 re-auth path could
+        // misinterpret as a valid prior session).
+        //
+        // This spec mocks Stage 1 returning a valid result (authorizeCode + accountID)
+        // and Stage 2 returning an inner-code failure. After login() returns false,
+        // assert that BOTH state.token AND state.accountID are absent — Stage 1's
+        // accountID was buffered, not committed.
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "US"
+        // Defensive: ensure no stale state.accountID from any prior spec leaks in.
+        state.remove('accountID')
+        state.remove('token')
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                // Stage 1: success — would historically have written state.accountID = "stage1-acct"
+                Expando r = new Expando()
+                r.status = 200
+                r.data = [traceId: "t1", code: 0, msg: "OK",
+                          result: [accountID: "stage1-acct", authorizeCode: "stage1-authcode"]]
+                callback.call(r)
+            } else {
+                // Stage 2: failure — atomic-pair invariant says state.accountID MUST NOT persist
+                Expando r = new Expando()
+                r.status = 200
+                r.data = [traceId: "t2", code: -11201000, msg: "Invalid password", result: null]
+                callback.call(r)
+            }
+        }
+
+        when:
+        Boolean ok = driver.login()
+
+        then: "login returns false (Stage 2 failed)"
+        ok == false
+
+        and: "state.token is NOT set"
+        !state.containsKey('token') || state.token == null
+
+        and: "state.accountID is also NOT set (atomic-pair invariant — Stage 1 buffered, did not commit)"
+        // This is the load-bearing assertion: without the refactor that defers
+        // the state.accountID write to exchangeAuthCode, state.accountID would
+        // be "stage1-acct" here even though state.token is null.
+        !state.containsKey('accountID') || state.accountID == null
+
+        and: "Stage 2's failure produced the diagnostic ERROR (sanity check — Stage 2 was actually reached)"
+        testLog.errors.any {
+            it.contains("inner code=-11201000") && it.contains("msg='Invalid password'")
+        }
+    }
+
+    def "V27.5 Stage 1 HTTP 200 + code=0 but missing authorizeCode — ERROR logged, no NPE"() {
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "US"
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                Expando r = new Expando()
+                r.status = 200
+                // code=0 (success) but result is missing the required authorizeCode field
+                r.data = [traceId: "t", code: 0, msg: "OK", result: [accountID: "acct-x"]]
+                callback.call(r)
+            } else {
+                throw new RuntimeException("V27.5: Stage 2 must not be called when Stage 1 result is malformed")
+            }
+        }
+
+        when:
+        Boolean ok = driver.login()
+
+        then: "login returns false cleanly (no NPE)"
+        noExceptionThrown()
+        ok == false
+
+        and: "ERROR log identifies the missing result fields"
+        // Quoted verbatim from the source's logError line in getAuthorizationCode:
+        //   "getAuthorizationCode: HTTP 200 + code=0 but missing authorizeCode/accountID — VeSync API shape changed?"
+        // Narrowed from a disjunction (was: || "missing result fields") to a single
+        // substring so the logError text itself is pinned — the alternate phrase
+        // belongs to the recordError ctx (which writes to state.errorHistory, not
+        // the log layer), so the disjunction was satisfied by an unrelated path.
+        testLog.errors.any {
+            it.contains("missing authorizeCode/accountID")
+        }
+
+        and: "state.token NOT set"
+        !state.containsKey('token') || state.token == null
+    }
+
+    def "V27.6 Stage 2 HTTP 200 + code=0 but missing token — ERROR logged, no NPE"() {
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "US"
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                callback.call(authByPWDStage1Success("authcode-s6", "acct-s6"))
+            } else {
+                Expando r = new Expando()
+                r.status = 200
+                // code=0 but result has no token
+                r.data = [traceId: "t", code: 0, msg: "OK", result: [accountID: "acct-s6", countryCode: "US"]]
+                callback.call(r)
+            }
+        }
+
+        when:
+        Boolean ok = driver.login()
+
+        then: "login returns false cleanly"
+        noExceptionThrown()
+        ok == false
+
+        and: "ERROR log identifies the missing token"
+        // Pinned to the exact logError text from exchangeAuthCode:
+        //   "exchangeAuthCode: HTTP 200 + code=0 but missing token — VeSync API shape changed?"
+        // Use a slightly longer literal substring (not just "missing token") so a
+        // refactor that drops the qualifier "HTTP 200 + code=0 but" — which is the
+        // load-bearing diagnostic context — would fail this assertion.
+        testLog.errors.any { it.contains("HTTP 200 + code=0 but missing token") }
+
+        and: "state.token NOT set"
+        !state.containsKey('token') || state.token == null
+    }
+
+    def "V27.7 terminalId persistence — same value across two consecutive logins"() {
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "US"
+        List<String> terminalIdsSeen = []
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            // Auth-flow body is pre-serialized to a JSON String (commit 058ac2f workaround
+            // for Apache HttpClient chunked-encoding rejection on VeSync's OAuth endpoint);
+            // parse it back to a Map to read the terminalId field.
+            Map parsedBody = new groovy.json.JsonSlurper().parseText(params.body as String) as Map
+            // Capture the terminalId from EVERY request body
+            terminalIdsSeen << (parsedBody.terminalId as String)
+            if (params.uri.contains("authByPWDOrOTM")) {
+                callback.call(authByPWDStage1Success())
+            } else {
+                callback.call(exchangeStage2Success())
+            }
+        }
+
+        when: "we log in twice"
+        driver.login()
+        String terminalIdAfterFirstLogin = state.terminalId as String
+        driver.login()
+
+        then: "state.terminalId was set after first login and matches the on-the-wire value"
+        terminalIdAfterFirstLogin != null
+        terminalIdAfterFirstLogin.startsWith("2")
+        terminalIdAfterFirstLogin.length() == 33
+
+        and: "all four httpPost calls carried the same terminalId (stable per install)"
+        terminalIdsSeen.size() == 4
+        terminalIdsSeen.unique() == [terminalIdAfterFirstLogin]
+
+        and: "state.terminalId did not change between the two logins"
+        state.terminalId == terminalIdAfterFirstLogin
+    }
+
+    def "V27.7b terminalId is preserved across forceReinitialize() despite state.clear()"() {
+        // Pins the W2 fix: forceReinitialize() must NOT regenerate state.terminalId.
+        // The per-install identifier is treated as a stable fingerprint by VeSync's
+        // anti-abuse heuristics; a fresh value on every full-reinit cycle would make
+        // this Hubitat install look like a new device each time.
+        //
+        // The spec isolates the state.clear+restore step by mocking initialize() to
+        // a no-op (the login mechanics are exercised by other V27 specs); we care
+        // only that the terminalId survives the state wipe.
+        given: "state.terminalId is set + a few other state fields would be wiped by state.clear()"
+        String originalTid = "2abcdef0123456789abcdef0123456789"
+        state.terminalId = originalTid
+        state.token = "old-token"
+        state.accountID = "old-acct"
+        state.countryCode = "US"
+        state.deviceList = ["some-cid": "some-configmodule"]
+
+        and: "initialize() is mocked so we test ONLY the state-preservation step"
+        driver.metaClass.initialize = { -> /* no-op — login/getDevices/poll-schedule out of scope */ }
+
+        when:
+        driver.forceReinitialize()
+
+        then: "no exception thrown"
+        noExceptionThrown()
+
+        and: "state.terminalId is preserved EXACTLY (not regenerated)"
+        state.terminalId == originalTid
+
+        and: "other state fields WERE cleared (state.clear() ran as expected)"
+        // Sanity check that we are actually exercising the state.clear() path and
+        // not bypassing it via the early-exception catch block.
+        !state.containsKey('token')     || state.token     == null
+        !state.containsKey('accountID') || state.accountID == null
+        !state.containsKey('countryCode') || state.countryCode == null
+        !state.containsKey('deviceList') || state.deviceList == null
+    }
+
+    def "V27.8 stage-1 request body carries the v2.7 fields (authProtocolType, clientType, appID, terminalId)"() {
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "US"
+        Map stage1Body = null
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                // Auth-flow body is pre-serialized to a JSON String (commit 058ac2f workaround
+                // for Apache HttpClient chunked-encoding rejection on VeSync's OAuth endpoint);
+                // parse it back to a Map for the body-shape assertion.
+                stage1Body = new groovy.json.JsonSlurper().parseText(params.body as String) as Map
+                callback.call(authByPWDStage1Success())
+            } else {
+                callback.call(exchangeStage2Success())
+            }
+        }
+
+        when:
+        driver.login()
+
+        then: "stage 1 body carries the new auth-flow fields"
+        stage1Body != null
+        stage1Body.method == "authByPWDOrOTM"
+        stage1Body.authProtocolType == "generic"
+        stage1Body.clientType == "vesyncApp"
+        stage1Body.appID == "eldodkfj"
+        stage1Body.sourceAppID == "eldodkfj"
+        stage1Body.clientVersion == "VeSync 5.6.60"
+        stage1Body.terminalId != null
+        (stage1Body.terminalId as String).startsWith("2")
+        (stage1Body.terminalId as String).length() == 33
+        stage1Body.userCountryCode == "US"
+        stage1Body.osInfo == "Android"
+        // clientInfo is the pyvesync identity string (PHONE_BRAND constant) — the parent
+        // driver intentionally fingerprints as pyvesync for VeSync anti-abuse compatibility.
+        stage1Body.clientInfo == "pyvesync"
+
+        and: "stage 1 traceId is dynamic (NOT the legacy DEFAULT_TRACE_ID 1634265366)"
+        stage1Body.traceId != null
+        stage1Body.traceId != "1634265366"
+        (stage1Body.traceId as String).startsWith("APP")
+
+        and: "traceId's terminalId-suffix is 4 chars (pyvesync TERMINAL_ID[-5:-1] parity, NOT 5 chars)"
+        // pyvesync uses the Python slice TERMINAL_ID[-5:-1] which is exclusive-stop
+        // and yields exactly 4 chars (the 5th-from-last through the 2nd-from-last).
+        // Groovy's inclusive range [-5..-1] would yield 5 chars (wrong); the correct
+        // Groovy equivalent is [-5..-2]. The traceId format is "APP<4chars><10-digit-epoch>-<5-digit-seq>".
+        //
+        // The load-bearing discriminator is the dash POSITION, not a substring check:
+        //   Correct tree (4-char suffix): dash at index 3+4+10 = 17
+        //   Buggy tree   (5-char suffix): dash at index 3+5+10 = 18
+        // The startsWith() assertion remains as a positive sanity check on the suffix,
+        // but is NOT load-bearing on its own — a buggy 5-char output's first 4 chars
+        // are identical to the correct 4-char slice, so startsWith() alone is vacuous
+        // against the off-by-one. The dash-position assertion catches it cleanly.
+        String expectedSuffix = (state.terminalId as String)[-5..-2]
+        expectedSuffix.length() == 4
+        (stage1Body.traceId as String).startsWith("APP${expectedSuffix}")
+        (stage1Body.traceId as String).indexOf('-') == 17
+    }
+
+    def "V27.8b auth flow httpPost suppresses 'Expect: 100-continue' header via explicit empty Expect value"() {
+        // Pins the workaround for Apache HttpClient 4.x's auto-injected 'Expect: 100-continue'
+        // header on the VeSync OAuth endpoints. VeSync's auth middleware returns inner code
+        // -11102086 'internal error' for requests carrying Expect: 100-continue. The fix is
+        // to set Expect: "" explicitly in the headers map (alongside the body pre-serialization
+        // that suppresses chunked encoding). A regression that drops or alters this header
+        // value re-introduces silent auth failures on accounts that exercise the new flow.
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "US"
+        Map stage1Params = null
+        Map stage2Params = null
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                stage1Params = params.clone() as Map
+                callback.call(authByPWDStage1Success())
+            } else if (params.uri.contains("loginByAuthorizeCode4Vesync")) {
+                stage2Params = params.clone() as Map
+                callback.call(exchangeStage2Success())
+            }
+        }
+
+        when:
+        driver.login()
+
+        then: "Stage 1 (authByPWDOrOTM) httpPost carries an explicit empty Expect header"
+        stage1Params != null
+        stage1Params.headers != null
+        stage1Params.headers.containsKey("Expect")
+        stage1Params.headers["Expect"] == ""
+
+        and: "Stage 2 (loginByAuthorizeCode4Vesync) httpPost carries an explicit empty Expect header"
+        stage2Params != null
+        stage2Params.headers != null
+        stage2Params.headers.containsKey("Expect")
+        stage2Params.headers["Expect"] == ""
+    }
+
+    def "V27.9 Stage 2 cross-region thrash exhausts MAX_CROSS_REGION_RETRIES — returns false with ERROR + recordError, no stack overflow"() {
+        // Pins the contract of the retry-depth safety guard in exchangeAuthCode():
+        //   if (retryDepth >= MAX_CROSS_REGION_RETRIES) -> logError + recordError + return false
+        // A future refactor that removes the guard (or off-by-ones the comparison
+        // operator from >= to > / inverts the condition) would re-introduce unbounded
+        // recursion and stack overflow risk on a misbehaving cross-region response.
+        // This spec asserts the load-bearing properties of the guard.
+        //
+        // MAX_CROSS_REGION_RETRIES = 2. Call flow when Stage 2 always returns
+        // cross-region (signature: exchangeAuthCode(authCode, stage1AccountID, bizToken, regionChange, retryDepth)):
+        //   exchangeAuthCode(authCode, acct, null, null, 0)             retryDepth=0 (< 2): httpPost #1 fires, recurses
+        //   exchangeAuthCode(authCode, acct, biz,  "lastRegion", 1)     retryDepth=1 (< 2): httpPost #2 fires, recurses
+        //   exchangeAuthCode(authCode, acct, biz,  "lastRegion", 2)     retryDepth=2 (== 2): guard trips, NO httpPost,
+        //                                                                                    logError + recordError, returns false
+        // -> Stage 2 httpPost call count = 2 (NOT 3).
+        given:
+        wireV27Credentials()
+        settings.deviceRegion = "EU"
+        int stage1Calls = 0
+        int stage2Calls = 0
+        state.errorHistory = [:]
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                stage1Calls++
+                callback.call(authByPWDStage1Success("thrash-authcode", "thrash-acct"))
+            } else if (params.uri.contains("loginByAuthorizeCode4Vesync")) {
+                stage2Calls++
+                // ALWAYS return cross-region — server keeps insisting on a different region
+                callback.call(exchangeStage2CrossRegion("thrash-biz-${stage2Calls}", "FR"))
+            }
+        }
+
+        when:
+        Boolean loginResult = driver.login()
+
+        then: "login returns false (guard tripped, no stack overflow)"
+        noExceptionThrown()
+        loginResult == false
+
+        and: "Stage 1 fired exactly once"
+        stage1Calls == 1
+
+        and: "Stage 2 httpPost fired exactly MAX_CROSS_REGION_RETRIES=2 times"
+        // First call (retryDepth=0) + first retry (retryDepth=1). The third
+        // invocation of exchangeAuthCode (retryDepth=2) hits the guard BEFORE
+        // making an httpPost — so the count is 2, not 3.
+        stage2Calls == 2
+
+        and: "ERROR log identifies the retry-depth exhaustion"
+        // Quoted verbatim from the source:
+        //   "exchangeAuthCode: cross-region retry depth ${retryDepth} exceeded MAX_CROSS_REGION_RETRIES=${MAX_CROSS_REGION_RETRIES} — giving up"
+        // At guard-trip time retryDepth=2 and MAX_CROSS_REGION_RETRIES=2.
+        testLog.errors.any {
+            it.contains("cross-region retry depth") &&
+            it.contains("exceeded MAX_CROSS_REGION_RETRIES") &&
+            it.contains("giving up")
+        }
+
+        and: "recordError was invoked with site='exchangeAuthCode'"
+        // recordError writes to state.errorHistory[<dni>]; the harness's TestDevice
+        // has deviceNetworkId = "test-device-001".
+        Map history = state.errorHistory as Map
+        history != null
+        history["test-device-001"] != null
+        def slot = history["test-device-001"] as List
+        slot.any { entry ->
+            (entry.ctx as Map)?.site == "exchangeAuthCode" &&
+            (entry.msg as String).contains("cross-region retry depth exceeded")
+        }
+
+        and: "state.token is NOT set (guard correctly refused to declare success)"
+        !state.containsKey('token') || state.token == null
+
+        and: "state.countryCode reflects the LAST corrective value seen during the retry cycle"
+        // Pre-skill QA NIT 4 design choice: on retry-depth exhaustion, the
+        // intentional behavior is to LEAVE state.countryCode at the last
+        // corrected value (the "best guess" picked up from the cross-region
+        // response chain) — not to roll back to the original wrong value.
+        // The thrash mock supplies "FR" in every cross-region response, so the
+        // last corrective value seen before the guard tripped is "FR".
+        // A future refactor that clears state.countryCode on exhaustion (e.g.
+        // "reset to a clean slate") would fail this assertion, surfacing the
+        // unintentional design drift.
+        state.countryCode == "FR"
+    }
+
+    def "V27.10 generateTraceId modulo-99999 clamps state.traceSeq at the wraparound boundary"() {
+        // Regression guard for the traceSeq modulo clamp in generateTraceId():
+        //   Integer prev = ((state.traceSeq ?: 0) as Integer) % 99999
+        //   Integer seq  = prev + 1
+        // Without the modulo, a long-lived install would eventually overflow
+        // Integer.MAX_VALUE on its ~2.1B-th traceId. The clamp keeps state.traceSeq in
+        // [1..99999] inclusive so the 5-digit suffix in the generated traceId stays
+        // well-formed across the wraparound boundary.
+        //
+        // login() calls generateTraceId twice (Stage 1 + Stage 2). Starting from
+        // state.traceSeq = 99999, the two successive values must be 1 then 2 — proving
+        // both that the modulo wrapped 99999 to 0 (then 0+1=1) and that the next call
+        // wrapped 1 to 1 (then 1+1=2).
+        given: "state.traceSeq sits at the modulo boundary (99999)"
+        wireV27Credentials()
+        state.traceSeq = 99999
+        List<String> traceIdsSeen = []
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            // Auth-flow body is pre-serialized to a JSON String (commit 058ac2f workaround
+            // for Apache HttpClient chunked-encoding rejection on VeSync's OAuth endpoint);
+            // parse it back to a Map to read the traceId field.
+            Map parsedBody = new groovy.json.JsonSlurper().parseText(params.body as String) as Map
+            traceIdsSeen << (parsedBody.traceId as String)
+            if (params.uri.contains("authByPWDOrOTM")) {
+                callback.call(authByPWDStage1Success())
+            } else {
+                callback.call(exchangeStage2Success())
+            }
+        }
+
+        when: "login is called (Stage 1 + Stage 2 each generate one traceId)"
+        driver.login()
+
+        then: "state.traceSeq wrapped to a small value (NOT 100001 or higher)"
+        state.traceSeq == 2
+
+        and: "Stage 1 traceId ends with the wrapped 5-digit suffix -00001"
+        traceIdsSeen.size() == 2
+        traceIdsSeen[0].endsWith("-00001")
+
+        and: "Stage 2 traceId increments by 1 (still in the 5-digit range)"
+        traceIdsSeen[1].endsWith("-00002")
+    }
+
+    def "V27.11 Stage 2 response without accountID falls back to stage1 accountID (W1 atomic-pair invariant)"() {
+        // Regression guard for the acctId fallback branch in exchangeAuthCode():
+        //   state.accountID = acctId ?: stage1AccountID
+        // Stage 2's response normally echoes the same accountID that Stage 1 returned,
+        // but if Stage 2 ever omits the field (server-side anomaly), this fork commits
+        // the buffered stage1AccountID value so the atomic-pair invariant (state.token
+        // and state.accountID are both set or both absent) holds. Without the fallback,
+        // state.accountID would be null and the first device-list poll would silently
+        // fail authorization.
+        given:
+        wireV27Credentials()
+
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            if (params.uri.contains("authByPWDOrOTM")) {
+                callback.call(authByPWDStage1Success("auth-fallback", "acct-from-stage1"))
+            } else {
+                // Stage 2 response: token + countryCode present, accountID field OMITTED
+                Expando r = new Expando()
+                r.status = 200
+                r.data = [
+                    traceId: "test-trace-stage2-no-acctid",
+                    code:    0,
+                    msg:     "OK",
+                    result:  [
+                        // NO accountID field — server returned an anomalous shape
+                        acceptLanguage: "en",
+                        countryCode: "US",
+                        token:       "bearer-fallback",
+                        bizToken:    "",
+                        currentRegion: ""
+                    ]
+                ]
+                callback.call(r)
+            }
+        }
+
+        when:
+        driver.login()
+
+        then: "state.token is set from Stage 2's response"
+        state.token == "bearer-fallback"
+
+        and: "state.accountID falls back to the value Stage 1 buffered (NOT null)"
+        state.accountID == "acct-from-stage1"
+
+        and: "no error logged — graceful fallback path"
+        testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // captureDiagnosticsFor() — privacy-relevant truncation of state.terminalId
+    //
+    // The library renderer in LevoitDiagnosticsLib only displays the values
+    // captureDiagnosticsFor returns; the truncation contract itself is
+    // implemented in the parent driver's captureDiagnosticsFor() method. These
+    // specs pin the contract directly so a future refactor that drops the
+    // truncation (or expands it from 8 to 33 chars, leaking the full identifier)
+    // is caught at the unit-test layer.
+    // -------------------------------------------------------------------------
+
+    def "captureDiagnosticsFor truncates state.terminalId to first 8 chars + ellipsis"() {
+        given: "state.terminalId is set to a full 33-char identifier"
+        state.terminalId = "2abcdef0123456789abcdef0123456789"
+
+        when:
+        Map ctx = driver.captureDiagnosticsFor("any-dni")
+
+        then: "the returned terminalId is truncated to exactly first 8 chars + Unicode ellipsis"
+        // Exact-equals (not contains) so a future change from .take(8) to
+        // .take(33) (full leak) or to .take(4) (over-truncation) both fail.
+        ctx.terminalId == "2abcdef0…"
+        // Length sanity: 8 visible chars + 1 ellipsis = 9.
+        (ctx.terminalId as String).length() == 9
+    }
+
+    def "captureDiagnosticsFor returns '(not set)' for terminalId when state.terminalId is null"() {
+        given: "state.terminalId is not set (fresh install or pre-v2.7 state)"
+        // Explicitly clear in case prior specs left it set.
+        state.remove('terminalId')
+
+        when:
+        Map ctx = driver.captureDiagnosticsFor("any-dni")
+
+        then: "the returned terminalId falls back to the documented sentinel"
+        ctx.terminalId == "(not set)"
     }
 }

@@ -113,7 +113,7 @@ The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing
 | Attribute | Values | Description |
 | --- | --- | --- |
 | online | true, false | Offline detection state managed by the parent. Set to `false` after 3 consecutive failed self-heal attempts; returns to `true` on the next successful poll. Use in Rule Machine to detect chronically-offline devices and trigger an alert. |
-| diagnostics | markdown | One-click bug-report data. Click the **captureDiagnostics** command on the device page to populate. Contains driver version, device metadata, recent error history, and an attribute snapshot, plus a pre-filled GitHub issue link. Does not capture account credentials, token, or email. |
+| diagnostics | markdown | One-click bug-report data. Click the **captureDiagnostics** command on the device page to populate. Contains driver version, device metadata, recent error history, and an attribute snapshot, plus a pre-filled GitHub issue link. From v2.7 onwards the parent-state section also surfaces `countryCode` (your VeSync account's region — US, DE, FR, etc.) and a truncated `terminalId` (first 8 chars + ellipsis of the per-install identifier — useful for confirming "is this report from the same install as the last one?"). Does not capture account credentials, token, email, or the full terminalId. |
 
 ### Core 200S
 

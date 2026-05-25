@@ -18,6 +18,7 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
 | `ROADMAP.md` | Public roadmap — future releases, device-support tiers, speculative API questions, naming traps | Trigger phrases: *"roadmap"*, *"future release"*, *"next version"*, *"v2.X"* (where X is unshipped), *"upcoming"*, *"planned"*, *"any plans for &lt;model&gt;"*, *"what's coming"* |
 | `CHANGELOG.md` | Release-by-release change history (Keep-a-Changelog format) | Trigger phrases: *"changelog"*, *"release notes"*, *"what changed"*, *"what shipped in v2.X"* |
 | `docs/migration-from-niklas-upstream.md` | Step-by-step migration guide for users coming from the original NiklasGustafsson/Hubitat upstream | Trigger phrases: *"migration"*, *"upgrade from upstream"*, *"moving from Niklas"*, *"v1 to v2"*, *"existing devices break after install"* |
+| `docs/oauth-flow.md` | Internal-debugging reference for the v2.7+ two-stage OAuth2 login flow (pyvesync parity). Constants/state reference, fresh-install walkthrough, cross-region handling, symptom-to-root-cause troubleshooting table, diagnostic recipes for verboseDebug dumps, HTTP-layer notes (Apache HttpClient chunked + Expect:100-continue workaround). Developer/maintainer-facing only. | Trigger phrases: *"OAuth"*, *"OAuth2"*, *"two-stage login"*, *"auth flow"*, *"authentication flow"*, *"login flow"*, *"VeSync login"*, *"VeSync auth"*, *"terminalId"*, *"authorizeCode"*, *"bizToken"*, *"BP27"*, *"appVersion is too low"*, *"new device login email"*, *"app version is too low"*, *"-11012022"*, *"-11102086"*, *"-11260022"*, *"-11001000"*, *"-11201000"*, *"Stage 1"* / *"Stage 2"*, *"Apache HttpClient"* / *"chunked encoding"* / *"Expect: 100-continue"*, *"cross-region"* (login). |
 | `CODE_OF_CONDUCT.md` | Community-conduct standard (Contributor Covenant 2.1). | Trigger phrases: *"code of conduct"*, *"community rules"*, *"incident reporting"* |
 | `levoitManifest.json` | HPM package manifest | Trigger phrases: *"HPM"*, *"package manifest"*, *"manifest"*, *"Hubitat Package Manager"*, anything about install via HPM |
 | `.gemini/config.yaml` (when present) | Gemini Code Assist auto-review configuration for this repo | Trigger phrases: *"gemini"*, *"auto-review"*, *"PR review bot"* |
@@ -378,6 +379,12 @@ This is a **maintainer-only** scenario; end users never trip this because they o
 
 ---
 
+## Developer dispatch: model selection
+
+The `vesync-driver-developer` agent uses **Opus**, always. No per-dispatch override. v2.6 surfaced enough Sonnet-introduced bugs that the per-token savings were eaten by extra QA-iteration rounds downstream, but the load-bearing reason for "always Opus" is that mixing models breaks the `SendMessage` resume cache (cached agent state is model-tied; switching models forces a fresh dispatch with full re-briefing context, losing the 60-70% input-token savings the pipeline is designed around).
+
+---
+
 ## QA dispatch: model selection
 
 The `vesync-driver-qa` agent defaults to **Sonnet** as of v2.2 (was Opus through v2.1). Per the agent's own self-analysis after the v2.1 review cycles, Sonnet produces equivalent verdicts at ~5× lower per-token cost for most diffs in this codebase. Opus remains worth the cost for a specific subset.
@@ -593,6 +600,8 @@ The QA agent's definition contains a numbered catalog of bug patterns from the v
 
     **API-response-field coercions** in `applyStatus`/`update` are intentionally out of scope — the VeSync API contract guarantees numeric types for device-status fields, so only user-controlled command parameters are untrusted inputs; RULE37's `set*`/`doSet*`/`cycle*`-only method predicate enforces this boundary.
 
+27. VeSync API endpoint deprecated via appVersion gate — VeSync periodically tightens its server-side appVersion validation on legacy endpoints. The legacy `/cloud/v1/user/login` (method "login") was hit by this in early 2026 — fresh installs got `code: -11012022 msg: "app version is too low"` despite valid credentials. The symptom user-side is "Login failed - check credentials and retry" even with known-good credentials. The fix shape: align the parent driver's auth flow + `APP_VERSION` + endpoint URLs with pyvesync's current release (3.4.1+). pyvesync moves first when VeSync tightens; this fork follows. `Fix scope: per-instance` — each endpoint deprecation is its own surgery (the v2.7 release migrated `login()` to pyvesync 3.4.1's two-stage OAuth flow; future gate-tightenings on `getDevices`, `bypassV2`, or other endpoints would each need their own migration). Detection: look for inner code `-11012022` or similar version-range codes in error responses; cross-reference pyvesync's `src/pyvesync/const.py` `APP_VERSION` against this driver's `@Field static final String APP_VERSION` constant — drift of more than one minor version is a leading indicator. There is no automatic lint rule yet; the first recurrence of this pattern will trigger adding one (per the coverage-sub-agent calibration: a missing lint rule for a new pattern is WARN-not-FAIL on the first occurrence).
+
 When the developer or QA recognizes one of these patterns in a diff, name it explicitly: *"Bug Pattern #1 — missing 2-arg signature."* The other agent recognizes the name and applies the canonical fix.
 
 ---
@@ -630,7 +639,7 @@ See `CONTRIBUTING.md` "Fork remotes (`gh` CLI gotcha)" — this fork has two rem
 
 ## Cost optimization notes
 
-The 4-agent pipeline is shaped around model-cost asymmetry: dev/QA Sonnet (~5× cheaper than Opus per token), tester/ops Haiku (~19× cheaper than Opus). Resume via `SendMessage` on warm cache preserves ~60-70% of input tokens (driver source + prior findings stay cached). Tester/ops contain raw output (100KB Gradle / 60KB logs) into ~1KB structured summaries — main + dev + QA contexts stay lean. Cumulative effect: iterative driver work runs at **~30-40% of all-Opus-main-session cost**. See "QA dispatch: model selection" above for QA cost-attribution detail (48/29/15/3/5).
+The 4-agent pipeline is shaped around model-cost asymmetry: dev Opus (full per-token cost, fewer defects — see "Developer dispatch: model selection" above), QA Sonnet (~5× cheaper than Opus per token), tester/ops Haiku (~19× cheaper than Opus). Resume via `SendMessage` on warm cache preserves ~60-70% of input tokens. Tester/ops contain raw output into ~1KB structured summaries — main + dev + QA contexts stay lean. See "QA dispatch: model selection" above for QA cost-attribution detail (48/29/15/3/5).
 
 ---
 

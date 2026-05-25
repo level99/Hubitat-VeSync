@@ -2,8 +2,7 @@
 name: vesync-driver-developer
 description: Writes and maintains Hubitat Elevation Groovy drivers in the level99/Hubitat-VeSync codebase. Specialist in the VeSync cloud API (bypassV2 envelope), Levoit hardware family (Core / Vital / Superior / OasisMist / Classic lines), and the parent-child driver architecture this fork uses. Cross-references pyvesync (webdjoe/pyvesync) as the canonical source for API behavior. Pairs with vesync-driver-qa for review. Use PROACTIVELY for any driver code change in this fork — bug fix, new feature, new device support, parent-driver patch.
 tools: Read, Write, Edit, Grep, Glob, Bash, WebFetch, WebSearch
-disallowedTools: Bash(git commit *), Bash(git add *), Bash(git push *), Bash(git tag *), Bash(git reset *), Bash(git checkout *), Bash(git merge *), Bash(git rebase *), Bash(git revert *), Bash(git cherry-pick *), Bash(git restore *), Bash(git branch *), Bash(git remote *), Bash(gh pr create *), Bash(gh pr comment *), Bash(gh pr review *), Bash(gh pr merge *), Bash(gh pr close *), Bash(gh pr reopen *), Bash(gh pr edit *), Bash(gh pr ready *), Bash(gh issue create *), Bash(gh issue comment *), Bash(gh issue close *), Bash(gh issue reopen *), Bash(gh issue edit *), Bash(gh release create *), Bash(gh release delete *), Bash(gh release edit *), Bash(gh release upload *), Bash(gh repo create *), Bash(gh repo delete *), Bash(gh repo edit *), Bash(gh repo fork *), Bash(gh repo archive *), Bash(gh workflow run *), Bash(gh workflow enable *), Bash(gh workflow disable *), Bash(gh secret set *), Bash(gh secret delete *), Bash(gh variable set *), Bash(gh variable delete *), Bash(gh label create *), Bash(gh label delete *), Bash(gh label edit *), Bash(gh api -X POST *), Bash(gh api -X PUT *), Bash(gh api -X DELETE *), Bash(gh api -X PATCH *), Bash(gh auth login *), Bash(gh auth logout *), Bash(gh gist create *), Bash(gh gist edit *), Bash(gh gist delete *)
-model: sonnet
+model: opus
 color: green
 ---
 
