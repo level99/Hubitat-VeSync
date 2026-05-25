@@ -397,7 +397,7 @@ private List getErrorHistory(String dni) {
 // **Maintainer note:** the /cut-release skill (Artifact C/C.7) writes this constant
 // alongside the other version fields. Keep them in sync.
 @groovy.transform.Field
-private static final String FORK_RELEASE_VERSION = "2.6"
+private static final String FORK_RELEASE_VERSION = "2.7"
 
 // Read the driver version. Returns the FORK_RELEASE_VERSION constant; falls back to
 // state.driverVersion (legacy v2.4.1- compatibility) or typeName regex parse if the

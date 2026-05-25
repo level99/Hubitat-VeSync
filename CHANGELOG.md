@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7] - 2026-05-24
+
 ### Added
 
 - **Verbose API logging now covers the auth path.** When the parent driver's `verboseDebug` preference is enabled, the login request and response bodies are also dumped to debug logs (in addition to device-control API call dumps already covered by this setting). Auth-material credentials and tokens are filtered from the dump before logging; email addresses and account identifiers are additionally redacted at log time. Useful when diagnosing login failures against a VeSync API change.
