@@ -926,6 +926,9 @@ private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCal
  * those plus regionChange="lastRegion" (bounded by MAX_CROSS_REGION_RETRIES).
  *
  * Sources: pyvesync/auth.py, models/vesync_models.py, const.py.
+ *
+ * Detailed walkthrough + troubleshooting/symptom-to-root-cause table:
+ *   docs/oauth-flow.md
  */
 Boolean login() {
     return retryableHttp("login", 3) {
