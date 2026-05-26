@@ -140,21 +140,23 @@ git diff <base>..HEAD --stat
 
 Apply this matrix:
 
-| Diff content | Coverage | Platform | Protocol | Adversarial | Design | Operator |
-|---|---|---|---|---|---|---|
-| Pure docs (`*.md` only) | YES | maybe | NO | NO | maybe | YES |
-| New driver added | YES | YES | YES | YES | YES | YES |
-| Existing driver behavior changed | YES | YES | YES | YES | YES | YES |
-| New library / lib refactor | YES | YES | YES | YES | YES | maybe |
-| Spec-only changes (`*Spec.groovy`) | maybe | NO | NO | YES | maybe | NO |
-| Lint rule change (`tests/lint_rules/`) | YES | YES | NO | maybe | NO | NO |
-| Manifest-only change | NO | YES (version consistency) | NO | NO | NO | maybe |
-| `version:` bump only (cut-release) | NO | YES | NO | NO | NO | maybe |
-| CHANGELOG / release notes only | NO | NO | NO | NO | NO | YES |
-| CI/workflow change (`.github/`) | NO | YES | NO | NO | NO | NO |
-| Cut-release skill / agent definition | NO | NO | NO | NO | YES | maybe |
+| Diff content | Coverage | Platform | Protocol | Adversarial | Design | Operator | Codex |
+|---|---|---|---|---|---|---|---|
+| Pure docs (`*.md` only) | YES | maybe | NO | NO | maybe | YES | maybe |
+| New driver added | YES | YES | YES | YES | YES | YES | YES |
+| Existing driver behavior changed | YES | YES | YES | YES | YES | YES | YES |
+| New library / lib refactor | YES | YES | YES | YES | YES | maybe | YES |
+| Spec-only changes (`*Spec.groovy`) | maybe | NO | NO | YES | maybe | NO | maybe |
+| Lint rule change (`tests/lint_rules/`) | YES | YES | NO | maybe | NO | NO | maybe |
+| Manifest-only change | NO | YES (version consistency) | NO | NO | NO | maybe | NO |
+| `version:` bump only (cut-release) | NO | YES | NO | NO | NO | maybe | NO |
+| CHANGELOG / release notes only | NO | NO | NO | NO | NO | YES | maybe |
+| CI/workflow change (`.github/`) | NO | YES | NO | NO | NO | NO | NO |
+| Cut-release skill / agent definition | NO | NO | NO | NO | YES | maybe | YES |
 
-**Default for non-trivial PRs**: dispatch ALL 6. Only skip when the diff genuinely doesn't touch the sub-agent's scope.
+**Default for non-trivial PRs**: dispatch ALL 6 Claude sub-agents + Codex. Only skip when the diff genuinely doesn't touch the reviewer's scope.
+
+**Codex column rationale**: Codex is the OpenAI CLI second-opinion pass orchestrated by the `/vesync-final-review` skill (NOT a Claude sub-agent — the skill fires it as a parallel Bash call). It's strong at doc-vs-code drift (`maybe` for pure-docs and CHANGELOG-only), sibling-pattern incompleteness and stale narration (`YES` for new driver / behavior change / new library), vacuous regression-guards (`maybe` for spec-only), and over-zealous lint-rule enforcement (`maybe` for lint rule changes). Trivial mechanical changes (version bumps, manifest-only, CI) get `NO`. Your YES/NO/maybe verdict is advisory — the skill applies an additional `codex_available` gate (auth check) that can force NO regardless of your classification.
 
 ## Output format
 
@@ -184,7 +186,7 @@ Diff type: <pure docs | new driver | behavior change | new lib | spec-only | lin
 
 ## Dispatch plan
 
-| Sub-agent | Dispatch? | Reason if skipping |
+| Reviewer | Dispatch? | Reason if skipping |
 |---|---|---|
 | coverage | YES / NO | … |
 | platform | YES / NO | … |
@@ -192,12 +194,13 @@ Diff type: <pure docs | new driver | behavior change | new lib | spec-only | lin
 | adversarial | YES / NO | … |
 | design | YES / NO | … |
 | operator | YES / NO | … |
+| codex | YES / NO | … |
 
 ## Skill instruction
 
-- FAIL: report findings and STOP. Do not dispatch deep-audit sub-agents.
-- PASS: dispatch the YES sub-agents in parallel.
-- UNCERTAIN: dispatch all 6 + flag the uncertainty.
+- FAIL: report findings and STOP. Do not dispatch deep-audit reviewers.
+- PASS: dispatch the YES Claude sub-agents in parallel. The skill independently checks `codex login status` and forces the codex row to NO if Codex is unavailable, regardless of your verdict.
+- UNCERTAIN: dispatch all 6 Claude sub-agents + Codex + flag the uncertainty.
 ```
 
 ## Calibration
