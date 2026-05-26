@@ -206,8 +206,9 @@ def setSpeed(spd){
 //     independently confirmed this mapping.
 //   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/device_map.py
 //     (LTF-F422S FanModes.SLEEP: 'advancedSleep'); HA vesync cross-check bonus finding #d.
-//   Refutation: community user reports "advancedSleep" is rejected and "sleep" is the
-//     correct API literal --> remove the reverse-mapping and send "sleep" directly.
+//   If contradicted in the future: a community report showing "advancedSleep" is rejected
+//     and "sleep" is the correct literal would mean removing the reverse-mapping and
+//     sending "sleep" directly. No such report yet — current behavior follows pyvesync.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return

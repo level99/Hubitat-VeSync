@@ -281,8 +281,9 @@ def setSpeed(spd){
 //     the two fan method names; pyvesync device_map.py is the authoritative source.
 //   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/device_map.py
 //     (LPF-R432S entry, set_mode_method='setFanMode').
-//   Refutation: community user reports "setFanMode" is rejected and "setTowerFanMode" works
-//     --> swap to "setTowerFanMode" and update the header note.
+//   If contradicted in the future: a community report showing "setFanMode" is rejected
+//     and "setTowerFanMode" works would mean swapping methods and updating this header.
+//     No such report yet — current behavior follows pyvesync.
 //
 // CROSS-CHECK [pyvesync device_map.py LPF-R432S entry / HA cross-check finding #d]:
 //   Decision: "sleep" reverse-maps to/from API "advancedSleep" (same pattern as Tower Fan).
@@ -290,8 +291,9 @@ def setSpeed(spd){
 //     Tower Fan has "auto"; Pedestal Fan has "eco" -- do NOT confuse these.
 //   Source: pyvesync device_map.py LPF-R432S FanModes entries (eco, advancedSleep);
 //     HA vesync cross-check finding #d (advancedSleep reverse-mapping).
-//   Refutation for eco: community user confirms "auto" is accepted on their Pedestal Fan -->
-//     add "auto" as an alias or replace "eco" with "auto".
+//   If contradicted in the future (eco vs auto): a community report showing "auto" is
+//     accepted on the Pedestal Fan would mean adding "auto" as an alias or replacing
+//     "eco" with "auto". No such report yet — current behavior follows pyvesync.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return

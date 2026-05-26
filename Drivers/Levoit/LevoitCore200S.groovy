@@ -30,8 +30,8 @@ SOFTWARE.
 //                  setLevel's internal setSpeed() call. Added cases for "1"/"2"/"3" matching Core
 //                  300S canonical pattern; added integer-string remap in setSpeed() to emit named
 //                  speed attributes ("low"/"medium"/"high") not "1"/"2"/"3".
-//                  Fix: setLevel(null) NPE (BP18) — added Math.max/min/(val as Integer)?:0 coercion
-//                  before null-unsafe arithmetic comparisons.
+//                  Fix: setLevel(null) NPE (BP18) — null-guard via safeIntArg() (the
+//                  fork's null-safe coercion helper) before arithmetic comparisons.
 // 2026-05-03: v2.5  Migrated to LevoitCorePurifier shared library (Phase 2).
 //                  Removed 14 shared methods now provided by LevoitCorePurifierLib.
 //                  BP24-A fix: cycleSpeed() dead state.switch branch replaced with
