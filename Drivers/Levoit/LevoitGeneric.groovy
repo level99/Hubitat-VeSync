@@ -166,10 +166,9 @@ def setLevel(val){
     if (!requireNotNull(val, "setLevel")) return   // BP18: null-guard (blank RM slot; safeIntArg is null-safe but produces 0 with no log)
     logDebug "setLevel(${val})"
     // Intentional divergence from typed drivers: val==0 does NOT route to off() here.
-    // Typed purifier drivers (Core/Vital) treat level:0 as power-off (SwitchLevel convention).
-    // Typed humidifier drivers treat level:0 as zero-mist-level (not power-off).
-    // Since the Generic driver cannot know the device shape until captureDiagnostics runs,
-    // neither semantic can be inferred safely. Callers must use off() explicitly.
+    // The Generic driver cannot know the device shape until captureDiagnostics runs,
+    // so it cannot tell whether a caller intends power-off (SwitchLevel convention)
+    // or a passive level event for an unknown device. Callers must use off() explicitly.
     // Record the level; we can't know which speed/mist command applies until we know
     // the device shape, so just store and emit for rules/automations.
     device.sendEvent(name:"level", value: safeIntArg(val, 0))

@@ -160,8 +160,9 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    // BUG #212: Sup6000S V2 firmware rejects setVirtualLevel during sleep mode (inner code -1).
-    // BP24: NO-ON — preference setter; firmware-rejects during sleep mode (Sup6000S V2 constraint).
+    // BP24: SHOULD-ON — mist-level command; calls ensureSwitchOn() below (SwitchLevel convention).
+    // Sup6000S V2 firmware additionally rejects setVirtualLevel while in sleep mode (inner code -1),
+    // so this method short-circuits during sleep mode before any cloud write or ensureSwitchOn.
     if (device.currentValue("mode") == "sleep") {
         logInfo "Skipping setMistLevel during sleep mode (Sup6000S firmware rejects preference writes in sleep mode; change mode first)"
         return

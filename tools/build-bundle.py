@@ -8,6 +8,7 @@ Produces bundles/levoit_libraries.zip with the layout Hubitat expects:
   level99.LevoitCorePurifier.groovy     <- renamed copy of LevoitCorePurifierLib.groovy
   level99.LevoitVitalPurifier.groovy    <- renamed copy of LevoitVitalPurifierLib.groovy
   level99.LevoitHumidifier.groovy       <- renamed copy of LevoitHumidifierLib.groovy
+  level99.LevoitFan.groovy              <- renamed copy of LevoitFanLib.groovy
   install.txt                           <- bundle install manifest
   update.txt                            <- bundle update manifest (same content)
 
