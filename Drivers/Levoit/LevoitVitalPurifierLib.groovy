@@ -299,9 +299,10 @@ def setMode(mode) {
 
 def setPetMode(onOff) {
     if (!requireNonEmptyEnum(onOff, "setPetMode")) return
-    // BP25: normalize to lowercase before mode selection.
+    // BP25: normalize + canonicalize truthy variants ("true"/"1"/"yes") before mode selection.
     String v = (onOff as String).trim().toLowerCase()
-    setMode(v == "on" ? "pet" : "auto")
+    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    setMode(canon == "on" ? "pet" : "auto")
 }
 
 def setAutoPreference(pref) {

@@ -411,12 +411,14 @@ def setNightlightSwitch(value){
     logDebug "setNightlightSwitch(${value})"
     if (!requireNonEmptyEnum(value, "setNightlightSwitch")) return
     if (!isRgbVariant()) return
-    // BP25: normalize to lowercase so Rule Machine "ON"/"OFF" routes correctly.
-    // No C3 idempotency gate: setNightlightSwitch preserves the last-known color and
-    // brightness from state. Two calls with the same on/off value may differ in the
-    // color/brightness payload actually sent (e.g. state changed between calls), so
-    // comparing only the on/off attribute would incorrectly suppress legitimate writes.
-    String action = ((value as String).trim().toLowerCase() == "on") ? "on" : "off"
+    // BP25: normalize + canonicalize truthy variants ("true"/"1"/"yes") so Rule
+    // Machine bindings route correctly. No C3 idempotency gate: setNightlightSwitch
+    // preserves the last-known color and brightness from state. Two calls with the
+    // same on/off value may differ in the color/brightness payload actually sent
+    // (e.g. state changed between calls), so comparing only the on/off attribute
+    // would incorrectly suppress legitimate writes.
+    String v = (value as String).trim().toLowerCase()
+    String action = (v in ["on","true","1","yes"]) ? "on" : "off"
     // Keep last color + brightness when toggling -- pull from state or use defaults
     Integer brightness = (state.nightlightBrightness as Integer) ?: 100
     Integer hue = (state.nightlightHue as Integer) ?: 0          // degrees 0-360

@@ -312,8 +312,9 @@ def setDryingMode(onOff){
 def setNightlight(onOff, brightness = null, colorTemp = null){
     logDebug "setNightlight(${onOff}, ${brightness}, ${colorTemp})"
     if (!requireNonEmptyEnum(onOff, "setNightlight")) return
-    // BP25: normalize to lowercase before all comparisons.
-    String nl = (onOff as String).trim().toLowerCase()
+    // BP25: normalize + canonicalize truthy variants ("true"/"1"/"yes") before all comparisons.
+    String v = (onOff as String).trim().toLowerCase()
+    String nl = (v in ["on","true","1","yes"]) ? "on" : "off"
     Integer br   = (brightness  != null) ? Math.max(0, Math.min(100, safeIntArg(brightness, 0)))       : null   // BP26
     Integer ct   = (colorTemp   != null) ? Math.max(2000, Math.min(3500, safeIntArg(colorTemp, 3500))) : null   // BP26
     if (nl == "off") { br = 0; ct = ct ?: 3500 }

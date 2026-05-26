@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Rule Machine truthy-binding inputs (`"true"` / `"1"` / `"yes"`) on three on/off setters now route correctly.** The v2.6 BP25 sweep canonicalized 17+ setters but missed three: Vital line `setPetMode`, OasisMist 450S `setNightlightSwitch`, and Sprout Humidifier `setNightlight`. Calls from Rule Machine using hub-variable truthy values previously produced the opposite of the intended action — `setPetMode("true")` routed to auto mode (disabling pet mode) instead of enabling it; `setNightlightSwitch("true")` sent the off action payload; `setNightlight("true")` computed brightness as on-intent but sent the off switch payload. All three now apply the canonical truthy-coercion before branching.
+
 ### Internal
 
 - **`/vesync-final-review` ship-gate skill now includes the OpenAI Codex CLI as a 7th parallel reviewer alongside the 6 Claude sub-agents.** Codex runs as a skill-orchestrated `Bash` call (not a Claude sub-agent) and produces a different-model second-opinion pass on every full review. Calibrated against PR #13 (v2.6) pre-merge HEAD: Codex caught 4 real findings that 30 sweeps of the existing pipeline plus Gemini bot review had missed (1 latent NUL byte in an agent definition, 2 stale comments contradicting current code, 1 stale tooling docstring). If Codex CLI is not installed or not authenticated, the skill degrades gracefully to Claude-only fan-out. No user-visible driver behavior change.
