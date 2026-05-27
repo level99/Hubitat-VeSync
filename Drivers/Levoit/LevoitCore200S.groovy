@@ -340,13 +340,7 @@ def update(status, nightLight)
 {
     ensureDebugWatchdog()
     logDebug "update(status, nightLight)"
-    // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
+    seedPrefs()
 
     logDebug status
 

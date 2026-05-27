@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Internal
 
 - **`/vesync-final-review` ship-gate skill now includes the OpenAI Codex CLI as a 7th parallel reviewer alongside the 6 Claude sub-agents.** Codex runs as a skill-orchestrated `Bash` call (not a Claude sub-agent) and produces a different-model second-opinion pass on every full review. Calibrated against PR #13 (v2.6) pre-merge HEAD: Codex caught 4 real findings that 30 sweeps of the existing pipeline plus Gemini bot review had missed (1 latent NUL byte in an agent definition, 2 stale comments contradicting current code, 1 stale tooling docstring). If Codex CLI is not installed or not authenticated, the skill degrades gracefully to Claude-only fan-out. No user-visible driver behavior change.
+- **Under-the-hood: 21 child drivers consolidated to shared envelope-peel and pref-seed helpers in `LevoitChildBaseLib`.** ~260 lines of duplicated boilerplate replaced with helper calls; future fixes to either pattern apply uniformly to all affected drivers in one edit. Behavior is byte-equivalent except the debug-gated `applyStatus raw r ...` log line no longer reports envelope-peel depth.
 
 ## [2.7] - 2026-05-24
 

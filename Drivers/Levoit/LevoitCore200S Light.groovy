@@ -192,13 +192,7 @@ def update() {
 def update(status) {
     ensureDebugWatchdog()
     logDebug "update()"
-    // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
+    seedPrefs()
 
     def result = null  // declared here to avoid MissingPropertyException on return
     def mode = status.result.night_light
