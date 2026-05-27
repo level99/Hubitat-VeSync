@@ -194,7 +194,8 @@ class TestBP2HardcodedPurifierMethod:
 # ---------------------------------------------------------------------------
 
 class TestBP3EnvelopePeel:
-    GOOD = textwrap.dedent("""\
+    # must-not-catch: inline while-loop shape (status quo on most v2.8 drivers).
+    GOOD_INLINE = textwrap.dedent("""\
         def applyStatus(status) {
             def r = status?.result ?: [:]
             int peelGuard = 0
@@ -207,19 +208,39 @@ class TestBP3EnvelopePeel:
         }
     """)
 
+    # must-not-catch: helper-call shape (Task #140 Phase 2+ migration).
+    # Equivalent contract via peelEnvelope() from LevoitChildBaseLib.
+    GOOD_HELPER = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = peelEnvelope(status)
+            if (settings?.debugOutput) log.debug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
+        }
+    """)
+
+    # must-catch: neither inline loop NOR helper call — bug class still flagged.
     BAD = textwrap.dedent("""\
         def applyStatus(status) {
             def r = status?.result ?: [:]
-            // no peel loop
+            // no peel loop, no helper call
             def mode = r.workMode
         }
     """)
 
-    def test_good_passes(self):
-        findings = run_rule(check_bp3_envelope_peel, self.GOOD, "LevoitVital200S")
+    # Backward-compat alias so any out-of-class reference to GOOD keeps working.
+    GOOD = GOOD_INLINE
+
+    def test_good_inline_passes(self):
+        # Direction B (inline shape): rule accepts inline while-loop pattern.
+        findings = run_rule(check_bp3_envelope_peel, self.GOOD_INLINE, "LevoitVital200S")
+        assert findings == []
+
+    def test_good_helper_passes(self):
+        # Direction B (helper shape): rule accepts peelEnvelope() helper call.
+        findings = run_rule(check_bp3_envelope_peel, self.GOOD_HELPER, "LevoitVital200S")
         assert findings == []
 
     def test_bad_fails(self):
+        # Direction A: rule still catches the bug class when neither shape present.
         findings = run_rule(check_bp3_envelope_peel, self.BAD, "LevoitVital200S")
         assert any(f['rule_id'] == 'BP3_missing_envelope_peel' for f in findings)
         assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP3_missing_envelope_peel')
@@ -453,7 +474,8 @@ class TestBP11DocumentationLink:
 # ---------------------------------------------------------------------------
 
 class TestBP12PrefSeed:
-    GOOD = textwrap.dedent("""\
+    # must-not-catch: inline state.prefsSeeded gate (status quo on most v2.8 drivers).
+    GOOD_INLINE = textwrap.dedent("""\
         def applyStatus(status) {
             if (!state.prefsSeeded) {
                 if (settings?.descriptionTextEnable == null) {
@@ -464,17 +486,37 @@ class TestBP12PrefSeed:
         }
     """)
 
+    # must-not-catch: helper-call shape (Task #140 Phase 2+ migration).
+    # Equivalent contract via seedPrefs() from LevoitChildBaseLib.
+    GOOD_HELPER = textwrap.dedent("""\
+        def applyStatus(status) {
+            seedPrefs()
+            def r = peelEnvelope(status)
+        }
+    """)
+
+    # must-catch: neither inline gate NOR helper call — bug class still flagged.
     BAD = textwrap.dedent("""\
         def applyStatus(status) {
             def r = status?.result ?: [:]
         }
     """)
 
-    def test_good_passes(self):
-        findings = run_rule(check_bp12_pref_seed, self.GOOD, "LevoitVital200S")
+    # Backward-compat alias so any out-of-class reference to GOOD keeps working.
+    GOOD = GOOD_INLINE
+
+    def test_good_inline_passes(self):
+        # Direction B (inline shape): rule accepts state.prefsSeeded gate.
+        findings = run_rule(check_bp12_pref_seed, self.GOOD_INLINE, "LevoitVital200S")
+        assert findings == []
+
+    def test_good_helper_passes(self):
+        # Direction B (helper shape): rule accepts seedPrefs() helper call.
+        findings = run_rule(check_bp12_pref_seed, self.GOOD_HELPER, "LevoitVital200S")
         assert findings == []
 
     def test_bad_fails(self):
+        # Direction A: rule still catches the bug class when neither shape present.
         findings = run_rule(check_bp12_pref_seed, self.BAD, "LevoitVital200S")
         assert any(f['rule_id'] == 'BP12_missing_pref_seed' for f in findings)
         assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP12_missing_pref_seed')
