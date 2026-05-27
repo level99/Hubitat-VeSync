@@ -169,3 +169,53 @@ private Integer safeIntArg(raw, Integer fallback, Integer lo, Integer hi) {
     Integer v = safeIntArg(raw, fallback)
     return Math.max(lo, Math.min(hi, v))
 }
+
+// BP12: seed pref defaults at first poll method invocation.
+// Idempotent via state.prefsSeeded gate; safe to call repeatedly.
+// Insert at top of: applyStatus() for V2-API drivers; update(status,nightLight)
+// for Core line; etc. See CONTRIBUTING.md / CLAUDE.md "Pref-seed pattern" for
+// the full insertion-point table per driver shape.
+//
+// Heals descriptionTextEnable=true default for users migrated from older
+// Driver Type without clicking Save Preferences.
+//
+// NOTE: This helper is for child drivers only. The parent driver
+// (VeSyncIntegration.groovy) and Notification Tile keep this pattern inline
+// because they cannot #include level99.LevoitChildBase — the include's
+// textual paste at file end would shadow their own logInfo/logDebug
+// definitions (parent's logInfo routes through sanitize() for PII
+// redaction; shadow would break that). VeSyncIntegrationVirtual seeds 2
+// prefs and stays inline as a deliberate outlier.
+private void seedPrefs() {
+    if (state.prefsSeeded) return
+    if (settings?.descriptionTextEnable == null) {
+        device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
+    }
+    state.prefsSeeded = true
+}
+
+// BP3: peel bypassV2 envelope layers; returns innermost result Map (or
+// empty Map if response is malformed). Up to 4 layers of [code, result,
+// traceId] wrapping — handles both single-wrap (purifier shape) and
+// double-wrap (humidifier shape) transparently.
+//
+// Call shape: replace
+//   def r = response?.result ?: [:]
+//   int peelGuard = 0
+//   while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
+//       r = r.result
+//       peelGuard++
+//   }
+// with:
+//   def r = peelEnvelope(response)
+//
+// Behavior is byte-identical to the pre-existing inline pattern.
+private Map peelEnvelope(Map response) {
+    def r = response?.result ?: [:]
+    int peelGuard = 0
+    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
+        r = r.result
+        peelGuard++
+    }
+    return (r instanceof Map) ? (r as Map) : [:]
+}
