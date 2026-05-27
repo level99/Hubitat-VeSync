@@ -311,28 +311,10 @@ def applyStatus(status){
     // Placed here so all three update() entry points (0-arg, 1-arg, 2-arg) trigger it.
     ensureDebugWatchdog()
 
-    // One-time pref seed: heal descriptionTextEnable=true default for users migrated
-    // from older Type without Save (forward-compat -- BP#12)
-    // Insertion point: top of applyStatus() per V1-humidifier-base pref-seed convention
-    // (same as Classic 300S, LV600S, OasisMist 450S -- all VeSyncHumid200300S class).
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
-
-    def r = status?.result ?: [:]
-    // Defensive envelope peel -- humidifier bypassV2 responses can be double-wrapped (BP#3).
-    // Peel through any [code, result, traceId] envelope layers until device data is reached.
-    // Dual 200S is typically single-wrapped like Classic 300S, but the peel loop is defensive.
-    int peelGuard = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-        r = r.result
-        peelGuard++
-    }
+    seedPrefs()
+    def r = peelEnvelope(status)
     // Diagnostic raw dump -- gated by debugOutput. Keep for ongoing field diagnostics.
-    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // Dual 200S response uses `enabled` (boolean), NOT `powerSwitch` (int)
