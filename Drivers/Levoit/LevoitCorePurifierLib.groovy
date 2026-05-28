@@ -29,8 +29,12 @@ library(
 // Library contract:
 //   REQUIRES: #include level99.LevoitDiagnostics  (provides recordError)
 //   REQUIRES: #include level99.LevoitChildBase    (provides logInfo/logDebug/logError/ensureSwitchOn)
-//   REQUIRES: host driver provides `def mapSpeedToInteger(speed)` returning Integer
-//   PROVIDES: see Group 1 + Group 2 sections below for the 25 methods supplied.
+//   REQUIRES: host driver provides `def getSpeedBands()` returning a Map of
+//             API-integer-level -> named-band (e.g. [1:"low",2:"medium",3:"high"]
+//             for 3-band 200S/300S; add 4:"max" for 4-band 400S/600S). The
+//             table-driven mapSpeedToInteger/mapIntegerToSpeed/mapIntegerStringToSpeed
+//             helpers consume it (Bucket B1, #142 Phase 2c).
+//   PROVIDES: see Group 1 + Group 2 sections below for the 28 methods supplied.
 
 // ---- Group 1: Shared 18 — called by all four Core drivers (200S/300S/400S/600S) ----
 
@@ -157,6 +161,65 @@ def handlePower(on) {
 			}
 		}
     return result
+}
+
+// Bucket B1 (#142 Phase 2c): table-driven speed mapping. Reads the host driver's
+// getSpeedBands() to support both 3-band (200S/300S: [1:low,2:medium,3:high]) and
+// 4-band (400S/600S: [1:low,2:medium,3:high,4:max]) models from one implementation.
+//
+// Behavior preserved exactly from the prior per-driver inline switch/ternary forms:
+//   mapSpeedToInteger(name|"int-string") -> Integer:
+//     - exact band-name match (low/medium/high[/max]) -> that band's key
+//     - integer-string ("1".."4") that maps to a known band key -> that key
+//     - anything else (unknown name, null, out-of-range int-string) -> max key
+//       (3-band fallback=3, 4-band fallback=4) — matches the old `return 3/4` default
+//   mapIntegerToSpeed(int) / mapIntegerStringToSpeed("int-string") -> String name:
+//     - exact key match -> that band's name
+//     - anything else (unknown int, null) -> max band name ("high" 3-band, "max" 4-band)
+//       — matches the old ternary/switch default
+//
+// The fallback-to-max semantics make a real "high" lookup on a 3-band table and an
+// unknown-input fallback indistinguishable in output (both -> 3 / "high"), exactly
+// as the prior code behaved.
+
+// Public (def) to match the prior per-driver method visibility exactly — the old
+// inline mapSpeedToInteger/mapIntegerToSpeed/mapIntegerStringToSpeed were all `def`.
+def mapSpeedToInteger(speed) {
+    Map bands = getSpeedBands()
+    Integer maxKey = bands.keySet().max()
+    if (speed != null) {
+        String s = speed.toString()
+        // Named-band match (low/medium/high[/max])
+        def named = bands.find { k, v -> v == s }
+        if (named) return named.key as Integer
+        // Integer-string match ("2" -> band key 2, if 2 is a valid band)
+        if (s.isInteger()) {
+            Integer asInt = s.toInteger()
+            if (bands.containsKey(asInt)) return asInt
+        }
+    }
+    // Unknown name, null, or out-of-range integer-string -> max band (old `return 3/4`)
+    return maxKey
+}
+
+def mapIntegerToSpeed(level) {
+    Map bands = getSpeedBands()
+    Integer maxKey = bands.keySet().max()
+    if (level != null) {
+        // Accept Integer or numeric-String key
+        Integer key = (level instanceof Number) ? (level as Integer)
+                     : (level.toString().isInteger() ? level.toString().toInteger() : null)
+        if (key != null && bands.containsKey(key)) return bands[key]
+    }
+    // Unknown int, null, or out-of-range -> max band name (old ternary/switch default)
+    return bands[maxKey]
+}
+
+// Integer-STRING input ("1".."4") -> band name. Distinct public name retained because
+// the per-driver setSpeed() integer-string remap path calls it by this name. Delegates
+// to mapIntegerToSpeed (which already accepts numeric-String input) for one impl.
+def mapIntegerStringToSpeed(speed) {
+    return mapIntegerToSpeed(speed)
 }
 
 def handleSpeed(speed) {

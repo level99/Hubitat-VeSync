@@ -244,56 +244,18 @@ def setMode(mode) {
     }
 }
 
-def mapSpeedToInteger(speed) {
-    switch(speed)
-    {
-        case "1":
-        case "low":
-            return 1;
-        case "2":
-        case "medium":
-            return 2;
-        case "3":
-        case "high":
-            return 3;
-    }
-    return 4;
-}
-
-def mapIntegerStringToSpeed(speed) {
-    switch(speed)
-    {
-        case "1":
-            return "low";
-        case "2":
-            return "medium";
-        case "3":
-            return "high";
-        case "4":
-            return "max";
-    }
-    return "max";
-}
-
-def mapIntegerToSpeed(speed) {
-    switch(speed)
-    {
-        case 1:
-            return "low";
-        case 2:
-            return "medium";
-        case 3:
-            return "high";
-    }
-    return "max";
-}
+// Speed-band table for Core 400S (4-band). Index = API integer level, value = named band.
+// Consumed by the lib's table-driven mapSpeedToInteger/mapIntegerToSpeed/
+// mapIntegerStringToSpeed helpers (Bucket B1, #142 Phase 2c).
+private Map getSpeedBands() { [1:"low", 2:"medium", 3:"high", 4:"max"] }
 
 // logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog, ensureSwitchOn
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 // installed, uninstalled, initialize, updated, on, off, toggle, setDisplay, handlePower,
 // handleSpeed, handleMode, handleDisplayOn, setChildLock, setTimer, cancelTimer, resetFilter,
-// checkHttpResponse, setLevel(value, duration), setAutoMode, handleAutoMode, handleEvent,
-// updateAQIandFilter, convertRange are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
+// checkHttpResponse, setLevel(value, duration), mapSpeedToInteger, mapIntegerToSpeed,
+// mapIntegerStringToSpeed, setAutoMode, handleAutoMode, handleEvent, updateAQIandFilter,
+// convertRange are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
 // update, update(status, nightLight) are provided by
 // #include level99.LevoitCoreAQPurifier (LevoitCoreAQPurifierLib.groovy).
 

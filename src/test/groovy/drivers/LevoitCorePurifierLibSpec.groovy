@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 
 /**
@@ -499,5 +500,179 @@ class LevoitCorePurifierLibSpec extends HubitatSpec {
 
         and: "behavior is identical to null nightLight (BP1 3-signature compatibility only)"
         eventsAfterNullCall > 0
+    }
+
+    // -------------------------------------------------------------------------
+    // Bucket B1 (#142 Phase 2c): table-driven speed mapping
+    //
+    // The primary spec loads through Core 400S (4-band). For 3-band coverage we
+    // load a REAL Core 300S driver instance (which declares its own 3-band
+    // getSpeedBands()) and wire it with the same sandbox globals. This tests the
+    // production 3-band declaration, not a test-injected closure — and avoids the
+    // Groovy metaClass-vs-internal-dispatch fragility that a getSpeedBands()
+    // override would introduce (the lib's mapSpeedToInteger calls getSpeedBands()
+    // as an unqualified self-call, which does not reliably honour a per-instance
+    // metaClass override).
+    //
+    // This is the regression baseline that proves the Phase 2c parameterization
+    // preserves the prior per-driver behavior tables for both band counts.
+    // -------------------------------------------------------------------------
+
+    // Lazily-loaded, sandbox-wired Core 300S instance for 3-band assertions.
+    private def band3Driver() {
+        def cls = loadDriverClass("Drivers/Levoit/LevoitCore300S.groovy")
+        def d = cls.getDeclaredConstructor().newInstance()
+        wireSandbox(d)
+        return d
+    }
+
+    // ---- 4-band (default Core 400S loader) mapSpeedToInteger ----
+
+    @Unroll
+    def "4-band mapSpeedToInteger: #input -> #expected"() {
+        expect:
+        driver.mapSpeedToInteger(input) == expected
+
+        where:
+        input      | expected
+        "low"      | 1
+        "medium"   | 2
+        "high"     | 3
+        "max"      | 4
+        "1"        | 1
+        "2"        | 2
+        "3"        | 3
+        "4"        | 4
+        "auto"     | 4   // unknown name -> max key (4-band fallback)
+        "garbage"  | 4   // unknown name -> max key
+        null       | 4   // null -> max key
+    }
+
+    @Unroll
+    def "4-band mapIntegerToSpeed: #input -> #expected"() {
+        expect:
+        driver.mapIntegerToSpeed(input) == expected
+
+        where:
+        input | expected
+        1     | "low"
+        2     | "medium"
+        3     | "high"
+        4     | "max"
+        5     | "max"   // out-of-range -> max band name (4-band fallback)
+        0     | "max"   // out-of-range -> max band name
+        255   | "max"   // API "off" sentinel -> max band name (matches old switch default)
+        null  | "max"   // null -> max band name
+    }
+
+    @Unroll
+    def "4-band mapIntegerStringToSpeed: #input -> #expected (delegates to mapIntegerToSpeed)"() {
+        expect:
+        driver.mapIntegerStringToSpeed(input) == expected
+
+        where:
+        input | expected
+        "1"   | "low"
+        "2"   | "medium"
+        "3"   | "high"
+        "4"   | "max"
+    }
+
+    // ---- 3-band (injected table) mapSpeedToInteger ----
+
+    @Unroll
+    def "3-band mapSpeedToInteger: #input -> #expected"() {
+        given:
+        def driver3 = band3Driver()
+
+        expect:
+        driver3.mapSpeedToInteger(input) == expected
+
+        where:
+        input      | expected
+        "low"      | 1
+        "medium"   | 2
+        "high"     | 3
+        "1"        | 1
+        "2"        | 2
+        "3"        | 3
+        "4"        | 3   // 4 not in 3-band table -> max key 3 (matches old 200S/300S `return 3`)
+        "max"      | 3   // "max" not a 3-band name -> max key 3 (old behavior)
+        "auto"     | 3   // unknown -> max key
+        null       | 3   // null -> max key
+    }
+
+    @Unroll
+    def "3-band mapIntegerToSpeed: #input -> #expected"() {
+        given:
+        def driver3 = band3Driver()
+
+        expect:
+        driver3.mapIntegerToSpeed(input) == expected
+
+        where:
+        input | expected
+        1     | "low"
+        2     | "medium"
+        3     | "high"
+        4     | "high"   // out-of-range -> max band name "high" (matches old 200S/300S default)
+        0     | "high"
+        255   | "high"
+        null  | "high"
+    }
+
+    @Unroll
+    def "3-band mapIntegerStringToSpeed: #input -> #expected"() {
+        given:
+        def driver3 = band3Driver()
+
+        expect:
+        driver3.mapIntegerStringToSpeed(input) == expected
+
+        where:
+        input | expected
+        "1"   | "low"
+        "2"   | "medium"
+        "3"   | "high"
+    }
+
+    // ---- round-trip integrity (the CRITICAL invariant: no v2.5-style "all land on high") ----
+
+    def "4-band round-trip: every band name maps to int and back to itself"() {
+        expect:
+        ["low", "medium", "high", "max"].every { name ->
+            driver.mapIntegerToSpeed(driver.mapSpeedToInteger(name)) == name
+        }
+    }
+
+    def "3-band round-trip: every band name maps to int and back to itself"() {
+        given:
+        def driver3 = band3Driver()
+
+        expect:
+        ["low", "medium", "high"].every { name ->
+            driver3.mapIntegerToSpeed(driver3.mapSpeedToInteger(name)) == name
+        }
+    }
+
+    def "4-band distinctness: low/medium/high/max map to DISTINCT integers (regression guard for v2.5 'all-land-on-high' bug)"() {
+        when:
+        def ints = ["low", "medium", "high", "max"].collect { driver.mapSpeedToInteger(it) }
+
+        then: "all four integers are distinct — no two bands collapse to the same level"
+        ints == [1, 2, 3, 4]
+        ints.toSet().size() == 4
+    }
+
+    def "3-band distinctness: low/medium/high map to DISTINCT integers"() {
+        given:
+        def driver3 = band3Driver()
+
+        when:
+        def ints = ["low", "medium", "high"].collect { driver3.mapSpeedToInteger(it) }
+
+        then:
+        ints == [1, 2, 3]
+        ints.toSet().size() == 3
     }
 }
