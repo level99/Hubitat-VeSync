@@ -30,9 +30,9 @@ library(
 //   REQUIRES: #include level99.LevoitDiagnostics  (provides recordError)
 //   REQUIRES: #include level99.LevoitChildBase    (provides logInfo/logDebug/logError/ensureSwitchOn)
 //   REQUIRES: host driver provides `def mapSpeedToInteger(speed)` returning Integer
-//   PROVIDES: see Group 1 + Group 2 sections below for the 21 methods supplied.
+//   PROVIDES: see Group 1 + Group 2 sections below for the 25 methods supplied.
 
-// ---- Group 1: Shared 14 — called by all four Core drivers (200S/300S/400S/600S) ----
+// ---- Group 1: Shared 18 — called by all four Core drivers (200S/300S/400S/600S) ----
 
 def installed() {
 	logDebug "Installed with settings: ${settings}"
@@ -45,6 +45,77 @@ def uninstalled() {
 
 def initialize() {
 	logDebug "initializing"
+}
+
+// Bucket A3 (#142 Phase 2a): byte-identical lifecycle across all 4 Core drivers.
+// State-clear + unschedule + initialize + delayed runIn pattern; BP16 debug-watchdog
+// records state.debugEnabledAt for cross-reboot auto-disable per LevoitChildBase.
+def updated() {
+    logDebug "Updated with settings: ${settings}"
+    state.clear()
+    unschedule()
+    initialize()
+
+    runIn(3, "update")
+
+    // Turn off debug log in 30 minutes (happy path — no hub reboot)
+    if (settings?.debugOutput) {
+        runIn(1800, "logDebugOff")
+        state.debugEnabledAt = now()
+    } else {
+        state.remove("debugEnabledAt")
+    }
+}
+
+// Bucket A1 (#142 Phase 2a): byte-identical power-on across all 4 Core drivers.
+// state.turningOn re-entrance guard protects against on()→setSpeed→on() recursion
+// when state.mode is null (fresh device) — see setSpeed() recovery branch.
+// Dispatches to per-driver setSpeed/setMode/update via Groovy dynamic dispatch.
+def on() {
+    logDebug "on()"
+
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        handlePower(true)
+        logInfo "Power on"
+        handleEvent("switch", "on")
+
+        if (state.speed != null) {
+            setSpeed(state.speed)
+        }
+        else {
+            setSpeed("low")
+        }
+
+        if (state.mode != null) {
+            setMode(state.mode)
+        }
+        else {
+            update()
+        }
+    } finally {
+        state.remove('turningOn')
+    }
+}
+
+// Bucket A2 (#142 Phase 2a): byte-identical power-off across all 4 Core drivers.
+// state.turningOff re-entrance guard mirrors on()'s state.turningOn protection.
+// Emits speed:off so dashboards/Rule Machine see speed go to off on power-down
+// (capability parity — D2 fix landed in v2.5).
+def off() {
+    logDebug "off()"
+
+    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
+    state.turningOff = true
+    try {
+        handlePower(false)
+        logInfo "Power off"
+        handleEvent("switch", "off")
+        handleEvent("speed", "off")
+    } finally {
+        state.remove('turningOff')
+    }
 }
 
 def toggle() {
@@ -251,6 +322,18 @@ def checkHttpResponse(action, resp) {
 // 1-arg parent callback — BP1 requires all three overloads; this delegator lives in the lib
 // so all four Core drivers (200S/300S/400S/600S) inherit it automatically.
 def update(status) { update(status, null) }
+
+// Bucket A4 (#142 Phase 2a): 2-arg setLevel overload — Hubitat SwitchLevel capability standard signature.
+// VeSync devices do NOT support hardware-level fade/duration, so the duration
+// parameter is intentionally ignored. Delegates to the per-driver 1-arg version
+// via Groovy dynamic dispatch.
+// Without this overload, any caller using the standard 2-arg form (Rule Machine
+// with duration, dashboard tiles, MCP setLevel(N, D), third-party apps) throws
+// MissingMethodException — Hubitat sandbox catches it silently and the command
+// fails without user feedback.
+def setLevel(value, duration) {
+    setLevel(value)
+}
 
 // ---- Group 2: AQ-group 7 — called by 300S/400S/600S only (200S does not have AQ sensor) ----
 

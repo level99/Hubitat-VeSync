@@ -111,85 +111,12 @@ metadata {
     }
 }
 
-def updated() {
-	logDebug "Updated with settings: ${settings}"
-
-    state.clear()
-    unschedule()
-	initialize()
-
-    runIn(3, "update")
-
-    // Turn off debug log in 30 minutes (happy path — no hub reboot)
-    if (settings?.debugOutput) {
-        runIn(1800, "logDebugOff")
-        state.debugEnabledAt = now()
-    } else {
-        state.remove("debugEnabledAt")
-    }
-}
-
-def on() {
-    logDebug "on()"
-
-    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
-    state.turningOn = true
-    try {
-        handlePower(true)
-        logInfo "Power on"
-        handleEvent("switch", "on")
-
-        if (state.speed != null) {
-            setSpeed(state.speed)
-        }
-        else {
-            setSpeed("low")
-        }
-
-        if (state.mode != null) {
-            setMode(state.mode)
-        }
-        else {
-            update()
-        }
-    } finally {
-        state.remove('turningOn')
-    }
-}
-
-def off() {
-    logDebug "off()"
-
-    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
-    state.turningOff = true
-    try {
-        handlePower(false)
-        logInfo "Power off"
-        handleEvent("switch", "off")
-        handleEvent("speed", "off")
-    } finally {
-        state.remove('turningOff')
-    }
-}
-
 def cycleSpeed() {
     logDebug "cycleSpeed()"
     ensureSwitchOn()    // BP24-A fix — replaces dead state.switch == "off" branch
 
     def speed = (state.speed == "low") ? "medium" : ( (state.speed == "medium") ? "high" : "low")
     setSpeed(speed)
-}
-
-// 2-arg setLevel overload — Hubitat SwitchLevel capability standard signature.
-// VeSync devices do NOT support hardware-level fade/duration, so the duration
-// parameter is intentionally ignored. Delegates to the 1-arg version.
-// Without this overload, any caller using the standard 2-arg form (Rule Machine
-// with duration, dashboard tiles, MCP setLevel(N, D), third-party apps) throws
-// MissingMethodException — Hubitat sandbox catches it silently and the command
-// fails without user feedback.
-def setLevel(value, duration)
-{
-    setLevel(value)
 }
 
 def setLevel(value)
@@ -306,9 +233,9 @@ def mapIntegerToSpeed(speed) {
 
 // logDebug, logError, logInfo, logDebugOff, ensureDebugWatchdog, ensureSwitchOn
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
-// installed, uninstalled, initialize, toggle, setDisplay, handlePower, handleSpeed,
-// handleMode, handleDisplayOn, setChildLock, setTimer, cancelTimer, resetFilter,
-// checkHttpResponse are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
+// installed, uninstalled, initialize, updated, on, off, toggle, setDisplay, handlePower,
+// handleSpeed, handleMode, handleDisplayOn, setChildLock, setTimer, cancelTimer, resetFilter,
+// checkHttpResponse, setLevel(value, duration) are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
 
 def update() {
 
