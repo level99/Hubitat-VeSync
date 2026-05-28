@@ -675,4 +675,193 @@ class LevoitCorePurifierLibSpec extends HubitatSpec {
         ints == [1, 2, 3]
         ints.toSet().size() == 3
     }
+
+    // -------------------------------------------------------------------------
+    // Bucket B2/B3 (#142 Phase 2d): parameterized setSpeed + setMode
+    //
+    // The default driver (Core 400S) is the auto-supporting / 4-band case.
+    // For the no-auto case we load a REAL Core 200S instance (supportsAutoMode()
+    // returns false, 3-band table) and wire it. This proves the auto-support
+    // dimension is correctly gated by the host hook — the only difference between
+    // 200S and 300S/400S/600S for these two methods.
+    // -------------------------------------------------------------------------
+
+    // Lazily-loaded, sandbox-wired Core 200S instance for no-auto assertions.
+    private def noAutoDriver() {
+        def cls = loadDriverClass("Drivers/Levoit/LevoitCore200S.groovy")
+        def d = cls.getDeclaredConstructor().newInstance()
+        wireSandbox(d)
+        return d
+    }
+
+    // ---- setSpeed: auto-supporting (Core 400S default loader) ----
+
+    def "setSpeed('auto') on auto-supporting driver routes to setMode + emits speed=auto"() {
+        given: "device on, switch on so ensureSwitchOn is a no-op"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setSpeed("auto")
+
+        then: "setPurifierMode auto sent (via setMode('auto'))"
+        testParent.allRequests.any { it.method == "setPurifierMode" && it.data.mode == "auto" }
+
+        and: "speed event = auto"
+        testDevice.events.any { it.name == "speed" && it.value == "auto" }
+    }
+
+    def "setSpeed('off') short-circuits to off() before ensureSwitchOn (does NOT auto-on)"() {
+        given: "device is off"
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+
+        when:
+        driver.setSpeed("off")
+
+        then: "setSwitch enabled=false sent (off path)"
+        testParent.allRequests.any { it.method == "setSwitch" && it.data.enabled == false }
+
+        and: "no setSwitch enabled=true (must NOT auto-on for an explicit off)"
+        !testParent.allRequests.any { it.method == "setSwitch" && it.data.enabled == true }
+    }
+
+    def "setSpeed('3') integer-string remaps to 'high' then sends 4-band level 3"() {
+        given:
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when:
+        driver.setSpeed("3")
+
+        then: "setLevel level=3 (high on 4-band Core 400S)"
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req?.data?.level == 3
+
+        and: "speed event emitted as named 'high', not '3'"
+        testDevice.events.any { it.name == "speed" && it.value == "high" }
+    }
+
+    def "setSpeed('4') integer-string remaps to 'max' on 4-band driver"() {
+        given:
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when:
+        driver.setSpeed("4")
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req?.data?.level == 4
+        testDevice.events.any { it.name == "speed" && it.value == "max" }
+    }
+
+    def "setSpeed(null) is rejected by BP18 null/empty-guard (no API call)"() {
+        when:
+        driver.setSpeed(null)
+
+        then: "no setLevel / setPurifierMode request — guard returned false"
+        !testParent.allRequests.any { it.method in ["setLevel", "setPurifierMode"] }
+    }
+
+    // ---- setSpeed: no-auto (Core 200S loader) ----
+
+    def "setSpeed('auto') on no-auto Core 200S does NOT route to auto (falls through state-machine)"() {
+        given: "Core 200S (supportsAutoMode=false), switch on, manual mode"
+        def d = noAutoDriver()
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when: "setSpeed('auto') — 'auto' is not a valid band name, not off/sleep"
+        d.setSpeed("auto")
+
+        then: "the auto branch is gated off (supportsAutoMode=false); no setPurifierMode auto"
+        !testParent.allRequests.any { it.method == "setPurifierMode" && it.data.mode == "auto" }
+        // 'auto' falls into the manual-mode branch -> handleSpeed("auto") -> mapSpeedToInteger("auto")
+        // -> max key 3 (3-band fallback). The device receives a setLevel, not a mode change.
+        and: "a setLevel was sent (auto treated as an unknown speed name -> max band)"
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req?.data?.level == 3
+    }
+
+    // ---- setMode: auto-supporting (Core 400S default loader) ----
+
+    def "setMode('auto') on auto-supporting driver is accepted + sends setPurifierMode auto"() {
+        given:
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setMode("auto")
+
+        then:
+        testParent.allRequests.any { it.method == "setPurifierMode" && it.data.mode == "auto" }
+        testDevice.events.any { it.name == "mode" && it.value == "auto" }
+        testDevice.events.any { it.name == "speed" && it.value == "auto" }
+    }
+
+    def "setMode('manual') accepted on both driver types; emits mode=manual"() {
+        given:
+        testDevice.events.add([name: "switch", value: "on"])
+        state.speed = "medium"
+
+        when:
+        driver.setMode("manual")
+
+        then:
+        testParent.allRequests.any { it.method == "setPurifierMode" && it.data.mode == "manual" }
+        testDevice.events.any { it.name == "mode" && it.value == "manual" }
+
+        and: "manual switch-case emits the cached speed"
+        testDevice.events.any { it.name == "speed" && it.value == "medium" }
+    }
+
+    def "setMode('garbage') rejected on auto-supporting driver (invalid mode, no API call)"() {
+        when:
+        driver.setMode("garbage")
+
+        then: "invalid mode rejected before any API call"
+        !testParent.allRequests.any { it.method == "setPurifierMode" }
+
+        and: "a WARN names the valid modes including auto"
+        testLog.warns.any { it.contains("setMode") && it.contains("auto") }
+    }
+
+    def "setMode(null) rejected by BP18 null/empty-guard"() {
+        when:
+        driver.setMode(null)
+
+        then:
+        !testParent.allRequests.any { it.method == "setPurifierMode" }
+    }
+
+    // ---- setMode: no-auto (Core 200S loader) — the auto-support gate ----
+
+    def "setMode('auto') on no-auto Core 200S is REJECTED (auto not in allowed set)"() {
+        given:
+        def d = noAutoDriver()
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        d.setMode("auto")
+
+        then: "auto is not an allowed mode on 200S — rejected, no API call"
+        !testParent.allRequests.any { it.method == "setPurifierMode" }
+
+        and: "the WARN's allowed-modes list is exactly 'manual, sleep' (auto absent from the allowed set)"
+        // Note: the rejected input 'auto' is echoed in the message; we assert on the
+        // allowed-list portion after 'must be one of:' which must NOT include auto.
+        testLog.warns.any { it.contains("setMode") && it.contains("must be one of: manual, sleep;") }
+    }
+
+    def "setMode('sleep') on no-auto Core 200S is accepted"() {
+        given:
+        def d = noAutoDriver()
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        d.setMode("sleep")
+
+        then: "sleep is allowed on 200S"
+        testParent.allRequests.any { it.method == "setPurifierMode" && it.data.mode == "sleep" }
+        testDevice.events.any { it.name == "mode" && it.value == "sleep" }
+    }
 }

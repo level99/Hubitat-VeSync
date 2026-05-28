@@ -34,7 +34,11 @@ library(
 //             for 3-band 200S/300S; add 4:"max" for 4-band 400S/600S). The
 //             table-driven mapSpeedToInteger/mapIntegerToSpeed/mapIntegerStringToSpeed
 //             helpers consume it (Bucket B1, #142 Phase 2c).
-//   PROVIDES: see Group 1 + Group 2 sections below for the 28 methods supplied.
+//   REQUIRES: host driver provides `def supportsAutoMode()` returning boolean —
+//             false for 200S (no AQ sensor / no auto mode), true for 300S/400S/600S.
+//             setSpeed/setMode consume it to gate the auto branch + allowed-mode set
+//             (Bucket B2/B3, #142 Phase 2d).
+//   PROVIDES: see Group 1 + Group 2 sections below for the 30 methods supplied.
 
 // ---- Group 1: Shared 18 — called by all four Core drivers (200S/300S/400S/600S) ----
 
@@ -256,6 +260,105 @@ def handleMode(mode) {
 			}
 		}
     return result
+}
+
+// Bucket B2 (#142 Phase 2d): table + auto-support parameterized setSpeed.
+// Two host hooks capture the only per-model differences:
+//   getSpeedBands()     — band table (Phase 2c); its keys derive the integer-string
+//                         remap gate (["1","2","3"] for 3-band, +"4" for 4-band)
+//   supportsAutoMode()  — false for 200S (no AQ sensor / no auto mode), true otherwise;
+//                         gates the `s == "auto"` branch that 200S lacks
+// BP18 null/empty-guard, BP25 lowercase-normalize, BP24-B ensureSwitchOn placement
+// (after the off short-circuit) all preserved verbatim from the prior per-driver bodies.
+// SHOULD-ON: setSpeed turns the device on (SwitchLevel/FanControl convention) via
+// ensureSwitchOn() after the "off" short-circuit.
+def setSpeed(speed) {
+    logDebug "setSpeed(${speed})"
+    if (!requireNonEmptyEnum(speed, "setSpeed")) return false                   // BP18 null/empty-guard
+    String s = (speed as String).trim().toLowerCase()
+    // Remap integer-string values from setLevel() path to named speed strings.
+    // setLevel() passes Integer 1..N; (speed as String) yields "1".."N".
+    // The valid integer-string set is derived from the band table (Phase 2c) so
+    // 3-band (200S/300S) and 4-band (400S/600S) models share this one body.
+    def intStringSet = getSpeedBands().keySet().collect { it.toString() }
+    if (s in intStringSet) s = mapIntegerStringToSpeed(s)
+    // Power short-circuits BEFORE ensureSwitchOn — setSpeed("off") must NOT auto-on first
+    if (s == "off") { off(); return }
+    ensureSwitchOn()                                                             // BP24-B auto-on (after short-circuit)
+    if (supportsAutoMode() && s == "auto") {
+        setMode(s)
+        state.speed = s
+        handleEvent("speed", s)
+    }
+    else if (s == "sleep") {
+        setMode(s)
+        handleEvent("speed", "on")
+    }
+    else if (state.mode == "manual") {
+        handleSpeed(s)
+        state.speed = s
+        handleEvent("speed", s)
+        logInfo "Speed: ${s}"
+    }
+    else if (state.mode == "sleep") {
+        setMode("manual")
+        handleSpeed(s)
+        state.speed = s
+        handleEvent("speed", s)
+        logInfo "Speed: ${s}"
+    }
+    else {
+        // Recover: unknown or null state.mode (e.g. fresh device, pre-first-poll).
+        // Guard against on() re-entrancy: when state.turningOn is set we are inside on()'s
+        // own setSpeed call — skip mode establishment to avoid issuing a spurious
+        // setPurifierMode that would clobber a concurrently-dispatched setMode command.
+        // on() will call setMode(state.mode) or update() after this setSpeed returns.
+        if (!state.turningOn) {
+            handleMode("manual")
+            state.mode = "manual"
+            handleEvent("mode", "manual")
+        }
+        handleSpeed(s)
+        state.speed = s
+        handleEvent("speed", s)
+        logInfo "Speed: ${s}"
+    }
+}
+
+// Bucket B3 (#142 Phase 2d): auto-support parameterized setMode.
+// supportsAutoMode() gates the allowed-mode set AND the auto switch-case branch:
+//   false (200S) -> ["manual","sleep"]; true (300S/400S/600S) -> ["manual","sleep","auto"]
+// BP18 null/empty-guard, BP25 lowercase-normalize, invalid-mode rejection BEFORE
+// auto-on, BP24-B ensureSwitchOn after rejection, all preserved verbatim.
+// SHOULD-ON: setMode turns the device on after the rejection checks via ensureSwitchOn().
+def setMode(mode) {
+    logDebug "setMode(${mode})"
+    if (!requireNonEmptyEnum(mode, "setMode")) return false                     // BP18 null/empty-guard
+    String m = (mode as String).trim().toLowerCase()
+    List allowed = supportsAutoMode() ? ["manual", "sleep", "auto"] : ["manual", "sleep"]
+    if (!(m in allowed)) {                                                       // reject invalid BEFORE auto-on
+        logWarn "setMode: invalid mode '${m}' -- must be one of: ${allowed.join(', ')}; ignoring"
+        return false
+    }
+    ensureSwitchOn()                                                             // BP24-B auto-on (after rejection checks)
+
+    handleMode(m)
+    state.mode = m
+    handleEvent("mode", m)
+    logInfo "Mode: ${m}"
+
+    switch(m)
+    {
+        case "manual":
+            handleEvent("speed", state.speed)
+            break;
+        case "auto":
+            handleEvent("speed", "auto")
+            break;
+        case "sleep":
+            handleEvent("speed", "on")
+            break;
+    }
 }
 
 def handleDisplayOn(displayOn)

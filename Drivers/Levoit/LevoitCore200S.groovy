@@ -140,75 +140,9 @@ def setLevel(value)
     setSpeed(speed)
 }
 
-def setSpeed(speed) {
-    logDebug "setSpeed(${speed})"
-    if (!requireNonEmptyEnum(speed, "setSpeed")) return false                   // BP18 null/empty-guard
-    String s = (speed as String).trim().toLowerCase()
-    // Remap integer-string values from setLevel() path to named speed strings.
-    // setLevel() passes Integer 1/2/3; (speed as String) yields "1"/"2"/"3".
-    // Emit named speeds ("low"/"medium"/"high") for attribute consistency.
-    if (s in ["1", "2", "3"]) s = mapIntegerStringToSpeed(s)
-    // Power short-circuits BEFORE ensureSwitchOn — setSpeed("off") must NOT auto-on first
-    if (s == "off") { off(); return }
-    ensureSwitchOn()                                                             // BP24-B auto-on (after short-circuit)
-    if (s == "sleep") {
-        setMode(s)
-        handleEvent("speed", "on")
-    }
-    else if (state.mode == "manual") {
-        handleSpeed(s)
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
-    }
-    else if (state.mode == "sleep") {
-        setMode("manual")
-        handleSpeed(s)
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
-    }
-    else {
-        // Recover: unknown or null state.mode (e.g. fresh device, pre-first-poll).
-        // Guard against on() re-entrancy: when state.turningOn is set we are inside on()'s
-        // own setSpeed call — skip mode establishment to avoid issuing a spurious
-        // setPurifierMode that would clobber a concurrently-dispatched setMode command.
-        // on() will call setMode(state.mode) or update() after this setSpeed returns.
-        if (!state.turningOn) {
-            handleMode("manual")
-            state.mode = "manual"
-            handleEvent("mode", "manual")
-        }
-        handleSpeed(s)
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
-    }
-}
-
-def setMode(mode) {
-    logDebug "setMode(${mode})"
-    if (!requireNonEmptyEnum(mode, "setMode")) return false                     // BP18 null/empty-guard
-    String m = (mode as String).trim().toLowerCase()
-    if (!(m in ["manual", "sleep"])) {                                          // reject invalid BEFORE auto-on
-        logWarn "setMode: invalid mode '${m}' -- must be one of: manual, sleep; ignoring"
-        return false
-    }
-    ensureSwitchOn()                                                             // BP24-B auto-on (after rejection checks)
-    handleMode(m)
-    state.mode = m
-    handleEvent("mode", m)
-    logInfo "Mode: ${m}"
-    switch(m)
-    {
-        case "manual":
-            handleEvent("speed", state.speed)
-            break;
-        case "sleep":
-            handleEvent("speed", "on")
-            break;
-    }
-}
+// Core 200S has no AQ sensor and no auto mode — setSpeed/setMode (provided by the lib)
+// gate the auto branch + allowed-mode set on this hook (Bucket B2/B3, #142 Phase 2d).
+private boolean supportsAutoMode() { false }
 
 // Speed-band table for Core 200S (3-band). Index = API integer level, value = named band.
 // Consumed by the lib's table-driven mapSpeedToInteger/mapIntegerToSpeed/
@@ -220,7 +154,7 @@ private Map getSpeedBands() { [1:"low", 2:"medium", 3:"high"] }
 // installed, uninstalled, initialize, updated, on, off, toggle, setDisplay, handlePower,
 // handleSpeed, handleMode, handleDisplayOn, setChildLock, setTimer, cancelTimer, resetFilter,
 // checkHttpResponse, setLevel(value, duration), mapSpeedToInteger, mapIntegerToSpeed,
-// mapIntegerStringToSpeed are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
+// mapIntegerStringToSpeed, setSpeed, setMode are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
 
 def update() {
 
