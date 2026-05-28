@@ -1,6 +1,6 @@
 ---
-name: vesync-final-review
-description: Final pre-PR multi-agent QA review for Hubitat-VeSync driver fork. Runs the Haiku pre-flight gate, then dispatches up to 6 specialized sub-agents in parallel (coverage, platform, protocol, adversarial, design, operator) PLUS the OpenAI Codex CLI as a different-model second-opinion pass, synthesizes their findings into a unified report. Use BEFORE opening or marking a PR ready-for-review. Distinct from the cheaper pipeline-stage `vesync-driver-qa` agent. Usage: /vesync-final-review [PR# OR base..HEAD OR brief context]
+name: final-review
+description: Final pre-PR multi-agent QA review for Hubitat-VeSync driver fork. Runs the Haiku pre-flight gate, then dispatches up to 6 specialized sub-agents in parallel (coverage, platform, protocol, adversarial, design, operator) PLUS the OpenAI Codex CLI as a different-model second-opinion pass, synthesizes their findings into a unified report. Use BEFORE opening or marking a PR ready-for-review. Distinct from the cheaper pipeline-stage `vesync-driver-qa` agent. Usage: /final-review [PR# OR base..HEAD OR brief context]
 context: hubitat-vesync-fork
 disable-model-invocation: true
 ---
@@ -14,7 +14,7 @@ Codex is **not a Claude sub-agent** — it's orchestrated via a `Bash` call from
 ## When to use this skill vs the pipeline `vesync-driver-qa` agent
 
 - **Pipeline `vesync-driver-qa` agent** (cheap, iterative): use via `Agent({vesync-driver-qa})` during dev↔qa iteration loops. Sonnet-default. ~$1-2 per round, cache-warm resumes. Catches ~60-70% per round; cache + context accumulates across rounds.
-- **`/vesync-final-review` skill** (thorough, gated): use ONCE before opening a PR or flipping draft → ready-for-review. ~$8-10 per run with full multi-agent fan-out. Catches near-100% of what the maintainer or community thread reader would otherwise flag.
+- **`/final-review` skill** (thorough, gated): use ONCE before opening a PR or flipping draft → ready-for-review. ~$8-10 per run with full multi-agent fan-out. Catches near-100% of what the maintainer or community thread reader would otherwise flag.
 
 Don't invoke this skill for trivial fixes mid-iteration — the cheap pipeline agent is the right tool there. Use this skill at the ship-readiness gate.
 
@@ -308,7 +308,7 @@ Produce a unified report with this structure:
 
 ## Re-review rounds (after dev fixes)
 
-When the dev pushes fixes addressing prior findings, the user will re-invoke `/vesync-final-review` (or just ask "re-review with the fixes"). At that point:
+When the dev pushes fixes addressing prior findings, the user will re-invoke `/final-review` (or just ask "re-review with the fixes"). At that point:
 
 1. Identify which findings the dev addressed (from PR comments, commit messages, or user's brief).
 2. Identify which sub-agents flagged those findings (their scope).

@@ -164,21 +164,21 @@ Beyond `CLAUDE.md` (always loaded), the following docs live in the repo. **Read 
 
 ---
 
-## Two-tier QA: pipeline agent vs `/vesync-final-review` skill
+## Two-tier QA: pipeline agent vs `/final-review` skill
 
 This codebase ships TWO QA entry points, with deliberate cost-quality tiering:
 
 | Tier | Tool | When to use | Cost | Catch rate |
 |---|---|---|---|---|
 | **Iteration** | `Agent({vesync-driver-qa})` | Inside dev↔qa↔tester↔ops pipeline loops, many times per PR during active development | ~$1-2 per round (Sonnet, SendMessage-resumed) | ~60-70% per round; cache + context accumulates across rounds |
-| **Ship gate** | `/vesync-final-review` skill | ONCE before opening a PR or flipping draft → ready-for-review | ~$8-10 per run (Haiku pre-flight + 6 specialized Claude sub-agents in parallel fan-out + OpenAI Codex CLI second-opinion pass) + 1 ChatGPT Plus message | ~100% per run against this fork's review style |
+| **Ship gate** | `/final-review` skill | ONCE before opening a PR or flipping draft → ready-for-review | ~$8-10 per run (Haiku pre-flight + 6 specialized Claude sub-agents in parallel fan-out + OpenAI Codex CLI second-opinion pass) + 1 ChatGPT Plus message | ~100% per run against this fork's review style |
 
 Typical PR cycle:
 1. Dev iterates: `vesync-driver-developer` → `vesync-driver-qa` (Sonnet, cheap iteration) → `vesync-driver-tester` → `vesync-driver-operations`. Loop 3-5×.
-2. Before opening PR or flipping ready: run `/vesync-final-review` once. Address findings.
+2. Before opening PR or flipping ready: run `/final-review` once. Address findings.
 3. Open / mark ready. Maintainer reviews.
 
-Don't invoke `/vesync-final-review` mid-iteration — it's the ship gate, not the iteration partner. Don't try to push the pipeline agent to skill-level rigor — that's what the skill exists for. The tiering is the whole point.
+Don't invoke `/final-review` mid-iteration — it's the ship gate, not the iteration partner. Don't try to push the pipeline agent to skill-level rigor — that's what the skill exists for. The tiering is the whole point.
 
 Reviewers that the skill fans out to: the 6 Claude sub-agents defined under `.claude/agents/vesync-driver-qa-*.md` — `coverage` (Opus), `platform` (Sonnet), `protocol` (Sonnet), `adversarial` (Opus), `design` (Sonnet), `operator` (Sonnet) — plus `preflight` (Haiku) as the sequential gate, plus the OpenAI Codex CLI as a different-model second-opinion pass orchestrated by the skill as a parallel `Bash` call (NOT a Claude sub-agent). If Codex CLI is not installed or not authenticated locally, the skill skips it and runs Claude-agents-only — degradation is graceful, not a hard requirement.
 
@@ -191,7 +191,7 @@ Reviewers that the skill fans out to: the 6 Claude sub-agents defined under `.cl
 | `vesync-driver-qa-adversarial` | Input adversaries (null/empty/unicode/MAX_INT), state adversaries (guard-bypass), concurrency adversaries (async race, re-entrance), environment adversaries (BP14/16/17/19/21/22), Rule Machine adversaries (BP18 blank slots, C3 idempotency, BP23/BP24 from-off) |
 | `vesync-driver-qa-design` | Lib boundary integrity (Phase 1-5 architecture), cross-line consistency (Core/Vital/Classic/V2/Fan family), helper-extraction opportunities, intentional-asymmetry rationale, BP24 SHOULD-ON/NO-ON/SKIP-OK classification |
 | `vesync-driver-qa-operator` | BREAKING flag honesty (what breaks vs what's preserved), TMI filter (no impl-detail in user-facing prose), CHANGELOG `[Unreleased]` per-commit discipline, dashboard/RM impact disclosure, log discipline + PII sanitize routing, `Drivers/Levoit/readme.md` device-row updates, cut-release invariant trips |
-| Codex CLI (OpenAI) | Broad-review second-opinion pass with soft prioritization toward doc-vs-code drift, sibling-pattern incompleteness across driver families, vacuous regression-guards, over-zealous code-side enforcement, stale narration, HPM-bundle integrity. Different model family than the 6 Claude sub-agents → different blind spots. Orchestrated by the skill as a parallel `Bash` call (NOT a Claude sub-agent). Prompt template baked inline in `.claude/skills/vesync-final-review/SKILL.md` Step 4c. |
+| Codex CLI (OpenAI) | Broad-review second-opinion pass with soft prioritization toward doc-vs-code drift, sibling-pattern incompleteness across driver families, vacuous regression-guards, over-zealous code-side enforcement, stale narration, HPM-bundle integrity. Different model family than the 6 Claude sub-agents → different blind spots. Orchestrated by the skill as a parallel `Bash` call (NOT a Claude sub-agent). Prompt template baked inline in `.claude/skills/final-review/SKILL.md` Step 4c. |
 
 The skill's pre-flight Haiku gate runs FIRST as a sequential check; if it FAILs (lint broken, manifest malformed, version lockstep broken, etc.), the skill stops without dispatching the expensive deep-audit agents OR Codex — broken-PR cost ~$0.005 instead of $5-8.
 

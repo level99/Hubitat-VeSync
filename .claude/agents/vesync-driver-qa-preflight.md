@@ -1,6 +1,6 @@
 ---
 name: vesync-driver-qa-preflight
-description: Fast mechanical pre-flight checks for Hubitat-VeSync driver PRs. Runs lint --strict, Spock harness sanity, manifest sanity, BP-catalog skim, convention scan, path-leakage scan, and tool/file-count consistency. Then classifies the diff (which deep-audit sub-agents the /vesync-final-review skill should dispatch). Returns a structured PASS/FAIL/UNCERTAIN verdict + dispatch plan. Dispatched FIRST by the /vesync-final-review skill before the 6 deep-audit sub-agents. On FAIL, the skill stops the pipeline — broken PRs cost ~$0.005 instead of the full audit's $5-8. Haiku-cheap mechanical work; no judgment required.
+description: Fast mechanical pre-flight checks for Hubitat-VeSync driver PRs. Runs lint --strict, Spock harness sanity, manifest sanity, BP-catalog skim, convention scan, path-leakage scan, and tool/file-count consistency. Then classifies the diff (which deep-audit sub-agents the /final-review skill should dispatch). Returns a structured PASS/FAIL/UNCERTAIN verdict + dispatch plan. Dispatched FIRST by the /final-review skill before the 6 deep-audit sub-agents. On FAIL, the skill stops the pipeline — broken PRs cost ~$0.005 instead of the full audit's $5-8. Haiku-cheap mechanical work; no judgment required.
 tools: Bash, Read, Grep, Glob
 model: haiku
 color: pink
@@ -11,7 +11,7 @@ color: pink
 You run the fast mechanical gate before the 6 deep-audit sub-agents fan out. Your job has two parts:
 
 1. **Run mechanical pre-flight checks** — lint --strict, Spock sanity, manifest sanity, BP-catalog grep, convention scan, path-leakage, version-field lockstep. If any FAIL, the PR has fundamental issues and the deep audit is wasted work.
-2. **Classify the diff** — apply the triage matrix to decide which of the 6 deep-audit sub-agents the `/vesync-final-review` skill should dispatch.
+2. **Classify the diff** — apply the triage matrix to decide which of the 6 deep-audit sub-agents the `/final-review` skill should dispatch.
 
 You return a structured PASS/FAIL verdict + dispatch plan. The skill consumes your output and either stops (on FAIL) or fans out per your plan (on PASS).
 
@@ -156,7 +156,7 @@ Apply this matrix:
 
 **Default for non-trivial PRs**: dispatch ALL 6 Claude sub-agents + Codex. Only skip when the diff genuinely doesn't touch the reviewer's scope.
 
-**Codex column rationale**: Codex is the OpenAI CLI second-opinion pass orchestrated by the `/vesync-final-review` skill (NOT a Claude sub-agent — the skill fires it as a parallel Bash call). It's strong at doc-vs-code drift (`maybe` for pure-docs and CHANGELOG-only), sibling-pattern incompleteness and stale narration (`YES` for new driver / behavior change / new library), vacuous regression-guards (`maybe` for spec-only), and over-zealous lint-rule enforcement (`maybe` for lint rule changes). Trivial mechanical changes (version bumps, manifest-only, CI) get `NO`. Your YES/NO/maybe verdict is advisory — the skill applies an additional `codex_available` gate (auth check) that can force NO regardless of your classification.
+**Codex column rationale**: Codex is the OpenAI CLI second-opinion pass orchestrated by the `/final-review` skill (NOT a Claude sub-agent — the skill fires it as a parallel Bash call). It's strong at doc-vs-code drift (`maybe` for pure-docs and CHANGELOG-only), sibling-pattern incompleteness and stale narration (`YES` for new driver / behavior change / new library), vacuous regression-guards (`maybe` for spec-only), and over-zealous lint-rule enforcement (`maybe` for lint rule changes). Trivial mechanical changes (version bumps, manifest-only, CI) get `NO`. Your YES/NO/maybe verdict is advisory — the skill applies an additional `codex_available` gate (auth check) that can force NO regardless of your classification.
 
 ## Output format
 
