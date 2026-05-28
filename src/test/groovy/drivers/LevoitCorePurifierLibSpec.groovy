@@ -864,4 +864,186 @@ class LevoitCorePurifierLibSpec extends HubitatSpec {
         testParent.allRequests.any { it.method == "setPurifierMode" && it.data.mode == "sleep" }
         testDevice.events.any { it.name == "mode" && it.value == "sleep" }
     }
+
+    // -------------------------------------------------------------------------
+    // Bucket B4/B5 (#142 Phase 2e): parameterized setLevel(value) + cycleSpeed
+    //
+    // setLevel thresholds are derived from the band count: (i*100).intdiv(N) for
+    // i in 1..N-1 — proven byte-exact vs the prior hardcoded thresholds (3-band
+    // [33,66], 4-band [25,50,75]) across the full 0..100 domain. cycleSpeed order
+    // derives from getSpeedBands().values(). Default loader = Core 400S (4-band);
+    // 3-band coverage via band3Driver() (Core 300S).
+    //
+    // The boundary tests lock the EXACT band edges — this is the v2.5 "all land on
+    // high" bug regression guard for the threshold path.
+    // -------------------------------------------------------------------------
+
+    // ---- setLevel 4-band threshold boundaries (Core 400S: [25,50,75]) ----
+
+    @Unroll
+    def "4-band setLevel(#pct) maps to speed level #lvl (boundary lock)"() {
+        given:
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when:
+        driver.setLevel(pct)
+
+        then: "setLevel API call carries the expected band level"
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req?.data?.level == lvl
+
+        and: "the level attribute reflects the raw percentage"
+        testDevice.events.any { it.name == "level" && it.value == pct }
+
+        where:
+        pct | lvl
+        1   | 1    // <25 -> 1
+        24  | 1    // boundary just below 25
+        25  | 2    // boundary at 25 -> 2
+        49  | 2    // just below 50
+        50  | 3    // boundary at 50 -> 3
+        74  | 3    // just below 75
+        75  | 4    // boundary at 75 -> 4
+        100 | 4    // top
+    }
+
+    // ---- setLevel 3-band threshold boundaries (Core 300S: [33,66]) ----
+
+    @Unroll
+    def "3-band setLevel(#pct) maps to speed level #lvl (boundary lock)"() {
+        given:
+        def d = band3Driver()
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when:
+        d.setLevel(pct)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req?.data?.level == lvl
+
+        where:
+        pct | lvl
+        1   | 1    // <33 -> 1
+        32  | 1    // just below 33
+        33  | 2    // boundary at 33 -> 2
+        65  | 2    // just below 66
+        66  | 3    // boundary at 66 -> 3
+        100 | 3    // top
+    }
+
+    def "setLevel(0) short-circuits to off() (no speed command)"() {
+        given:
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(0)
+
+        then: "off path: setSwitch enabled=false"
+        testParent.allRequests.any { it.method == "setSwitch" && it.data.enabled == false }
+
+        and: "no setLevel speed command sent"
+        !testParent.allRequests.any { it.method == "setLevel" }
+    }
+
+    def "setLevel(null) is null-guarded by safeIntArg -> 0 -> off (no NPE, no speed command)"() {
+        given:
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(null)
+
+        then: "safeIntArg(null,0,0,100) -> 0 -> off() short-circuit"
+        testParent.allRequests.any { it.method == "setSwitch" && it.data.enabled == false }
+        !testParent.allRequests.any { it.method == "setLevel" }
+        noExceptionThrown()
+    }
+
+    def "4-band setLevel boundary-distinctness: the threshold set maps to all 4 distinct bands (v2.5 regression guard)"() {
+        given:
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when: "one representative percentage from each band"
+        def levels = [10, 35, 60, 90].collect { pct ->
+            testParent.reset()
+            driver.setLevel(pct)
+            testParent.allRequests.find { it.method == "setLevel" }?.data?.level
+        }
+
+        then: "each band maps to a DISTINCT level — no collapse to a single speed"
+        levels == [1, 2, 3, 4]
+        levels.toSet().size() == 4
+    }
+
+    def "3-band setLevel boundary-distinctness: maps to 3 distinct bands"() {
+        given:
+        def d = band3Driver()
+        testDevice.events.add([name: "switch", value: "on"])
+        state.mode = "manual"
+
+        when:
+        def levels = [10, 50, 90].collect { pct ->
+            testParent.reset()
+            d.setLevel(pct)
+            testParent.allRequests.find { it.method == "setLevel" }?.data?.level
+        }
+
+        then:
+        levels == [1, 2, 3]
+        levels.toSet().size() == 3
+    }
+
+    // ---- cycleSpeed wraparound (4-band Core 400S) ----
+
+    @Unroll
+    def "4-band cycleSpeed from #from advances to level #toLevel"() {
+        given:
+        testDevice.events.add([name: "switch", value: "on"])
+        state.speed = from
+        state.mode = "manual"
+
+        when:
+        driver.cycleSpeed()
+
+        then: "the next band's setLevel level is sent"
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req?.data?.level == toLevel
+
+        where:
+        from     | toLevel
+        "low"    | 2
+        "medium" | 3
+        "high"   | 4
+        "max"    | 1   // wraps to first band
+        null     | 1   // unrecognized/null wraps to first band
+    }
+
+    // ---- cycleSpeed wraparound (3-band Core 300S) ----
+
+    @Unroll
+    def "3-band cycleSpeed from #from advances to level #toLevel"() {
+        given:
+        def d = band3Driver()
+        testDevice.events.add([name: "switch", value: "on"])
+        state.speed = from
+        state.mode = "manual"
+
+        when:
+        d.cycleSpeed()
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req?.data?.level == toLevel
+
+        where:
+        from     | toLevel
+        "low"    | 2
+        "medium" | 3
+        "high"   | 1   // 3-band wraps high -> low
+        "max"    | 1   // 'max' not in 3-band table -> wraps to first
+        null     | 1
+    }
 }

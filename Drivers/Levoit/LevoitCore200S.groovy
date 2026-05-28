@@ -111,35 +111,6 @@ metadata {
     }
 }
 
-def cycleSpeed() {
-    logDebug "cycleSpeed()"
-    ensureSwitchOn()    // BP24-A fix — replaces dead state.switch == "off" branch
-
-    def speed = (state.speed == "low") ? "medium" : ( (state.speed == "medium") ? "high" : "low")
-    setSpeed(speed)
-}
-
-def setLevel(value)
-{
-    logDebug "setLevel $value"
-    // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
-    Integer pct = safeIntArg(value, 0, 0, 100)
-    // SwitchLevel convention: setLevel(0) means off (Z-Wave dimmer platform expectation).
-    if (pct == 0) { off(); return }
-    // BP23: auto-on when switch is off (SwitchLevel capability convention).
-    // state.turningOn re-entrance guard is inside ensureSwitchOn().
-    ensureSwitchOn()
-    def speed = 0
-    setMode("manual") // always manual if setLevel() cmd was called
-
-    if(pct < 33) speed = 1
-    if(pct >= 33 && pct < 66) speed = 2
-    if(pct >= 66) speed = 3
-
-    device.sendEvent(name: "level", value: pct)
-    setSpeed(speed)
-}
-
 // Core 200S has no AQ sensor and no auto mode — setSpeed/setMode (provided by the lib)
 // gate the auto branch + allowed-mode set on this hook (Bucket B2/B3, #142 Phase 2d).
 private boolean supportsAutoMode() { false }
@@ -153,8 +124,8 @@ private Map getSpeedBands() { [1:"low", 2:"medium", 3:"high"] }
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 // installed, uninstalled, initialize, updated, on, off, toggle, setDisplay, handlePower,
 // handleSpeed, handleMode, handleDisplayOn, setChildLock, setTimer, cancelTimer, resetFilter,
-// checkHttpResponse, setLevel(value, duration), mapSpeedToInteger, mapIntegerToSpeed,
-// mapIntegerStringToSpeed, setSpeed, setMode are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
+// checkHttpResponse, setLevel(value, duration), setLevel(value), cycleSpeed, mapSpeedToInteger,
+// mapIntegerToSpeed, mapIntegerStringToSpeed, setSpeed, setMode are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
 
 def update() {
 

@@ -38,7 +38,7 @@ library(
 //             false for 200S (no AQ sensor / no auto mode), true for 300S/400S/600S.
 //             setSpeed/setMode consume it to gate the auto branch + allowed-mode set
 //             (Bucket B2/B3, #142 Phase 2d).
-//   PROVIDES: see Group 1 + Group 2 sections below for the 30 methods supplied.
+//   PROVIDES: see Group 1 + Group 2 sections below for the 32 methods supplied.
 
 // ---- Group 1: Shared 18 — called by all four Core drivers (200S/300S/400S/600S) ----
 
@@ -359,6 +359,57 @@ def setMode(mode) {
             handleEvent("speed", "on")
             break;
     }
+}
+
+// Bucket B5 (#142 Phase 2e): table-driven speed cycle. The cycle order is the
+// band table's values (Phase 2c getSpeedBands()), so 3-band (low/medium/high) and
+// 4-band (low/medium/high/max) models share this body. Walks to the next band and
+// wraps to the first; an unrecognized/null state.speed (indexOf == -1) wraps to the
+// first band ("low"), matching the prior per-driver ternary's final-else and the
+// switch's default. BP24-A: ensureSwitchOn() turns the device on if off (SHOULD-ON).
+def cycleSpeed() {
+    logDebug "cycleSpeed()"
+    ensureSwitchOn()
+
+    List order = getSpeedBands().values().toList()
+    int idx = order.indexOf(state.speed)
+    String next = order[(idx + 1) % order.size()]
+    setSpeed(next)
+}
+
+// Bucket B4 (#142 Phase 2e): table-driven setLevel(value) 1-arg. The
+// percentage-to-band thresholds are derived from the band count: for N bands the
+// boundaries are (i*100).intdiv(N) for i in 1..N-1 — proven byte-exact across the
+// full 0..100 domain against the prior per-driver hardcoded thresholds (3-band
+// [33,66], 4-band [25,50,75]; verified zero mismatches at every percentage).
+// band = 1 + (count of thresholds <= pct), giving 1..N.
+// BP18 null-guard (safeIntArg), setLevel(0)==off short-circuit, BP23 ensureSwitchOn,
+// and the setMode("manual") + sendEvent(level) + setSpeed(band) sequence are all
+// preserved verbatim from the prior per-driver bodies.
+def setLevel(value)
+{
+    logDebug "setLevel $value"
+    // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
+    Integer pct = safeIntArg(value, 0, 0, 100)
+    // SwitchLevel convention: setLevel(0) means off (Z-Wave dimmer platform expectation).
+    if (pct == 0) { off(); return }
+    // BP23: auto-on when switch is off (SwitchLevel capability convention).
+    // state.turningOn re-entrance guard is inside ensureSwitchOn().
+    ensureSwitchOn()
+    setMode("manual") // always manual if setLevel() cmd was called
+
+    // Derive the band from the per-model band count (Phase 2c getSpeedBands()).
+    // Thresholds (i*100).intdiv(N) reproduce the exact prior boundaries:
+    //   3-band -> [33,66] (<33→1, 33-65→2, ≥66→3)
+    //   4-band -> [25,50,75] (<25→1, 25-49→2, 50-74→3, ≥75→4)
+    int n = getSpeedBands().size()
+    int speed = 1
+    for (int i = 1; i < n; i++) {
+        if (pct >= (i * 100).intdiv(n)) speed = i + 1
+    }
+
+    device.sendEvent(name: "level", value: pct)
+    setSpeed(speed)
 }
 
 def handleDisplayOn(displayOn)
