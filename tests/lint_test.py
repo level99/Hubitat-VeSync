@@ -217,6 +217,34 @@ class TestBP3EnvelopePeel:
         }
     """)
 
+    # must-not-catch: lib-inheritance shape (Task #142 Phase 2b+ centerpiece migration).
+    # The driver has no applyStatus body locally — it inherits one from the lib.
+    # The lib's body must contain a complete applyStatus method with either the
+    # inline peel or the peelEnvelope() call inside.
+    #
+    # No production driver currently inherits applyStatus via lib (V2-line drivers
+    # all define their own; Core line uses update() not applyStatus). The rule
+    # supports this for future lib-extraction phases. The fixture below stages
+    # a synthetic lib on disk to exercise the resolution path.
+    GOOD_LIB_INHERITANCE = textwrap.dedent("""\
+        #include level99.LevoitSyntheticTestLib
+
+        // Driver inherits applyStatus + envelope-peel from the synthetic lib
+        // staged at Drivers/Levoit/LevoitSyntheticTestLibLib.groovy.
+    """)
+
+    # Synthetic lib content that the lib-inheritance test stages on disk.
+    SYNTHETIC_LIB_NAME = "LevoitSyntheticTestLib"
+    SYNTHETIC_LIB_CONTENT = textwrap.dedent("""\
+        // Synthetic lib file used by test_good_lib_inheritance_passes.
+        // Provides applyStatus with peelEnvelope() helper call so the BP3 rule
+        // finds the contract satisfied via #include lookup.
+        def applyStatus(status) {
+            def r = peelEnvelope(status)
+            if (settings?.debugOutput) log.debug "applyStatus raw r keys=${r?.keySet()}"
+        }
+    """)
+
     # must-catch: neither inline loop NOR helper call — bug class still flagged.
     BAD = textwrap.dedent("""\
         def applyStatus(status) {
@@ -238,6 +266,28 @@ class TestBP3EnvelopePeel:
         # Direction B (helper shape): rule accepts peelEnvelope() helper call.
         findings = run_rule(check_bp3_envelope_peel, self.GOOD_HELPER, "LevoitVital200S")
         assert findings == []
+
+    def test_good_lib_inheritance_passes(self, tmp_path):
+        # Direction B (lib-inheritance shape, Task #142 Phase 2b-pre): rule accepts
+        # a driver that inherits applyStatus + envelope peel from an #include'd lib.
+        # Resolves via tests/lint_rules/_helpers.py:included_lib_texts which reads
+        # the lib file sibling-of-driver from disk. We stage a synthetic lib in
+        # Drivers/Levoit/ for the duration of this test (real path required; the
+        # _helpers.py:_lib_text_cache caches by Path, and the test uses a unique
+        # synthetic lib name to avoid collisions with real libs).
+        lib_path = REPO_ROOT / "Drivers" / "Levoit" / f"{self.SYNTHETIC_LIB_NAME}Lib.groovy"
+        lib_path.write_text(self.SYNTHETIC_LIB_CONTENT, encoding='utf-8')
+        try:
+            findings = run_rule(check_bp3_envelope_peel, self.GOOD_LIB_INHERITANCE, "LevoitVital200S")
+            assert findings == []
+        finally:
+            try:
+                lib_path.unlink()
+            except FileNotFoundError:
+                pass
+            # Evict the per-path cache entry so subsequent tests don't see stale data.
+            from lint_rules._helpers import _lib_text_cache
+            _lib_text_cache.pop(lib_path, None)
 
     def test_bad_fails(self):
         # Direction A: rule still catches the bug class when neither shape present.
@@ -495,6 +545,22 @@ class TestBP12PrefSeed:
         }
     """)
 
+    # must-not-catch: lib-inheritance shape (Task #142 Phase 2b+ centerpiece migration).
+    # The driver has no pref-seed pattern locally — it inherits a method (e.g.
+    # update(status, nightLight)) from an #include'd lib whose body has the pattern.
+    # Resolves to the real LevoitChildBaseLib.groovy on disk via _helpers.py:
+    # included_lib_texts (the lib contains both the inline-gate and helper-call shapes).
+    #
+    # Fixture is intentionally bare — no comment or code containing the inline
+    # token "state.prefsSeeded" or helper-call token "seedPrefs(" — otherwise the
+    # rule's regex would match the fixture text itself and the test would pass for
+    # the wrong reason (defeating the non-vacuity proof that the lib lookup matters).
+    GOOD_LIB_INHERITANCE = textwrap.dedent("""\
+        #include level99.LevoitChildBase
+
+        // Driver inherits pref-seed via a method defined in the lib body.
+    """)
+
     # must-catch: neither inline gate NOR helper call — bug class still flagged.
     BAD = textwrap.dedent("""\
         def applyStatus(status) {
@@ -513,6 +579,14 @@ class TestBP12PrefSeed:
     def test_good_helper_passes(self):
         # Direction B (helper shape): rule accepts seedPrefs() helper call.
         findings = run_rule(check_bp12_pref_seed, self.GOOD_HELPER, "LevoitVital200S")
+        assert findings == []
+
+    def test_good_lib_inheritance_passes(self):
+        # Direction B (lib-inheritance shape, Task #142 Phase 2b-pre): rule accepts
+        # a driver that inherits the pref-seed pattern from an #include'd lib.
+        # Resolves via tests/lint_rules/_helpers.py:included_lib_texts which reads
+        # the real LevoitChildBaseLib.groovy from disk.
+        findings = run_rule(check_bp12_pref_seed, self.GOOD_LIB_INHERITANCE, "LevoitVital200S")
         assert findings == []
 
     def test_bad_fails(self):
