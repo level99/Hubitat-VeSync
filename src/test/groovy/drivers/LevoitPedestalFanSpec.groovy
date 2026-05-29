@@ -184,6 +184,32 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         testLog.errors.any { it.contains("0") || it.contains("invalid") || it.contains("must be") }
     }
 
+    def "BP24: setSpeed('turbo') on an off device does NOT turn it on and sends no speed command"() {
+        // Regression guard: the unknown-enum reject must run BEFORE ensureSwitchOn().
+        // Pre-fix, ensureSwitchOn() ran first, so setSpeed('turbo') from off powered the
+        // device on and then no-op'd at the fanControlEnumToLevel==null reject -- a phantom
+        // power-on with no speed set.
+        // NON-VACUITY: this assertion goes RED if ensureSwitchOn() is moved back ahead of
+        // the level-resolution/reject (the pre-fix ordering) — the off device would then
+        // receive a setSwitch powerSwitch=1, failing the first `then` block.
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove('turningOn')
+
+        when: "an unrecognized enum speed is requested on an off device"
+        driver.setSpeed("turbo")
+
+        then: "no on() — no setSwitch powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "no setLevel speed command was sent"
+        testParent.allRequests.findAll { it.method == "setLevel" }.size() == 0
+
+        and: "an error was logged for the unknown enum"
+        testLog.errors.any { it.contains("turbo") || it.contains("unknown") }
+    }
+
     def "setSpeed('on') calls on() -- Hubitat FanControl capability convention (Theme A)"() {
         // Hubitat FanControl.setSpeed accepts 'on' as a valid enum value meaning 'resume at
         // prior/default speed'. Previously this fell through to the unknown-enum error path.

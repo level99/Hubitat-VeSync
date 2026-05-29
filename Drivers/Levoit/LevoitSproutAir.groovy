@@ -159,8 +159,10 @@ def initialize(){ logDebug "Initializing" }
 // Different from VeSyncAirBypass (Core line): {switch: 'on'/'off', id: 0}
 def on(){
     logDebug "on()"
-    // Re-entrance guard: ensureSwitchOn() → on() → setFanSpeed() → ensureSwitchOn() would recurse
-    // without this. state.turningOn matches the pattern used in humidifier drivers (e.g. Sup6000S).
+    // Re-entrance guard: guards against re-entry when a speed/mode setter calls ensureSwitchOn()
+    // during an in-flight turn-on. The recursion vector is setFanSpeed -> ensureSwitchOn -> on;
+    // on() itself only issues setSwitch, so without this flag a setter that auto-ons would re-enter
+    // on() before the first call completes. state.turningOn matches humidifier drivers (e.g. Sup6000S).
     if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
     state.turningOn = true
     try {

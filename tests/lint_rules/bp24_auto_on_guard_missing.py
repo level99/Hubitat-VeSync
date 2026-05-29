@@ -123,6 +123,56 @@ ENSURE_SWITCH_ON_RE = re.compile(r'ensureSwitchOn\s*\(')
 # ensureSwitchOn() is used).
 TURNING_ON_RE = re.compile(r'\bstate\.turningOn\b')
 
+# Delegate-call patterns: a SHOULD-ON method with no direct API call may still
+# reach the cloud by delegating to a same-file helper (handleX / doSetX /
+# setFanSpeed / setSpeed / setMode / writeSpeedPreferred / sendLevel-style).
+# Mirrors the delegation-following design in check_c3_gate_coverage.py so a
+# SHOULD-ON method that delegates does not silently escape the auto-on scan.
+_DELEGATE_CALL_RE = re.compile(
+    r'\b(handle\w+|doSet\w+|setFanSpeed|setSpeed|setSpeedLevel|setMode|'
+    r'writeSpeedPreferred|sendLevel)\s*\('
+)
+
+# Any method definition (for callee-body lookup).  Optional leading indentation,
+# optional return type, captured method name.
+ANY_METHOD_RE = re.compile(r'^\s*def\s+(\w+)\s*\(', re.MULTILINE)
+
+
+def _resolve_delegate_callee_body(
+    caller_name: str, caller_body: str, source: str
+):
+    """
+    Resolve the first same-file delegate callee named in ``caller_body``.
+
+    Scans ``caller_body`` for the first _DELEGATE_CALL_RE match, extracts the
+    callee name, looks it up via ANY_METHOD_RE, and returns the callee's
+    brace-balanced body string (or None if no resolvable, non-self callee).
+
+    Two guards prevent false positives (matching check_c3_gate_coverage.py):
+      - Self-reference: a callee name equal to ``caller_name`` is a method name
+        appearing inside a string literal (e.g. logDebug "setMode()") — skip it.
+      - Not-defined: a callee name with no matching def in ``source`` — skip it.
+    """
+    method_positions = {}
+    for am in ANY_METHOD_RE.finditer(source):
+        method_positions.setdefault(am.group(1), am)
+    for dm in _DELEGATE_CALL_RE.finditer(caller_body):
+        raw = dm.group(0)
+        callee_name = raw[:raw.index('(')].strip()
+        if callee_name == caller_name:
+            continue
+        callee_match = method_positions.get(callee_name)
+        if callee_match is None:
+            continue
+        brace = source.find('{', callee_match.end() - 1)
+        if brace == -1:
+            continue
+        end = _find_method_body_end(source, brace)
+        if end == -1:
+            continue
+        return source[brace:end]
+    return None
+
 
 def _find_method_body_end(source: str, brace_start: int) -> int:
     """
@@ -221,14 +271,74 @@ def check_rule32_auto_on_guard_missing(
         body = raw_text[brace_start:body_end]
         body_clean = _strip_line_comments(body)
 
+        method_start_line = _line_of(raw_text, m.start())
+
         # Does the method make a direct API call?
         if not API_CALL_RE.search(body_clean):
-            # Pure delegation (e.g. calls another method that does the API call)
-            # — not our responsibility; the callee should have the guard.
+            # No direct API call.  Two sub-cases:
+            #
+            # (1) The method already carries its own auto-on guard
+            #     (ensureSwitchOn() — the canonical helper).  It is correct
+            #     regardless of where the cloud write happens.  PASS.
+            #
+            # (2) Pure delegation with NO self-guard: the method reaches the cloud
+            #     through a same-file delegate (handleSpeed/doSetX/setFanSpeed-style).
+            #     Follow the delegation and check the callee for the guard — a
+            #     SHOULD-ON method must not escape the auto-on scan just because the
+            #     API call lives one hop away.  If the callee makes an API call but
+            #     lacks ensureSwitchOn(), the auto-on guard is missing → BP24-B.
+            if ENSURE_SWITCH_ON_RE.search(body_clean):
+                continue
+
+            callee_body = _resolve_delegate_callee_body(
+                method_name, body_clean, raw_text
+            )
+            if callee_body is None:
+                # No resolvable same-file delegate — nothing to follow.
+                continue
+            callee_clean = _strip_line_comments(callee_body)
+            if not API_CALL_RE.search(callee_clean):
+                # Delegate does not itself reach the cloud — out of scope here.
+                continue
+            if ENSURE_SWITCH_ON_RE.search(callee_clean):
+                # Callee carries the guard — the SHOULD-ON chain is protected. PASS.
+                continue
+            # Delegate makes an API call but neither caller nor callee guards the
+            # power state → auto-on guard missing across the delegation boundary.
+            findings.append(make_finding(
+                severity="FAIL",
+                rule_id="RULE32_auto_on_guard_missing",
+                title=(
+                    f"{method_name}() delegates an API call without an auto-on guard "
+                    "(Bug Pattern #24-B, delegation-following)"
+                ),
+                file_rel=file_rel,
+                lineno=method_start_line,
+                raw_lines=raw_lines,
+                why=(
+                    f"Bug Pattern #24-B: ``{method_name}()`` reaches the VeSync cloud "
+                    "through a same-file delegate that makes the API call, but neither "
+                    f"``{method_name}()`` nor the delegate checks whether the device is on "
+                    "first. Calling this method from automation on an off-state device "
+                    "causes the cloud to accept the command while the physical device stays "
+                    "off — Hubitat attributes and real device state diverge. SHOULD-ON "
+                    "methods must auto-turn-on before commanding, even when the cloud write "
+                    "is one delegation hop away."
+                ),
+                fix=(
+                    f"Add ``ensureSwitchOn()`` at the top of ``{method_name}()`` (after "
+                    "parameter validation, before delegating), OR add it inside the "
+                    "delegate that performs the API call. ``ensureSwitchOn()`` is provided "
+                    "by LevoitChildBaseLib and handles both the currentValue check and the "
+                    "!state.turningOn re-entrance flag. If this method is intentionally "
+                    "SKIP-OK or NO-ON, add an exemption entry to the "
+                    "``bp24_auto_on_exemptions`` list in tests/lint_config.yaml with a "
+                    "substantive ``rationale``."
+                ),
+            ))
             continue
 
         # API call present — check for auto-on guard.
-        method_start_line = _line_of(raw_text, m.start())
 
         has_ensure_switch_on = bool(ENSURE_SWITCH_ON_RE.search(body_clean))
         has_inline_guard = bool(INLINE_GUARD_RE.search(body_clean))

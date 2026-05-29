@@ -182,8 +182,10 @@ def initialize(){ logDebug "Initializing" }
 // V2-style convention — different from VeSyncAirBypass Core line: {switch: 'on'/'off', id: 0}
 def on(){
     logDebug "on()"
-    // Re-entrance guard: ensureSwitchOn() → on() → setFanSpeed() → ensureSwitchOn() would recurse
-    // without this. state.turningOn matches the pattern used in humidifier drivers (e.g. Sup6000S).
+    // Re-entrance guard: guards against re-entry when a speed/mode setter calls ensureSwitchOn()
+    // during an in-flight turn-on. The recursion vector is setFanSpeed -> ensureSwitchOn -> on;
+    // on() itself only issues setSwitch, so without this flag a setter that auto-ons would re-enter
+    // on() before the first call completes. state.turningOn matches humidifier drivers (e.g. Sup6000S).
     if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
     state.turningOn = true
     try {
@@ -368,10 +370,15 @@ def setTimer(seconds, action="off"){
     if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"addTimerV2"]); return }
     logDebug "setTimer(${secs}s, action=${act})"
     int actVal = (act == "on") ? 1 : 0
+    // Payload matches pyvesync PurifierV2TimerPayloadData / PurifierV2TimerActionItems:
+    //   top-level defaults type:0, subDeviceNo:0, repeat:0; each startAct item carries num:0.
     def data = [
         enabled: true,
-        startAct: [[type: "powerSwitch", act: actVal]],
-        tmgEvt: [clkSec: secs]
+        startAct: [[type: "powerSwitch", act: actVal, num: 0]],
+        tmgEvt: [clkSec: secs],
+        type: 0,
+        subDeviceNo: 0,
+        repeat: 0
     ]
     def resp = hubBypass("addTimerV2", data, "addTimerV2(${secs}s,${act})")
     if (httpOk(resp)) {

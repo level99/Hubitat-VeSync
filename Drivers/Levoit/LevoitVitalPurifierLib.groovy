@@ -228,6 +228,18 @@ def setSpeed(spd) {
     if (s == "off") return off()
     if (s == "sleep") { setMode("sleep"); device.sendEvent(name:"speed", value:"on"); return }
 
+    // Reject unknown speed values BEFORE ensureSwitchOn() and before any cloud write.
+    // Without this, an unrecognized value (e.g. "turbo") falls through to mapSpeedToInteger,
+    // which defaults unknown input to the "low" band (default: return 2) -- silently widening
+    // garbage to a real speed AND auto-powering the device on. setMode already rejects invalid
+    // modes; mirror that here so a malformed FanControl/Rule Machine speed does not turn the
+    // device on. (BP24-class: reject-before-auto-on.)
+    List validSpeeds = ["low", "medium", "high", "max"]
+    if (!(s in validSpeeds)) {
+        logWarn "setSpeed: invalid speed '${s}' -- must be one of: ${(validSpeeds + ['sleep','off']).join(', ')}; ignoring"
+        return
+    }
+
     ensureSwitchOn()
 
     // setLevel establishes manual mode + speed atomically; no setMode("manual") pre-call needed (V2 quirk)

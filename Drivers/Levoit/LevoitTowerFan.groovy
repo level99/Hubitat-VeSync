@@ -163,26 +163,32 @@ def setSpeed(spd){
         if (early == "off") { off(); return }
         if (early == "on")  { on(); return }
     }
-    // BP24-B: auto-on when switch is off (SwitchLevel/FanControl capability convention).
-    // Placed after the off/on short-circuits so setSpeed("off") never triggers auto-on.
-    // ensureSwitchOn() is provided by #include level99.LevoitChildBase.
-    ensureSwitchOn()
-    // If numeric string or integer, treat as raw fan level (1-12 raw setSpeed command)
-    if (spd instanceof Number || (spd instanceof String && spd.isInteger())) {
+    // Resolve + validate the requested level BEFORE ensureSwitchOn() so an invalid speed
+    // never auto-powers the device on (BP24-class: reject-before-auto-on). Previously
+    // ensureSwitchOn() ran first, so setSpeed("turbo") from off turned the device ON and
+    // then no-op'd at the enum-null reject below -- a phantom power-on with no speed set.
+    Integer lvl
+    boolean isRaw = (spd instanceof Number || (spd instanceof String && spd.isInteger()))
+    if (isRaw) {
         Integer rawLevel = (spd as Integer)
         if (rawLevel < 1 || rawLevel > 12) {
             logError "setSpeed: invalid raw level ${rawLevel} -- must be 1-12"
             recordError("setSpeed: invalid raw level ${rawLevel}", [method:"setLevel"])
             return
         }
-        sendLevel(rawLevel)
-        return
+        lvl = rawLevel
+    } else {
+        // Enum string (FanControl capability path). "auto" is a mode, not a level.
+        String s = (spd as String).trim().toLowerCase()
+        if (s == "auto") { ensureSwitchOn(); setMode("auto"); return }
+        lvl = fanControlEnumToLevel(s)
+        if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; recordError("setSpeed: unknown enum '${s}'", [method:"setLevel"]); return }
     }
-    // Enum string (FanControl capability path)
-    String s = (spd as String).trim().toLowerCase()
-    if (s == "auto") { setMode("auto"); return }
-    Integer lvl = fanControlEnumToLevel(s)
-    if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; recordError("setSpeed: unknown enum '${s}'", [method:"setLevel"]); return }
+    // BP24-B: auto-on when switch is off (SwitchLevel/FanControl capability convention).
+    // Placed after the off/on short-circuits AND after speed validation so neither
+    // setSpeed("off") nor an invalid speed triggers auto-on.
+    // ensureSwitchOn() is provided by #include level99.LevoitChildBase.
+    ensureSwitchOn()
     sendLevel(lvl)
 }
 

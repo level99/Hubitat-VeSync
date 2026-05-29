@@ -284,6 +284,19 @@ def setSpeed(speed) {
     if (s in intStringSet) s = mapIntegerStringToSpeed(s)
     // Power short-circuits BEFORE ensureSwitchOn — setSpeed("off") must NOT auto-on first
     if (s == "off") { off(); return }
+    // Reject unknown speed values BEFORE ensureSwitchOn() and before any cloud write.
+    // Without this, an unrecognized value (e.g. "turbo") falls through to handleSpeed ->
+    // mapSpeedToInteger, which defaults unknown input to the MAX band — silently widening
+    // garbage to full speed AND auto-powering the device on. setMode already rejects invalid
+    // modes; mirror that here. Valid named bands come from the band table; "sleep" is always
+    // valid, "auto" only on auto-capable models.
+    List validSpeeds = getSpeedBands().values().collect { it as String }
+    validSpeeds << "sleep"
+    if (supportsAutoMode()) validSpeeds << "auto"
+    if (!(s in validSpeeds)) {
+        logWarn "setSpeed: invalid speed '${s}' -- must be one of: ${validSpeeds.join(', ')}; ignoring"
+        return
+    }
     ensureSwitchOn()                                                             // BP24-B auto-on (after short-circuit)
     if (supportsAutoMode() && s == "auto") {
         setMode(s)

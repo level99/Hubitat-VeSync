@@ -920,7 +920,8 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
 
     def "BUG #212: setMistLevel skips cloud call when device is in sleep mode (Sup6000S firmware constraint)"() {
         // Pre-fix: setMistLevel(5) proceeded to setVirtualLevel even during sleep mode.
-        // Post-fix: sleep-mode guard after requireNotNull but before safeIntArg returns early with INFO.
+        // Post-fix: sleep-mode guard runs after the safeIntArg parse and the lvl<=0 power-off
+        // branch, but before the cloud write (setVirtualLevel) and ensureSwitchOn; returns early with INFO.
         given: "device mode is sleep"
         settings.descriptionTextEnable = true
         testDevice.events.add([name: "mode", value: "sleep"])
@@ -950,6 +951,34 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
 
         then: "setVirtualLevel API call was sent"
         !testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // setMistLevel(0) power-off ordering vs sleep-mode guard.
+    // Release-notes contract: setMistLevel(0) turns the device off for ALL humidifiers.
+    // The lvl<=0 -> off() branch MUST evaluate BEFORE the sleep-mode short-circuit, so a
+    // setMistLevel(0) issued while in sleep mode powers the device off instead of skipping.
+    // Regression guard: this test FAILS if the sleep guard is moved back ahead of the
+    // power-off branch (the off()/setSwitch power=0 call would never fire).
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel(0) while in sleep mode powers the device off (off branch precedes sleep guard)"() {
+        given: "device is in sleep mode and on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "mode", value: "sleep"])
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when:
+        driver.setMistLevel(0)
+
+        then: "a setSwitch power-off (powerSwitch=0) API call was made"
+        def req = testParent.allRequests.find { it.method == "setSwitch" }
+        req != null
+        req.data.powerSwitch == 0
+
+        and: "no setVirtualLevel mist-write call was made"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
     }
 
     // -------------------------------------------------------------------------

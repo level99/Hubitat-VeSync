@@ -589,6 +589,35 @@ class LevoitVital200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP24: invalid speed from off-state must NOT auto-power the device on
+    // -------------------------------------------------------------------------
+
+    def "BP24: setSpeed('turbo') on an off device does NOT turn it on and sends no speed command"() {
+        // Regression guard: the invalid-speed reject must run BEFORE ensureSwitchOn().
+        // Pre-fix, ensureSwitchOn() ran first, so an unrecognized speed powered the device
+        // on and then mapSpeedToInteger's default→low (return 2) sent a real low-speed command.
+        // NON-VACUITY: this assertion goes RED if the reject is moved back after
+        // ensureSwitchOn() (the pre-fix ordering) — the off device would then receive a
+        // setSwitch powerSwitch=1 AND a setLevel command, failing both `then` blocks.
+        given: "device is off and turningOn flag is clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove('turningOn')
+
+        when: "setSpeed('turbo') is called on an off device"
+        driver.setSpeed("turbo")
+
+        then: "no on() — no setSwitch powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "no setLevel speed command was sent"
+        testParent.allRequests.find { it.method == "setLevel" } == null
+
+        and: "a warn was logged naming the method"
+        testLog.warns.any { it.contains("setSpeed") }
+    }
+
+    // -------------------------------------------------------------------------
     // C3: state-change gate — setChildLock and setDisplay
     // -------------------------------------------------------------------------
 

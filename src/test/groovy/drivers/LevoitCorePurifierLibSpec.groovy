@@ -763,24 +763,45 @@ class LevoitCorePurifierLibSpec extends HubitatSpec {
         !testParent.allRequests.any { it.method in ["setLevel", "setPurifierMode"] }
     }
 
+    // Unknown-speed rejection from an OFF device: an unrecognized band name (e.g. "turbo") must be
+    // rejected BEFORE ensureSwitchOn() and before any cloud write — it must NOT auto-power-on the
+    // device nor widen the garbage value to the MAX band.
+    // Regression guard: this test FAILS if the unknown-speed validation is removed (the device would
+    // then auto-on via ensureSwitchOn and send a setLevel at the MAX band).
+    def "setSpeed('turbo') from off-state does NOT auto-on and sends NO cloud command (unknown speed rejected)"() {
+        given: "device is off, no in-flight turn-on"
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        state.mode = "auto"
+
+        when:
+        driver.setSpeed("turbo")
+
+        then: "no power-on (ensureSwitchOn never fired): no setSwitch enabled=true"
+        !testParent.allRequests.any { it.method == "setSwitch" && it.data.enabled == true }
+
+        and: "no speed/mode cloud command was sent"
+        !testParent.allRequests.any { it.method in ["setLevel", "setPurifierMode"] }
+    }
+
     // ---- setSpeed: no-auto (Core 200S loader) ----
 
-    def "setSpeed('auto') on no-auto Core 200S does NOT route to auto (falls through state-machine)"() {
+    def "setSpeed('auto') on no-auto Core 200S is rejected as unknown speed (no API call)"() {
         given: "Core 200S (supportsAutoMode=false), switch on, manual mode"
         def d = noAutoDriver()
         testDevice.events.add([name: "switch", value: "on"])
         state.mode = "manual"
 
-        when: "setSpeed('auto') — 'auto' is not a valid band name, not off/sleep"
+        when: "setSpeed('auto') — 'auto' is not a valid band name, not off/sleep, and auto is unsupported"
         d.setSpeed("auto")
 
-        then: "the auto branch is gated off (supportsAutoMode=false); no setPurifierMode auto"
+        then: "no setPurifierMode auto (supportsAutoMode=false)"
         !testParent.allRequests.any { it.method == "setPurifierMode" && it.data.mode == "auto" }
-        // 'auto' falls into the manual-mode branch -> handleSpeed("auto") -> mapSpeedToInteger("auto")
-        // -> max key 3 (3-band fallback). The device receives a setLevel, not a mode change.
-        and: "a setLevel was sent (auto treated as an unknown speed name -> max band)"
-        def req = testParent.allRequests.find { it.method == "setLevel" }
-        req?.data?.level == 3
+
+        // Unknown-speed rejection: 'auto' is not in the valid-speed set on a no-auto model, so it is
+        // rejected BEFORE any cloud write instead of falling through to mapSpeedToInteger -> max band.
+        and: "no setLevel was sent (unknown speed rejected, not widened to max band)"
+        !testParent.allRequests.any { it.method == "setLevel" }
     }
 
     // ---- setMode: auto-supporting (Core 400S default loader) ----

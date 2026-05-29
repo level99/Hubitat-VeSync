@@ -140,7 +140,7 @@ boolean requireNonEmptyEnum(arg, String methodName) {
 //
 // Belt-and-suspenders with requireNotNull: keep the null-guard at call sites,
 // use safeIntArg to handle the non-null-but-non-numeric vector.
-private Integer safeIntArg(raw, Integer fallback = 0) {
+Integer safeIntArg(raw, Integer fallback = 0) {
     if (raw == null) return fallback
     try {
         String s = raw.toString().trim()
@@ -165,7 +165,7 @@ private Integer safeIntArg(raw, Integer fallback = 0) {
 // 4-arg clamp overload: coerce raw to Integer (W1/W2-hardened), then clamp to [lo, hi].
 // Collapses Math.max(lo, Math.min(hi, safeIntArg(x, fallback))) to one call.
 // Clamp is applied AFTER coercion and AFTER fallback — fallback is the pre-clamp value.
-private Integer safeIntArg(raw, Integer fallback, Integer lo, Integer hi) {
+Integer safeIntArg(raw, Integer fallback, Integer lo, Integer hi) {
     Integer v = safeIntArg(raw, fallback)
     return Math.max(lo, Math.min(hi, v))
 }

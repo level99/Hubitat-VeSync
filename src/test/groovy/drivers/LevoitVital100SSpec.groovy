@@ -652,6 +652,36 @@ class LevoitVital100SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP24: invalid speed from off-state must NOT auto-power the device on
+    // -------------------------------------------------------------------------
+
+    def "BP24: setSpeed('turbo') on an off device does NOT turn it on and sends no speed command"() {
+        // Regression guard (shared LevoitVitalPurifierLib.setSpeed; same path on 100S/200S).
+        // The invalid-speed reject must run BEFORE ensureSwitchOn(). Pre-fix, ensureSwitchOn()
+        // ran first, so an unrecognized speed powered the device on and then mapSpeedToInteger's
+        // default→low (return 2) sent a real low-speed command.
+        // NON-VACUITY: this assertion goes RED if the reject is moved back after
+        // ensureSwitchOn() (the pre-fix ordering) — the off device would then receive a
+        // setSwitch powerSwitch=1 AND a setLevel command, failing both `then` blocks.
+        given: "device is off and turningOn flag is clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove('turningOn')
+
+        when: "setSpeed('turbo') is called on an off device"
+        driver.setSpeed("turbo")
+
+        then: "no on() — no setSwitch powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "no setLevel speed command was sent"
+        testParent.allRequests.find { it.method == "setLevel" } == null
+
+        and: "a warn was logged naming the method"
+        testLog.warns.any { it.contains("setSpeed") }
+    }
+
+    // -------------------------------------------------------------------------
     // C3: state-change gate — setChildLock and setDisplay
     // -------------------------------------------------------------------------
 
@@ -889,9 +919,12 @@ class LevoitVital100SSpec extends HubitatSpec {
     // -----------------------------------------------------------------------
 
     @Unroll
-    def "BP26: setRoomSize('#badInput') does not throw and makes setAutoPreference API call (Vital 100S)"() {
-        // safeIntArg maps non-numeric to 0; the method sends 0 to the API (no floor on setRoomSize).
+    def "BP26: setRoomSize('#badInput') does not throw and sends roomSize=600 fallback (Vital 100S)"() {
+        // safeIntArg(sz, 600) maps non-numeric input to the 600 fallback (LevoitVitalPurifierLib
+        // setRoomSize). The method sends that fallback to the API as roomSize.
         // Pre-fix: (sz as Integer) on non-numeric threw before the guard could fire.
+        // Regression guard: asserts the actual roomSize payload value (600), so a change to the
+        // fallback constant — or a regression to an unguarded cast — fails this test.
         given:
         settings.descriptionTextEnable = false
 
@@ -901,8 +934,10 @@ class LevoitVital100SSpec extends HubitatSpec {
         then: "no exception thrown"
         noExceptionThrown()
 
-        and: "a setAutoPreference API call was made (not a silent no-op)"
-        testParent.allRequests.find { it.method == "setAutoPreference" } != null
+        and: "a setAutoPreference API call was made with the 600 fallback roomSize"
+        def req = testParent.allRequests.find { it.method == "setAutoPreference" }
+        req != null
+        req.data.roomSize == 600
 
         where:
         badInput << ["abc", "", true]

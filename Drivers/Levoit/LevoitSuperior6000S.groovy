@@ -161,14 +161,17 @@ def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
     // BP24: SHOULD-ON — mist-level command; calls ensureSwitchOn() below (SwitchLevel convention).
-    // Sup6000S V2 firmware additionally rejects setVirtualLevel while in sleep mode (inner code -1),
-    // so this method short-circuits during sleep mode before any cloud write or ensureSwitchOn.
+    // setMistLevel(0) means "turn off" (SwitchLevel/MistLevel convention; release-notes contract for
+    // all humidifiers). Evaluate the power-off branch BEFORE the sleep-mode short-circuit so a
+    // setMistLevel(0) issued while sleeping still powers the device off rather than silently skipping.
+    Integer lvl = safeIntArg(level, 0)
+    if (lvl <= 0) { off(); return }
+    // Sup6000S V2 firmware rejects setVirtualLevel while in sleep mode (inner code -1), so a
+    // positive-level mist write short-circuits during sleep mode before any cloud write or ensureSwitchOn.
     if (device.currentValue("mode") == "sleep") {
         logInfo "Skipping setMistLevel during sleep mode (Sup6000S firmware rejects preference writes in sleep mode; change mode first)"
         return
     }
-    Integer lvl = safeIntArg(level, 0)
-    if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
     def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: clamped, levelType: "mist"], "setVirtualLevel(${clamped})")

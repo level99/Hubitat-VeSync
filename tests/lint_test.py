@@ -5900,6 +5900,158 @@ class TestRule37BP26DoSetMethod:
 
 
 # ---------------------------------------------------------------------------
+# RULE37 Pass-1 partial-guard — scalar-param safeIntArg must not exempt OTHER
+# unguarded raw casts in the same method (closed-mechanism fix #9).
+# ---------------------------------------------------------------------------
+
+class TestRule37BP26ScalarPartialGuard:
+    """
+    RULE37 scalar-param partial-guard: the original Pass-1 implementation bailed
+    out of the per-param cast scan the moment ``safeIntArg(`` appeared ANYWHERE
+    in the method body.  A method that guards one param via safeIntArg but
+    raw-casts the FIRST (untyped) param on a different statement therefore went
+    unflagged.  The fix mirrors the Map-field partial-guard: only the SPECIFIC
+    safeIntArg-guarded receiver is exempt; an unguarded raw cast on the first
+    param is still flagged.
+    """
+
+    # Bad: setX(level) guards `other` via safeIntArg but raw-casts the first param `level`.
+    BAD_SCALAR_PARTIAL_GUARD = textwrap.dedent("""\
+        def setX(level) {
+            Integer o = safeIntArg(other, 0)
+            Integer v = level as Integer
+            hubBypass("setX", [v: v, o: o])
+        }
+    """)
+
+    # Good: the first param `level` itself goes through safeIntArg; the other coercion is also guarded.
+    GOOD_SCALAR_FULLY_GUARDED = textwrap.dedent("""\
+        def setX(level) {
+            Integer v = safeIntArg(level, 0)
+            Integer o = safeIntArg(other, 0)
+            hubBypass("setX", [v: v, o: o])
+        }
+    """)
+
+    def test_scalar_partial_guard_flags_unguarded_first_param(self):
+        """
+        Must-catch: safeIntArg on a non-first param does NOT exempt a raw
+        ``level as Integer`` cast on the first param.
+
+        Non-vacuity: reverting the fix (restoring the unconditional
+        ``if SAFE_INT_ARG_RE.search(body_clean): ... continue``) makes the rule
+        return [] for BAD_SCALAR_PARTIAL_GUARD, failing this assertion.
+        """
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_SCALAR_PARTIAL_GUARD)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37 for scalar partial-guard (level raw-cast, other guarded), got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE37_unsafe_int_coercion'), (
+            f"RULE37 scalar partial-guard finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_scalar_fully_guarded_passes(self):
+        """
+        Must-not-catch: when the first param itself is safeIntArg-guarded (and all
+        other coercions too), the method must NOT flag.
+        """
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_SCALAR_FULLY_GUARDED)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Fully-guarded scalar method must not flag RULE37, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE32 delegation-following — SHOULD-ON method delegating to a lib helper that
+# lacks ensureSwitchOn() must be flagged (closed-mechanism fix #10).
+# ---------------------------------------------------------------------------
+
+class TestRule32DelegationFollowing:
+    """
+    RULE32 delegation-following: a SHOULD-ON method (setSpeed/setMode/etc.) with
+    no DIRECT API call previously escaped the auto-on scan entirely
+    (``if not API_CALL_RE.search(body_clean): continue``).  The fix follows a
+    same-file delegate (handleX/doSetX/setFanSpeed-style); if the delegate makes
+    the API call but neither the caller nor the delegate calls ensureSwitchOn(),
+    the auto-on guard is missing across the delegation boundary → BP24-B.
+    """
+
+    # Bad: setSpeed delegates to handleSpeed (which makes the API call) but neither
+    # setSpeed nor handleSpeed calls ensureSwitchOn().
+    BAD_DELEGATE_NO_GUARD = textwrap.dedent("""\
+        def setSpeed(spd) {
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Good: the delegate handleSpeed carries the ensureSwitchOn() guard.
+    GOOD_DELEGATE_CALLEE_GUARDED = textwrap.dedent("""\
+        def setSpeed(spd) {
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            ensureSwitchOn()
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Also-good: the caller itself carries the guard before delegating.
+    GOOD_DELEGATE_CALLER_GUARDED = textwrap.dedent("""\
+        def setSpeed(spd) {
+            ensureSwitchOn()
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    def test_delegate_callee_unguarded_flags(self):
+        """
+        Must-catch: SHOULD-ON method delegating to an unguarded API-calling callee
+        must flag RULE32 BP24-B.
+
+        Non-vacuity: reverting the fix (restoring ``if not API_CALL_RE.search:
+        continue``) makes the rule return [] for BAD_DELEGATE_NO_GUARD (setSpeed
+        has no direct API call so it would be skipped entirely), failing this.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.BAD_DELEGATE_NO_GUARD)
+        assert any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            f"Expected RULE32 for SHOULD-ON method delegating to unguarded callee, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE32_auto_on_guard_missing'), (
+            f"RULE32 delegation finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_delegate_callee_guarded_passes(self):
+        """Must-not-catch: when the delegate callee has ensureSwitchOn(), no finding."""
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.GOOD_DELEGATE_CALLEE_GUARDED)
+        assert not any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            f"Delegate callee with ensureSwitchOn() must not flag RULE32, got: {findings}"
+        )
+
+    def test_delegate_caller_guarded_passes(self):
+        """Must-not-catch: when the caller itself has ensureSwitchOn() before delegating, no finding."""
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.GOOD_DELEGATE_CALLER_GUARDED)
+        assert not any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            f"Caller with ensureSwitchOn() before delegate must not flag RULE32, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # RULE39 -- CHANGELOG user-facing TMI lint
 # ---------------------------------------------------------------------------
 
