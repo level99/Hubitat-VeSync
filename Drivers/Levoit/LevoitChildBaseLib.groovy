@@ -292,3 +292,36 @@ private Map peelEnvelope(Map response) {
     }
     return (r instanceof Map) ? (r as Map) : [:]
 }
+
+// Hub/parent call wrapper — invokes parent.sendBypassRequest with a standard
+// bypassV2 envelope ([method, source:"APP", data]) and returns a synchronous
+// [status, data] result captured from the parent's response callback.
+// Optional tag adds a one-line debug trace; optional cb forwards the raw resp.
+//
+// recordError (called from httpOk below) resolves to the consumer driver's own
+// definition at compile time — either #include level99.LevoitDiagnostics, or a
+// local no-op stub (LevoitGeneric) — since the include's textual paste compiles
+// inside the consumer unit.
+private hubBypass(method, Map data=[:], tag=null, cb=null) {
+    def rspObj = [status: -1, data: null]
+    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
+        rspObj = [status: resp?.status, data: resp?.data]
+        def inner = resp?.data?.result?.code
+        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
+        if (cb) cb(resp)
+    }
+    return rspObj
+}
+
+private boolean httpOk(resp) {
+    if (!resp) return false
+    def st = resp.status as Integer
+    if (st in [200,201,204]) {
+        def inner = resp?.data?.result?.code
+        if (inner == null || inner == 0) return true
+        logDebug "HTTP 200, innerCode ${inner}"
+        return false
+    }
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
+    return false
+}

@@ -438,29 +438,6 @@ def applyStatus(status){
 // logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 
-// Hub/parent call wrapper — matches sibling driver pattern
-private hubBypass(method, Map data=[:], tag=null, cb=null){
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp){
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]){
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// hubBypass, httpOk are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 
 // ------------- END -------------

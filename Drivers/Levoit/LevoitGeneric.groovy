@@ -470,30 +470,9 @@ private boolean hasDeviceFields(data){
 // MissingMethodException on top of the original error.
 private void recordError(String msg, Map ctx = [:], String overrideDni = null) { /* no-op */ }
 
-// Hub/parent call wrapper
-private hubBypass(method, Map data=[:], tag=null, cb=null){
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source:"APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp){
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]){
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// hubBypass, httpOk are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
+// httpOk's recordError("HTTP ...") call resolves to the local no-op stub above
+// (Generic does not #include level99.LevoitDiagnostics).
 
 /**
  * shouldFallback — returns true only when a V2 setSwitch call was received by the

@@ -28,7 +28,8 @@ library(
 // Library contract:
 //   REQUIRES: #include level99.LevoitDiagnostics  (provides recordError)
 //   REQUIRES: #include level99.LevoitChildBase    (provides logInfo/logDebug/logError/logWarn/
-//                                                  ensureDebugWatchdog/ensureSwitchOn/requireNotNull)
+//                                                  ensureDebugWatchdog/ensureSwitchOn/requireNotNull/
+//                                                  hubBypass/httpOk)
 //   PROVIDES: 31 shared methods covering lifecycle, power, speed/level, mode,
 //             feature setters, timer, polling, and HTTP plumbing. See sections below.
 //   BEHAVIOR CONTRACTS:
@@ -443,32 +444,7 @@ def update(status, nightLight) {
 
 // ---- HTTP plumbing ----
 
-// Hub/parent call wrapper
-private hubBypass(method, Map data=[:], tag=null, cb=null) {
-    def rspObj = [ status: -1, data: null ]
-    parent.sendBypassRequest(device, [ method: method, source:"APP", data: data ]) { resp ->
-        rspObj = [ status: resp?.status, data: resp?.data ]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp) {
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]) {
-        def inner = resp?.data?.result?.code
-        if (inner == null) return true
-        if (inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"
-    recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// hubBypass, httpOk are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 
 // ---- Power (canonical V2-line payload) ----
 // Canonical payload per pyvesync LAP-V102S.yaml / LAP-V201S.yaml:
