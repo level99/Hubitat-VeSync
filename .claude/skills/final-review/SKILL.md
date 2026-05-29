@@ -33,9 +33,9 @@ Parse `$ARGUMENTS`:
 
 Confirm the audit scope to the user briefly before dispatching: which branch, which base, what's in the diff.
 
-### Step 1b — Codex auth/install pre-check
+### Step 1b — Codex auth/install/usage pre-check
 
-Before dispatching anything else, check whether the OpenAI Codex CLI is installed and authenticated. This determines whether the parallel fan-out includes the Codex second-opinion pass or runs Claude-agents-only.
+Before dispatching anything else, check whether the OpenAI Codex CLI is installed, authenticated, and not usage-blocked. This determines whether the parallel fan-out includes the Codex second-opinion pass or runs Claude-agents-only.
 
 ```bash
 codex login status 2>&1
@@ -45,6 +45,9 @@ Interpret:
 - `Logged in using ChatGPT` or `Logged in using API key` → set `codex_available = true`. Codex will participate in the parallel dispatch.
 - `Not logged in` → set `codex_available = false`. Warn the user once: *"Codex CLI is installed but not authenticated (`codex login`). Proceeding with 6-agent Claude fan-out only."* Do NOT abort the skill.
 - Exit non-zero / `command not found` / similar → set `codex_available = false`. Warn the user once: *"Codex CLI is not installed on PATH. Proceeding with 6-agent Claude fan-out only. To install: `npm install -g @openai/codex`."* Do NOT abort the skill.
+- Output (or a `codex login status --json` plan/usage field, when the installed CLI version emits one) indicates the ChatGPT plan's usage window is exhausted / rate-limited (substrings like `usage limit`, `rate limit`, `quota`, `429`, `reset at`) → set `codex_available = false`. Warn the user once: *"Codex CLI is authenticated but the ChatGPT plan's usage window is exhausted (resets later). Proceeding with 6-agent Claude fan-out only."* Do NOT abort, and do NOT burn a probe message trying to confirm.
+
+**Do NOT spend a real `codex exec` probe message just to test usage** — on ChatGPT Plus the message budget is the scarce resource the whole gate exists to protect. `codex login status` is free; rely on it plus the Step 6 runtime guard (which catches a usage-exhaustion that only surfaces once the real fan-out call runs).
 
 When `codex_available = false`, the rest of the skill behaves as if Codex did not exist — the 6 Claude sub-agents still fan out and produce the unified report. The synthesis step skips the Codex-merge logic.
 
@@ -247,7 +250,9 @@ If the PR is large and the user is doing other work, dispatch each sub-agent wit
 
 ### Step 6 — Gather reports + synthesize
 
-When all dispatched Claude sub-agents return AND the Codex background job notifies completion (if dispatched), read `<repo-parent>/.codex_review_<short-sha>.md` into your context. If Codex was not dispatched (auth gate failed in Step 1b, or matrix marked it NO), skip the Codex-merge logic below and proceed with Claude-only synthesis.
+When all dispatched Claude sub-agents return AND the Codex background job notifies completion (if dispatched), read `<repo-parent>/.codex_review_<short-sha>.md` into your context. If Codex was not dispatched (auth/usage gate failed in Step 1b, or matrix marked it NO), skip the Codex-merge logic below and proceed with Claude-only synthesis.
+
+**Runtime usage-exhaustion guard (the Step 1b pre-check's safety net).** Step 1b can't always detect a usage block up front — the ChatGPT plan's window can be fine at `codex login status` time but exhaust mid-run, so the failure only surfaces in the background job's output. Before merging Codex findings, sanity-check the output file: if `.codex_review_<short-sha>.md` is **missing, empty, or its body is a usage/rate-limit/auth error rather than a findings report** (substrings like `usage limit`, `rate limit`, `quota`, `429`, `stream error`, `not logged in`), treat Codex as unavailable for this run — note `Codex: unavailable this run (usage/rate-limit)` in the unified report's **Sub-agents dispatched** line, skip the Codex-merge logic, and proceed with Claude-only synthesis. Do NOT surface the raw error text as a "finding", and do NOT block or retry (a retry just burns another message against the same exhausted window). The 6-agent Claude fan-out is the authoritative result; Codex is always additive.
 
 Produce a unified report with this structure:
 

@@ -30,7 +30,7 @@ The library architecture as of v2.5 (Phases 1-5 shipped):
 | `LevoitHumidifierLib.groovy` | 11 cross-family humidifier infrastructure methods + `doSetDisplayScreenSwitch` / `doSetAutoStopSwitch` helpers | All 9 humidifier drivers (Classic + V2 families) |
 | `LevoitFanLib.groovy` | Tower + Pedestal Fan shared methods (lifecycle, capabilities, polling, fan-level mapping) | Fan line |
 
-## Your scope (six checks)
+## Your scope (seven checks)
 
 1. **Lib boundary integrity.** Does the diff move code into a lib (consolidation) or extract from a lib into per-driver (regression)? The trend is consolidation; regressions need explicit justification.
 
@@ -57,6 +57,8 @@ The library architecture as of v2.5 (Phases 1-5 shipped):
    If the diff extracts cross-family infrastructure into the wrong lib (e.g., humidifier-specific helper into `LevoitChildBase`), flag it.
 
 6. **BP24-A/B/C SHOULD-ON / NO-ON / SKIP-OK classification.** When the diff adds a new public method that fits an established classification (SHOULD-ON like `setSpeed`/`setMistLevel`/`cycleSpeed`; SKIP-OK like `setMode` on V2-line firmware; NO-ON like `off`/`refresh`), verify the classification matches RULE32's exemption list in `tests/lint_config.yaml`.
+
+7. **Lib-include collision (duplicate-signature compile error by construction).** `#include level99.<Lib>` is a *textual paste at parse time*, so if the same method signature is defined in two places a driver pulls in, that driver fails to compile. This is the #142-class hazard. The diff trips it whenever it (a) adds/moves a method INTO a lib that some including driver also gets from another lib, or (b) adds an `#include` to a driver whose body (or another included lib) already defines a method the new lib provides. **Check:** for each driver affected by the diff, enumerate the union of method names from its own body + every lib it `#include`s (Diagnostics / ChildBase / the family lib). Any name appearing ≥2× across that set is a collision = **BLOCKING** (compile error — the Spock harness reproduces it since `resolveLibraryFile()` inlines the same way). When the diff adds a method to a shared lib, the highest-risk collision is against `LevoitChildBase` (every child includes it), so always cross-check a lib-added method name against `LevoitChildBaseLib.groovy`'s exports.
 
 ## Audit workflow
 
@@ -130,7 +132,7 @@ Mismatch = **WARN**. Wrong-tier classification can result in either a false-posi
 ```markdown
 # Design Sub-Agent Report
 
-**Scope:** Lib boundary integrity, cross-line consistency, helper-extraction opportunities, intentional-asymmetry rationale, Phase 1-5 architecture, BP24 classification.
+**Scope:** Lib boundary integrity, cross-line consistency, helper-extraction opportunities, intentional-asymmetry rationale, Phase 1-5 architecture, BP24 classification, lib-include collision.
 
 ## Family-consistency walk
 

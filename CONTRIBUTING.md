@@ -172,8 +172,19 @@ This is the most common substantive contribution. The flow is:
     - **NO-ON methods** (`setChildLock`, `setDisplay`, `setTimer`, `cancelTimer`, `resetFilter`, `setDryingMode`, preference-config setters): no guard. These configure settings that take effect on next power-on; silently powering on would be surprising.
     Lint RULE31 + RULE32 enforce these conventions; missing guards on SHOULD-ON methods will fail `uv run --python 3.12 tests/lint.py --strict`. If a method is intentionally SKIP-OK or NO-ON, add an entry to the `bp24_auto_on_exemptions` list in `tests/lint_config.yaml` with a substantive `rationale` field.
     Add a from-off-state Spock test for every SHOULD-ON command (see "from-off Spock test pattern" below). Missing tests for SHOULD-ON methods are flagged by QA review.
-12. **Add a Spock spec at `src/test/groovy/drivers/<DriverName>Spec.groovy`** — copy the closest existing spec as a template. Cover at minimum: happy-path setSwitch, setMode, applyStatus parsing of the canonical fixture, and any device-specific commands. The harness uses the Hubitat sandbox mock and resolves the `#include` library directive automatically.
+12. **Add a Spock spec at `src/test/groovy/drivers/<DriverName>Spec.groovy`** — copy the closest existing spec as a template. Cover at minimum: happy-path setSwitch, setMode, applyStatus parsing of the canonical fixture, and any device-specific commands. The harness uses the Hubitat sandbox mock and resolves the driver's `#include` library directives automatically **for libraries already registered** in `HubitatSpec.resolveLibraryFile()`. If your driver `#include`s a brand-new library, see *Adding a new shared library* below first — without the resolver case, every spec covering this driver fails with `MissingMethodException`.
 13. **Run lint + Spock locally** — `./gradlew test` and `uv run --python 3.12 tests/lint.py`. Both should pass before opening a PR.
+
+### Adding a new shared library
+
+Most contributions extend an existing library (the table in *Codebase orientation* lists them). If you genuinely need a **new** shared library (`#include level99.<Name>`), four sync points must all land in the same PR — miss any one and either the Spock harness or end users' hubs break, often with a confusing `MissingMethodException` and no obvious cause:
+
+1. **`library(...)` `name:` drops the `Lib` filename suffix.** Filename `LevoitFooLib.groovy` declares `name: "LevoitFoo"`, so drivers write `#include level99.LevoitFoo`. A mismatch breaks compile.
+2. **Register the resolver in `src/test/groovy/support/HubitatSpec.groovy` → `resolveLibraryFile()`.** Add a `case "level99.LevoitFoo": return ...` mapping the include name to the on-disk file. The Spock harness inlines library bodies by textual paste at parse time; **without the case it silently can't find the lib, and every spec covering a driver that `#include`s it fails with `MissingMethodException`.** The resolver fail-fasts with a clear `no resolver for #include level99.LevoitFoo` message when a case is missing — that message is your cue to add one. (There is no automatic discovery; the case list is hand-maintained on purpose.)
+3. **Add the file to `tools/build-bundle.py`'s `LIBS` list.** The list drives the HPM bundle ZIP. Without the entry, end users won't get the lib via HPM and `#include` resolution fails on their hubs after an update.
+4. **Confirm `levoitManifest.json` `bundles[]` covers it.** The cut-release procedure BLOCKS if any `*Lib.groovy` isn't bundled. Usually one bundle holds all libs, so an existing bundle already covers it — but verify.
+
+Library source files also have a parser quirk: keep file-scope commentary minimal (see the **BP20** rows in the conventions table — `/* */` blocks *and* dense `//` blocks before the `library(...)` declaration can trip Hubitat's library parser into a silent save failure). Put rationale in CONTRIBUTING / the BP catalog, not the library source.
 
 ### Preview drivers (no maintainer hardware)
 
