@@ -248,7 +248,7 @@ def setDisplay(onOff){
     // sendEvent always emits "on" or "off" — never the raw input ("true", "1", "yes").
     // The C3 gate compares canonical vs canonical so truthy-variant input cannot defeat it.
     String v = (onOff as String).trim().toLowerCase()
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("displayOn") == canon) return
     Integer sw = (canon == "on") ? 1 : 0
@@ -269,7 +269,7 @@ def setChildLock(onOff){
     if (!requireNonEmptyEnum(onOff, "setChildLock")) return
     // BP25: normalize to lowercase, then derive canonical on/off for sendEvent and C3 gate.
     String v = (onOff as String).trim().toLowerCase()
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("childLock") == canon) return
     Integer sw = (canon == "on") ? 1 : 0

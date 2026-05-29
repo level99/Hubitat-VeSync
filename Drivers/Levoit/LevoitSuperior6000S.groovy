@@ -255,7 +255,7 @@ def setChildLock(onOff){
     if (!requireNonEmptyEnum(onOff, "setChildLock")) return false
     // BP25: derive canonical on/off for sendEvent and C3 gate — never emit raw "true"/"1"/"yes".
     String val = (onOff as String).trim().toLowerCase()
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("childLock") == canon) return true
     Integer v = (canon == "on") ? 1 : 0
     def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${canon})")
@@ -273,7 +273,7 @@ def setDryingMode(onOff){
     // state (active/complete/idle/off), not the autoDryingSwitch user preference that this
     // method writes. Comparing against dryingMode would incorrectly suppress the write when
     // the device is mid-cycle (state="active", user-pref="on").
-    Integer v = ((onOff as String).trim().toLowerCase() in ["on","true","1","yes"]) ? 1 : 0
+    Integer v = (canonOnOff(onOff) == "on") ? 1 : 0
     def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
     if (httpOk(resp)) logInfo "Drying mode auto-switch set: ${onOff}"
     else { logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"]) }

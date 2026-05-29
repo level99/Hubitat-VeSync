@@ -143,7 +143,7 @@ def setDisplay(displayOn) {
     // Passing canon (not raw v) to handleDisplayOn ensures the attribute emits "on"/"off",
     // never "true"/"1"/"yes". The C3 gate compares canonical vs canonical.
     String v = (displayOn as String).trim().toLowerCase()
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
     if (device.currentValue("display") == canon) return
     handleDisplayOn(canon)
@@ -462,7 +462,7 @@ def setChildLock(value) {
     // Attribute always emits "on" or "off"; the C3 gate compares canonical vs canonical so
     // truthy-variant input ("TRUE", "1", "yes") does not defeat same-state suppression.
     String v = (value as String).trim().toLowerCase()
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
     if (device.currentValue("childLock") == canon) return
     def result = false

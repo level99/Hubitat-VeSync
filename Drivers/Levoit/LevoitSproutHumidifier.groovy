@@ -258,7 +258,7 @@ def setChildLock(onOff){
     if (!requireNonEmptyEnum(onOff, "setChildLock")) return false
     // BP25: derive canonical on/off for sendEvent and C3 gate — never emit raw "true"/"1"/"yes".
     String val = (onOff as String).trim().toLowerCase()
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("childLock") == canon) return true
     Integer v = (canon == "on") ? 1 : 0
     def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${canon})")
@@ -285,7 +285,7 @@ def setDryingMode(onOff){
     // BP25: normalize to lowercase, then derive canonical on/off for sendEvent and C3 gate.
     // Attribute always emits "on" or "off"; the C3 gate compares canonical vs canonical.
     String v = (onOff as String).trim().toLowerCase()
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("dryingEnabled") == canon) return true
     Integer sw = (canon == "on") ? 1 : 0
@@ -316,7 +316,7 @@ def setNightlight(onOff, brightness = null, colorTemp = null){
     if (!requireNonEmptyEnum(onOff, "setNightlight")) return
     // BP25: normalize + canonicalize truthy variants ("true"/"1"/"yes") before all comparisons.
     String v = (onOff as String).trim().toLowerCase()
-    String nl = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String nl = canonOnOff(v)
     Integer br   = (brightness  != null) ? Math.max(0, Math.min(100, safeIntArg(brightness, 0)))       : null   // BP26
     Integer ct   = (colorTemp   != null) ? Math.max(2000, Math.min(3500, safeIntArg(colorTemp, 3500))) : null   // BP26
     if (nl == "off") { br = 0; ct = ct ?: 3500 }

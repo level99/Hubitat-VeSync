@@ -316,7 +316,7 @@ def setPetMode(onOff) {
     if (!requireNonEmptyEnum(onOff, "setPetMode")) return
     // BP25: normalize + canonicalize truthy variants ("true"/"1"/"yes") before mode selection.
     String v = (onOff as String).trim().toLowerCase()
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     setMode(canon == "on" ? "pet" : "auto")
 }
 
@@ -345,7 +345,7 @@ def setChildLock(onOff) {
     // the caller intended to lock. Both the gate and the coercion must see the same form.
     String v = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
     if (device.currentValue("childLock") == canon) return
     def resp = hubBypass("setChildLock", [childLockSwitch: canon == "on" ? 1 : 0], "setChildLock")
@@ -362,7 +362,7 @@ def setDisplay(onOff) {
     // BP25: normalize to lowercase before C3 gate and payload coercion (same rationale as setChildLock).
     String v = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
     if (device.currentValue("display") == canon) return
     def resp = hubBypass("setDisplay", [screenSwitch: canon == "on" ? 1 : 0], "setDisplay")

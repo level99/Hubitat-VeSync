@@ -420,7 +420,7 @@ def setNightlightSwitch(value){
     // (e.g. state changed between calls), so comparing only the on/off attribute
     // would incorrectly suppress legitimate writes.
     String v = (value as String).trim().toLowerCase()
-    String action = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String action = canonOnOff(v)
     // Keep last color + brightness when toggling -- pull from state or use defaults
     Integer brightness = (state.nightlightBrightness as Integer) ?: 100
     Integer hue = (state.nightlightHue as Integer) ?: 0          // degrees 0-360

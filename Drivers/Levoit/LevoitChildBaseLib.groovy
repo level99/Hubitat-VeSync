@@ -212,6 +212,37 @@ Integer parseLevelOrNull(raw) {
     }
 }
 
+// BP25 canonical on/off coercion: the single blessed source for the permissive
+// truthy-variant set. Returns "on" when the (already-normalized, lowercase) input
+// is one of "on"/"true"/"1"/"yes"; otherwise "off". The input is re-normalized
+// internally (toString().trim().toLowerCase()) so the helper is idempotent and
+// safe whether the caller passes the raw arg or its normalized form — at every
+// migrated call site the input is already the normalized `v`/`val`, so behavior is
+// byte-identical to the inline `(v in ["on","true","1","yes"]) ? "on" : "off"`.
+// Null input returns "off" (never throws); current call sites guard upstream via
+// requireNonEmptyEnum so null never actually reaches here.
+//
+// Usage (canonical pattern — see LevoitHumidifierLib.doSetDisplayScreenSwitch):
+//
+//   String v     = (onOff as String).trim().toLowerCase()
+//   String canon = canonOnOff(v)
+//   if (device.currentValue("attr") == canon) return   // C3 gate uses canon
+//   Integer sw   = (canon == "on") ? 1 : 0              // payload uses canon
+//   device.sendEvent(name:"attr", value: canon)         // event emits canon
+//
+// Centralizing the truthy-variant list here prevents a future site from getting the
+// set wrong (the duplication risk that motivated the v2.8 extraction).
+//
+// INTENTIONAL EXCEPTION — LevoitFanLib does NOT use this helper. The fan line's
+// feature-toggle setters (doSetMuteSwitch / doSetDisplayScreenSwitch) apply a
+// STRICT enum-rejection gate (any value outside "on"/"off" is rejected, truthy
+// variants are unreachable) — a documented behavioral divergence from
+// LevoitHumidifierLib's permissive coercion. The strict form must stay inline.
+String canonOnOff(v) {
+    if (v == null) return "off"
+    return ((v.toString().trim().toLowerCase()) in ["on","true","1","yes"]) ? "on" : "off"
+}
+
 // BP12: seed pref defaults at first poll method invocation.
 // Idempotent via state.prefsSeeded gate; safe to call repeatedly.
 // Insert at top of: applyStatus() for V2-API drivers; update(status,nightLight)

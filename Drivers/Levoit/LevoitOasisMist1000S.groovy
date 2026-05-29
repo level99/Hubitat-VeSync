@@ -277,7 +277,7 @@ def setNightlight(onOff, brightness = null){
     String nl = (onOff as String).trim().toLowerCase()
     if (brightness == null) {
         // Pure on/off toggle -- use setNightLightStatus (pyvesync toggle_nightlight path)
-        Integer nlSwitch = (nl in ["on","true","1","yes"]) ? 1 : 0
+        Integer nlSwitch = (canonOnOff(nl) == "on") ? 1 : 0
         def resp = hubBypass("setNightLightStatus", [nightLightSwitch: nlSwitch], "setNightLightStatus(${nl})")
         if (httpOk(resp)) {
             String onOffStr = (nlSwitch == 1) ? "on" : "off"

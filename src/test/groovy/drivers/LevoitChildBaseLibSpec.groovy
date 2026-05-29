@@ -619,4 +619,77 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         expect: "beyond Integer range -> null (treated as garbage, not bit-wrapped)"
         driver.parseLevelOrNull("99999999999999") == null
     }
+
+    // -------------------------------------------------------------------------
+    // canonOnOff (BP25) — single blessed source for the permissive truthy-variant
+    // on/off coercion. Returns "on" for on/true/1/yes (case/whitespace-insensitive),
+    // "off" otherwise. Re-normalizes its input internally so it is idempotent and
+    // safe whether passed the raw arg or the already-normalized form.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "canonOnOff: '#raw' -> '#expected' (BP25 permissive truthy coercion)"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.canonOnOff(raw) == expected
+
+        where:
+        raw       | expected
+        // truthy variants -> "on"
+        "on"      | "on"
+        "true"    | "on"
+        "1"       | "on"
+        "yes"     | "on"
+        // explicit off and the rest -> "off"
+        "off"     | "off"
+        "false"   | "off"
+        "0"       | "off"
+        "no"      | "off"
+        // anything unrecognized -> "off"
+        "garbage" | "off"
+        ""        | "off"
+        "   "     | "off"
+    }
+
+    @Unroll
+    def "canonOnOff: case-insensitive + whitespace-trimmed '#raw' -> '#expected'"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect: "input is normalized (trim + lowercase) internally before the truthy test"
+        driver.canonOnOff(raw) == expected
+
+        where:
+        raw       | expected
+        "ON"      | "on"
+        " On "    | "on"
+        "TRUE"    | "on"
+        " yes"    | "on"
+        "OFF"     | "off"
+        " Off "   | "off"
+        "FALSE"   | "off"
+    }
+
+    def "canonOnOff: null input -> 'off' (no exception)"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect: "explicit `if (v == null) return 'off'` guard returns off before any .toString(); never throws"
+        driver.canonOnOff(null) == "off"
+    }
+
+    def "canonOnOff: boxed integer 1 -> 'on', 0 -> 'off' (toString coercion)"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.canonOnOff(1) == "on"
+        driver.canonOnOff(0) == "off"
+    }
 }

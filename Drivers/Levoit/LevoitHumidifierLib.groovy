@@ -184,7 +184,7 @@ def doSetDisplayScreenSwitch(onOff) {
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off",
     // never the raw normalized input ("true", "1", "yes"). The C3 gate compares canonical
     // vs canonical so truthy-variant input does not defeat same-state suppression.
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("displayOn") == canon) return true
     Integer v = (canon == "on") ? 1 : 0
     def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${canon})")
@@ -204,7 +204,7 @@ def doSetAutoStopSwitch(onOff) {
     if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
     String val = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("autoStopEnabled") == canon) return true
     Integer v = (canon == "on") ? 1 : 0
     def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${canon})")
@@ -256,7 +256,7 @@ def doSetDisplayStateSwitch(onOff) {
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off",
     // never the raw normalized input ("true", "1", "yes"). The C3 gate compares canonical
     // vs canonical so truthy-variant input does not defeat same-state suppression.
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("displayOn") == canon) return true
     Boolean v = (canon == "on")
     def resp = hubBypass("setDisplay", [state: v], "setDisplay(${canon})")
@@ -278,7 +278,7 @@ def doSetAutoStopEnabled(onOff) {
     if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
     String val = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("autoStopEnabled") == canon) return true
     Boolean v = (canon == "on")
     def resp = hubBypass("setAutomaticStop", [enabled: v], "setAutomaticStop(${canon})")
