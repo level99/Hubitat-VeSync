@@ -928,4 +928,97 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
         "LTF-F422S" | "FanModeTest"     | "setTowerFanMode" | "sleep"
         "LPF-R423S" | "PedestalModeTest"| "setFanMode"      | "auto"
     }
+
+    // -------------------------------------------------------------------------
+    // Multi-variant payload validation: setOscillationStatus on the Pedestal Fan
+    // sends FOUR distinct legitimate key-sets depending on the caller
+    // (setHorizontalOscillation / setVerticalOscillation / setHorizontalRange /
+    // setVerticalRange). FIXTURE_OPS therefore carries dataKeyVariants (a list of
+    // allowed key-Sets) for this op rather than a single union dataKeys Set.
+    //
+    // Regression guard for the strict union-exact-match bug: the old validator
+    // compared ourKeys against the 7-key UNION as a single Set, so EVERY one of
+    // the four real variants mismatched and ERRORed — the harness never actually
+    // validated this op and silently masked any genuine payload regression.
+    //
+    // If someone reverts fixtureKeyVariants / the validator back to strict
+    // exact-match against the union Set, the "validates cleanly" cases below go
+    // RED (they would log the mismatch ERROR and lack the "Payload validated"
+    // DEBUG), and the wrong-key cases would still pass — proving the guard's
+    // direction.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "sendBypassRequest setOscillationStatus variant '#variantName' validates cleanly (no mismatch ERROR)"() {
+        given: "Pedestal Fan child spawned"
+        state.realParentDetected = false
+        driver.spawnFromFixture("LPF-R423S", "PedestalOsc-${variantName}")
+        String dni = "VirtualVeSync-LPF-R423S-PedestalOsc-${variantName}"
+        def child = childRegistry[dni]
+        settings.debugOutput = true
+        testLog.reset()
+
+        when: "send setOscillationStatus with one of the four legitimate Pedestal payload variants"
+        driver.sendBypassRequest(child, [
+            method: "setOscillationStatus",
+            source: "APP",
+            data  : data
+        ], { resp -> /* no-op closure */ })
+
+        then: "no key-mismatch ERROR logged for this legitimate variant"
+        !testLog.errors.any { it.contains("mismatch") }
+
+        and: "DEBUG confirms the payload validated against a key-set variant"
+        testLog.debugs.any { it.contains("Payload validated") && it.contains("setOscillationStatus") }
+
+        where:
+        variantName | data
+        "H-toggle"  | [horizontalOscillationState: 1, actType: "default"]
+        "V-toggle"  | [verticalOscillationState: 1, actType: "default"]
+        "H-range"   | [horizontalOscillationState: 1, actType: "default", left: 30, right: 30]
+        "V-range"   | [verticalOscillationState: 1, actType: "default", top: 30, bottom: 30]
+    }
+
+    def "sendBypassRequest setOscillationStatus with a bogus extra key still logs mismatch ERROR"() {
+        given:
+        state.realParentDetected = false
+        driver.spawnFromFixture("LPF-R423S", "PedestalOscBogus")
+        String dni = "VirtualVeSync-LPF-R423S-PedestalOscBogus"
+        def child = childRegistry[dni]
+        testLog.reset()
+
+        when: "send a variant-shaped payload plus an unexpected key"
+        driver.sendBypassRequest(child, [
+            method: "setOscillationStatus",
+            source: "APP",
+            data  : [horizontalOscillationState: 1, actType: "default", bogusKey: 99]
+        ], { resp -> /* closure */ })
+
+        then: "no variant matches → mismatch ERROR logged naming the method"
+        testLog.errors.any { it.contains("mismatch") && it.contains("setOscillationStatus") }
+    }
+
+    def "sendBypassRequest setOscillationStatus with an illegal cross-axis combo still logs mismatch ERROR"() {
+        given:
+        state.realParentDetected = false
+        driver.spawnFromFixture("LPF-R423S", "PedestalOscCross")
+        String dni = "VirtualVeSync-LPF-R423S-PedestalOscCross"
+        def child = childRegistry[dni]
+        testLog.reset()
+
+        when: "send horizontal state with vertical-range top/bottom keys — a combo no real caller sends"
+        // [horizontalOscillationState, actType, top, bottom] matches none of the four
+        // legitimate variants: H-toggle is [horizontalOscillationState, actType],
+        // H-range is [horizontalOscillationState, actType, left, right], and the
+        // top/bottom keys only ever accompany verticalOscillationState. The fix must
+        // reject this plausible-but-illegal cross-axis combination.
+        driver.sendBypassRequest(child, [
+            method: "setOscillationStatus",
+            source: "APP",
+            data  : [horizontalOscillationState: 1, actType: "default", top: 30, bottom: 30]
+        ], { resp -> /* closure */ })
+
+        then: "illegal combo matches no variant → mismatch ERROR logged"
+        testLog.errors.any { it.contains("mismatch") && it.contains("setOscillationStatus") }
+    }
 }

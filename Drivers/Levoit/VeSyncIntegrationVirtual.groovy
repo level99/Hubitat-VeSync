@@ -413,11 +413,10 @@ import groovy.transform.Field
     ],
     "LPF-R423S": [
         [methodName: "setLevel",              dataKeys: ["levelIdx", "levelType", "manualSpeedLevel"] as Set],
-        [methodName: "setOscillationStatus",  dataKeys: ["actType", "bottom", "horizontalOscillationState", "left", "right", "top", "verticalOscillationState"] as Set],
+        [methodName: "setOscillationStatus",  dataKeyVariants: [["actType", "horizontalOscillationState", "left", "right"] as Set, ["actType", "bottom", "top", "verticalOscillationState"] as Set, ["actType", "horizontalOscillationState"] as Set, ["actType", "verticalOscillationState"] as Set]],
         [methodName: "setSwitch",             dataKeys: ["powerSwitch", "switchIdx"] as Set],
         [methodName: "getFanStatus",          dataKeys: [] as Set],
-        // Extensions: pyvesync vendored LPF-R423S.yaml omits setFanMode and setDisplay.
-        // Source: tools/virtual_parent_extensions.json LPF-R423S entry.
+        // pyvesync vendored LPF-R423S.yaml omits setFanMode and setDisplay — only setLevel, setSwitch, setOscillationStatus, getFanStatus are present. Mode-set and display commands are driver-side additions.
         [methodName: "setFanMode",            dataKeys: ["workMode"] as Set],
         [methodName: "setDisplay",            dataKeys: ["screenSwitch"] as Set]
     ],
@@ -427,8 +426,7 @@ import groovy.transform.Field
         [methodName: "setMuteSwitch",         dataKeys: ["muteSwitch"] as Set],
         [methodName: "setOscillationSwitch",  dataKeys: ["oscillationSwitch"] as Set],
         [methodName: "getTowerFanStatus",     dataKeys: [] as Set],
-        // Extensions: pyvesync vendored LTF-F422S.yaml omits setTowerFanMode and setDisplay.
-        // Source: tools/virtual_parent_extensions.json LTF-F422S entry.
+        // pyvesync vendored LTF-F422S.yaml omits setTowerFanMode and setDisplay — only setLevel, setSwitch, setMuteSwitch, setOscillationSwitch, getTowerFanStatus are present. Mode-set and display commands are driver-side additions.
         [methodName: "setTowerFanMode",       dataKeys: ["workMode"] as Set],
         [methodName: "setDisplay",            dataKeys: ["screenSwitch"] as Set]
     ],
@@ -964,12 +962,25 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
         return true
     }
 
-    // Validate payload data keys against fixture canonical shape
-    Set ourKeys     = ((payloadMap?.data as Map)?.keySet() ?: []) as Set
-    Set fixtureKeys = (fixtureOp.dataKeys as Set) ?: ([] as Set)
-    if (ourKeys != fixtureKeys) {
+    // Validate payload data keys against the fixture canonical shape.
+    //
+    // Most ops send a single fixed key-set, validated by exact-match against
+    // fixtureOp.dataKeys. A few ops legitimately send DIFFERENT key-sets
+    // depending on which caller invoked them (e.g. setOscillationStatus on the
+    // Pedestal Fan — horizontal/vertical/range/axis-off each send a distinct
+    // legitimate key-set). Such ops carry fixtureOp.dataKeyVariants (a list of
+    // allowed key-Sets); the payload validates if it matches ANY one variant.
+    // A genuinely-wrong key-set (typo'd key, or an illegal cross-axis combo like
+    // horizontalOscillationState + top/bottom) matches no variant → still ERRORs.
+    Set ourKeys = ((payloadMap?.data as Map)?.keySet() ?: []) as Set
+    List allowedVariants = fixtureKeyVariants(fixtureOp)
+    boolean matched = allowedVariants.any { (it as Set) == ourKeys }
+    if (!matched) {
+        String expected = (allowedVariants.size() == 1)
+            ? "${(allowedVariants[0] as Set).sort()}"
+            : "one of ${allowedVariants.collect { (it as Set).sort() }}"
         logError "[DEV TOOL] Payload data keys mismatch for method '${method}': " +
-                 "ours=${ourKeys.sort()}, pyvesync=${fixtureKeys.sort()}"
+                 "ours=${ourKeys.sort()}, pyvesync=${expected}"
     } else {
         logDebug "[DEV TOOL] Payload validated: ${method} keys=${ourKeys.sort()}"
     }
@@ -1307,6 +1318,21 @@ private Map findFixtureOpByMethod(String fixtureName, String method) {
     List ops = FIXTURE_OPS[fixtureName] as List
     if (!ops) return null
     return ops.find { it.methodName == method } as Map
+}
+
+// Return the list of allowed payload-data key-Sets for a fixture op.
+//
+// Single-variant ops (the common case) carry `dataKeys` (one Set); this returns
+// it wrapped in a one-element list. Multi-variant ops carry `dataKeyVariants`
+// (a list of Sets) and this returns it directly. Generalizing through a List
+// lets the validator treat both shapes uniformly (match-any-variant), so any
+// future caller-varying op only needs `dataKeyVariants` in FIXTURE_OPS — no
+// validator change. dataKeyVariants takes precedence if both are present.
+private List fixtureKeyVariants(Map fixtureOp) {
+    if (fixtureOp?.dataKeyVariants != null) {
+        return (fixtureOp.dataKeyVariants as List).collect { it as Set }
+    }
+    return [ (fixtureOp?.dataKeys as Set) ?: ([] as Set) ]
 }
 
 // ---------------------------------------------------------------------------
