@@ -173,6 +173,7 @@ def _collect_per_file_rules():
         bp28_level_off_ambiguity,
         process_token_scrub,
         changelog_tmi,
+        device_shorthand_leak,
     )
     rules = []
     for module in [
@@ -187,6 +188,7 @@ def _collect_per_file_rules():
         bp28_level_off_ambiguity,
         process_token_scrub,
         changelog_tmi,
+        device_shorthand_leak,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

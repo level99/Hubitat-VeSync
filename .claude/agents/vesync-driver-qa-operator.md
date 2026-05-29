@@ -88,6 +88,12 @@ git diff <base>..HEAD -- 'CHANGELOG.md' 'levoitManifest.json' | grep -nE 'pipeli
 
 Hits in user-facing prose = **WARN**.
 
+### Step 3b — device-name shorthand leak (mechanical backstop: RULE41)
+
+Internal device-name shorthands — `Sup6000S` for "Superior 6000S", `OM1000S`, `LV600SHC`, `TowerFan`, etc. — must not leak into user-facing prose (manifest `releaseNotes`, CHANGELOG user-facing sections, `Drivers/Levoit/readme.md`). This class is now caught mechanically by **RULE41** (`tests/lint_rules/device_shorthand_leak.py`, gated by `lint.py --strict`) against a curated denylist of known contractions, so the pre-flight already flags any denylisted shorthand — **don't re-flag those.**
+
+Your residual judgment role is what the denylist *can't* know: (a) a shorthand for a NEWLY-ADDED device not yet in the RULE41 denylist, or (b) a non-shorthand wording leak (a marketing name spelled differently than the manifest `name` field). If you spot a new device-name shorthand in user-facing prose, flag it AND note it should be added to RULE41's denylist (closed-mechanism follow-up). This is the exact class the operator lens historically MISSED (the v2.6 `Sup6000S` releaseNotes leak); RULE41 is the backstop, you cover the not-yet-denylisted cases.
+
 ### Step 4 — CHANGELOG drift on feat/fix commits
 
 ```bash

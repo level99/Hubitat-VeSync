@@ -7035,3 +7035,337 @@ class TestRule39ChangelogTmi:
             f"'handleEvent' (bare, no parens) is NOT in _INTERNAL_JARGON_NAMES and must not flag, "
             f"got: {jargon_findings}"
         )
+
+
+# ---------------------------------------------------------------------------
+# RULE41 -- internal device-name shorthand leak into user-facing prose
+# ---------------------------------------------------------------------------
+
+from lint_rules.device_shorthand_leak import check_rule41_device_shorthand_leak
+
+
+class TestRule41DeviceShorthandLeak:
+    """
+    RULE41: internal device-name shorthands (Sup6000S, OM1000S, Core200S, ...)
+    must not appear in user-facing prose (levoitManifest.json releaseNotes,
+    CHANGELOG.md, Drivers/Levoit/readme.md).
+
+    Non-vacuity contracts:
+      - must-catch tests FAIL if the denylist entry is removed or the scan is
+        disabled.
+      - must-not-catch tests FAIL if the rule over-fires on public names, real
+        hardware model codes, or out-of-scope dev-doc paths.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    @staticmethod
+    def _run(src: str, basename: str = 'CHANGELOG.md', parent: str = None) -> list:
+        """Invoke RULE41 against src as a named in-scope user-facing file."""
+        if basename == 'readme.md':
+            path = REPO_ROOT / 'Drivers' / 'Levoit' / 'readme.md'
+        elif basename == 'levoitManifest.json':
+            path = REPO_ROOT / 'levoitManifest.json'
+        else:
+            path = REPO_ROOT / basename
+        raw_lines = src.splitlines()
+        from lint_rules.groovy_lite import clean_source
+        _, cleaned_lines = clean_source(src)
+        return check_rule41_device_shorthand_leak(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+
+    @staticmethod
+    def _run_at_path(src: str, path: Path) -> list:
+        """Invoke RULE41 against src at an arbitrary path (for out-of-scope tests)."""
+        raw_lines = src.splitlines()
+        from lint_rules.groovy_lite import clean_source
+        _, cleaned_lines = clean_source(src)
+        return check_rule41_device_shorthand_leak(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-catch
+    # -----------------------------------------------------------------------
+
+    def test_catches_sup6000s_in_releasenotes_shaped_string(self):
+        """
+        'Sup6000S' in the manifest releaseNotes value must flag RULE41 with the
+        'Superior 6000S' suggestion. This is the confirmed v2.6 leak.
+
+        Non-vacuity: removing the 'Sup6000S' denylist entry returns [] here.
+        """
+        src = '  "releaseNotes": "2.6 - Fixes Sup6000S setDisplay in sleep mode.",'
+        findings = self._run(src, basename='levoitManifest.json')
+        matches = [f for f in findings if f['rule_id'] == 'RULE41_device_shorthand_leak'
+                   and 'Sup6000S' in f['title']]
+        assert matches, f"Expected Sup6000S RULE41 finding, got: {findings}"
+        assert 'Superior 6000S' in matches[0]['title'], (
+            f"Finding should suggest the public name 'Superior 6000S', got: {matches[0]['title']}"
+        )
+
+    def test_catches_om1000s_in_changelog(self):
+        """'OM1000S' in a CHANGELOG user-facing subsection must flag with 'OasisMist 1000S'."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - Fixes OM1000S mist level reporting.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        matches = [f for f in findings if f['rule_id'] == 'RULE41_device_shorthand_leak'
+                   and 'OM1000S' in f['title']]
+        assert matches, f"Expected OM1000S RULE41 finding, got: {findings}"
+        assert 'OasisMist 1000S' in matches[0]['title'], (
+            f"Should suggest 'OasisMist 1000S', got: {matches[0]['title']}"
+        )
+
+    def test_catches_om450s_in_readme(self):
+        """'OM450S' contraction in bare readme prose must flag with 'OasisMist 450S'."""
+        src = "OM450S now reports humidity."
+        findings = self._run(src, basename='readme.md')
+        assert any(f['rule_id'] == 'RULE41_device_shorthand_leak' and 'OM450S' in f['title']
+                   for f in findings), f"Expected OM450S finding, got: {findings}"
+
+    def test_catches_multiple_shorthands_one_line(self):
+        """Two contraction shorthands on one line produce two findings."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - Sup6000S and OM1000S now share the mist-level logic.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        names = {f['title'].split("'")[1] for f in findings
+                 if f['rule_id'] == 'RULE41_device_shorthand_leak'}
+        assert 'Sup6000S' in names and 'OM1000S' in names, (
+            f"Expected both Sup6000S and OM1000S, got: {names}"
+        )
+
+    def test_catches_lv600shc_abbreviation(self):
+        """'LV600SHC' must flag with 'LV600S Hub Connect'."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - LV600SHC mist fix.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert any('LV600S Hub Connect' in f['title'] for f in findings
+                   if f['rule_id'] == 'RULE41_device_shorthand_leak'), (
+            f"Expected LV600S Hub Connect suggestion, got: {findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch
+    # -----------------------------------------------------------------------
+
+    def test_does_not_catch_public_superior_name(self):
+        """The public 'Superior 6000S' (with space) must NOT flag."""
+        src = '  "releaseNotes": "2.6 - Fixes Superior 6000S setDisplay in sleep mode.",'
+        findings = self._run(src, basename='levoitManifest.json')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Public name 'Superior 6000S' must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_real_model_code(self):
+        """A real hardware model code 'LEH-S601S-WUS' must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Added
+
+            - Adds support for LEH-S601S-WUS regional variant.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Real model code must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_public_oasismist_with_space(self):
+        """The public 'OasisMist 1000S' (with space) must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - OasisMist 1000S mist fix.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Public 'OasisMist 1000S' must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_lv600s_public_name(self):
+        """'LV600S' alone IS the public name (not a leak) -- must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - LV600S mist level fix.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"'LV600S' is the public name and must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_core_family_public_no_space_name(self):
+        """
+        'Core200S'/'Core600S' (no space) ARE the manifest public names, NOT
+        leaks -- must NOT flag. This is the authoritative-derivation correction:
+        the Core family genuinely uses the no-space form in driver metadata.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - Core200S and Core600S now report PM2.5 on dashboards.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Core family no-space form is the public name and must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_manifest_non_releasenotes_line(self):
+        """
+        A manifest line that is NOT the releaseNotes value is out of scope, even
+        if it contains a contraction -- only the releaseNotes value is scanned.
+        Uses a contraction (Sup6000S) so the scope gate is genuinely exercised:
+        if the rule scanned all manifest lines, this WOULD flag.
+        """
+        src = '      "description": "alias Sup6000S for the Superior 6000S driver",'
+        findings = self._run(src, basename='levoitManifest.json')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Non-releaseNotes manifest line is out of scope, got: {findings}"
+        )
+
+    def test_does_not_catch_real_vesync_device_type_literal(self):
+        """
+        'Dual200S' / 'Classic200S' / 'Vital200S' are real VeSync device-type
+        literals the cloud API reports verbatim -- they legitimately appear in
+        technical user-facing prose and must NOT flag (they are NOT contractions).
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Added
+
+            - Levoit Dual 200S Humidifier driver (Dual200S literal device type);
+              Classic200S and Vital200S routing unchanged.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Real VeSync device-type literals must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_backticked_contraction(self):
+        """
+        A backticked contraction (`` `Sup6000S` ``) is suppressed as a code
+        reference (defense in depth) -- must NOT flag.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Added
+
+            - Internal device-type alias `Sup6000S` documented for contributors.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Backticked contraction must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_contraction_filename(self):
+        """A '*.yaml' filename context suppresses a contraction match -- must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Added
+
+            - Vendored fixture sourced from upstream Sup6000S.yaml.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Filename context must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_changelog_internal_subsection(self):
+        """
+        A contraction in the CHANGELOG ### Internal subsection is OUT of scope --
+        implementation detail belongs there; must NOT flag.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Internal
+
+            - Sup6000S router wiring refactor; no user-visible change.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"### Internal subsection is out of scope, got: {findings}"
+        )
+
+    def test_does_not_catch_changelog_preamble(self):
+        """
+        A contraction in the top-of-file CHANGELOG preamble (before the first
+        ``## [`` section) is OUT of scope -- must NOT flag.
+        """
+        src = textwrap.dedent("""\
+            # Changelog
+
+            Notes for maintainers: Sup6000S is the dev shorthand we avoid in prose.
+
+            ## [Unreleased]
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"CHANGELOG preamble is out of scope, got: {findings}"
+        )
+
+    def test_out_of_scope_dev_doc_path_not_scanned(self):
+        """
+        The shorthand 'Sup6000S' appearing in a dev-doc path (CLAUDE.md) is
+        OUT of scope and must NOT flag -- internal shorthand is fine there.
+        """
+        src = "BP25 fix re-blessed; Sup6000S was the v2.6 leak example."
+        findings = self._run_at_path(src, REPO_ROOT / 'CLAUDE.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Dev-doc CLAUDE.md is out of scope and must not flag, got: {findings}"
+        )
+
+    def test_out_of_scope_roadmap_not_scanned(self):
+        """ROADMAP.md is dev-facing -- out of scope, must NOT flag."""
+        src = "Future: OM450S regional variants under evaluation."
+        findings = self._run_at_path(src, REPO_ROOT / 'ROADMAP.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"ROADMAP.md is out of scope and must not flag, got: {findings}"
+        )
+
+    def test_out_of_scope_stray_readme_not_scanned(self):
+        """
+        A readme.md outside Drivers/Levoit/ must NOT be scanned. Uses a
+        contraction (Sup6000S) so the parent-dir scope gate is genuinely
+        exercised: the same content under Drivers/Levoit/readme.md WOULD flag.
+        """
+        src = "Sup6000S example."
+        findings = self._run_at_path(src, REPO_ROOT / 'readme.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Stray top-level readme.md is out of scope, got: {findings}"
+        )
