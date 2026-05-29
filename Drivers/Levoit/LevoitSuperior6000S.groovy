@@ -273,9 +273,10 @@ def setDryingMode(onOff){
     // state (active/complete/idle/off), not the autoDryingSwitch user preference that this
     // method writes. Comparing against dryingMode would incorrectly suppress the write when
     // the device is mid-cycle (state="active", user-pref="on").
-    Integer v = (canonOnOff(onOff) == "on") ? 1 : 0
-    def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
-    if (httpOk(resp)) logInfo "Drying mode auto-switch set: ${onOff}"
+    String canon = canonOnOff(onOff)
+    Integer v = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${canon})")
+    if (httpOk(resp)) logInfo "Drying mode auto-switch set: ${canon}"
     else { logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"]) }
 }
 

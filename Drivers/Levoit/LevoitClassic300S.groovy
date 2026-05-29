@@ -156,6 +156,7 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
+    // BP24: SHOULD-ON — mist-level command; calls ensureSwitchOn() below (SwitchLevel convention).
     // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
     Integer lvl = parseLevelOrNull(level)
     if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
