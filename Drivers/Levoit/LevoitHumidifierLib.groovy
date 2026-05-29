@@ -31,7 +31,8 @@ library(
 // PROVIDES: cross-family infrastructure + V2-line and Classic-family shared helpers:
 //   Lifecycle: installed, updated, uninstalled, initialize, refresh
 //   Polling: update() (no-arg), update(status) (1-arg), update(status, nightLight) (2-arg)
-//   Power: toggle (lastSwitchSet preferred-state pattern)
+//   Power: on, off (payload parameterized via per-driver powerPayload(boolean) hook),
+//          toggle (lastSwitchSet preferred-state pattern)
 //   HTTP plumbing: hubBypass, httpOk
 //   V2-line shared bodies (OM1000S + Sprout + Sup6000S + LV600SHC for setDisplay):
 //     doSetDisplayScreenSwitch — {screenSwitch: int} payload, emits displayOn
@@ -49,7 +50,8 @@ library(
 //   Groovy "duplicate method signature" conflicts.
 //
 // Per-driver methods retained (intentional family divergence):
-//   on/off (Classic vs V2 payload), setMode (5 wire-value variants),
+//   powerPayload(boolean) hook (Classic {enabled,id} vs V2 {powerSwitch,switchIdx}),
+//   setMode (5 wire-value variants),
 //   setMistLevel (range + payload varies), setWarmMistLevel (3 drivers, 2 shapes),
 //   setChildLock/setDryingMode (Sprout+Sup6000S only),
 //   nightlight methods (per-driver), applyStatus (structurally family-divergent),
@@ -97,6 +99,39 @@ def initialize() {
 
 def refresh() {
     update()
+}
+
+// ---- Power ----
+// Shared on()/off() bodies. The only per-driver difference is the setSwitch payload, supplied
+// by the powerPayload(boolean) hook each driver declares:
+//   Classic family (Classic 200S/300S, Dual 200S, OasisMist 450S, LV600S): {enabled: bool, id: 0}
+//   V2 family (LV600S HubConnect, OasisMist 1000S, Sprout, Superior 6000S):
+//                                                                  {powerSwitch: 0|1, switchIdx: 0}
+// The diagnostic tag string passed as hubBypass's 3rd arg is derived from the payload so it stays
+// accurate per-family without a second hook (the tag is a log string only; specs assert req.data,
+// not the tag). state.turningOn re-entrance guard on on() prevents the
+// ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn() recursion.
+// Each driver MUST declare: Map powerPayload(boolean on) { ... }
+def on(){
+    logDebug "on()"
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        Map payload = powerPayload(true)
+        def resp = hubBypass("setSwitch", payload, "setSwitch(${payload})")
+        if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
+}
+
+def off(){
+    logDebug "off()"
+    Map payload = powerPayload(false)
+    def resp = hubBypass("setSwitch", payload, "setSwitch(${payload})")
+    if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
+    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
 }
 
 // ---- Toggle ----
