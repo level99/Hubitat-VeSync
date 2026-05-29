@@ -167,10 +167,12 @@ def setLevel(level) {
     logDebug "setLevel(${level})"
     // BP18: explicit null guard for the null-from-blank-RM-slot path.
     if (!requireNotNull(level, "setLevel")) return
-    // BP26: safeIntArg safely converts the level parameter (which may be a non-numeric
-    // string such as "" or "5.7" from Rule Machine) to an integer without throwing.
-    // Range is clamped to [0, 100]; 0 maps to the night-light off path below.
-    Integer pct = safeIntArg(level, 0, 0, 100)
+    // BP28: distinguish explicit 0/low (-> night-light off) from non-numeric garbage
+    // (-> ignore, night-light unchanged). safeIntArg would coerce a typo like "brght" to
+    // 0 and silently switch the night-light off; parseLevelOrNull returns null instead.
+    Integer pct = parseLevelOrNull(level)
+    if (pct == null) { logWarn "setLevel: ignoring non-numeric value '${level}'"; return }
+    pct = Math.max(0, Math.min(100, pct))
     if (pct < 10) { setNightLight("off") }
     else if (pct > 75) { setNightLight("on") }
     else setNightLight("dim")

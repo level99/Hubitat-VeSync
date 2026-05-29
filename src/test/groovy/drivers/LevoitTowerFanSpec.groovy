@@ -1282,9 +1282,10 @@ class LevoitTowerFanSpec extends HubitatSpec {
     // -------------------------------------------------------------------------
 
     @Unroll
-    def "BP26: setLevel('#badInput') does not throw and routes to off() (Tower Fan fallback=0)"() {
-        // safeIntArg maps "abc", "", true to 0. 0 → off() path. No setLevel API call.
-        // This test fails if safeIntArg is removed from LevoitFanLib.setLevel.
+    def "BP28: setLevel('#badInput') is ignored — no off(), no setLevel command (Tower Fan)"() {
+        // BP28 contract: parseLevelOrNull maps "abc"/""/true to null -> ignore (device unchanged).
+        // Previously safeIntArg mapped these to 0 -> off(); BP28 makes non-numeric a no-op while
+        // explicit 0 still routes to off(). Fails if parseLevelOrNull is removed from LevoitFanLib.setLevel.
         given: "device is on so the auto-on guard does not confuse the assertion"
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
@@ -1295,11 +1296,26 @@ class LevoitTowerFanSpec extends HubitatSpec {
         then: "no exception thrown"
         noExceptionThrown()
 
-        and: "no setLevel API call — 0 coercion routes to off()"
+        and: "no off() and no setLevel command — non-numeric input ignored"
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
         testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
 
         where:
         badInput << ["abc", "", true]
+    }
+
+    def "BP28: setLevel(0) still routes to off() (Tower Fan explicit-0 contract preserved)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when:
+        driver.setLevel(0)
+
+        then: "off() (setSwitch) was sent and no setLevel speed command"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
 
     def "BP26: setLevel('5.7') does not throw and makes a setLevel API call with truncated value (Tower Fan)"() {

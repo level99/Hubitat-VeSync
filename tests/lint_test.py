@@ -2579,6 +2579,186 @@ class TestRule37BP26RelationalComparison:
 
 
 # ---------------------------------------------------------------------------
+# RULE40 — BP28 level/mist setter safeIntArg(param,0) -> off() ambiguity
+# ---------------------------------------------------------------------------
+
+class TestRule40BP28LevelOffAmbiguity:
+    """
+    RULE40 (Bug Pattern #28): a set* method that assigns a local from
+    ``safeIntArg(<param>, 0)`` and routes it into a numeric-threshold branch
+    (``<= 0`` / ``== 0`` / ``< <int-literal>``) whose body calls an off-form
+    (``off()`` OR ``set*("off")``), without a ``parseLevelOrNull`` null-ignore
+    guard, silently turns the device (or a sub-feature) OFF on non-numeric input.
+    The fix uses ``parseLevelOrNull``.
+    """
+
+    from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity as _rule
+
+    # MUST-NOT-CATCH: the fixed shape (parseLevelOrNull guard present).
+    GOOD_PARSE_LEVEL_OR_NULL = textwrap.dedent("""\
+        def setMistLevel(level) {
+            if (!requireNotNull(level, "setMistLevel")) return
+            Integer lvl = parseLevelOrNull(level)
+            if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
+            if (lvl <= 0) { off(); return }
+            Integer clamped = Math.max(1, Math.min(9, lvl))
+            ensureSwitchOn()
+            hubBypass("setVirtualLevel", [level: clamped], "setVirtualLevel(${clamped})")
+        }
+    """)
+
+    # MUST-NOT-CATCH: setLevel via the 4-arg clamp overload, fixed with parseLevelOrNull.
+    GOOD_PARSE_LEVEL_CLAMP = textwrap.dedent("""\
+        def setLevel(val) {
+            Integer pct = parseLevelOrNull(val)
+            if (pct == null) { logWarn "setLevel: ignoring non-numeric value '${val}'"; return }
+            pct = Math.max(0, Math.min(100, pct))
+            if (pct == 0) { off(); return }
+            ensureSwitchOn()
+            sendLevel(pct)
+        }
+    """)
+
+    # MUST-NOT-CATCH: safeIntArg(param,0) but NO off()-on-zero branch (setTimer: 0 = no timer).
+    GOOD_SAFEINTARG_NO_OFF = textwrap.dedent("""\
+        def setTimer(seconds) {
+            int secs = safeIntArg(seconds, 0)
+            if (secs <= 0) { delTimer(); return }
+            hubBypass("addTimer", [clkSec: secs], "addTimer(${secs})")
+        }
+    """)
+
+    # MUST-NOT-CATCH: off()-on-zero but the zero comes from a NON-param source
+    # (computed internal value, never raw user garbage).
+    GOOD_OFF_FROM_NON_PARAM = textwrap.dedent("""\
+        def setSomething(arg) {
+            Integer derived = computeBand(arg)
+            if (derived == 0) { off(); return }
+            hubBypass("x", [v: derived], "x(${derived})")
+        }
+    """)
+
+    # MUST-CATCH: the OLD ambiguous shape — safeIntArg(level,0) -> if(lvl<=0){off()}.
+    BAD_SAFEINTARG_OFF = textwrap.dedent("""\
+        def setMistLevel(level) {
+            if (!requireNotNull(level, "setMistLevel")) return
+            Integer lvl = safeIntArg(level, 0)
+            if (lvl <= 0) { off(); return }
+            Integer clamped = Math.max(1, Math.min(9, lvl))
+            ensureSwitchOn()
+            hubBypass("setVirtualLevel", [level: clamped], "setVirtualLevel(${clamped})")
+        }
+    """)
+
+    # MUST-CATCH: setLevel with safeIntArg 4-arg clamp -> if(pct==0){off()}.
+    BAD_SAFEINTARG_CLAMP_OFF = textwrap.dedent("""\
+        def setLevel(val) {
+            Integer pct = safeIntArg(val, 0, 0, 100)
+            if (pct == 0) { off(); return }
+            ensureSwitchOn()
+            sendLevel(pct)
+        }
+    """)
+
+    # MUST-CATCH: Core 200S Light shape — safeIntArg(level,0,0,100) -> if(pct<10){setNightLight("off")}.
+    # The off-form is set*("off"), not bare off(); the threshold is `< N`, not `<= 0`. RULE40 must
+    # catch this broadened off-form / threshold pair (the blind spot QA flagged).
+    BAD_SETNIGHTLIGHT_OFF = textwrap.dedent("""\
+        def setLevel(level) {
+            if (!requireNotNull(level, "setLevel")) return
+            Integer pct = safeIntArg(level, 0, 0, 100)
+            if (pct < 10) { setNightLight("off") }
+            else if (pct > 75) { setNightLight("on") }
+            else setNightLight("dim")
+        }
+    """)
+
+    # MUST-NOT-CATCH: a safeIntArg-fed `< N` branch whose body does NOT call an off-form.
+    # Proves the four-way conjunction gates correctly — fallback-0 + `< N` threshold alone
+    # is NOT enough; condition (iii) (off-form in branch body) must also hold.
+    GOOD_SAFEINTARG_LT_NO_OFFFORM = textwrap.dedent("""\
+        def setBrightness(level) {
+            Integer pct = safeIntArg(level, 0)
+            if (pct < 10) { pct = 10 }
+            hubBypass("setBrightness", [brightness: pct], "setBrightness(${pct})")
+        }
+    """)
+
+    def test_parse_level_or_null_passes(self):
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.GOOD_PARSE_LEVEL_OR_NULL)
+        assert not any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"parseLevelOrNull guard must not flag RULE40, got: {findings}"
+        )
+
+    def test_parse_level_clamp_passes(self):
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.GOOD_PARSE_LEVEL_CLAMP)
+        assert not any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"parseLevelOrNull clamp form must not flag RULE40, got: {findings}"
+        )
+
+    def test_safeintarg_without_off_passes(self):
+        """safeIntArg(param,0) with no off()-on-zero branch is out of scope."""
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.GOOD_SAFEINTARG_NO_OFF)
+        assert not any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"safeIntArg without off()-on-zero must not flag RULE40, got: {findings}"
+        )
+
+    def test_off_from_non_param_passes(self):
+        """off()-on-zero whose zero is a computed value (not safeIntArg(param,0)) is out of scope."""
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.GOOD_OFF_FROM_NON_PARAM)
+        assert not any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"off() from non-param value must not flag RULE40, got: {findings}"
+        )
+
+    def test_safeintarg_off_fails(self):
+        """OLD shape: safeIntArg(level,0) -> if(lvl<=0){off()} must flag RULE40 with FAIL."""
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.BAD_SAFEINTARG_OFF)
+        assert any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"Expected RULE40_level_off_ambiguity for safeIntArg->off shape, got: {findings}"
+        )
+        # Regression guard: missing severity key is a dead-gate — verify present and FAIL.
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE40_level_off_ambiguity'), (
+            f"RULE40 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_safeintarg_clamp_off_fails(self):
+        """OLD shape: safeIntArg(val,0,0,100) -> if(pct==0){off()} must flag RULE40."""
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.BAD_SAFEINTARG_CLAMP_OFF)
+        assert any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"Expected RULE40_level_off_ambiguity for safeIntArg clamp->off shape, got: {findings}"
+        )
+
+    def test_setnightlight_off_form_fails(self):
+        """Core 200S Light shape: safeIntArg(level,0,0,100) -> if(pct<10){setNightLight("off")}
+        must flag RULE40 — the set*("off") off-form + `< N` threshold blind spot."""
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.BAD_SETNIGHTLIGHT_OFF)
+        assert any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"Expected RULE40_level_off_ambiguity for setNightLight('off') off-form, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE40_level_off_ambiguity'), (
+            f"RULE40 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_safeintarg_lt_without_offform_passes(self):
+        """A safeIntArg-fed `< N` branch whose body does NOT call an off-form must NOT flag —
+        proves the four-way conjunction gates (condition iii: off-form in branch body)."""
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.GOOD_SAFEINTARG_LT_NO_OFFFORM)
+        assert not any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"safeIntArg-fed `< N` clamp without off-form must not flag RULE40, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # RULE20 version_lockstep — _extract_definition_block parser robustness
 # ---------------------------------------------------------------------------
 

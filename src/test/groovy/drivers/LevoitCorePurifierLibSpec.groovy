@@ -969,17 +969,34 @@ class LevoitCorePurifierLibSpec extends HubitatSpec {
         !testParent.allRequests.any { it.method == "setLevel" }
     }
 
-    def "setLevel(null) is null-guarded by safeIntArg -> 0 -> off (no NPE, no speed command)"() {
+    def "setLevel(null) is ignored — no off(), no speed command, no NPE (BP28)"() {
+        // BP28 contract change: parseLevelOrNull(null) -> null -> ignore (device unchanged).
+        // Previously safeIntArg(null,0,0,100) -> 0 -> off(); BP28 makes null/empty/garbage
+        // a no-op (device stays as-is) while explicit 0 still routes to off().
         given:
         testDevice.events.add([name: "switch", value: "on"])
 
         when:
         driver.setLevel(null)
 
-        then: "safeIntArg(null,0,0,100) -> 0 -> off() short-circuit"
-        testParent.allRequests.any { it.method == "setSwitch" && it.data.enabled == false }
+        then: "no off() and no speed command — null is ignored, device left unchanged"
+        !testParent.allRequests.any { it.method == "setSwitch" }
         !testParent.allRequests.any { it.method == "setLevel" }
         noExceptionThrown()
+    }
+
+    def "setLevel('garbage') is ignored — no off(), no speed command (BP28)"() {
+        // Non-vacuity: FAILS on pre-fix (safeIntArg("garbage",0,0,100)->0->off());
+        // PASSES post-fix (parseLevelOrNull->null->ignore).
+        given:
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel("garbage")
+
+        then: "non-numeric typo ignored: no off(), no speed command"
+        !testParent.allRequests.any { it.method == "setSwitch" }
+        !testParent.allRequests.any { it.method == "setLevel" }
     }
 
     def "4-band setLevel boundary-distinctness: the threshold set maps to all 4 distinct bands (v2.5 regression guard)"() {

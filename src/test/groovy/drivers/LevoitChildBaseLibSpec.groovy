@@ -576,4 +576,47 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         expect:
         driver.safeIntArg("9", 5, 1, 9) == 9
     }
+
+    // -------------------------------------------------------------------------
+    // parseLevelOrNull (BP28) — numeric -> Integer; non-numeric/null/empty -> null
+    // -------------------------------------------------------------------------
+
+    def "parseLevelOrNull: numeric input '#raw' returns Integer #expected (BP28)"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.parseLevelOrNull(raw) == expected
+
+        where:
+        raw    | expected
+        "0"    | 0
+        "5"    | 5
+        "9"    | 9
+        5      | 5
+        "5.7"  | 5     // decimal truncates toward zero (matches safeIntArg int() semantics)
+        "0.0"  | 0
+    }
+
+    def "parseLevelOrNull: non-numeric/null/empty input '#raw' returns null (BP28)"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect:
+        driver.parseLevelOrNull(raw) == null
+
+        where:
+        raw << ["garbage", "hgih", "abc", "", "  ", null, "true", "1.2.3"]
+    }
+
+    def "parseLevelOrNull: out-of-int-range BigDecimal returns null (W1 guard, BP28)"() {
+        given:
+        settings.debugOutput = false
+        settings.descriptionTextEnable = false
+
+        expect: "beyond Integer range -> null (treated as garbage, not bit-wrapped)"
+        driver.parseLevelOrNull("99999999999999") == null
+    }
 }

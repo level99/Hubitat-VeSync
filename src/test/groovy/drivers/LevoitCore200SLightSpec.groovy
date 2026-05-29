@@ -271,7 +271,7 @@ class LevoitCore200SLightSpec extends HubitatSpec {
     def "BP26: setLevel('') does not throw on empty-string input from Rule Machine (Core 200S Light)"() {
         // Before D2 fix, `level < 10` on a blank-slot "" string threw GroovyCastException
         // (swallowed silently by the Hubitat sandbox — no log entry, no effect).
-        // After D2 fix: safeIntArg("", 0, 0, 100) returns 0; 0 < 10 → setNightLight("off").
+        // Under BP28: parseLevelOrNull("") returns null → setLevel ignores it (no night-light command).
         given:
         settings.descriptionTextEnable = false
 
@@ -297,5 +297,40 @@ class LevoitCore200SLightSpec extends HubitatSpec {
 
         and: "no error logged"
         testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // BP28 regression guard: a non-numeric setLevel value must NOT switch the
+    // night-light off. Core 200S Light's off-form is setNightLight("off"), reached
+    // via the `pct < 10` threshold — the broadened off-form RULE40 now covers.
+    // Non-vacuity: (a) FAILS on pre-fix (safeIntArg("garbage",0,0,100)->0->`<10`->
+    // setNightLight("off")); PASSES post-fix (parseLevelOrNull->null->ignore).
+    // (b) guards the explicit-0/low contract so the fix can't over-correct.
+    // -------------------------------------------------------------------------
+
+    def "BP28: setLevel('garbage') is ignored — no setNightLight command (Core 200S Light)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.allRequests.clear()
+
+        when: "setLevel called with a non-numeric typo"
+        driver.setLevel("garbage")
+
+        then: "no setNightLight command was sent — non-numeric input ignored"
+        testParent.allRequests.findAll { it.method == "setNightLight" }.isEmpty()
+    }
+
+    def "BP28: setLevel(0) still sends setNightLight('off') (Core 200S Light low/0 contract preserved)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.allRequests.clear()
+
+        when: "setLevel(0) is called — genuine numeric 0 routes through the < 10 band"
+        driver.setLevel(0)
+
+        then: "setNightLight('off') was sent (explicit-low off-form still fires)"
+        def req = testParent.allRequests.find { it.method == "setNightLight" }
+        req != null
+        req.data.night_light == "off"
     }
 }

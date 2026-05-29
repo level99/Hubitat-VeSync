@@ -552,6 +552,46 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP28 regression guard: non-numeric level/mist value must NOT turn device off.
+    // Non-vacuity: (a) FAILS on pre-fix code (safeIntArg("garbage",0)->0->off());
+    // PASSES on post-fix (parseLevelOrNull("garbage")->null->ignore). (b) guards the
+    // explicit-0 contract so the fix can't over-correct and break setMistLevel(0).
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel('garbage') is ignored — no off(), no cloud command (BP28)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel called with a non-numeric typo"
+        driver.setMistLevel("garbage")
+
+        then: "no off() (setSwitch powerSwitch:0) was sent"
+        testParent.allRequests.every { !(it.method == "setSwitch" && it.data.powerSwitch == 0) }
+
+        and: "no setVirtualLevel mist command was sent"
+        testParent.allRequests.every { it.method != "setVirtualLevel" }
+    }
+
+    def "setMistLevel(0) still calls off() (BP28 explicit-0 contract preserved)"() {
+        given: "device is on, not sleeping"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testDevice.events.add([name: "mode", value: "manual"])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel(0) is called"
+        driver.setMistLevel(0)
+
+        then: "off() (setSwitch powerSwitch:0) was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 } != null
+
+        and: "no setVirtualLevel mist command was sent"
+        testParent.allRequests.every { it.method != "setVirtualLevel" }
+    }
+
+    // -------------------------------------------------------------------------
     // CONCERN 3 regression guard: setAutoStop C3 state-change gate
     // setAutoStop("on") when autoStopEnabled is already "on" → no API call (no-op).
     // -------------------------------------------------------------------------

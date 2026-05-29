@@ -196,7 +196,10 @@ def setLevel(val, duration) {
 // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
 def setLevel(val) {
     logDebug "setLevel $val"
-    Integer pct = safeIntArg(val, 0, 0, 100)
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer pct = parseLevelOrNull(val)
+    if (pct == null) { logWarn "setLevel: ignoring non-numeric value '${val}'"; return }
+    pct = Math.max(0, Math.min(100, pct))
     if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off.
     // state.turningOn is set by on() while configureOnState() runs async;

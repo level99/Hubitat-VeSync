@@ -978,6 +978,46 @@ Fallback semantics: use `0` where 0 maps to an off/reject downstream guard (e.g.
 
 ---
 
+### BP28: non-numeric level/mist value silently turns the device OFF
+
+**Fix scope:** class-wide — every level/mist `set*` method that routes a `safeIntArg(<userParam>, 0)` result into a numeric-threshold branch (`<= 0` / `== 0` / `< <int-literal>`) whose body calls an **off-form** — either a bare `off()` OR a `set*("off")` sub-feature call (e.g. `setNightLight("off")`).
+
+**Root cause:** `safeIntArg(raw, 0)` substitutes its fallback (`0`) on NON-numeric input (BP26's whole point — it must never throw). But when the coerced result then feeds an off-form via a threshold branch, a typo coerces to `0` and turns the device (or a sub-feature) **OFF** — indistinguishable from an explicit `0`. Two off-form shapes seen in this codebase:
+- **Direct power-off:** `Integer lvl = safeIntArg(level, 0); if (lvl <= 0) { off(); return }` — `setMistLevel("hgih")` → device off.
+- **Sub-feature off (Core 200S Light):** `Integer pct = safeIntArg(level, 0, 0, 100); if (pct < 10) { setNightLight("off") }` — `setLevel("brght")` → night-light silently off. Note the off-form is `set*("off")`, not bare `off()`, and the threshold is `< N`, not `<= 0` — the original RULE40 was blind to both, fixed in the v2.8 broadening.
+
+The user expects a typo to be ignored, not to power the device (or its sub-feature) off. (null/empty are already handled upstream by `requireNotNull` / the parser; this is specifically a PRESENT-but-non-numeric value reaching the threshold→off-form branch.)
+
+**Contract:**
+- explicit `0` / low (`"0"`) → off-form (SwitchLevel/MistLevel convention — preserved)
+- non-numeric garbage (`"hgih"`, `"brght"`, `"abc"`) → ignore with a one-line WARN, device stays as-is
+- null / empty → already handled by `requireNotNull` / `parseLevelOrNull` returning null
+
+**Canonical fix:** use `parseLevelOrNull(raw)` from `LevoitChildBaseLib` — the SwitchLevel/MistLevel-aware variant of `safeIntArg` that returns the parsed Integer for genuinely-numeric input (including `"0"` and `"5.7"`→5) and **null** for non-numeric/unparseable/null/empty input:
+```groovy
+// BEFORE (typo -> 0 -> off(), data-loss-equivalent)
+Integer lvl = safeIntArg(level, 0)
+if (lvl <= 0) { off(); return }
+
+// AFTER (typo -> ignored with WARN; explicit 0 still -> off())
+Integer lvl = parseLevelOrNull(level)
+if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
+if (lvl <= 0) { off(); return }
+```
+For the `setLevel` 4-arg-clamp form, `parseLevelOrNull(val)` replaces `safeIntArg(val, 0, 0, 100)`; re-apply the `Math.max(0, Math.min(100, pct))` clamp after the null-guard.
+
+**Known sites (all fixed in v2.8):** `setMistLevel` on Superior 6000S, OasisMist 450S/1000S, Sprout Humidifier, LV600S, LV600S HubConnect, Classic 200S/300S, Dual 200S; `setLevel` on LevoitCorePurifierLib, LevoitFanLib, LevoitVitalPurifierLib, Superior 6000S; `setLevel` (set*("off") sub-feature off-form via `< 10` threshold) on Core 200S Light. (14 sites, 13 files.)
+
+**Out of scope (deliberately keep `safeIntArg`):** sites where the fallback-0 is a valid clamp floor (`setHumidity`, brightness), means "no timer" (`setTimer` 0 → cancel), or where 0 is a valid setting (`setWarmMistLevel` 0 = warm-off, not device-off). These have no off-form-on-fallback-0-from-garbage ambiguity.
+
+**Regression guard:** Spock spec per affected driver/lib must assert BOTH: (a) `setMistLevel("garbage")` / `setLevel("garbage")` → no off-form (`off()` or `set*("off")`) / no cloud command (device stays), AND (b) `setMistLevel(0)` / `setLevel(0)` → the off-form still fires. The (b) leg guards against an over-correction that breaks the explicit-0/low contract.
+
+**Lint enforcement:** RULE40 (`tests/lint_rules/bp28_level_off_ambiguity.py`) flags a `set*` body ONLY when all four conditions hold (the conjunction prevents false positives on benign numeric branches): (i) a local is assigned from `safeIntArg(<firstParam>, 0 ...)` (fallback-0, any overload); (ii) that local feeds a numeric-threshold branch (`<= 0` / `== 0` / `< <int-literal>`); (iii) the branch body calls an off-form — `off()` OR `set*("off")`; (iv) no `parseLevelOrNull` guard is present. Presence of `parseLevelOrNull` exempts; threshold branches whose operand is a computed/clamped internal (not `safeIntArg(<param>,0)`) are not flagged; a `safeIntArg`-fed `< N` branch whose body does NOT call an off-form is not flagged. Must-catch fixtures cover `<=0`/`==0`→`off()`, `safeIntArg(_,0,0,100)`→`off()`, and `< 10`→`setNightLight("off")`; must-not-catch fixtures cover the parseLevelOrNull-guarded forms, a `safeIntArg`-fed no-off()-branch, a non-param-fed off(), and a `safeIntArg`-fed `< N` with no off-form. All in `tests/lint_test.py::TestRule40BP28LevelOffAmbiguity`.
+
+**Shipped:** v2.8.
+
+---
+
 ## Report format
 
 Return ONE of:

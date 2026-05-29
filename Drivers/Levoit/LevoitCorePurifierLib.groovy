@@ -402,8 +402,11 @@ def cycleSpeed() {
 def setLevel(value)
 {
     logDebug "setLevel $value"
-    // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
-    Integer pct = safeIntArg(value, 0, 0, 100)
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    // null/empty (BP18 blank-RM-slot) also -> null here and route to the ignore branch.
+    Integer pct = parseLevelOrNull(value)
+    if (pct == null) { logWarn "setLevel: ignoring non-numeric value '${value}'"; return }
+    pct = Math.max(0, Math.min(100, pct))
     // SwitchLevel convention: setLevel(0) means off (Z-Wave dimmer platform expectation).
     if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off (SwitchLevel capability convention).

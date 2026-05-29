@@ -170,6 +170,48 @@ Integer safeIntArg(raw, Integer fallback, Integer lo, Integer hi) {
     return Math.max(lo, Math.min(hi, v))
 }
 
+// BP28 level parser: the SwitchLevel/MistLevel-aware variant of safeIntArg.
+//
+// safeIntArg substitutes its fallback (0) on NON-numeric input, which makes a
+// typo like setMistLevel("hgih") indistinguishable from an explicit
+// setMistLevel(0): both coerce to 0 and turn the device OFF. parseLevelOrNull
+// lets level/mist setters tell these two cases apart:
+//
+//   - genuinely-numeric input ("0", "5", "5.7") -> the parsed Integer
+//     (decimal truncates toward zero, matching safeIntArg's int() semantics)
+//   - non-numeric / unparseable / null / empty input -> null
+//
+// Callers branch on the result:
+//
+//   Integer lvl = parseLevelOrNull(level)
+//   if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
+//   if (lvl <= 0)    { off(); return }   // explicit 0 -> off, contract preserved
+//   ...clamp + ensureSwitchOn + cloud write...
+//
+// Use ONLY where a non-numeric value should leave the device unchanged rather
+// than power it off (the level->off branch). For sites where the fallback-0
+// is itself a valid clamp floor (setHumidity, brightness) or means "no timer"
+// (setTimer), keep safeIntArg — those do not have an off()-on-zero branch.
+//
+// W1 guard: out-of-range BigDecimals (beyond int range) return null (cannot be
+// represented as an Integer level; treated as garbage rather than bit-wrapped).
+Integer parseLevelOrNull(raw) {
+    if (raw == null) return null
+    try {
+        String s = raw.toString().trim()
+        if (s.isEmpty()) return null
+        if (s.isInteger()) return s.toInteger()
+        if (s.isBigDecimal()) {
+            BigDecimal bd = s.toBigDecimal()
+            if (bd > Integer.MAX_VALUE || bd < Integer.MIN_VALUE) return null
+            return bd.intValue()
+        }
+        return null
+    } catch (ignored) {
+        return null
+    }
+}
+
 // BP12: seed pref defaults at first poll method invocation.
 // Idempotent via state.prefsSeeded gate; safe to call repeatedly.
 // Insert at top of: applyStatus() for V2-API drivers; update(status,nightLight)

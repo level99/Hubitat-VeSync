@@ -164,7 +164,9 @@ def setMistLevel(level){
     // setMistLevel(0) means "turn off" (SwitchLevel/MistLevel convention; release-notes contract for
     // all humidifiers). Evaluate the power-off branch BEFORE the sleep-mode short-circuit so a
     // setMistLevel(0) issued while sleeping still powers the device off rather than silently skipping.
-    Integer lvl = safeIntArg(level, 0)
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer lvl = parseLevelOrNull(level)
+    if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
     if (lvl <= 0) { off(); return }
     // Sup6000S V2 firmware rejects setVirtualLevel while in sleep mode (inner code -1), so a
     // positive-level mist write short-circuits during sleep mode before any cloud write or ensureSwitchOn.
@@ -203,7 +205,10 @@ def setLevel(val, duration) {
 // turns an off device ON at level 1 — inverted behaviour.
 def setLevel(val){
     logDebug "setLevel(${val})"
-    Integer pct = safeIntArg(val, 0, 0, 100)
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer pct = parseLevelOrNull(val)
+    if (pct == null) { logWarn "setLevel: ignoring non-numeric value '${val}'"; return }
+    pct = Math.max(0, Math.min(100, pct))
     if (pct == 0) { off(); return }
     Integer lvl = levelFromPercent(pct)
     sendEvent(name:"level", value: pct)

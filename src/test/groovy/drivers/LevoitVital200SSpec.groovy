@@ -789,9 +789,10 @@ class LevoitVital200SSpec extends HubitatSpec {
     // BP18 regression guard: setLevel(null) does not throw NPE
     // -------------------------------------------------------------------------
 
-    def "BP18: setLevel(null) does not throw and does not send a speed command"() {
-        // Regression guard: before this fix, null < 20 threw NPE (Groovy null arithmetic),
-        // which the Hubitat sandbox swallowed silently. Now routes to off() via 0 coercion.
+    def "BP18/BP28: setLevel(null) does not throw and sends no speed command (null ignored)"() {
+        // Regression guard: before BP18, null < 20 threw NPE (Groovy null arithmetic),
+        // swallowed silently by the sandbox. Under BP28, parseLevelOrNull(null) -> null ->
+        // ignore (device unchanged) — no off(), no speed command.
         given:
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
@@ -802,8 +803,9 @@ class LevoitVital200SSpec extends HubitatSpec {
         then: "no NPE thrown"
         noExceptionThrown()
 
-        and: "no setLevel (speed) API call was made — null routes to off() path"
+        and: "no setLevel (speed) API call and no off() — null is ignored"
         testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
     }
 
     def "BP18: setPetMode(null) returns silently with logWarn (no API call)"() {
