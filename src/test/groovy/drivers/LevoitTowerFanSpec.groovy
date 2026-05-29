@@ -500,28 +500,20 @@ class LevoitTowerFanSpec extends HubitatSpec {
         lastEventValue("mode") != "advancedSleep"
     }
 
-    def "setMode('normal') sends setTowerFanMode with workMode='normal' (no reverse-mapping)"() {
+    @Unroll
+    def "setMode('#mode') sends setTowerFanMode with workMode='#mode' (no reverse-mapping)"() {
         given: "default state"
 
         when:
-        driver.setMode("normal")
+        driver.setMode(mode)
 
-        then: "API receives 'normal' unchanged"
+        then: "API receives the mode literal unchanged"
         def req = testParent.allRequests.find { it.method == "setTowerFanMode" }
         req != null
-        req.data.workMode == "normal"
-    }
+        req.data.workMode == mode
 
-    def "setMode('turbo') sends setTowerFanMode with workMode='turbo'"() {
-        given: "default state"
-
-        when:
-        driver.setMode("turbo")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setTowerFanMode" }
-        req != null
-        req.data.workMode == "turbo"
+        where:
+        mode << ["normal", "turbo"]
     }
 
     def "setMode sends setTowerFanMode, NOT setPurifierMode"() {
@@ -649,30 +641,23 @@ class LevoitTowerFanSpec extends HubitatSpec {
     // Toggle pattern (NIT 1): state.lastSwitchSet preferred over currentValue
     // -------------------------------------------------------------------------
 
-    def "toggle() reads state.lastSwitchSet='on' and calls off()"() {
-        given: "state.lastSwitchSet was seeded by a prior on() call"
-        state.lastSwitchSet = "on"
+    @Unroll
+    def "toggle() reads state.lastSwitchSet='#lastSet' and sends setSwitch powerSwitch=#expectedPower"() {
+        given: "state.lastSwitchSet was seeded by a prior on()/off() call"
+        state.lastSwitchSet = lastSet
 
         when: "toggle() is called"
         driver.toggle()
 
-        then: "setSwitch with powerSwitch=0 was sent (off was called)"
+        then: "setSwitch with the inverted powerSwitch was sent"
         def req = testParent.allRequests.find { it.method == "setSwitch" }
         req != null
-        req.data.powerSwitch == 0
-    }
+        req.data.powerSwitch == expectedPower
 
-    def "toggle() reads state.lastSwitchSet='off' and calls on()"() {
-        given: "state.lastSwitchSet was seeded by a prior off() call"
-        state.lastSwitchSet = "off"
-
-        when:
-        driver.toggle()
-
-        then: "setSwitch with powerSwitch=1 was sent (on was called)"
-        def req = testParent.allRequests.find { it.method == "setSwitch" }
-        req != null
-        req.data.powerSwitch == 1
+        where:
+        lastSet | expectedPower
+        "on"    | 0
+        "off"   | 1
     }
 
     def "toggle() falls back to device.currentValue('switch') when state not seeded"() {
@@ -693,126 +678,84 @@ class LevoitTowerFanSpec extends HubitatSpec {
     // Oscillation / mute / display payloads
     // -------------------------------------------------------------------------
 
-    def "setOscillation('on') sends setOscillationSwitch with {oscillationSwitch:1}"() {
+    @Unroll
+    def "setOscillation('#arg') sends setOscillationSwitch with {oscillationSwitch:#expected}"() {
         when:
-        driver.setOscillation("on")
+        driver.setOscillation(arg)
 
         then:
         def req = testParent.allRequests.find { it.method == "setOscillationSwitch" }
         req != null
-        req.data.oscillationSwitch == 1
+        req.data.oscillationSwitch == expected
+
+        where:
+        arg   | expected
+        "on"  | 1
+        "off" | 0
     }
 
-    def "setOscillation('off') sends setOscillationSwitch with {oscillationSwitch:0}"() {
+    @Unroll
+    def "setMute('#arg') sends setMuteSwitch with {muteSwitch:#expected}"() {
         when:
-        driver.setOscillation("off")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setOscillationSwitch" }
-        req != null
-        req.data.oscillationSwitch == 0
-    }
-
-    def "setMute('on') sends setMuteSwitch with {muteSwitch:1}"() {
-        when:
-        driver.setMute("on")
+        driver.setMute(arg)
 
         then:
         def req = testParent.allRequests.find { it.method == "setMuteSwitch" }
         req != null
-        req.data.muteSwitch == 1
+        req.data.muteSwitch == expected
+
+        where:
+        arg   | expected
+        "on"  | 1
+        "off" | 0
     }
 
-    def "setMute('off') sends setMuteSwitch with {muteSwitch:0}"() {
+    @Unroll
+    def "setDisplay('#arg') sends setDisplay with {screenSwitch:#expected}"() {
         when:
-        driver.setMute("off")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setMuteSwitch" }
-        req != null
-        req.data.muteSwitch == 0
-    }
-
-    def "setDisplay('on') sends setDisplay with {screenSwitch:1}"() {
-        when:
-        driver.setDisplay("on")
+        driver.setDisplay(arg)
 
         then:
         def req = testParent.allRequests.find { it.method == "setDisplay" }
         req != null
-        req.data.screenSwitch == 1
+        req.data.screenSwitch == expected
+
+        where:
+        arg   | expected
+        "on"  | 1
+        "off" | 0
     }
 
-    def "setDisplay('off') sends setDisplay with {screenSwitch:0}"() {
+    // ---- BP18: null-arg guards across all single-string setters ----
+
+    @Unroll
+    def "#cmd(null) emits WARN and makes no API call (BP18)"() {
         when:
-        driver.setDisplay("off")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-        req.data.screenSwitch == 0
-    }
-
-    // ---- BP18: null-arg + invalid-enum guards on oscillation / mute / display ----
-
-    def "setOscillation(null) emits WARN and makes no API call (BP18)"() {
-        when:
-        driver.setOscillation(null)
+        driver."$cmd"(null)
 
         then:
         noExceptionThrown()
         testParent.allRequests.isEmpty()
-        testLog.warns.any { it.contains("setOscillation") && it.contains("null") }
+        testLog.warns.any { it.contains(cmd) && it.contains("null") }
+
+        where:
+        cmd << ["setOscillation", "setMute", "setDisplay", "setSpeed", "setMode"]
     }
 
-    def "setOscillation('yes') logs error and makes no API call (invalid enum)"() {
+    // ---- invalid-enum guards on oscillation / mute / display ----
+
+    @Unroll
+    def "#cmd('yes') logs error and makes no API call (invalid enum)"() {
         when:
-        driver.setOscillation("yes")
-
-        then:
-        noExceptionThrown()
-        testParent.allRequests.isEmpty()
-        testLog.errors.any { it.contains("yes") || it.contains("invalid") }
-    }
-
-    def "setMute(null) emits WARN and makes no API call (BP18)"() {
-        when:
-        driver.setMute(null)
-
-        then:
-        noExceptionThrown()
-        testParent.allRequests.isEmpty()
-        testLog.warns.any { it.contains("setMute") && it.contains("null") }
-    }
-
-    def "setMute('yes') logs error and makes no API call (invalid enum)"() {
-        when:
-        driver.setMute("yes")
+        driver."$cmd"("yes")
 
         then:
         noExceptionThrown()
         testParent.allRequests.isEmpty()
         testLog.errors.any { it.contains("yes") || it.contains("invalid") }
-    }
 
-    def "setDisplay(null) emits WARN and makes no API call (BP18)"() {
-        when:
-        driver.setDisplay(null)
-
-        then:
-        noExceptionThrown()
-        testParent.allRequests.isEmpty()
-        testLog.warns.any { it.contains("setDisplay") && it.contains("null") }
-    }
-
-    def "setDisplay('yes') logs error and makes no API call (invalid enum)"() {
-        when:
-        driver.setDisplay("yes")
-
-        then:
-        noExceptionThrown()
-        testParent.allRequests.isEmpty()
-        testLog.errors.any { it.contains("yes") || it.contains("invalid") }
+        where:
+        cmd << ["setOscillation", "setMute", "setDisplay"]
     }
 
     // -------------------------------------------------------------------------
@@ -934,26 +877,6 @@ class LevoitTowerFanSpec extends HubitatSpec {
         then: "info HTML contains temperature value (71.7)"
         def infoVal = lastEventValue("info") as String
         infoVal.contains("Temp") || infoVal.contains("71")
-    }
-
-    // ---- BP18: null-arg guard ----
-
-    def "setSpeed(null) does not throw and emits a WARN log (BP18)"() {
-        when:
-        driver.setSpeed(null)
-        then:
-        noExceptionThrown()
-        testLog.warns.any { it.contains("setSpeed") && it.contains("null") }
-        testParent.allRequests.isEmpty()
-    }
-
-    def "setMode(null) does not throw and emits a WARN log (BP18)"() {
-        when:
-        driver.setMode(null)
-        then:
-        noExceptionThrown()
-        testLog.warns.any { it.contains("setMode") && it.contains("null") }
-        testParent.allRequests.isEmpty()
     }
 
     // -------------------------------------------------------------------------

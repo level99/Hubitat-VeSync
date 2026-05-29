@@ -159,30 +159,23 @@ class LevoitCore300SSpec extends HubitatSpec {
     // v2.3 new features: childLock, display, timer, resetFilter, pm25, airQualityIndex
     // -------------------------------------------------------------------------
 
-    def "setChildLock('on') sends setChildLock with child_lock=true"() {
+    @Unroll
+    def "setChildLock('#input') sends setChildLock with child_lock=#expected"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setChildLock("on")
+        driver.setChildLock(input)
 
         then:
         def req = testParent.allRequests.find { it.method == "setChildLock" }
         req != null
-        req.data.child_lock == true
-    }
+        req.data.child_lock == expected
 
-    def "setChildLock('off') sends setChildLock with child_lock=false"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setChildLock("off")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
-        req != null
-        req.data.child_lock == false
+        where:
+        input | expected
+        "on"  | true
+        "off" | false
     }
 
     def "update() parses child_lock=true from fixture and emits childLock='on'"() {
@@ -351,58 +344,43 @@ class LevoitCore300SSpec extends HubitatSpec {
     // C3: state-change gate — setChildLock and setDisplay (retroactive fix via lib)
     // -------------------------------------------------------------------------
 
-    def "C3: setChildLock('on') when childLock is already 'on' is a no-op (no API call)"() {
-        given: "childLock is already on"
+    @Unroll
+    def "C3: #driverMethod('on') when #attr is already 'on' is a no-op (no API call)"() {
+        given: "#attr is already on"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "on"])
+        testDevice.events.add([name: attr, value: "on"])
 
         when:
-        driver.setChildLock("on")
+        driver."$driverMethod"("on")
 
-        then: "no setChildLock API call was made"
-        testParent.allRequests.find { it.method == "setChildLock" } == null
+        then: "no #apiMethod API call was made"
+        testParent.allRequests.find { it.method == apiMethod } == null
 
         and: "no errors logged"
         testLog.errors.isEmpty()
+
+        where:
+        driverMethod   | attr        | apiMethod
+        "setChildLock" | "childLock" | "setChildLock"
+        "setDisplay"   | "display"   | "setDisplay"
     }
 
-    def "C3: setChildLock('on') when childLock is 'off' does send the API call"() {
-        given: "childLock is currently off"
+    @Unroll
+    def "C3: #driverMethod('on') when #attr is 'off' does send the API call"() {
+        given: "#attr is currently off"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "off"])
+        testDevice.events.add([name: attr, value: "off"])
 
         when:
-        driver.setChildLock("on")
+        driver."$driverMethod"("on")
 
-        then: "setChildLock API call was made"
-        testParent.allRequests.find { it.method == "setChildLock" } != null
-    }
+        then: "#apiMethod API call was made"
+        testParent.allRequests.find { it.method == apiMethod } != null
 
-    def "C3: setDisplay('on') when display is already 'on' is a no-op (no API call)"() {
-        given: "display is already on"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "on"])
-
-        when:
-        driver.setDisplay("on")
-
-        then: "no setDisplay API call was made"
-        testParent.allRequests.find { it.method == "setDisplay" } == null
-
-        and: "no errors logged"
-        testLog.errors.isEmpty()
-    }
-
-    def "C3: setDisplay('on') when display is 'off' does send the API call"() {
-        given: "display is currently off"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "off"])
-
-        when:
-        driver.setDisplay("on")
-
-        then: "setDisplay API call was made"
-        testParent.allRequests.find { it.method == "setDisplay" } != null
+        where:
+        driverMethod   | attr        | apiMethod
+        "setChildLock" | "childLock" | "setChildLock"
+        "setDisplay"   | "display"   | "setDisplay"
     }
 
     // -------------------------------------------------------------------------
@@ -546,72 +524,51 @@ class LevoitCore300SSpec extends HubitatSpec {
     // BP25: case-sensitivity — setChildLock / setDisplay uppercase inputs
     // -----------------------------------------------------------------------
 
-    def "BP25: setChildLock('ON') uppercase makes the API call and sends child_lock:true (not false)"() {
-        // Pre-fix: ("ON" == "on") is false → child_lock:false sent (unlock instead of lock).
-        // Post-fix: toLowerCase() normalizes "ON" → "on" → child_lock:true (correct).
-        given: "childLock is currently 'off' so the C3 gate does not block"
+    @Unroll
+    def "BP25: #driverMethod('ON') uppercase makes the API call and sends #payloadField:true (not false)"() {
+        // Pre-fix: ("ON" == "on") is false → payloadField:false sent (inverted).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → payloadField:true (correct).
+        given: "#attr is currently 'off' so the C3 gate does not block"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "off"])
+        testDevice.events.add([name: attr, value: "off"])
 
-        when: "setChildLock is called with uppercase 'ON'"
-        driver.setChildLock("ON")
+        when: "#driverMethod is called with uppercase 'ON'"
+        driver."$driverMethod"("ON")
 
         then: "API call was made"
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        def req = testParent.allRequests.find { it.method == apiMethod }
         req != null
 
-        and: "payload carries child_lock:true (lock), NOT false (unlock)"
-        req.data.child_lock == true
+        and: "payload carries #payloadField:true, NOT false"
+        req.data[payloadField] == true
 
         and: "emitted event value is lowercase 'on'"
-        lastEventValue("childLock") == "on"
+        lastEventValue(attr) == "on"
+
+        where:
+        driverMethod   | apiMethod      | payloadField | attr
+        "setChildLock" | "setChildLock" | "child_lock" | "childLock"
+        "setDisplay"   | "setDisplay"   | "state"      | "display"
     }
 
-    def "BP25: setChildLock('ON') when childLock is already 'on' is a no-op (C3 gate works with uppercase)"() {
+    @Unroll
+    def "BP25: #driverMethod('ON') when #attr is already 'on' is a no-op (C3 gate works with uppercase)"() {
         // Pre-fix: ("on" == "ON") is false → gate bypassed, redundant API call made.
         // Post-fix: toLowerCase() yields "on" == "on" → gate fires, no API call.
-        given: "childLock is already 'on'"
+        given: "#attr is already 'on'"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "on"])
+        testDevice.events.add([name: attr, value: "on"])
 
-        when: "setChildLock called with uppercase 'ON'"
-        driver.setChildLock("ON")
+        when: "#driverMethod called with uppercase 'ON'"
+        driver."$driverMethod"("ON")
 
         then: "no API call was made (C3 gate worked correctly)"
-        testParent.allRequests.find { it.method == "setChildLock" } == null
-    }
+        testParent.allRequests.find { it.method == apiMethod } == null
 
-    def "BP25: setDisplay('ON') uppercase makes the API call and sends state:true (not false)"() {
-        // Pre-fix: ("ON" == "on") is false → state:false sent (turn off instead of on).
-        // Post-fix: toLowerCase() normalizes "ON" → "on" → state:true (correct).
-        given: "display is currently 'off' so the C3 gate does not block"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "off"])
-
-        when: "setDisplay is called with uppercase 'ON'"
-        driver.setDisplay("ON")
-
-        then: "API call was made"
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-
-        and: "payload carries state:true (on), NOT false (off)"
-        req.data.state == true
-
-        and: "emitted event value is lowercase 'on'"
-        lastEventValue("display") == "on"
-    }
-
-    def "BP25: setDisplay('ON') when display is already 'on' is a no-op (C3 gate works with uppercase)"() {
-        given: "display is already 'on'"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "on"])
-
-        when:
-        driver.setDisplay("ON")
-
-        then: "no API call was made"
-        testParent.allRequests.find { it.method == "setDisplay" } == null
+        where:
+        driverMethod   | apiMethod      | attr
+        "setChildLock" | "setChildLock" | "childLock"
+        "setDisplay"   | "setDisplay"   | "display"
     }
 
     // -------------------------------------------------------------------------
@@ -685,35 +642,25 @@ class LevoitCore300SSpec extends HubitatSpec {
     // Bug Pattern #26: safeIntArg regression — non-numeric RM inputs must not throw
     // -------------------------------------------------------------------------
 
-    def "BP26: setTimer('') does not throw on empty-string input from Rule Machine (Core 300S)"() {
-        // Before BP26 fix, `seconds as Integer` on "" threw NumberFormatException (swallowed
-        // silently by Hubitat sandbox, leaving the command a no-op with no log entry).
-        // safeIntArg("", 0) returns 0, which routes to the cancelTimer / early-return path.
+    @Unroll
+    def "BP26: setTimer('#badInput') does not throw on non-numeric input from Rule Machine (Core 300S)"() {
+        // Before BP26 fix, `seconds as Integer` on non-numeric input threw NumberFormatException
+        // (swallowed silently by Hubitat sandbox, leaving the command a no-op with no log entry).
+        // safeIntArg(badInput, 0) returns 0, which routes to the cancelTimer / early-return path.
         given:
         settings.descriptionTextEnable = false
 
-        when: "setTimer called with empty string (Rule Machine blank slot)"
-        driver.setTimer("")
+        when: "setTimer called with non-numeric input (Rule Machine blank slot / typo)"
+        driver.setTimer(badInput)
 
         then: "no exception thrown"
         noExceptionThrown()
 
         and: "no error logged"
         testLog.errors.isEmpty()
-    }
 
-    def "BP26: setTimer('abc') does not throw on non-numeric input from Rule Machine (Core 300S)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when: "setTimer called with non-numeric string"
-        driver.setTimer("abc")
-
-        then: "no exception thrown"
-        noExceptionThrown()
-
-        and: "no error logged"
-        testLog.errors.isEmpty()
+        where:
+        badInput << ["", "abc"]
     }
 
     // -------------------------------------------------------------------------

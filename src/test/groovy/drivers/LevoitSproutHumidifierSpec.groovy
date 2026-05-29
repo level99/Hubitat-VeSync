@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestParent
 
@@ -249,9 +250,10 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
     // Mode read-path normalization
     // -------------------------------------------------------------------------
 
-    def "applyStatus workMode='autoPro' normalizes to user-facing 'auto'"() {
+    @Unroll
+    def "applyStatus workMode='#rawMode' normalizes to user-facing 'auto'"() {
         given:
-        def status = [code: 0, result: [powerSwitch: 1, workMode: "autoPro", humidity: 50,
+        def status = [code: 0, result: [powerSwitch: 1, workMode: rawMode, humidity: 50,
                                         targetHumidity: 55, virtualLevel: 1, waterLacksState: 0,
                                         waterTankLifted: 0, autoStopSwitch: 1, autoStopState: 0, screenState: 1]]
         when:
@@ -259,18 +261,9 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
 
         then:
         lastEventValue("mode") == "auto"
-    }
 
-    def "applyStatus workMode='auto' also normalizes to user-facing 'auto' (defensive firmware variant)"() {
-        given:
-        def status = [code: 0, result: [powerSwitch: 1, workMode: "auto", humidity: 50,
-                                        targetHumidity: 55, virtualLevel: 1, waterLacksState: 0,
-                                        waterTankLifted: 0, autoStopSwitch: 1, autoStopState: 0, screenState: 1]]
-        when:
-        driver.applyStatus(status)
-
-        then:
-        lastEventValue("mode") == "auto"
+        where:
+        rawMode << ["autoPro", "auto"]  // 'auto' is the defensive firmware variant
     }
 
     // -------------------------------------------------------------------------
@@ -315,24 +308,18 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         !call.data.containsKey("mode")
     }
 
-    def "setMode('sleep') sends workMode='sleep'"() {
+    @Unroll
+    def "setMode('#mode') sends workMode='#mode'"() {
         when:
-        driver.setMode("sleep")
+        driver.setMode(mode)
 
         then:
         def call = testParent.allRequests.find { it.method == "setHumidityMode" }
         call != null
-        call.data.workMode == "sleep"
-    }
+        call.data.workMode == mode
 
-    def "setMode('manual') sends workMode='manual'"() {
-        when:
-        driver.setMode("manual")
-
-        then:
-        def call = testParent.allRequests.find { it.method == "setHumidityMode" }
-        call != null
-        call.data.workMode == "manual"
+        where:
+        mode << ["sleep", "manual"]
     }
 
     def "setMode with invalid mode logs error and does not call API"() {
@@ -921,65 +908,44 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         lastEventValue("dryingEnabled") == "on"
     }
 
-    def "BP25-truthy: setDryingMode('true') sends autoDryingSwitch:1 and emits 'on'"() {
-        // Pre-fix: v = "true"; sendEvent(value:"true"). Post-fix: canon="on"; sendEvent(value:"on").
+    @Unroll
+    def "BP25-truthy: setDryingMode('#truthyInput') sends autoDryingSwitch:1 and emits 'on'"() {
+        // Pre-fix: v = raw input; sendEvent(value: raw). Post-fix: canon="on"; sendEvent(value:"on").
         given:
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "dryingEnabled", value: "off"])
 
         when:
-        driver.setDryingMode("true")
+        driver.setDryingMode(truthyInput)
 
         then: "API call sent with autoDryingSwitch:1"
         def req = testParent.allRequests.find { it.method == "setDryingMode" }
         req != null
         req.data.autoDryingSwitch == 1
 
-        and: "emitted attribute is canonical 'on', not raw 'true'"
+        and: "emitted attribute is canonical 'on', not raw '${truthyInput}'"
         lastEventValue("dryingEnabled") == "on"
+
+        where:
+        truthyInput << ["true", "1"]
     }
 
-    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits 'on'"() {
+    @Unroll
+    def "BP25-truthy: setChildLock('#truthyInput') sends childLockSwitch:1 and emits 'on'"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setChildLock("true")
+        driver.setChildLock(truthyInput)
 
         then:
         def req = testParent.allRequests.find { it.method == "setChildLock" }
         req != null
         req.data.childLockSwitch == 1
         lastEventValue("childLock") == "on"
-    }
 
-    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits 'on'"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setChildLock("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
-        req != null
-        req.data.childLockSwitch == 1
-        lastEventValue("childLock") == "on"
-    }
-
-    def "BP25-truthy: setDryingMode('1') sends autoDryingSwitch:1 and emits 'on'"() {
-        given:
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "dryingEnabled", value: "off"])
-
-        when:
-        driver.setDryingMode("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setDryingMode" }
-        req != null
-        req.data.autoDryingSwitch == 1
-        lastEventValue("dryingEnabled") == "on"
+        where:
+        truthyInput << ["true", "1"]
     }
 
     def "BP25-truthy: C3 gate suppresses setDryingMode when dryingEnabled='on' and input is 'true'"() {

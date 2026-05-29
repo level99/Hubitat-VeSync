@@ -2,6 +2,7 @@ package drivers
 
 import support.HubitatSpec
 import support.TestParent
+import spock.lang.Unroll
 
 /**
  * Unit tests for LevoitDual200S.groovy (Levoit Dual 200S Humidifier).
@@ -377,62 +378,44 @@ class LevoitDual200SSpec extends HubitatSpec {
         req.data.level == 1
     }
 
-    def "setMistLevel clamps values above 2 to 2 (Dual 200S range ceiling -- NOT 9 like Classic 300S)"() {
+    @Unroll
+    def "setMistLevel clamps #input to 2 (Dual 200S range ceiling -- NOT 9 like Classic 300S)"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setMistLevel(9)  // Classic 300S max; should clamp to 2 on Dual 200S
+        driver.setMistLevel(input)
 
         then:
         def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
         req != null
-        req.data.level == 2  // clamped to Dual 200S max (NOT passed through as 9)
-    }
+        req.data.level == 2  // clamped to Dual 200S max (NOT passed through)
 
-    def "setMistLevel clamps value 3 (one over max) to 2"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setMistLevel(3)
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setVirtualLevel" }
-        req != null
-        req.data.level == 2
+        where:
+        input << [9, 3]
     }
 
     // -------------------------------------------------------------------------
     // Mode write-path: only auto and manual valid; NO sleep
     // -------------------------------------------------------------------------
 
-    def "setMode('sleep') is rejected with logError (no sleep mode on Dual 200S)"() {
+    @Unroll
+    def "setMode('#mode') is rejected with logError (not valid for Dual 200S)"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setMode("sleep")
+        driver.setMode(mode)
 
-        then: "logError called -- sleep not valid for Dual 200S"
+        then: "logError called"
         !testLog.errors.isEmpty()
 
         and: "no mode request sent to device"
         def req = testParent.allRequests.find { it.method == "setHumidityMode" }
         req == null
-    }
 
-    def "setMode('invalid') is rejected with logError"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setMode("turbo")
-
-        then:
-        !testLog.errors.isEmpty()
-        def req = testParent.allRequests.find { it.method == "setHumidityMode" }
-        req == null
+        where:
+        mode << ["sleep", "turbo"]
     }
 
     def "setMode('manual') sends setHumidityMode with {mode:'manual'} -- field name is 'mode' not 'workMode'"() {
@@ -559,12 +542,13 @@ class LevoitDual200SSpec extends HubitatSpec {
     // Mode read-path: normalize firmware aliases to "auto"
     // -------------------------------------------------------------------------
 
-    def "applyStatus normalizes mode='humidity' to user-facing 'auto' (EU firmware alias)"() {
+    @Unroll
+    def "applyStatus normalizes mode='#apiMode' to user-facing 'auto' (firmware alias)"() {
         given:
         settings.descriptionTextEnable = false
-        // Simulate EU firmware reporting 'humidity' as the auto mode
+        // Simulate firmware reporting an auto-mode alias
         def deviceData = [enabled: true, humidity: 40, mist_virtual_level: 1,
-                          mist_level: 1, mode: "humidity", water_lacks: false,
+                          mist_level: 1, mode: apiMode, water_lacks: false,
                           humidity_high: false, water_tank_lifted: false,
                           display: true, automatic_stop_reach_target: false,
                           night_light_brightness: 0,
@@ -574,26 +558,11 @@ class LevoitDual200SSpec extends HubitatSpec {
         when:
         driver.applyStatus(status)
 
-        then: "'humidity' normalized to 'auto' for user-facing attribute"
+        then: "alias normalized to 'auto' for user-facing attribute"
         lastEventValue("mode") == "auto"
-    }
 
-    def "applyStatus normalizes mode='autoPro' to user-facing 'auto'"() {
-        given:
-        settings.descriptionTextEnable = false
-        def deviceData = [enabled: true, humidity: 40, mist_virtual_level: 1,
-                          mist_level: 1, mode: "autoPro", water_lacks: false,
-                          humidity_high: false, water_tank_lifted: false,
-                          display: true, automatic_stop_reach_target: false,
-                          night_light_brightness: 0,
-                          configuration: [auto_target_humidity: 50, display: true, automatic_stop: false]]
-        def status = v2StatusEnvelope(deviceData)
-
-        when:
-        driver.applyStatus(status)
-
-        then:
-        lastEventValue("mode") == "auto"
+        where:
+        apiMode << ["humidity", "autoPro"]
     }
 
     // -------------------------------------------------------------------------
@@ -616,30 +585,23 @@ class LevoitDual200SSpec extends HubitatSpec {
         !req.data.containsKey("targetHumidity")
     }
 
-    def "setHumidity clamps to 30 minimum"() {
+    @Unroll
+    def "setHumidity clamps #input to #expected"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setHumidity(20)
+        driver.setHumidity(input)
 
         then:
         def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
         req != null
-        req.data.target_humidity == 30
-    }
+        req.data.target_humidity == expected
 
-    def "setHumidity clamps to 80 maximum"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setHumidity(95)
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
-        req != null
-        req.data.target_humidity == 80
+        where:
+        input | expected
+        20    | 30
+        95    | 80
     }
 
     // -------------------------------------------------------------------------
@@ -694,24 +656,23 @@ class LevoitDual200SSpec extends HubitatSpec {
         lastEventValue("nightLightBrightness") == 50
     }
 
-    def "driver declares no setNightLight command (nightlight command absent per feature flag)"() {
+    // -------------------------------------------------------------------------
+    // Absent commands (hardware features not present): setNightLight (no nightlight
+    // per feature flag), setWarmMistLevel (no warm mist hardware) — both undeclared.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "driver declares no #cmd command (hardware feature absent)"() {
         when:
-        driver.setNightLight("dim")
+        driver."$cmd"(arg)
 
         then:
         thrown(MissingMethodException)
-    }
 
-    // -------------------------------------------------------------------------
-    // No warm mist (hardware absent)
-    // -------------------------------------------------------------------------
-
-    def "driver declares no setWarmMistLevel command (warm mist hardware absent)"() {
-        when:
-        driver.setWarmMistLevel(2)
-
-        then:
-        thrown(MissingMethodException)
+        where:
+        cmd                | arg
+        "setNightLight"    | "dim"
+        "setWarmMistLevel" | 2
     }
 
     // -------------------------------------------------------------------------
@@ -843,26 +804,19 @@ class LevoitDual200SSpec extends HubitatSpec {
         onReq != null
     }
 
-    def "BP26: setMistLevel('') does not throw on empty-string input from Rule Machine (Dual 200S)"() {
+    @Unroll
+    def "BP26: setMistLevel('#badInput') does not throw on non-numeric input from Rule Machine (Dual 200S)"() {
         given:
         settings.descriptionTextEnable = false
-        when: "setMistLevel called with empty string (Rule Machine blank slot)"
-        driver.setMistLevel("")
+        when: "setMistLevel called with a non-numeric Rule Machine value"
+        driver.setMistLevel(badInput)
         then: "no exception thrown"
         noExceptionThrown()
         and: "no error logged"
         testLog.errors.isEmpty()
-    }
 
-    def "BP26: setMistLevel('abc') does not throw on non-numeric input from Rule Machine (Dual 200S)"() {
-        given:
-        settings.descriptionTextEnable = false
-        when: "setMistLevel called with non-numeric string"
-        driver.setMistLevel("abc")
-        then: "no exception thrown"
-        noExceptionThrown()
-        and: "no error logged"
-        testLog.errors.isEmpty()
+        where:
+        badInput << ["", "abc"]
     }
 
     // -----------------------------------------------------------------------

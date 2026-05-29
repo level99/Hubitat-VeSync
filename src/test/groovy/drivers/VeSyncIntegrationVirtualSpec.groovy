@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestDevice
 
@@ -884,72 +885,47 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Test 13: fan — LTF-F422S setTowerFanMode round-trip
-    // Regression guard for BLOCKING #1 fix: verifies the fan-mode-setter
-    // (driver-side extension absent from pyvesync's upstream YAML) is now
-    // reachable through FIXTURE_OPS and updates canonical state correctly.
+    // Tests 13 & 14: fan mode-setter round-trips (driver-side extensions absent
+    // from pyvesync's upstream YAML; reachable through FIXTURE_OPS via
+    // virtual_parent_extensions.json). Regression guard for BLOCKING #1 fix.
+    // Both cases share an identical assertion shape — snapshot.workMode mutated,
+    // synthesizeStatusResponse carries it in the single-wrapped fan envelope,
+    // no ERROR, DEBUG "Payload validated" naming the method — and vary only in
+    // (fixture, label, method, workMode), so they collapse into one @Unroll.
     // -------------------------------------------------------------------------
 
-    def "sendBypassRequest setTowerFanMode on LTF-F422S updates workMode and logs DEBUG not ERROR"() {
-        given: "Tower Fan child spawned"
+    @Unroll
+    def "sendBypassRequest #method on #fixture updates workMode and logs DEBUG not ERROR"() {
+        given: "fan child spawned"
         state.realParentDetected = false
-        driver.spawnFromFixture("LTF-F422S", "FanModeTest")
-        String dni = "VirtualVeSync-LTF-F422S-FanModeTest"
+        driver.spawnFromFixture(fixture, label)
+        String dni = "VirtualVeSync-${fixture}-${label}"
         def child = childRegistry[dni]
         testLog.reset()
 
-        when: "send setTowerFanMode (workMode=sleep) — extension method added in virtual_parent_extensions.json"
+        when: "send the fan-mode setter — extension method added in virtual_parent_extensions.json"
         driver.sendBypassRequest(child, [
-            method: "setTowerFanMode",
+            method: method,
             source: "APP",
-            data  : [workMode: "sleep"]
+            data  : [workMode: workMode]
         ], { resp -> /* closure */ })
 
-        then: "canonical snapshot reflects workMode=sleep"
-        state.fixtureSnapshots[dni]?.workMode == "sleep"
+        then: "canonical snapshot reflects the new workMode"
+        state.fixtureSnapshots[dni]?.workMode == workMode
 
         and: "synthesizeStatusResponse carries updated workMode in fan envelope"
-        def response = driver.synthesizeStatusResponse(dni, "LTF-F422S")
-        response.result.workMode == "sleep"
+        def response = driver.synthesizeStatusResponse(dni, fixture)
+        response.result.workMode == workMode
 
         and: "no ERROR logged (method is now found in FIXTURE_OPS)"
         testLog.errors.isEmpty()
 
         and: "DEBUG logged confirming payload validated"
-        testLog.debugs.any { it.contains("Payload validated") && it.contains("setTowerFanMode") }
-    }
+        testLog.debugs.any { it.contains("Payload validated") && it.contains(method) }
 
-    // -------------------------------------------------------------------------
-    // Test 14: fan — LPF-R423S setFanMode round-trip
-    // Companion regression guard: pedestal fan mode-setter extension.
-    // -------------------------------------------------------------------------
-
-    def "sendBypassRequest setFanMode on LPF-R423S updates workMode and logs DEBUG not ERROR"() {
-        given: "Pedestal Fan child spawned"
-        state.realParentDetected = false
-        driver.spawnFromFixture("LPF-R423S", "PedestalModeTest")
-        String dni = "VirtualVeSync-LPF-R423S-PedestalModeTest"
-        def child = childRegistry[dni]
-        testLog.reset()
-
-        when: "send setFanMode (workMode=auto) — extension method added in virtual_parent_extensions.json"
-        driver.sendBypassRequest(child, [
-            method: "setFanMode",
-            source: "APP",
-            data  : [workMode: "auto"]
-        ], { resp -> /* closure */ })
-
-        then: "canonical snapshot reflects workMode=auto"
-        state.fixtureSnapshots[dni]?.workMode == "auto"
-
-        and: "synthesizeStatusResponse carries updated workMode in fan envelope"
-        def response = driver.synthesizeStatusResponse(dni, "LPF-R423S")
-        response.result.workMode == "auto"
-
-        and: "no ERROR logged"
-        testLog.errors.isEmpty()
-
-        and: "DEBUG logged confirming payload validated"
-        testLog.debugs.any { it.contains("Payload validated") && it.contains("setFanMode") }
+        where:
+        fixture     | label             | method            | workMode
+        "LTF-F422S" | "FanModeTest"     | "setTowerFanMode" | "sleep"
+        "LPF-R423S" | "PedestalModeTest"| "setFanMode"      | "auto"
     }
 }

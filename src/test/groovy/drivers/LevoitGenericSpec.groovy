@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestParent
 
@@ -305,17 +306,10 @@ class LevoitGenericSpec extends HubitatSpec {
         noExceptionThrown()
     }
 
-    def "compat is 'v2-api purifier' when multiple purifier-indicator fields are present"() {
-        given: "a status with typical purifier fields"
+    @Unroll
+    def "compat is 'v2-api #expectedKind' when multiple #expectedKind-indicator fields are present"() {
+        given: "a status with typical ${expectedKind} fields"
         settings.descriptionTextEnable = false
-        def deviceData = [
-            powerSwitch: 1,
-            PM25: 10,
-            AQLevel: 2,
-            fanSpeedLevel: 2,
-            manualSpeedLevel: 2,
-            filterLifePercent: 80
-        ]
         def status = v2StatusEnvelope(deviceData)
 
         when:
@@ -323,28 +317,12 @@ class LevoitGenericSpec extends HubitatSpec {
 
         then:
         String compat = lastEventValue("compat") as String
-        compat.startsWith("v2-api purifier")
-    }
+        compat.startsWith("v2-api ${expectedKind}")
 
-    def "compat is 'v2-api humidifier' when multiple humidifier-indicator fields are present"() {
-        given: "a status with typical humidifier fields"
-        settings.descriptionTextEnable = false
-        def deviceData = [
-            powerSwitch: 1,
-            humidity: 50,
-            mistLevel: 3,
-            virtualLevel: 3,
-            targetHumidity: 60,
-            waterLacksState: 0
-        ]
-        def status = v2StatusEnvelope(deviceData)
-
-        when:
-        driver.applyStatus(status)
-
-        then:
-        String compat = lastEventValue("compat") as String
-        compat.startsWith("v2-api humidifier")
+        where:
+        expectedKind | deviceData
+        "purifier"   | [powerSwitch: 1, PM25: 10, AQLevel: 2, fanSpeedLevel: 2, manualSpeedLevel: 2, filterLifePercent: 80]
+        "humidifier" | [powerSwitch: 1, humidity: 50, mistLevel: 3, virtualLevel: 3, targetHumidity: 60, waterLacksState: 0]
     }
 
     // -------------------------------------------------------------------------

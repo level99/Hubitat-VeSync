@@ -356,30 +356,23 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         lastEventValue("water") == "removed"
     }
 
-    def "setMode sends autoPro (not 'auto') to the API for auto mode"() {
+    @Unroll
+    def "setMode('#inputMode') sends workMode='#wireMode' to the API"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setMode("auto")
+        driver.setMode(inputMode)
 
-        then: "setHumidityMode was called with workMode=autoPro"
+        then: "setHumidityMode was called with the expected wire value"
         def req = testParent.allRequests.find { it.method == "setHumidityMode" }
         req != null
-        req.data.workMode == "autoPro"
-    }
+        req.data.workMode == wireMode
 
-    def "setMode sends 'manual' (not reverse-mapped) for manual mode"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setMode("manual")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setHumidityMode" }
-        req != null
-        req.data.workMode == "manual"
+        where:
+        inputMode | wireMode
+        "auto"    | "autoPro"   // reverse-mapped: 'auto' -> 'autoPro'
+        "manual"  | "manual"    // passes through (not reverse-mapped)
     }
 
     // -------------------------------------------------------------------------
@@ -517,10 +510,11 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
     // This test MUST FAIL on pre-fix code and PASS on post-fix code.
     // -------------------------------------------------------------------------
 
-    def "setLevel(0) calls off() and does NOT call setVirtualLevel (SwitchLevel convention)"() {
-        given: "device is on"
+    @Unroll
+    def "setLevel(0) calls off() and does NOT call setVirtualLevel when device is #switchState (SwitchLevel convention)"() {
+        given: "device is #switchState"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "switch", value: "on"])
+        testDevice.events.add([name: "switch", value: switchState])
         testParent.allRequests.clear()
 
         when: "setLevel(0) is called"
@@ -532,23 +526,9 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
 
         and: "setVirtualLevel was NOT sent (no mist-level command issued)"
         testParent.allRequests.every { it.method != "setVirtualLevel" }
-    }
 
-    def "setLevel(0) on already-off device sends off() without setVirtualLevel (SwitchLevel convention)"() {
-        given: "device is off"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "switch", value: "off"])
-        testParent.allRequests.clear()
-
-        when: "setLevel(0) is called on an off device"
-        driver.setLevel(0)
-
-        then: "setSwitch(powerSwitch:0) was sent (off called)"
-        def offReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 }
-        offReq != null
-
-        and: "setVirtualLevel was NOT sent"
-        testParent.allRequests.every { it.method != "setVirtualLevel" }
+        where:
+        switchState << ["on", "off"]
     }
 
     // -------------------------------------------------------------------------
@@ -793,49 +773,25 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
     // BP25-truthy: setChildLock truthy-variant canonical emission
     // -------------------------------------------------------------------------
 
-    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits 'on'"() {
-        // Pre-fix: val = "true"; sendEvent(value:"true"). Post-fix: canon="on"; sendEvent(value:"on").
+    @Unroll
+    def "BP25-truthy: setChildLock('#truthyInput') sends childLockSwitch:1 and emits 'on'"() {
+        // Pre-fix: val = raw input; sendEvent(value: raw). Post-fix: canon="on"; sendEvent(value:"on").
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setChildLock("true")
+        driver.setChildLock(truthyInput)
 
         then: "API call sent with childLockSwitch:1"
         def req = testParent.allRequests.find { it.method == "setChildLock" }
         req != null
         req.data.childLockSwitch == 1
 
-        and: "emitted attribute is canonical 'on', not raw 'true'"
+        and: "emitted attribute is canonical 'on', not raw '${truthyInput}'"
         lastEventValue("childLock") == "on"
-    }
 
-    def "BP25-truthy: setChildLock('ON') sends childLockSwitch:1 and emits 'on'"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setChildLock("ON")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
-        req != null
-        req.data.childLockSwitch == 1
-        lastEventValue("childLock") == "on"
-    }
-
-    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits 'on'"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setChildLock("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
-        req != null
-        req.data.childLockSwitch == 1
-        lastEventValue("childLock") == "on"
+        where:
+        truthyInput << ["true", "ON", "1"]
     }
 
     def "BP25-truthy: C3 gate suppresses setChildLock when childLock='on' and input is 'true'"() {
@@ -859,64 +815,44 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
     // LevoitHumidifierLib doSetDisplayScreenSwitch or doSetAutoStopSwitch.
     // -------------------------------------------------------------------------
 
-    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
+    @Unroll
+    def "BP25-truthy: setDisplay('#truthyInput') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setDisplay("true")
+        driver.setDisplay(truthyInput)
 
         then: "API call sent with screenSwitch:1"
         def req = testParent.allRequests.find { it.method == "setDisplay" }
         req != null
         req.data.screenSwitch == 1
 
-        and: "emitted attribute is canonical 'on', not raw 'true'"
+        and: "emitted attribute is canonical 'on', not raw '${truthyInput}'"
         lastEventValue("displayOn") == "on"
+
+        where:
+        truthyInput << ["true", "1"]
     }
 
-    def "BP25-truthy: setDisplay('1') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
+    @Unroll
+    def "BP25-truthy: setAutoStop('#truthyInput') sends autoStopSwitch:1 and emits 'on' (doSet* path)"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setDisplay("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-        req.data.screenSwitch == 1
-        lastEventValue("displayOn") == "on"
-    }
-
-    def "BP25-truthy: setAutoStop('true') sends autoStopSwitch:1 and emits 'on' (doSet* path)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setAutoStop("true")
+        driver.setAutoStop(truthyInput)
 
         then: "API call sent with autoStopSwitch:1"
         def req = testParent.allRequests.find { it.method == "setAutoStopSwitch" }
         req != null
         req.data.autoStopSwitch == 1
 
-        and: "emitted attribute is canonical 'on', not raw 'true'"
+        and: "emitted attribute is canonical 'on', not raw '${truthyInput}'"
         lastEventValue("autoStopEnabled") == "on"
-    }
 
-    def "BP25-truthy: setAutoStop('1') sends autoStopSwitch:1 and emits 'on' (doSet* path)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setAutoStop("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setAutoStopSwitch" }
-        req != null
-        req.data.autoStopSwitch == 1
-        lastEventValue("autoStopEnabled") == "on"
+        where:
+        truthyInput << ["true", "1"]
     }
 
     // -------------------------------------------------------------------------
@@ -1027,8 +963,9 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
     // and PASS on post-fix code (silent early return, no API call, no log).
     // -------------------------------------------------------------------------
 
-    def "BUG #213: setMode('') silently exits without API call (empty-string RM blank slot)"() {
-        // Pre-fix: requireNotNull("") returned true; "" became mode ""; logInfo "Mode: " was emitted.
+    @Unroll
+    def "BUG #213: #setterMethod('') silently exits without API call (empty-string RM blank slot)"() {
+        // Pre-fix: requireNotNull("") returned true; "" became the value; a logInfo leak was emitted.
         // Post-fix: requireNonEmptyEnum("") returns false silently; no processing occurs.
         given:
         settings.descriptionTextEnable = true
@@ -1036,16 +973,22 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         int infosBefore = testLog.infos.size()
 
         when:
-        driver.setMode("")
+        driver."$setterMethod"("")
 
         then: "no API call"
-        testParent.allRequests.findAll { it.method == "setHumidityMode" }.isEmpty()
+        testParent.allRequests.findAll { it.method == apiMethod }.isEmpty()
 
         and: "no new INFO log emitted (empty-string path is silent)"
         testLog.infos.size() == infosBefore
 
         and: "no exception thrown"
         noExceptionThrown()
+
+        where:
+        setterMethod    | apiMethod
+        "setMode"       | "setHumidityMode"
+        "setChildLock"  | "setChildLock"
+        "setDryingMode" | "setDryingMode"
     }
 
     def "BUG #213: setMode(null) still emits WARN (null path unchanged by fix)"() {
@@ -1061,44 +1004,6 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
 
         and: "no API call"
         testParent.allRequests.isEmpty()
-    }
-
-    def "BUG #213: setChildLock('') silently exits without API call (empty-string RM blank slot)"() {
-        given:
-        settings.descriptionTextEnable = true
-        testParent.allRequests.clear()
-        int infosBefore = testLog.infos.size()
-
-        when:
-        driver.setChildLock("")
-
-        then: "no API call"
-        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
-
-        and: "no new INFO log emitted"
-        testLog.infos.size() == infosBefore
-
-        and: "no exception thrown"
-        noExceptionThrown()
-    }
-
-    def "BUG #213: setDryingMode('') silently exits without API call (empty-string RM blank slot)"() {
-        given:
-        settings.descriptionTextEnable = true
-        testParent.allRequests.clear()
-        int infosBefore = testLog.infos.size()
-
-        when:
-        driver.setDryingMode("")
-
-        then: "no API call"
-        testParent.allRequests.findAll { it.method == "setDryingMode" }.isEmpty()
-
-        and: "no new INFO log emitted"
-        testLog.infos.size() == infosBefore
-
-        and: "no exception thrown"
-        noExceptionThrown()
     }
 
     // -------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestParent
 
@@ -456,20 +457,18 @@ class LevoitVital200SSpec extends HubitatSpec {
     // Theme C parity: state.lastSwitchSet consistency (matches Classic 300S / V100S pattern)
     // -------------------------------------------------------------------------
 
-    def "on() seeds state.lastSwitchSet='on' (Theme C parity)"() {
-        when: "on() is called"
-        driver.on()
+    @Unroll
+    def "#switchMethod seeds state.lastSwitchSet='#expected' (Theme C parity)"() {
+        when: "#switchMethod is called"
+        driver."$switchMethod"()
 
-        then: "lastSwitchSet is 'on'"
-        state.lastSwitchSet == "on"
-    }
+        then: "lastSwitchSet is '#expected'"
+        state.lastSwitchSet == expected
 
-    def "off() seeds state.lastSwitchSet='off' (Theme C parity)"() {
-        when: "off() is called"
-        driver.off()
-
-        then: "lastSwitchSet is 'off'"
-        state.lastSwitchSet == "off"
+        where:
+        switchMethod | expected
+        "on"         | "on"
+        "off"        | "off"
     }
 
     def "toggle() uses state.lastSwitchSet to avoid device.currentValue race (Theme C parity)"() {
@@ -621,117 +620,69 @@ class LevoitVital200SSpec extends HubitatSpec {
     // C3: state-change gate — setChildLock and setDisplay
     // -------------------------------------------------------------------------
 
-    def "C3: setChildLock('on') when childLock is already 'on' is a no-op (no API call)"() {
-        given: "childLock is already on"
+    @Unroll
+    def "C3: #driverMethod('on') when #attr is already 'on' is a no-op (no API call)"() {
+        given: "#attr is already on"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "on"])
+        testDevice.events.add([name: attr, value: "on"])
 
         when:
-        driver.setChildLock("on")
+        driver."$driverMethod"("on")
 
-        then: "no setChildLock API call was made"
-        testParent.allRequests.find { it.method == "setChildLock" } == null
+        then: "no #apiMethod API call was made"
+        testParent.allRequests.find { it.method == apiMethod } == null
 
         and: "no errors logged"
         testLog.errors.isEmpty()
+
+        where:
+        driverMethod   | attr        | apiMethod
+        "setChildLock" | "childLock" | "setChildLock"
+        "setDisplay"   | "display"   | "setDisplay"
     }
 
-    def "C3: setChildLock('on') when childLock is 'off' does send the API call"() {
-        given: "childLock is currently off"
+    @Unroll
+    def "C3: #driverMethod('on') when #attr is 'off' does send the API call"() {
+        given: "#attr is currently off"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "off"])
+        testDevice.events.add([name: attr, value: "off"])
 
         when:
-        driver.setChildLock("on")
+        driver."$driverMethod"("on")
 
-        then: "setChildLock API call was made"
-        testParent.allRequests.find { it.method == "setChildLock" } != null
-    }
+        then: "#apiMethod API call was made"
+        testParent.allRequests.find { it.method == apiMethod } != null
 
-    def "C3: setDisplay('on') when display is already 'on' is a no-op (no API call)"() {
-        given: "display is already on"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "on"])
-
-        when:
-        driver.setDisplay("on")
-
-        then: "no setDisplay API call was made"
-        testParent.allRequests.find { it.method == "setDisplay" } == null
-
-        and: "no errors logged"
-        testLog.errors.isEmpty()
-    }
-
-    def "C3: setDisplay('on') when display is 'off' does send the API call"() {
-        given: "display is currently off"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "off"])
-
-        when:
-        driver.setDisplay("on")
-
-        then: "setDisplay API call was made"
-        testParent.allRequests.find { it.method == "setDisplay" } != null
+        where:
+        driverMethod   | attr        | apiMethod
+        "setChildLock" | "childLock" | "setChildLock"
+        "setDisplay"   | "display"   | "setDisplay"
     }
 
     // -------------------------------------------------------------------------
     // BP18: null-guard on Vital lib setters
     // -------------------------------------------------------------------------
 
-    def "BP18: setMode(null) returns silently with logWarn (no API call)"() {
+    @Unroll
+    def "BP18: #driverMethod(null) returns silently with logWarn (no API call)"() {
         when:
-        driver.setMode(null)
+        driver."$driverMethod"(null)
 
-        then: "no setPurifierMode API call was made"
-        testParent.allRequests.find { it.method == "setPurifierMode" } == null
+        then: "no #apiMethod API call was made"
+        testParent.allRequests.find { it.method == apiMethod } == null
 
         and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setMode") }
-    }
+        testLog.warns.any { it.contains(driverMethod) }
 
-    def "BP18: setSpeed(null) returns silently with logWarn (no API call)"() {
-        when:
-        driver.setSpeed(null)
-
-        then: "no setLevel API call was made"
-        testParent.allRequests.find { it.method == "setLevel" } == null
-
-        and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setSpeed") }
-    }
-
-    def "BP18: setDisplay(null) returns silently with logWarn (no API call)"() {
-        when:
-        driver.setDisplay(null)
-
-        then: "no setDisplay API call was made"
-        testParent.allRequests.find { it.method == "setDisplay" } == null
-
-        and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setDisplay") }
-    }
-
-    def "BP18: setChildLock(null) returns silently with logWarn (no API call)"() {
-        when:
-        driver.setChildLock(null)
-
-        then: "no setChildLock API call was made"
-        testParent.allRequests.find { it.method == "setChildLock" } == null
-
-        and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setChildLock") }
-    }
-
-    def "BP18: setAutoPreference(null) returns silently with logWarn (no API call)"() {
-        when:
-        driver.setAutoPreference(null)
-
-        then: "no setAutoPreference API call was made"
-        testParent.allRequests.find { it.method == "setAutoPreference" } == null
-
-        and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setAutoPreference") }
+        where:
+        driverMethod        | apiMethod
+        "setMode"           | "setPurifierMode"
+        "setSpeed"          | "setLevel"
+        "setDisplay"        | "setDisplay"
+        "setChildLock"      | "setChildLock"
+        "setAutoPreference" | "setAutoPreference"
+        "setPetMode"        | "setPurifierMode"
+        "setRoomSize"       | "setAutoPreference"
     }
 
     // -------------------------------------------------------------------------
@@ -808,138 +759,83 @@ class LevoitVital200SSpec extends HubitatSpec {
         testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
     }
 
-    def "BP18: setPetMode(null) returns silently with logWarn (no API call)"() {
-        when:
-        driver.setPetMode(null)
-
-        then: "no setPurifierMode API call was made"
-        testParent.allRequests.find { it.method == "setPurifierMode" } == null
-
-        and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setPetMode") }
-    }
-
-    def "BP18: setRoomSize(null) returns silently with logWarn (no API call)"() {
-        when:
-        driver.setRoomSize(null)
-
-        then: "no setAutoPreference API call was made"
-        testParent.allRequests.find { it.method == "setAutoPreference" } == null
-
-        and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setRoomSize") }
-    }
-
     // -------------------------------------------------------------------------
     // Bug Pattern #25: C3 gate case-sensitivity — uppercase "ON"/"OFF" input
     // These specs MUST FAIL on pre-fix code (raw param compared) and
     // PASS on post-fix code (toLowerCase() normalization added).
     // -------------------------------------------------------------------------
 
-    def "BP25: setChildLock('ON') uppercase makes the API call and sends childLockSwitch:1 (not 0)"() {
-        // Pre-fix: ("ON" == "on") is false → childLockSwitch:0 sent (unlock instead of lock).
-        // Post-fix: toLowerCase() normalizes "ON" → "on" → childLockSwitch:1 (correct).
-        given: "childLock is currently 'off' so the C3 gate does not block"
+    @Unroll
+    def "BP25: #driverMethod('ON') uppercase makes the API call and sends #payloadField:1 (not 0)"() {
+        // Pre-fix: ("ON" == "on") is false → payloadField:0 sent (inverted).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → payloadField:1 (correct).
+        given: "#attr is currently 'off' so the C3 gate does not block"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "off"])
+        testDevice.events.add([name: attr, value: "off"])
 
-        when: "setChildLock is called with uppercase 'ON'"
-        driver.setChildLock("ON")
+        when: "#driverMethod is called with uppercase 'ON'"
+        driver."$driverMethod"("ON")
 
         then: "API call was made (gate correctly passed — 'off' != 'on')"
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        def req = testParent.allRequests.find { it.method == apiMethod }
         req != null
 
-        and: "payload carries childLockSwitch:1 (lock), NOT 0 (unlock)"
-        req.data.childLockSwitch == 1
+        and: "payload carries #payloadField:1, NOT 0"
+        req.data[payloadField] == 1
 
         and: "emitted event value is lowercase 'on'"
-        lastEventValue("childLock") == "on"
+        lastEventValue(attr) == "on"
+
+        where:
+        driverMethod   | apiMethod      | payloadField      | attr
+        "setChildLock" | "setChildLock" | "childLockSwitch" | "childLock"
+        "setDisplay"   | "setDisplay"   | "screenSwitch"    | "display"
     }
 
-    def "BP25: setChildLock('ON') when childLock is already 'on' is a no-op (C3 gate works with uppercase)"() {
+    @Unroll
+    def "BP25: #driverMethod('ON') when #attr is already 'on' is a no-op (C3 gate works with uppercase)"() {
         // Pre-fix: ("on" == "ON") is false → gate bypassed, redundant API call made.
         // Post-fix: toLowerCase() yields "on" == "on" → gate fires, no API call.
-        given: "childLock is already 'on'"
+        given: "#attr is already 'on'"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "on"])
+        testDevice.events.add([name: attr, value: "on"])
 
-        when: "setChildLock called with uppercase 'ON' (idempotent call)"
-        driver.setChildLock("ON")
+        when: "#driverMethod called with uppercase 'ON' (idempotent call)"
+        driver."$driverMethod"("ON")
 
         then: "no API call was made (C3 gate worked correctly)"
-        testParent.allRequests.find { it.method == "setChildLock" } == null
-    }
+        testParent.allRequests.find { it.method == apiMethod } == null
 
-    def "BP25: setDisplay('ON') uppercase makes the API call and sends screenSwitch:1 (not 0)"() {
-        // Pre-fix: ("ON" == "on") is false → screenSwitch:0 sent (turn off instead of on).
-        // Post-fix: toLowerCase() normalizes "ON" → "on" → screenSwitch:1 (correct).
-        given: "display is currently 'off' so the C3 gate does not block"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "off"])
-
-        when: "setDisplay is called with uppercase 'ON'"
-        driver.setDisplay("ON")
-
-        then: "API call was made"
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-
-        and: "payload carries screenSwitch:1 (on), NOT 0 (off)"
-        req.data.screenSwitch == 1
-
-        and: "emitted event value is lowercase 'on'"
-        lastEventValue("display") == "on"
-    }
-
-    def "BP25: setDisplay('ON') when display is already 'on' is a no-op (C3 gate works with uppercase)"() {
-        // Pre-fix: ("on" == "ON") is false → gate bypassed, redundant API call made.
-        // Post-fix: toLowerCase() yields "on" == "on" → gate fires, no API call.
-        given: "display is already 'on'"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "on"])
-
-        when: "setDisplay called with uppercase 'ON' (idempotent call)"
-        driver.setDisplay("ON")
-
-        then: "no API call was made (C3 gate worked correctly)"
-        testParent.allRequests.find { it.method == "setDisplay" } == null
+        where:
+        driverMethod   | apiMethod      | attr
+        "setChildLock" | "setChildLock" | "childLock"
+        "setDisplay"   | "setDisplay"   | "display"
     }
 
     // ---- BP25: setLightDetection (Vital200S-only setter) ----
 
-    def "BP25: setLightDetection('ON') sends lightDetectionSwitch:1, not 0 (BP25 regression guard)"() {
-        // Pre-fix: (onOff=="on") where onOff="ON" evaluates false → lightDetectionSwitch:0 (wrong).
-        // Post-fix: toLowerCase() normalizes "ON"→"on" → lightDetectionSwitch:1.
+    @Unroll
+    def "BP25: setLightDetection('#input') sends lightDetectionSwitch:#expectedSwitch and emits '#expectedEvt' (BP25 regression guard)"() {
+        // Pre-fix: (onOff=="on") where onOff="ON" evaluates false → wrong switch value.
+        // Post-fix: toLowerCase() normalizes case → correct switch value.
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setLightDetection("ON")
+        driver.setLightDetection(input)
 
-        then: "setLightDetection sent with lightDetectionSwitch:1 (enabled)"
+        then: "setLightDetection sent with lightDetectionSwitch:#expectedSwitch"
         def req = testParent.allRequests.find { it.method == "setLightDetection" }
         req != null
-        req.data.lightDetectionSwitch == 1
+        req.data.lightDetectionSwitch == expectedSwitch
 
-        and: "emitted event value is lowercase 'on'"
-        lastEventValue("lightDetection") == "on"
-    }
+        and: "emitted event value is lowercase '#expectedEvt'"
+        lastEventValue("lightDetection") == expectedEvt
 
-    def "BP25: setLightDetection('OFF') sends lightDetectionSwitch:0 (BP25 regression guard)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setLightDetection("OFF")
-
-        then: "setLightDetection sent with lightDetectionSwitch:0 (disabled)"
-        def req = testParent.allRequests.find { it.method == "setLightDetection" }
-        req != null
-        req.data.lightDetectionSwitch == 0
-
-        and: "emitted event value is lowercase 'off'"
-        lastEventValue("lightDetection") == "off"
+        where:
+        input  | expectedSwitch | expectedEvt
+        "ON"   | 1              | "on"
+        "OFF"  | 0              | "off"
     }
 
     def "BP18: setLightDetection(null) returns silently with no API call (BP18 null-guard)"() {
@@ -1036,94 +932,47 @@ class LevoitVital200SSpec extends HubitatSpec {
     // "1" verbatim, failing these assertions.
     // -----------------------------------------------------------------------
 
-    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits childLock='on' (Vital 200S)"() {
-        // Pre-canon: v="true"; sendEvent(value:"true"). Post-canon: canon="on"; sendEvent(value:"on").
+    @Unroll
+    def "BP25-truthy: #driverMethod('#input') sends #payloadField:1 and emits #attr='on' (Vital 200S)"() {
+        // Pre-canon: v="true"/"1"; sendEvent(value verbatim). Post-canon: canon="on"; sendEvent(value:"on").
         given:
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "off"])
+        testDevice.events.add([name: attr, value: "off"])
 
         when:
-        driver.setChildLock("true")
+        driver."$driverMethod"(input)
 
         then:
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        def req = testParent.allRequests.find { it.method == apiMethod }
         req != null
-        req.data.childLockSwitch == 1
-        lastEventValue("childLock") == "on"
+        req.data[payloadField] == 1
+        lastEventValue(attr) == "on"
+
+        where:
+        driverMethod   | input  | apiMethod      | payloadField        | attr
+        "setChildLock" | "true" | "setChildLock" | "childLockSwitch"   | "childLock"
+        "setChildLock" | "1"    | "setChildLock" | "childLockSwitch"   | "childLock"
+        "setDisplay"   | "true" | "setDisplay"   | "screenSwitch"      | "display"
+        "setDisplay"   | "1"    | "setDisplay"   | "screenSwitch"      | "display"
     }
 
-    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits childLock='on' (Vital 200S)"() {
-        given:
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "off"])
-
-        when:
-        driver.setChildLock("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
-        req != null
-        req.data.childLockSwitch == 1
-        lastEventValue("childLock") == "on"
-    }
-
-    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits display='on' (Vital 200S)"() {
-        given:
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "off"])
-
-        when:
-        driver.setDisplay("true")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-        req.data.screenSwitch == 1
-        lastEventValue("display") == "on"
-    }
-
-    def "BP25-truthy: setDisplay('1') sends screenSwitch:1 and emits display='on' (Vital 200S)"() {
-        given:
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "off"])
-
-        when:
-        driver.setDisplay("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-        req.data.screenSwitch == 1
-        lastEventValue("display") == "on"
-    }
-
-    def "BP25-truthy: setLightDetection('true') sends lightDetectionSwitch:1 and emits lightDetection='on' (Vital 200S)"() {
+    @Unroll
+    def "BP25-truthy: setLightDetection('#input') sends lightDetectionSwitch:1 and emits lightDetection='on' (Vital 200S)"() {
         // setLightDetection is a Vital200S per-driver method, not in VitalPurifierLib.
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setLightDetection("true")
+        driver.setLightDetection(input)
 
         then:
         def req = testParent.allRequests.find { it.method == "setLightDetection" }
         req != null
         req.data.lightDetectionSwitch == 1
         lastEventValue("lightDetection") == "on"
-    }
 
-    def "BP25-truthy: setLightDetection('1') sends lightDetectionSwitch:1 and emits lightDetection='on' (Vital 200S)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setLightDetection("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setLightDetection" }
-        req != null
-        req.data.lightDetectionSwitch == 1
-        lastEventValue("lightDetection") == "on"
+        where:
+        input << ["true", "1"]
     }
 
     // -------------------------------------------------------------------------

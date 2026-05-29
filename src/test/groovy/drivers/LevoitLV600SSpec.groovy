@@ -2,6 +2,7 @@ package drivers
 
 import support.HubitatSpec
 import support.TestParent
+import spock.lang.Unroll
 
 /**
  * Unit tests for LevoitLV600S.groovy (Levoit LV600S Humidifier).
@@ -731,31 +732,23 @@ class LevoitLV600SSpec extends HubitatSpec {
         !req.data.containsKey("targetHumidity")
     }
 
-    def "setHumidity clamps values below 30 to 30 (LV600S humidity_min=30 per device_map.py)"() {
+    @Unroll
+    def "setHumidity clamps #input to #expected (LV600S floor=30 per device_map.py, NOT 40 like OasisMist 450S)"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setHumidity(10)
+        driver.setHumidity(input)
 
         then:
         def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
         req != null
-        // LV600S uses 30 floor (NOT 40 like OasisMist 450S) per device_map.py base class default
-        req.data.target_humidity == 30
-    }
+        req.data.target_humidity == expected
 
-    def "setHumidity clamps values above 80 to 80"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setHumidity(95)
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
-        req != null
-        req.data.target_humidity == 80
+        where:
+        input | expected
+        10    | 30
+        95    | 80
     }
 
     // -------------------------------------------------------------------------

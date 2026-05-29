@@ -254,68 +254,32 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     // deviceType() — regional variant recognition
     // -------------------------------------------------------------------------
 
-    def "deviceType() recognizes LAP-V201S-WUS as V200S"() {
+    @Unroll
+    def "deviceType() recognizes #code as #expected"() {
+        // Single-assertion model-code → dtype recognition. Each row is one model code
+        // and its expected internal dtype string. The where: table is the single source
+        // of truth for this routing contract; per-row notes preserved from the original
+        // individual specs. (The GENERIC fall-through row replaces the former separate
+        // method: unknown codes route to the Generic Levoit Diagnostic Driver per v2.0+
+        // behavior — was "N/A" pre-Generic, now "GENERIC" so unknown devices get a working
+        // Hubitat presence + captureDiagnostics() self-service instead of silent skip.)
         expect:
-        driver.deviceType("LAP-V201S-WUS") == "V200S"
-    }
+        driver.deviceType(code) == expected
 
-    def "deviceType() recognizes LAP-V201S-WUSR as V200S"() {
-        expect:
-        driver.deviceType("LAP-V201S-WUSR") == "V200S"
-    }
-
-    def "deviceType() recognizes LAP-V201S-AASR as V200S"() {
-        expect:
-        driver.deviceType("LAP-V201S-AASR") == "V200S"
-    }
-
-    def "deviceType() recognizes LAP-V201S-WEU as V200S"() {
-        expect:
-        driver.deviceType("LAP-V201S-WEU") == "V200S"
-    }
-
-    def "deviceType() recognizes LAP-V201S-AUSR as V200S (Australia variant from TODO)"() {
-        expect:
-        driver.deviceType("LAP-V201S-AUSR") == "V200S"
-    }
-
-    def "deviceType() recognizes Vital200S string as V200S"() {
-        expect:
-        driver.deviceType("Vital200S") == "V200S"
-    }
-
-    def "deviceType() recognizes Core200S as 200S"() {
-        expect:
-        driver.deviceType("Core200S") == "200S"
-    }
-
-    def "deviceType() recognizes Core400S as 400S"() {
-        expect:
-        driver.deviceType("Core400S") == "400S"
-    }
-
-    def "deviceType() recognizes LEH-S601S-WUS as V601S (Superior 6000S)"() {
-        expect:
-        driver.deviceType("LEH-S601S-WUS") == "V601S"
-    }
-
-    def "deviceType() recognizes LEH-S601S-WUSR as V601S"() {
-        expect:
-        driver.deviceType("LEH-S601S-WUSR") == "V601S"
-    }
-
-    def "deviceType() recognizes LEH-S602S-WUS as V601S (variant)"() {
-        expect:
-        driver.deviceType("LEH-S602S-WUS") == "V601S"
-    }
-
-    def "deviceType() returns GENERIC for unknown codes (fall-through to LevoitGeneric driver)"() {
-        // Unknown model codes route to the Generic Levoit Diagnostic Driver per the v2.0+
-        // fall-through behavior. Was "N/A" pre-Generic; now "GENERIC" so unknown devices
-        // get a working Hubitat presence + captureDiagnostics() self-service instead of
-        // silent skip. See LevoitGeneric.groovy + the new-device-support issue template.
-        expect:
-        driver.deviceType("UnknownModel-XYZ") == "GENERIC"
+        where:
+        code                | expected
+        "LAP-V201S-WUS"     | "V200S"
+        "LAP-V201S-WUSR"    | "V200S"
+        "LAP-V201S-AASR"    | "V200S"
+        "LAP-V201S-WEU"     | "V200S"
+        "LAP-V201S-AUSR"    | "V200S"     // Australia variant from TODO
+        "Vital200S"         | "V200S"
+        "Core200S"          | "200S"
+        "Core400S"          | "400S"
+        "LEH-S601S-WUS"     | "V601S"     // Superior 6000S
+        "LEH-S601S-WUSR"    | "V601S"
+        "LEH-S602S-WUS"     | "V601S"     // variant
+        "UnknownModel-XYZ"  | "GENERIC"   // unknown → Generic fall-through (LevoitGeneric driver)
     }
 
     // -------------------------------------------------------------------------
@@ -1326,47 +1290,26 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     // resolve to the correct internal dtype string in the parent's switch block.
     // -------------------------------------------------------------------------
 
-    def "deviceType() recognizes LAP-V102S-WUS as V100S (Vital 100S, US)"() {
+    @Unroll
+    def "deviceType() recognizes v2.1 model code #code as #expected"() {
+        // Section F: v2.1 new-driver model codes. Single-assertion recognition; the where:
+        // table is the single source of truth. Per-row notes preserved from the original
+        // individual specs (e.g. LUH-O601S-WUS shares the OasisMist 450S driver because it
+        // maps to the same pyvesync class VeSyncHumid200300S; LPF-R432S-AEU is the real
+        // code — pyvesync's fixture has a LPF-R423S typo).
         expect:
-        driver.deviceType("LAP-V102S-WUS") == "V100S"
-    }
+        driver.deviceType(code) == expected
 
-    def "deviceType() recognizes LAP-V102S-AEUR as V100S (Vital 100S, EU regional variant)"() {
-        expect:
-        driver.deviceType("LAP-V102S-AEUR") == "V100S"
-    }
-
-    def "deviceType() recognizes Classic300S string as A601S (Classic 300S Humidifier)"() {
-        expect:
-        driver.deviceType("Classic300S") == "A601S"
-    }
-
-    def "deviceType() recognizes LUH-A601S-WUSB as A601S (Classic 300S Humidifier, US variant)"() {
-        expect:
-        driver.deviceType("LUH-A601S-WUSB") == "A601S"
-    }
-
-    def "deviceType() recognizes LUH-O451S-WUS as O451S (OasisMist 450S, primary US code)"() {
-        expect:
-        driver.deviceType("LUH-O451S-WUS") == "O451S"
-    }
-
-    def "deviceType() recognizes LUH-O601S-WUS as O451S (OasisMist 600S US -- shares driver per device_map overlap)"() {
-        // LUH-O601S-WUS maps to the same pyvesync class (VeSyncHumid200300S) as LUH-O451S-WUS.
-        // Both share the OasisMist 450S driver until a separate 600S driver is warranted.
-        expect:
-        driver.deviceType("LUH-O601S-WUS") == "O451S"
-    }
-
-    def "deviceType() recognizes LTF-F422S-WUS as TOWERFAN (Tower Fan, US)"() {
-        expect:
-        driver.deviceType("LTF-F422S-WUS") == "TOWERFAN"
-    }
-
-    def "deviceType() recognizes LPF-R432S-AEU as PEDESTALFAN (Pedestal Fan, EU)"() {
-        // Note: pyvesync fixture has a typo (LPF-R423S) but the real device code is LPF-R432S.
-        expect:
-        driver.deviceType("LPF-R432S-AEU") == "PEDESTALFAN"
+        where:
+        code               | expected
+        "LAP-V102S-WUS"    | "V100S"        // Vital 100S, US
+        "LAP-V102S-AEUR"   | "V100S"        // Vital 100S, EU regional variant
+        "Classic300S"      | "A601S"        // Classic 300S Humidifier (literal)
+        "LUH-A601S-WUSB"   | "A601S"        // Classic 300S Humidifier, US variant
+        "LUH-O451S-WUS"    | "O451S"        // OasisMist 450S, primary US code
+        "LUH-O601S-WUS"    | "O451S"        // OasisMist 600S US — shares 450S driver (same pyvesync class)
+        "LTF-F422S-WUS"    | "TOWERFAN"     // Tower Fan, US
+        "LPF-R432S-AEU"    | "PEDESTALFAN"  // Pedestal Fan, EU (real code; pyvesync fixture typo is LPF-R423S)
     }
 
     // -------------------------------------------------------------------------
@@ -1412,104 +1355,38 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     // All others  -> getPurifierStatus  (all purifier dtypes + GENERIC)
     // -------------------------------------------------------------------------
 
-    def "updateDevices() uses getTowerFanStatus for Tower Fan device (H1)"() {
-        given: "state has a Tower Fan device with deviceType data value set"
+    @Unroll
+    def "updateDevices() routes #typeName (#rawCode) to #expectedMethod (#caseId)"() {
+        // H1-H5 collapsed: single-device dtype routing. Each row sets up one child carrying
+        // a raw model code, calls updateDevices(), and asserts the resolved poll method
+        // appears in the captured bypass bodies. The where: table is the single source of
+        // truth for the per-device routing contract. (H6 combined multi-device routing and
+        // H7 map-default fallback remain separate specs — different assertion shapes.)
+        given: "state has one device with deviceType data value set"
         settings.refreshInterval = 30
         settings.descriptionTextEnable = false
         state.prefsSeeded = true
-        state.deviceList = ["TOWERFAN-CID": "test-config-module"]
+        state.deviceList = [(cid): "test-config-module"]
 
-        def fanDevice = new TestDevice()
-        fanDevice.typeName = "Levoit Tower Fan"
-        fanDevice.updateDataValue("deviceType", "LTF-F422S-WUS")  // dtype → TOWERFAN
-        fanDevice.metaClass.update = { Map st, nl -> true }
-        childDevices["TOWERFAN-CID"] = fanDevice
+        def dev = new TestDevice()
+        dev.typeName = typeName
+        dev.updateDataValue("deviceType", rawCode)
+        dev.metaClass.update = { Map st, nl -> true }
+        childDevices[cid] = dev
 
         when:
         driver.updateDevices()
 
-        then: "deviceMethodFor() resolved TOWERFAN dtype → getTowerFanStatus"
-        capturedBypassBodies.any { it.payload?.method == "getTowerFanStatus" }
-    }
+        then: "deviceMethodFor() resolved the dtype to the expected poll method"
+        capturedBypassBodies.any { it.payload?.method == expectedMethod }
 
-    def "updateDevices() uses getFanStatus for Pedestal Fan device (H2)"() {
-        given: "state has a Pedestal Fan device with deviceType data value set"
-        settings.refreshInterval = 30
-        settings.descriptionTextEnable = false
-        state.prefsSeeded = true
-        state.deviceList = ["PEDESTALFAN-CID": "test-config-module"]
-
-        def fanDevice = new TestDevice()
-        fanDevice.typeName = "Levoit Pedestal Fan"
-        fanDevice.updateDataValue("deviceType", "LPF-R432S-AEU")  // dtype → PEDESTALFAN
-        fanDevice.metaClass.update = { Map st, nl -> true }
-        childDevices["PEDESTALFAN-CID"] = fanDevice
-
-        when:
-        driver.updateDevices()
-
-        then: "deviceMethodFor() resolved PEDESTALFAN dtype → getFanStatus"
-        capturedBypassBodies.any { it.payload?.method == "getFanStatus" }
-    }
-
-    def "updateDevices() uses getPurifierStatus for Vital 100S device (H3 -- purifier fallthrough)"() {
-        given: "state has a Vital 100S purifier device with deviceType data value set"
-        settings.refreshInterval = 30
-        settings.descriptionTextEnable = false
-        state.prefsSeeded = true
-        state.deviceList = ["V100S-CID": "test-config-module"]
-
-        def purifierDevice = new TestDevice()
-        purifierDevice.typeName = "Levoit Vital 100S Air Purifier"
-        purifierDevice.updateDataValue("deviceType", "LAP-V102S-WUS")  // dtype → V100S → default branch
-        purifierDevice.metaClass.update = { Map st, nl -> true }
-        childDevices["V100S-CID"] = purifierDevice
-
-        when:
-        driver.updateDevices()
-
-        then: "deviceMethodFor() resolved V100S dtype → getPurifierStatus (default branch)"
-        capturedBypassBodies.any { it.payload?.method == "getPurifierStatus" }
-    }
-
-    def "updateDevices() uses getHumidifierStatus for Classic 300S device (H4 -- humidifier branch)"() {
-        given: "state has a Classic 300S humidifier device with deviceType data value set"
-        settings.refreshInterval = 30
-        settings.descriptionTextEnable = false
-        state.prefsSeeded = true
-        state.deviceList = ["A601S-CID": "test-config-module"]
-
-        def humDevice = new TestDevice()
-        humDevice.typeName = "Levoit Classic 300S Humidifier"
-        humDevice.updateDataValue("deviceType", "LUH-A601S-WUSB")  // dtype → A601S → getHumidifierStatus
-        humDevice.metaClass.update = { Map st, nl -> true }
-        childDevices["A601S-CID"] = humDevice
-
-        when:
-        driver.updateDevices()
-
-        then: "deviceMethodFor() resolved A601S dtype → getHumidifierStatus"
-        capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
-    }
-
-    def "updateDevices() uses getHumidifierStatus for OasisMist 450S device (H5 -- humidifier branch)"() {
-        given: "state has an OasisMist 450S humidifier device with deviceType data value set"
-        settings.refreshInterval = 30
-        settings.descriptionTextEnable = false
-        state.prefsSeeded = true
-        state.deviceList = ["O451S-CID": "test-config-module"]
-
-        def humDevice = new TestDevice()
-        humDevice.typeName = "Levoit OasisMist 450S Humidifier"
-        humDevice.updateDataValue("deviceType", "LUH-O451S-WUS")  // dtype → O451S → getHumidifierStatus
-        humDevice.metaClass.update = { Map st, nl -> true }
-        childDevices["O451S-CID"] = humDevice
-
-        when:
-        driver.updateDevices()
-
-        then: "deviceMethodFor() resolved O451S dtype → getHumidifierStatus"
-        capturedBypassBodies.any { it.payload?.method == "getHumidifierStatus" }
+        where:
+        caseId | cid              | typeName                              | rawCode           | expectedMethod
+        "H1"   | "TOWERFAN-CID"   | "Levoit Tower Fan"                    | "LTF-F422S-WUS"   | "getTowerFanStatus"     // dtype → TOWERFAN
+        "H2"   | "PEDESTALFAN-CID"| "Levoit Pedestal Fan"                 | "LPF-R432S-AEU"   | "getFanStatus"          // dtype → PEDESTALFAN
+        "H3"   | "V100S-CID"      | "Levoit Vital 100S Air Purifier"      | "LAP-V102S-WUS"   | "getPurifierStatus"     // dtype → V100S → default branch
+        "H4"   | "A601S-CID"      | "Levoit Classic 300S Humidifier"      | "LUH-A601S-WUSB"  | "getHumidifierStatus"   // dtype → A601S
+        "H5"   | "O451S-CID"      | "Levoit OasisMist 450S Humidifier"    | "LUH-O451S-WUS"   | "getHumidifierStatus"   // dtype → O451S
     }
 
     def "updateDevices() routes all 5 v2.1 devices correctly in a single deviceList (H6 -- combined)"() {
