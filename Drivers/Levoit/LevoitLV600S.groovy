@@ -69,7 +69,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.2] Levoit LV600S (LUH-A602S-WUSR/-WUS/-WEUR/-WEU/-WJP/-WUSC) — mist 1-9, warm mist 0-3, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display; no night-light; canonical pyvesync payloads. NOTE: auto-mode may use 'humidity' payload on some firmware -- see pyvesync PR #505 and driver source CROSS-CHECK.",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -129,28 +129,10 @@ metadata {
 //   on next setMode("auto") call happens automatically (state.firmwareVariant cleared).
 
 // ---------- Power ----------
+// Power on/off provided by #include level99.LevoitHumidifier; payload supplied via this hook.
 // Humidifier switch payload: {enabled: bool, id: 0}
 // NOT purifier shape {powerSwitch: int, switchIdx: 0}
-def on(){
-    logDebug "on()"
-    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
-    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
-    state.turningOn = true
-    try {
-        def resp = hubBypass("setSwitch", [enabled: true, id: 0], "setSwitch(enabled=true)")
-        if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
-    } finally {
-        state.turningOn = false
-    }
-}
-
-def off(){
-    logDebug "off()"
-    def resp = hubBypass("setSwitch", [enabled: false, id: 0], "setSwitch(enabled=false)")
-    if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
-}
+Map powerPayload(boolean on){ [enabled: on, id: 0] }
 
 
 // ---------- Mode ----------
@@ -238,7 +220,10 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    Integer lvl = safeIntArg(level, 0)
+    // BP24: SHOULD-ON — mist-level command; calls ensureSwitchOn() below (SwitchLevel convention).
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer lvl = parseLevelOrNull(level)
+    if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
     if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
@@ -341,28 +326,10 @@ def applyStatus(status){
     // Placed here so all three update() entry points (0-arg, 1-arg, 2-arg) trigger it.
     ensureDebugWatchdog()
 
-    // One-time pref seed: heal descriptionTextEnable=true default for users migrated
-    // from older Type without Save (forward-compat -- BP#12)
-    // Insertion point: top of applyStatus() per V1-humidifier-base pref-seed convention
-    // (same as Classic 300S and OasisMist 450S -- uses same VeSyncHumid200300S class).
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
-
-    def r = status?.result ?: [:]
-    // Defensive envelope peel -- humidifier bypassV2 responses can be double-wrapped (BP#3).
-    // Peel through any [code, result, traceId] envelope layers until device data is reached.
-    // LV600S is typically single-wrapped like Classic 300S, but the peel loop is defensive.
-    int peelGuard = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-        r = r.result
-        peelGuard++
-    }
+    seedPrefs()
+    def r = peelEnvelope(status)
     // Diagnostic raw dump -- gated by debugOutput. Keep for ongoing field diagnostics.
-    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // LV600S response uses `enabled` (boolean), NOT `powerSwitch` (int)

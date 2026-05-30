@@ -269,14 +269,31 @@ def check_bp2_hardcoded_purifier_method(path, raw_lines, cleaned_lines, raw_text
 # BP3 — Missing envelope-peel while-loop in V2-line drivers
 # ---------------------------------------------------------------------------
 
+# Three valid expressions of the BP3 contract:
+#   1. Inline while-loop pattern (status quo on most drivers as of v2.8)
+#   2. Helper call `peelEnvelope(...)` from LevoitChildBaseLib (Task #140 Phase 2+
+#      migration shape; helper body is byte-equivalent to the inline loop)
+#   3. Lib-inheritance: the driver `#include`s a lib whose body contains the
+#      inline peel OR the helper call (Task #142 Phase 2b+ centerpiece migration —
+#      a driver inherits applyStatus + envelope-peel from LevoitCorePurifierLib)
 PEEL_PATTERN = re.compile(
     r'while\s*\(.*peelGuard\s*<\s*\d',
     re.DOTALL
 )
+PEEL_HELPER_PATTERN = re.compile(r'\bpeelEnvelope\s*\(')
 
 def check_bp3_envelope_peel(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
     """
-    V2-line drivers must have the defensive while-loop envelope peel in applyStatus().
+    V2-line drivers must have the defensive envelope peel in applyStatus() —
+    either inline (PEEL_PATTERN while-loop) or via the peelEnvelope() helper
+    from LevoitChildBaseLib (PEEL_HELPER_PATTERN), in driver source OR in the
+    body of any #include'd library. The three shapes are semantically
+    equivalent at runtime (Hubitat inlines #include source).
+
+    Implementation: search the union of driver raw_text + every included
+    library's raw text (same approach BP1 uses for update-overload checks).
+    Method-body scoping is preserved — applyStatus must exist somewhere
+    (driver or lib) and at least one of its bodies must satisfy the contract.
     """
     findings = []
     fname = path.name
@@ -290,35 +307,54 @@ def check_bp3_envelope_peel(path, raw_lines, cleaned_lines, raw_text, config, re
         # Only check explicitly known V2 files for now
         return findings
 
-    # Find applyStatus() bodies
-    bodies = find_method_bodies(raw_text, "applyStatus")
+    # Expand search to include #include'd library files so that a driver
+    # that inherits applyStatus from a shared lib still satisfies the check.
+    lib_texts = included_lib_texts(raw_text, path)
+    search_text = raw_text + '\n' + '\n'.join(lib_texts)
+
+    # Find applyStatus() bodies anywhere (driver text or any included lib)
+    bodies = find_method_bodies(search_text, "applyStatus")
     if not bodies:
-        # applyStatus missing entirely — flag
+        # applyStatus missing entirely (driver + libs) — flag
         findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP3_no_applyStatus",
             title="applyStatus() method not found",
             path=path, rel_base=rel_base, lineno=1, lines=raw_lines,
             why="Bug Pattern #3: V2-line driver must have applyStatus() with envelope-peel logic.",
-            fix="Add applyStatus(status) with the while-loop peel (peelGuard < 4).",
+            fix="Add applyStatus(status) with the while-loop peel (peelGuard < 4) "
+                "OR a call to peelEnvelope(status) from LevoitChildBaseLib, "
+                "OR inherit applyStatus from an #include'd lib that provides one.",
         ))
         return findings
 
-    for (start_line, body) in bodies:
-        if not PEEL_PATTERN.search(body):
-            findings.append(make_finding_for_path(
-                severity="FAIL",
-                rule_id="BP3_missing_envelope_peel",
-                title="Missing envelope-peel while-loop in applyStatus()",
-                path=path, rel_base=rel_base, lineno=start_line, lines=raw_lines,
-                why="Bug Pattern #3: V2-line bypassV2 responses are sometimes double-wrapped. "
-                    "Without the while-loop peel (peelGuard < 4), applyStatus() reads the inner "
-                    "envelope dict [code, result, traceId] instead of device fields.",
-                fix="Add inside applyStatus(): "
-                    "int peelGuard = 0; while (r instanceof Map && r.containsKey('code') && "
-                    "r.containsKey('result') && r.result instanceof Map && peelGuard < 4) { "
-                    "r = r.result; peelGuard++ }",
-            ))
+    # At least one body must satisfy the peel contract.
+    any_satisfies = any(
+        PEEL_PATTERN.search(body) or PEEL_HELPER_PATTERN.search(body)
+        for (_start_line, body) in bodies
+    )
+    if not any_satisfies:
+        # Report at the first body's start line (or line 1 if it's in a lib —
+        # the find_method_bodies offset is into search_text, not raw_text;
+        # surfacing the driver path with line 1 is the honest signal).
+        driver_bodies = find_method_bodies(raw_text, "applyStatus")
+        lineno = driver_bodies[0][0] if driver_bodies else 1
+        findings.append(make_finding_for_path(
+            severity="FAIL",
+            rule_id="BP3_missing_envelope_peel",
+            title="Missing envelope-peel while-loop or peelEnvelope() helper call in applyStatus()",
+            path=path, rel_base=rel_base, lineno=lineno, lines=raw_lines,
+            why="Bug Pattern #3: V2-line bypassV2 responses are sometimes double-wrapped. "
+                "Without the while-loop peel (peelGuard < 4) or peelEnvelope() helper call, "
+                "applyStatus() reads the inner envelope dict [code, result, traceId] instead "
+                "of device fields. Neither driver nor any #include'd lib supplies the peel.",
+            fix="Add inside applyStatus(): EITHER "
+                "int peelGuard = 0; while (r instanceof Map && r.containsKey('code') && "
+                "r.containsKey('result') && r.result instanceof Map && peelGuard < 4) { "
+                "r = r.result; peelGuard++ } "
+                "OR call the helper: def r = peelEnvelope(status) "
+                "(requires #include level99.LevoitChildBase).",
+        ))
 
     return findings
 
@@ -585,7 +621,16 @@ def check_bp11_documentation_link(path, raw_lines, cleaned_lines, raw_text, conf
 # BP12 — Missing pref-seed (state.prefsSeeded)
 # ---------------------------------------------------------------------------
 
+# Three valid expressions of the BP12 contract:
+#   1. Inline `state.prefsSeeded` block (status quo on most drivers as of v2.8)
+#   2. Helper call `seedPrefs()` from LevoitChildBaseLib (Task #140 Phase 2+
+#      migration shape; helper body is byte-equivalent to the inline block)
+#   3. Lib-inheritance: the driver `#include`s a lib whose body contains the
+#      inline gate OR the helper call (Task #142 Phase 2b+ centerpiece migration —
+#      a driver inherits update(status, nightLight) from LevoitCorePurifierLib,
+#      whose body calls seedPrefs())
 PREF_SEED_PATTERN = re.compile(r'state\.prefsSeeded')
+PREF_SEED_HELPER_PATTERN = re.compile(r'\bseedPrefs\s*\(')
 
 # Insertion-point method per driver type
 BP12_INSERTION_POINTS = {
@@ -618,9 +663,16 @@ BP12_CORE_DRIVERS = {
 
 def check_bp12_pref_seed(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
     """
-    Every driver must have the one-time state.prefsSeeded self-healing block
-    at the correct insertion point, ensuring descriptionTextEnable=true is
-    applied for users who migrate without clicking Save Preferences.
+    Every driver must have the one-time pref-seed self-healing block at the
+    correct insertion point — either inline (state.prefsSeeded gate), via the
+    seedPrefs() helper from LevoitChildBaseLib, or inherited via an #include'd
+    lib whose body provides one of the two. All three shapes ensure
+    descriptionTextEnable=true is applied for users who migrate without
+    clicking Save Preferences.
+
+    Lib-inheritance: searches the union of driver raw_text + every included
+    library's raw text (same approach BP1 uses for update-overload checks).
+    Single-level lookup — does NOT recurse into includes within libs.
     """
     findings = []
     fname = path.name
@@ -631,8 +683,15 @@ def check_bp12_pref_seed(path, raw_lines, cleaned_lines, raw_text, config, rel_b
     ):
         return findings
 
-    # Does the file have the pattern at all?
-    if not PREF_SEED_PATTERN.search(raw_text):
+    # Expand search to include #include'd library files so a driver that
+    # inherits the pref-seed pattern from a shared lib still satisfies the check.
+    lib_texts = included_lib_texts(raw_text, path)
+    search_text = raw_text + '\n' + '\n'.join(lib_texts)
+
+    # Does the search text have either valid expression of the pattern?
+    has_inline = bool(PREF_SEED_PATTERN.search(search_text))
+    has_helper = bool(PREF_SEED_HELPER_PATTERN.search(search_text))
+    if not (has_inline or has_helper):
         # Determine the expected insertion method for context
         if fname in BP12_INSERTION_POINTS:
             method = BP12_INSERTION_POINTS[fname]
@@ -644,17 +703,21 @@ def check_bp12_pref_seed(path, raw_lines, cleaned_lines, raw_text, config, rel_b
         findings.append(make_finding_for_path(
             severity="FAIL",
             rule_id="BP12_missing_pref_seed",
-            title="Missing state.prefsSeeded self-healing block",
+            title="Missing state.prefsSeeded self-healing block or seedPrefs() helper call",
             path=path, rel_base=rel_base, lineno=1, lines=raw_lines,
             why="Bug Pattern #12: when a driver is Type-changed or HPM-updated, new preference "
                 "defaultValues are not auto-committed until user clicks Save Preferences. Without "
-                "the pref-seed block, descriptionTextEnable may be null (falsy), silently "
-                "suppressing all INFO logs for migrating users.",
-            fix=f"Add at top of {method}(): "
+                "the pref-seed block or seedPrefs() helper call, descriptionTextEnable may be null "
+                "(falsy), silently suppressing all INFO logs for migrating users. Neither driver "
+                "nor any #include'd lib supplies the pref-seed pattern.",
+            fix=f"Add at top of {method}(): EITHER "
                 "if (!state.prefsSeeded) { "
                 "if (settings?.descriptionTextEnable == null) { "
                 "device.updateSetting(\"descriptionTextEnable\", [type:\"bool\", value:true]) } "
-                "state.prefsSeeded = true }",
+                "state.prefsSeeded = true } "
+                "OR call the helper: seedPrefs() "
+                "(requires #include level99.LevoitChildBase). "
+                "OR inherit it from an #include'd lib whose body contains either form.",
         ))
 
     return findings

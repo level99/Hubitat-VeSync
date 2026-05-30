@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestParent
 
@@ -104,6 +105,25 @@ class LevoitGenericSpec extends HubitatSpec {
         then: "device fields were reached — humidity event confirms peel worked"
         lastEventValue("humidity") != null
         lastEventValue("switch") == "on"
+    }
+
+    def "update() self-fetch peels a double-wrapped envelope in hasDeviceFields and applies status (Bug Pattern #3)"() {
+        // Guards the hasDeviceFields() peel path (Phase 3c migration to shared peelEnvelope).
+        // hasDeviceFields(resp.data) must peel the double-wrap to recognize device fields;
+        // if the peel under-shoots, hasDeviceFields returns false, applyStatus never runs on
+        // the first response, and no humidity event is emitted from this path.
+        given: "getPurifierStatus returns a double-wrapped humidifier-shape response with real device fields"
+        def fixture = loadYamlFixture("LevoitGeneric.yaml")
+        def deviceData = fixture.responses.humidifier_on_auto as Map
+        testParent.cannedResponse = [status: 200, data: humidifierStatusEnvelope(deviceData)]
+
+        when: "0-arg update() self-fetch runs"
+        driver.update()
+
+        then: "hasDeviceFields peeled the double-wrap, so applyStatus emitted device events"
+        lastEventValue("humidity") != null
+        lastEventValue("switch") == "on"
+        noExceptionThrown()
     }
 
     def "applyStatus handles null status gracefully without throwing"() {
@@ -305,17 +325,10 @@ class LevoitGenericSpec extends HubitatSpec {
         noExceptionThrown()
     }
 
-    def "compat is 'v2-api purifier' when multiple purifier-indicator fields are present"() {
-        given: "a status with typical purifier fields"
+    @Unroll
+    def "compat is 'v2-api #expectedKind' when multiple #expectedKind-indicator fields are present"() {
+        given: "a status with typical ${expectedKind} fields"
         settings.descriptionTextEnable = false
-        def deviceData = [
-            powerSwitch: 1,
-            PM25: 10,
-            AQLevel: 2,
-            fanSpeedLevel: 2,
-            manualSpeedLevel: 2,
-            filterLifePercent: 80
-        ]
         def status = v2StatusEnvelope(deviceData)
 
         when:
@@ -323,28 +336,12 @@ class LevoitGenericSpec extends HubitatSpec {
 
         then:
         String compat = lastEventValue("compat") as String
-        compat.startsWith("v2-api purifier")
-    }
+        compat.startsWith("v2-api ${expectedKind}")
 
-    def "compat is 'v2-api humidifier' when multiple humidifier-indicator fields are present"() {
-        given: "a status with typical humidifier fields"
-        settings.descriptionTextEnable = false
-        def deviceData = [
-            powerSwitch: 1,
-            humidity: 50,
-            mistLevel: 3,
-            virtualLevel: 3,
-            targetHumidity: 60,
-            waterLacksState: 0
-        ]
-        def status = v2StatusEnvelope(deviceData)
-
-        when:
-        driver.applyStatus(status)
-
-        then:
-        String compat = lastEventValue("compat") as String
-        compat.startsWith("v2-api humidifier")
+        where:
+        expectedKind | deviceData
+        "purifier"   | [powerSwitch: 1, PM25: 10, AQLevel: 2, fanSpeedLevel: 2, manualSpeedLevel: 2, filterLifePercent: 80]
+        "humidifier" | [powerSwitch: 1, humidity: 50, mistLevel: 3, virtualLevel: 3, targetHumidity: 60, waterLacksState: 0]
     }
 
     // -------------------------------------------------------------------------

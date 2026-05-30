@@ -127,7 +127,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.2] Levoit OasisMist 450S/600S US+EU (LUH-O451S-WUS/-WUSR/-WEU, LUH-O601S-WUS/-KUS) — mist 1-9, warm mist 0-3, target humidity 40-80%, auto/sleep/manual modes, auto-stop, display; LUH-O451S-WEU (EU) adds RGB nightlight (ColorControl); canonical pyvesync payloads; RGB based on pyvesync PR #502 (preview)",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -205,28 +205,10 @@ metadata {
 //   both happen automatically on updated().
 
 // ---------- Power ----------
+// Power on/off provided by #include level99.LevoitHumidifier; payload supplied via this hook.
 // Humidifier switch payload: {enabled: bool, id: 0}
 // NOT purifier shape {powerSwitch: int, switchIdx: 0}
-def on(){
-    logDebug "on()"
-    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
-    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
-    state.turningOn = true
-    try {
-        def resp = hubBypass("setSwitch", [enabled: true, id: 0], "setSwitch(enabled=true)")
-        if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
-    } finally {
-        state.turningOn = false
-    }
-}
-
-def off(){
-    logDebug "off()"
-    def resp = hubBypass("setSwitch", [enabled: false, id: 0], "setSwitch(enabled=false)")
-    if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
-}
+Map powerPayload(boolean on){ [enabled: on, id: 0] }
 
 
 // ---------- Mode ----------
@@ -309,7 +291,10 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    Integer lvl = safeIntArg(level, 0)
+    // BP24: SHOULD-ON — mist-level command; calls ensureSwitchOn() below (SwitchLevel convention).
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer lvl = parseLevelOrNull(level)
+    if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
     if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
@@ -411,12 +396,14 @@ def setNightlightSwitch(value){
     logDebug "setNightlightSwitch(${value})"
     if (!requireNonEmptyEnum(value, "setNightlightSwitch")) return
     if (!isRgbVariant()) return
-    // BP25: normalize to lowercase so Rule Machine "ON"/"OFF" routes correctly.
-    // No C3 idempotency gate: setNightlightSwitch preserves the last-known color and
-    // brightness from state. Two calls with the same on/off value may differ in the
-    // color/brightness payload actually sent (e.g. state changed between calls), so
-    // comparing only the on/off attribute would incorrectly suppress legitimate writes.
-    String action = ((value as String).trim().toLowerCase() == "on") ? "on" : "off"
+    // BP25: normalize + canonicalize truthy variants ("true"/"1"/"yes") so Rule
+    // Machine bindings route correctly. No C3 idempotency gate: setNightlightSwitch
+    // preserves the last-known color and brightness from state. Two calls with the
+    // same on/off value may differ in the color/brightness payload actually sent
+    // (e.g. state changed between calls), so comparing only the on/off attribute
+    // would incorrectly suppress legitimate writes.
+    String v = (value as String).trim().toLowerCase()
+    String action = canonOnOff(v)
     // Keep last color + brightness when toggling -- pull from state or use defaults
     Integer brightness = (state.nightlightBrightness as Integer) ?: 100
     Integer hue = (state.nightlightHue as Integer) ?: 0          // degrees 0-360
@@ -669,14 +656,7 @@ def applyStatus(status){
     // Placed here so all three update() entry points (0-arg, 1-arg, 2-arg) trigger it.
     ensureDebugWatchdog()
 
-    // One-time pref seed: heal descriptionTextEnable=true default for users migrated
-    // from older Type without Save (forward-compat -- BP#12)
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
+    seedPrefs()
 
     // Self-seed state.deviceType from parent's stored data value (Fix 2 / Task 11).
     // Covers existing-deployed installs where parent created the child before v2.2
@@ -686,17 +666,9 @@ def applyStatus(status){
         state.deviceType = device.getDataValue("deviceType") ?: ""
     }
 
-    def r = status?.result ?: [:]
-    // Defensive envelope peel -- humidifier bypassV2 responses can be double-wrapped.
-    // Peel through any [code, result, traceId] envelope layers until device data is reached.
-    // OasisMist 450S is typically single-wrapped, but the peel loop is defensive (BP#3).
-    int peelGuard = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-        r = r.result
-        peelGuard++
-    }
+    def r = peelEnvelope(status)
     // Diagnostic raw dump -- gated by debugOutput. Keep for ongoing field diagnostics.
-    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // OasisMist 450S response uses `enabled` (boolean), NOT `powerSwitch` (int)

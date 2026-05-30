@@ -108,7 +108,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) — fan 1-3, auto/sleep/manual/turbo modes, AQ sensors (AQLevel/PM2.5), light detection, display, child lock, vent angle (passive read). pyvesync VeSyncAirBaseV2 class. V2-style payloads. First driver in codebase with TURBO mode and VENT_ANGLE attribute.",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -182,8 +182,10 @@ def initialize(){ logDebug "Initializing" }
 // V2-style convention — different from VeSyncAirBypass Core line: {switch: 'on'/'off', id: 0}
 def on(){
     logDebug "on()"
-    // Re-entrance guard: ensureSwitchOn() → on() → setFanSpeed() → ensureSwitchOn() would recurse
-    // without this. state.turningOn matches the pattern used in humidifier drivers (e.g. Sup6000S).
+    // Re-entrance guard: guards against re-entry when a speed/mode setter calls ensureSwitchOn()
+    // during an in-flight turn-on. The recursion vector is setFanSpeed -> ensureSwitchOn -> on;
+    // on() itself only issues setSwitch, so without this flag a setter that auto-ons would re-enter
+    // on() before the first call completes. state.turningOn matches humidifier drivers (e.g. Sup6000S).
     if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
     state.turningOn = true
     try {
@@ -276,7 +278,7 @@ def setDisplay(onOff){
     // "ON" evaluates ("ON" == "on") as false → sends screenSwitch:0 (off) when intent was on.
     String v = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("displayOn") == canon) return
     Integer sw = (canon == "on") ? 1 : 0
@@ -299,7 +301,7 @@ def setChildLock(onOff){
     // "ON" evaluates ("ON" == "on") as false → sends childLockSwitch:0 (unlocked) when intent was locked.
     String v = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("childLock") == canon) return
     Integer sw = (canon == "on") ? 1 : 0
@@ -325,7 +327,7 @@ def setLightDetection(onOff){
     // "ON" evaluates ("ON" == "on") as false → sends lightDetectionSwitch:0 (off) when intent was on.
     String v = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("lightDetection") == canon) return
     Integer sw = (canon == "on") ? 1 : 0
@@ -368,10 +370,15 @@ def setTimer(seconds, action="off"){
     if (!(act in ["on","off"])) { logError "setTimer: invalid action '${act}'"; recordError("setTimer: invalid action '${act}'", [method:"addTimerV2"]); return }
     logDebug "setTimer(${secs}s, action=${act})"
     int actVal = (act == "on") ? 1 : 0
+    // Payload matches pyvesync PurifierV2TimerPayloadData / PurifierV2TimerActionItems:
+    //   top-level defaults type:0, subDeviceNo:0, repeat:0; each startAct item carries num:0.
     def data = [
         enabled: true,
-        startAct: [[type: "powerSwitch", act: actVal]],
-        tmgEvt: [clkSec: secs]
+        startAct: [[type: "powerSwitch", act: actVal, num: 0]],
+        tmgEvt: [clkSec: secs],
+        type: 0,
+        subDeviceNo: 0,
+        repeat: 0
     ]
     def resp = hubBypass("addTimerV2", data, "addTimerV2(${secs}s,${act})")
     if (httpOk(resp)) {
@@ -438,24 +445,10 @@ def applyStatus(status){
     // BP16 watchdog: auto-disable debugOutput after 30 min even across hub reboots.
     ensureDebugWatchdog()
 
-    // BP12 pref-seed: heal descriptionTextEnable=true default for migrated installs.
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
-
-    def r = status?.result ?: [:]
-    // BP#3: defensive envelope peel — bypassV2 responses can be wrapped in
-    // {code, result, traceId} envelope layers. Peel until device data is reached.
-    int peelGuard = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-        r = r.result
-        peelGuard++
-    }
+    seedPrefs()
+    def r = peelEnvelope(status)
     // Diagnostic raw dump (debugOutput-gated).
-    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     def powerRaw = r.powerSwitch
@@ -550,29 +543,6 @@ def applyStatus(status){
 // logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 
-// Hub/parent call wrapper — matches sibling driver pattern
-private hubBypass(method, Map data=[:], tag=null, cb=null){
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp){
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]){
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// hubBypass, httpOk are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 
 // ------------- END -------------

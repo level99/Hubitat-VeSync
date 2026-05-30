@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestParent
 
@@ -355,43 +356,24 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
     // Mode read-path: workMode='humidity' -> user-facing 'auto'
     // -------------------------------------------------------------------------
 
-    def "applyStatus workMode='humidity' normalized to user-facing 'auto' (canonical A603S auto mode)"() {
+    @Unroll
+    def "applyStatus mode read-path: #fixtureKey normalizes to user-facing '#expectedMode'"() {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = v2StatusEnvelope(fixture.responses.device_on_auto_humidity as Map)
+        def status = v2StatusEnvelope(fixture.responses[fixtureKey] as Map)
 
         when:
         driver.applyStatus(status)
 
         then:
-        lastEventValue("mode") == "auto"
-    }
+        lastEventValue("mode") == expectedMode
 
-    def "applyStatus workMode='sleep' passes through unchanged"() {
-        given:
-        settings.descriptionTextEnable = false
-        def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = v2StatusEnvelope(fixture.responses.device_on_sleep_mode as Map)
-
-        when:
-        driver.applyStatus(status)
-
-        then:
-        lastEventValue("mode") == "sleep"
-    }
-
-    def "applyStatus workMode='manual' passes through unchanged"() {
-        given:
-        settings.descriptionTextEnable = false
-        def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = v2StatusEnvelope(fixture.responses.device_on_manual_warm2 as Map)
-
-        when:
-        driver.applyStatus(status)
-
-        then:
-        lastEventValue("mode") == "manual"
+        where:
+        fixtureKey                | expectedMode
+        "device_on_auto_humidity" | "auto"     // workMode='humidity' normalized (canonical A603S auto mode)
+        "device_on_sleep_mode"    | "sleep"    // 'sleep' passes through unchanged
+        "device_on_manual_warm2"  | "manual"   // 'manual' passes through unchanged
     }
 
     // -------------------------------------------------------------------------
@@ -680,36 +662,24 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
     // LevoitHumidifierLib doSetDisplayScreenSwitch.
     // -------------------------------------------------------------------------
 
-    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
+    @Unroll
+    def "BP25-truthy: setDisplay('#truthyInput') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setDisplay("true")
+        driver.setDisplay(truthyInput)
 
         then: "API call sent with screenSwitch:1"
         def req = testParent.allRequests.find { it.method == "setDisplay" }
         req != null
         req.data.screenSwitch == 1
 
-        and: "emitted attribute is canonical 'on', not raw 'true'"
+        and: "emitted attribute is canonical 'on', not raw '${truthyInput}'"
         lastEventValue("displayOn") == "on"
-    }
 
-    def "BP25-truthy: setDisplay('1') sends screenSwitch:1 and emits 'on' (doSet* path)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setDisplay("1")
-
-        then: "API call sent with screenSwitch:1"
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-        req.data.screenSwitch == 1
-
-        and: "emitted attribute is canonical 'on', not raw '1'"
-        lastEventValue("displayOn") == "on"
+        where:
+        truthyInput << ["true", "1"]
     }
 
     // -------------------------------------------------------------------------
@@ -1001,5 +971,40 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
         req != null
         req.data.targetHumidity == 30
+    }
+
+    // -------------------------------------------------------------------------
+    // BP28 regression guard: non-numeric mist value must NOT turn device off.
+    // Non-vacuity: (a) FAILS on pre-fix (safeIntArg("garbage",0)->0->off());
+    // PASSES post-fix (parseLevelOrNull->null->ignore). (b) guards explicit-0 contract.
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel('garbage') is ignored — no off(), no cloud command (BP28)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel called with a non-numeric typo"
+        driver.setMistLevel("garbage")
+
+        then: "nothing was sent to the cloud (no off(), no setVirtualLevel)"
+        testParent.allRequests.isEmpty()
+    }
+
+    def "setMistLevel(0) still calls off() (BP28 explicit-0 contract preserved)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel(0) is called"
+        driver.setMistLevel(0)
+
+        then: "off() (setSwitch) was sent"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "no setVirtualLevel mist command was sent"
+        testParent.allRequests.every { it.method != "setVirtualLevel" }
     }
 }

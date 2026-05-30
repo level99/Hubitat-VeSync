@@ -272,11 +272,30 @@ def check_rule37_unsafe_int_coercion(
         body = raw_text[brace_start:body_end]
         body_clean = _strip_line_comments(body)
 
-        # If safeIntArg is used in the body, the primary parameter coercion is safe.
-        # However, also check that no coercion expression appears in the *fallback*
-        # position of a safeIntArg() call — such expressions throw before the guard
-        # can intercept them (safeIntArg's try/catch does not protect its arguments).
+        # If safeIntArg is used in the body, SOME coercions are guarded — but not
+        # necessarily the one on this method's first parameter.  A method like
+        #   def setX(level){ safeIntArg(other, 0); Integer v = level as Integer }
+        # guards `other` but still raw-casts `level`.  Mirror the Map-field
+        # partial-guard logic: collect the set of receiver expressions already passed
+        # as the first argument to a safeIntArg() call, and only treat THOSE specific
+        # receivers as exempt.  Continue scanning the rest of the body for a raw cast
+        # on `param_name` when `param_name` is NOT in the protected set.
+        #
+        # Also, regardless of partial vs full guard, check that no coercion expression
+        # appears in the *fallback* position of a safeIntArg() call — such expressions
+        # throw before the guard can intercept them.
+        param_is_safeintarg_protected = False
         if SAFE_INT_ARG_RE.search(body_clean):
+            safeintarg_protected_p1: set[str] = set()
+            for sir_m in SAFE_INT_ARG_RECEIVER_RE.finditer(body_clean):
+                safeintarg_protected_p1.add(sir_m.group(1).strip())
+            # The first param is protected if its bare name (or a receiver whose base is
+            # the param) was passed as the first safeIntArg argument.
+            if param_name in safeintarg_protected_p1 or any(
+                _base_of(r) == param_name for r in safeintarg_protected_p1
+            ):
+                param_is_safeintarg_protected = True
+
             # Check for forbidden coercion in safeIntArg fallback argument.
             fb_m = SAFEINTARG_COERCION_FALLBACK_RE.search(body_clean)
             if fb_m:
@@ -308,7 +327,12 @@ def check_rule37_unsafe_int_coercion(
                         'Literal constant fallbacks (e.g. `safeIntArg(x, 800)`) are safe as-is.'
                     ),
                 ))
-            continue
+
+            # If THIS method's first param is itself safeIntArg-guarded, its own
+            # coercion is safe — skip the per-param cast scan below.  Otherwise fall
+            # through and scan for an unguarded raw cast on param_name.
+            if param_is_safeintarg_protected:
+                continue
 
         # RULE37 intentionally checks only the FIRST untyped parameter of each
         # set*/cycle* method.  Non-first command parameters (e.g. brightness/colorTemp

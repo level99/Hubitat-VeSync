@@ -140,7 +140,7 @@ boolean requireNonEmptyEnum(arg, String methodName) {
 //
 // Belt-and-suspenders with requireNotNull: keep the null-guard at call sites,
 // use safeIntArg to handle the non-null-but-non-numeric vector.
-private Integer safeIntArg(raw, Integer fallback = 0) {
+Integer safeIntArg(raw, Integer fallback = 0) {
     if (raw == null) return fallback
     try {
         String s = raw.toString().trim()
@@ -165,7 +165,163 @@ private Integer safeIntArg(raw, Integer fallback = 0) {
 // 4-arg clamp overload: coerce raw to Integer (W1/W2-hardened), then clamp to [lo, hi].
 // Collapses Math.max(lo, Math.min(hi, safeIntArg(x, fallback))) to one call.
 // Clamp is applied AFTER coercion and AFTER fallback — fallback is the pre-clamp value.
-private Integer safeIntArg(raw, Integer fallback, Integer lo, Integer hi) {
+Integer safeIntArg(raw, Integer fallback, Integer lo, Integer hi) {
     Integer v = safeIntArg(raw, fallback)
     return Math.max(lo, Math.min(hi, v))
+}
+
+// BP28 level parser: the SwitchLevel/MistLevel-aware variant of safeIntArg.
+//
+// safeIntArg substitutes its fallback (0) on NON-numeric input, which makes a
+// typo like setMistLevel("hgih") indistinguishable from an explicit
+// setMistLevel(0): both coerce to 0 and turn the device OFF. parseLevelOrNull
+// lets level/mist setters tell these two cases apart:
+//
+//   - genuinely-numeric input ("0", "5", "5.7") -> the parsed Integer
+//     (decimal truncates toward zero, matching safeIntArg's int() semantics)
+//   - non-numeric / unparseable / null / empty input -> null
+//
+// Callers branch on the result:
+//
+//   Integer lvl = parseLevelOrNull(level)
+//   if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
+//   if (lvl <= 0)    { off(); return }   // explicit 0 -> off, contract preserved
+//   ...clamp + ensureSwitchOn + cloud write...
+//
+// Use ONLY where a non-numeric value should leave the device unchanged rather
+// than power it off (the level->off branch). For sites where the fallback-0
+// is itself a valid clamp floor (setHumidity, brightness) or means "no timer"
+// (setTimer), keep safeIntArg — those do not have an off()-on-zero branch.
+//
+// W1 guard: out-of-range BigDecimals (beyond int range) return null (cannot be
+// represented as an Integer level; treated as garbage rather than bit-wrapped).
+Integer parseLevelOrNull(raw) {
+    if (raw == null) return null
+    try {
+        String s = raw.toString().trim()
+        if (s.isEmpty()) return null
+        if (s.isInteger()) return s.toInteger()
+        if (s.isBigDecimal()) {
+            BigDecimal bd = s.toBigDecimal()
+            if (bd > Integer.MAX_VALUE || bd < Integer.MIN_VALUE) return null
+            return bd.intValue()
+        }
+        return null
+    } catch (ignored) {
+        return null
+    }
+}
+
+// BP25 canonical on/off coercion: the single blessed source for the permissive
+// truthy-variant set. Returns "on" when the (already-normalized, lowercase) input
+// is one of "on"/"true"/"1"/"yes"; otherwise "off". The input is re-normalized
+// internally (toString().trim().toLowerCase()) so the helper is idempotent and
+// safe whether the caller passes the raw arg or its normalized form — at every
+// migrated call site the input is already the normalized `v`/`val`, so behavior is
+// byte-identical to the inline `(v in ["on","true","1","yes"]) ? "on" : "off"`.
+// Null input returns "off" (never throws); current call sites guard upstream via
+// requireNonEmptyEnum so null never actually reaches here.
+//
+// Usage (canonical pattern — see LevoitHumidifierLib.doSetDisplayScreenSwitch):
+//
+//   String v     = (onOff as String).trim().toLowerCase()
+//   String canon = canonOnOff(v)
+//   if (device.currentValue("attr") == canon) return   // C3 gate uses canon
+//   Integer sw   = (canon == "on") ? 1 : 0              // payload uses canon
+//   device.sendEvent(name:"attr", value: canon)         // event emits canon
+//
+// Centralizing the truthy-variant list here prevents a future site from getting the
+// set wrong (the duplication risk that motivated the v2.8 extraction).
+//
+// INTENTIONAL EXCEPTION — LevoitFanLib does NOT use this helper. The fan line's
+// feature-toggle setters (doSetMuteSwitch / doSetDisplayScreenSwitch) apply a
+// STRICT enum-rejection gate (any value outside "on"/"off" is rejected, truthy
+// variants are unreachable) — a documented behavioral divergence from
+// LevoitHumidifierLib's permissive coercion. The strict form must stay inline.
+String canonOnOff(v) {
+    if (v == null) return "off"
+    return ((v.toString().trim().toLowerCase()) in ["on","true","1","yes"]) ? "on" : "off"
+}
+
+// BP12: seed pref defaults at first poll method invocation.
+// Idempotent via state.prefsSeeded gate; safe to call repeatedly.
+// Insert at top of: applyStatus() for V2-API drivers; update(status,nightLight)
+// for Core line; etc. See CONTRIBUTING.md / CLAUDE.md "Pref-seed pattern" for
+// the full insertion-point table per driver shape.
+//
+// Heals descriptionTextEnable=true default for users migrated from older
+// Driver Type without clicking Save Preferences.
+//
+// NOTE: This helper is for child drivers only. The parent driver
+// (VeSyncIntegration.groovy) and Notification Tile keep this pattern inline
+// because they cannot #include level99.LevoitChildBase — the include's
+// textual paste at file end would shadow their own logInfo/logDebug
+// definitions (parent's logInfo routes through sanitize() for PII
+// redaction; shadow would break that). VeSyncIntegrationVirtual seeds 2
+// prefs and stays inline as a deliberate outlier.
+private void seedPrefs() {
+    if (state.prefsSeeded) return
+    if (settings?.descriptionTextEnable == null) {
+        device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
+    }
+    state.prefsSeeded = true
+}
+
+// BP3: peel bypassV2 envelope layers; returns innermost result Map (or
+// empty Map if response is malformed). Up to 4 layers of [code, result,
+// traceId] wrapping — handles both single-wrap (purifier shape) and
+// double-wrap (humidifier shape) transparently.
+//
+// Call shape: replace
+//   def r = response?.result ?: [:]
+//   int peelGuard = 0
+//   while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
+//       r = r.result
+//       peelGuard++
+//   }
+// with:
+//   def r = peelEnvelope(response)
+//
+// Behavior is byte-identical to the pre-existing inline pattern.
+private Map peelEnvelope(Map response) {
+    def r = response?.result ?: [:]
+    int peelGuard = 0
+    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
+        r = r.result
+        peelGuard++
+    }
+    return (r instanceof Map) ? (r as Map) : [:]
+}
+
+// Hub/parent call wrapper — invokes parent.sendBypassRequest with a standard
+// bypassV2 envelope ([method, source:"APP", data]) and returns a synchronous
+// [status, data] result captured from the parent's response callback.
+// Optional tag adds a one-line debug trace; optional cb forwards the raw resp.
+//
+// recordError (called from httpOk below) resolves to the consumer driver's own
+// definition at compile time — either #include level99.LevoitDiagnostics, or a
+// local no-op stub (LevoitGeneric) — since the include's textual paste compiles
+// inside the consumer unit.
+private hubBypass(method, Map data=[:], tag=null, cb=null) {
+    def rspObj = [status: -1, data: null]
+    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
+        rspObj = [status: resp?.status, data: resp?.data]
+        def inner = resp?.data?.result?.code
+        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
+        if (cb) cb(resp)
+    }
+    return rspObj
+}
+
+private boolean httpOk(resp) {
+    if (!resp) return false
+    def st = resp.status as Integer
+    if (st in [200,201,204]) {
+        def inner = resp?.data?.result?.code
+        if (inner == null || inner == 0) return true
+        logDebug "HTTP 200, innerCode ${inner}"
+        return false
+    }
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
+    return false
 }

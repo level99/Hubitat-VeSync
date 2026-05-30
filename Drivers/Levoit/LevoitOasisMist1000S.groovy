@@ -95,7 +95,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit OasisMist 1000S (LUH-M101S-WUS/-WUSR/-WEUR) — mist 1-9, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display; WEUR adds nightlight (runtime-gated). pyvesync VeSyncHumid1000S class; V2-style payloads (powerSwitch/workMode/virtualLevel). No warm mist.",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -144,28 +144,10 @@ metadata {
 // are provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ---------- Power ----------
+// Power on/off provided by #include level99.LevoitHumidifier; payload supplied via this hook.
 // VeSyncHumid1000S toggle_switch: {powerSwitch: int(toggle), switchIdx: 0}
 // Different from VeSyncHumid200300S which uses {enabled: bool, id: 0}
-def on(){
-    logDebug "on()"
-    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
-    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
-    state.turningOn = true
-    try {
-        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
-        if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
-    } finally {
-        state.turningOn = false
-    }
-}
-
-def off(){
-    logDebug "off()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
-    if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
-    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
-}
+Map powerPayload(boolean on){ [powerSwitch: on ? 1 : 0, switchIdx: 0] }
 
 // toggle: provided by #include level99.LevoitHumidifier
 
@@ -195,7 +177,10 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    Integer lvl = safeIntArg(level, 0)
+    // BP24: SHOULD-ON — mist-level command; calls ensureSwitchOn() below (SwitchLevel convention).
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer lvl = parseLevelOrNull(level)
+    if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
     if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
@@ -275,7 +260,7 @@ def setNightlight(onOff, brightness = null){
     String nl = (onOff as String).trim().toLowerCase()
     if (brightness == null) {
         // Pure on/off toggle -- use setNightLightStatus (pyvesync toggle_nightlight path)
-        Integer nlSwitch = (nl in ["on","true","1","yes"]) ? 1 : 0
+        Integer nlSwitch = (canonOnOff(nl) == "on") ? 1 : 0
         def resp = hubBypass("setNightLightStatus", [nightLightSwitch: nlSwitch], "setNightLightStatus(${nl})")
         if (httpOk(resp)) {
             String onOffStr = (nlSwitch == 1) ? "on" : "off"
@@ -310,13 +295,7 @@ def applyStatus(status){
     // BP16 watchdog: auto-disable debugOutput after 30 min even across hub reboots.
     ensureDebugWatchdog()
 
-    // BP12 pref-seed: heal descriptionTextEnable=true default for migrated installs.
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
+    seedPrefs()
 
     // Self-seed state.deviceType from parent's stored data value.
     // Guards nightlight runtime-gate without requiring a forced Save Preferences.
@@ -324,16 +303,9 @@ def applyStatus(status){
         state.deviceType = device.getDataValue("deviceType") ?: ""
     }
 
-    def r = status?.result ?: [:]
-    // BP#3: defensive envelope peel — bypassV2 responses can be wrapped in
-    // {code, result, traceId} envelope layers. Peel until device data is reached.
-    int peelGuard = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-        r = r.result
-        peelGuard++
-    }
+    def r = peelEnvelope(status)
     // Diagnostic raw dump (debugOutput-gated). Keep for ongoing field diagnostics.
-    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // 1000S response: powerSwitch (int 0|1) NOT `enabled` (bool).

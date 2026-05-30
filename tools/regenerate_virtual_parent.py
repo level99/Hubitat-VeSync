@@ -45,7 +45,7 @@ END_MARKER = "// === FIXTURE_OPS GENERATED END ==="
 
 
 def load_pyvesync_methods(fixture_path: Path) -> list[dict]:
-    """Return a list of {method, dataKeys} entries for one pyvesync fixture file.
+    """Return a list of method entries for one pyvesync fixture file.
 
     Pyvesync fixture format (after our trim — see tests/pyvesync-fixtures/README.md):
         <op_name>:
@@ -57,12 +57,30 @@ def load_pyvesync_methods(fixture_path: Path) -> list[dict]:
                 <key2>: ...
               source: APP
 
-    Multiple ops may dispatch via the same method (e.g. set_fan_speed AND
-    set_manual_mode both → setLevel). We dedupe by method name, taking the
-    union of data keys across all ops with that method (typically identical).
+    Multiple ops may dispatch via the same method. There are two distinct cases:
+
+      1. Same method, IDENTICAL key-set across all its ops (e.g. setSwitch's
+         turn_on/turn_off both send [powerSwitch, switchIdx]). The op count is
+         incidental; the validation shape is a single fixed key-set.
+
+      2. Same method, DIFFERENT key-sets depending on which caller invoked it
+         (e.g. setOscillationStatus on LPF-R423S — horizontal vs vertical vs
+         range vs axis-off each send a legitimately different key-set). The
+         union of these would accept key combinations no real caller ever sends,
+         so a strict union-exact-match either always-fails (when the union is
+         the validation target) or under-validates (accepting illegal combos).
+
+    We therefore preserve the DISTINCT key-set variants per method rather than
+    flattening to a union. The returned entry shape is:
+        {"method": m, "dataKeyVariants": [sorted_keys_1, sorted_keys_2, ...]}
+    where the variant list is order-stable (first-occurrence order in the
+    fixture) and deduped. render_groovy_block() emits a single `dataKeys` Set
+    for the common one-variant case and a `dataKeyVariants` list-of-Sets when a
+    method has more than one legitimate key-set.
     """
     raw = yaml.safe_load(fixture_path.read_text(encoding="utf-8")) or {}
-    by_method: dict[str, set[str]] = {}
+    # method -> list of distinct key-sets (tuples), in first-occurrence order
+    by_method: dict[str, list[tuple[str, ...]]] = {}
     for op_name, op_body in raw.items():
         payload = (op_body or {}).get("json_object", {}).get("payload")
         if not payload:
@@ -71,24 +89,20 @@ def load_pyvesync_methods(fixture_path: Path) -> list[dict]:
         if not method:
             continue
         data = payload.get("data") or {}
-        keys = set(data.keys()) if isinstance(data, dict) else set()
-        if method in by_method:
-            by_method[method] |= keys
-        else:
-            by_method[method] = keys
-    # Preserve first-occurrence order while deduping
-    seen: list[str] = []
-    for op_body in raw.values():
-        payload = (op_body or {}).get("json_object", {}).get("payload") or {}
-        m = payload.get("method")
-        if m and m not in seen and m in by_method:
-            seen.append(m)
-    return [{"method": m, "dataKeys": sorted(by_method[m])} for m in seen]
+        keys = tuple(sorted(data.keys())) if isinstance(data, dict) else ()
+        variants = by_method.setdefault(method, [])
+        if keys not in variants:
+            variants.append(keys)
+    return [
+        {"method": m, "dataKeyVariants": [list(v) for v in variants]}
+        for m, variants in by_method.items()
+    ]
 
 
 def merge_extensions(
     pyvesync_methods: list[dict],
     extensions: list[dict],
+    extension_comment: str | None = None,
 ) -> list[dict]:
     """Merge extension entries into the pyvesync method list.
 
@@ -96,20 +110,41 @@ def merge_extensions(
     Extension methods are appended after pyvesync methods to preserve
     visual ordering hint in the generated output (pyvesync first, extensions
     after).
+
+    Extension entries in virtual_parent_extensions.json use a single `dataKeys`
+    list (no extension method currently has caller-varying key-sets). We
+    normalize that to the internal one-variant `dataKeyVariants` shape so the
+    renderer sees a uniform structure. If an extension ever needs multiple
+    variants, it may supply `dataKeyVariants` (list of key lists) directly.
     """
+    def to_variants(ext: dict) -> list[list[str]]:
+        if "dataKeyVariants" in ext:
+            return [sorted(v) for v in ext["dataKeyVariants"]]
+        return [sorted(ext.get("dataKeys", []))]
+
     result = list(pyvesync_methods)
     seen_methods = {m["method"] for m in result}
+    first_appended = True
     for ext in extensions:
         method = ext["method"]
-        keys = sorted(ext.get("dataKeys", []))
+        variants = to_variants(ext)
         if method in seen_methods:
-            # Replace existing entry with extension's keys
+            # Replace existing entry with extension's key variants
             for entry in result:
                 if entry["method"] == method:
-                    entry["dataKeys"] = keys
+                    entry["dataKeyVariants"] = variants
                     break
         else:
-            result.append({"method": method, "dataKeys": keys})
+            entry = {"method": method, "dataKeyVariants": variants}
+            # Mark the first newly-appended extension method so the renderer can
+            # emit a one-line provenance divider above it (sourced from the
+            # extension block's _comment, kept in virtual_parent_extensions.json
+            # so the generated block stays self-documenting AND idempotent).
+            if first_appended:
+                if extension_comment:
+                    entry["extensionComment"] = extension_comment
+                first_appended = False
+            result.append(entry)
             seen_methods.add(method)
     return result
 
@@ -120,7 +155,17 @@ def render_groovy_block(fixture_to_methods: dict[str, list[dict]]) -> str:
     Output format matches the existing hand-coded style: aligned dataKeys on
     each line, `as Set` suffix, comma-separated entries inside the per-fixture
     list.
+
+    A method with a single legitimate key-set emits the established
+    `dataKeys: [...] as Set` shape (the validator does an exact-match against
+    it). A method whose key-set legitimately varies by caller (currently only
+    setOscillationStatus on LPF-R423S) emits a `dataKeyVariants` list of Sets;
+    the validator passes if the caller's keys match ANY listed variant.
     """
+    def keys_set_literal(keys: list[str]) -> str:
+        inner = ", ".join(f'"{k}"' for k in keys)
+        return f"[{inner}] as Set"
+
     lines: list[str] = []
     lines.append("@Field static final Map FIXTURE_OPS = [")
     fixture_names = sorted(fixture_to_methods.keys())
@@ -133,11 +178,31 @@ def render_groovy_block(fixture_to_methods: dict[str, list[dict]]) -> str:
         max_method_len = max((len(m["method"]) for m in methods), default=0)
         for entry in methods:
             method = entry["method"]
-            keys = entry["dataKeys"]
-            keys_literal = ", ".join(f'"{k}"' for k in keys)
+            variants = entry["dataKeyVariants"]
+            # Emit a provenance divider above the first extension-sourced method,
+            # if the extension block carried a _comment. Kept here (not as a
+            # manual edit) so a regen run reproduces it byte-for-byte.
+            comment = entry.get("extensionComment")
+            if comment:
+                lines.append(f"        // {comment}")
             method_quoted = f'"{method}",'
             method_padded = method_quoted.ljust(max_method_len + 4)
-            line = f"        [methodName: {method_padded} dataKeys: [{keys_literal}] as Set]"
+            if len(variants) == 1:
+                # Common case: one fixed key-set → exact-match `dataKeys`.
+                line = (
+                    f"        [methodName: {method_padded} "
+                    f"dataKeys: {keys_set_literal(variants[0])}]"
+                )
+            else:
+                # Multi-variant case: emit a list of allowed key-sets. The
+                # validator accepts the payload if it matches ANY variant.
+                variants_literal = ", ".join(
+                    keys_set_literal(v) for v in variants
+                )
+                line = (
+                    f"        [methodName: {method_padded} "
+                    f"dataKeyVariants: [{variants_literal}]]"
+                )
             if entry is not methods[-1]:
                 line += ","
             lines.append(line)
@@ -183,9 +248,16 @@ def main() -> int:
         raise SystemExit(f"driver source not found: {DRIVER_FILE}")
 
     extensions_data = json.loads(EXTENSIONS_JSON.read_text(encoding="utf-8"))
-    # Skip the _comment metadata key; only fixture entries are processed
+    # Skip the top-level _comment metadata key; only fixture entries are processed.
     extensions_by_fixture: dict[str, list[dict]] = {
         k: v.get("method_extensions", [])
+        for k, v in extensions_data.items()
+        if not k.startswith("_")
+    }
+    # Per-fixture extension provenance comment (emitted as a divider above the
+    # first appended extension method); None when the entry has no _comment.
+    extension_comment_by_fixture: dict[str, str | None] = {
+        k: v.get("_comment")
         for k, v in extensions_data.items()
         if not k.startswith("_")
     }
@@ -199,7 +271,8 @@ def main() -> int:
         fixture_name = fixture_path.stem
         pyvesync_methods = load_pyvesync_methods(fixture_path)
         extensions = extensions_by_fixture.get(fixture_name, [])
-        merged = merge_extensions(pyvesync_methods, extensions)
+        ext_comment = extension_comment_by_fixture.get(fixture_name)
+        merged = merge_extensions(pyvesync_methods, extensions, ext_comment)
         fixture_to_methods[fixture_name] = merged
 
     generated_block = render_groovy_block(fixture_to_methods)

@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 
 /**
@@ -91,46 +92,25 @@ class LevoitCore200SLightSpec extends HubitatSpec {
     // Happy path: night light parsing
     // -------------------------------------------------------------------------
 
-    def "update(status) with night_light='on' emits switch=on and level=100"() {
+    @Unroll
+    def "update(status) with night_light='#nl' emits switch=#expectedSwitch and level=#expectedLevel"() {
         given:
         settings.descriptionTextEnable = true
-        def status = [result: [night_light: "on"], code: 0]
+        def status = [result: [night_light: nl], code: 0]
 
         when:
         driver.update(status)
 
         then:
-        lastEventValue("switch") == "on"
-        lastEventValue("level") == 100
+        lastEventValue("switch") == expectedSwitch
+        lastEventValue("level") == expectedLevel
         testLog.errors.isEmpty()
-    }
 
-    def "update(status) with night_light='off' emits switch=off and level=0"() {
-        given:
-        settings.descriptionTextEnable = true
-        def status = [result: [night_light: "off"], code: 0]
-
-        when:
-        driver.update(status)
-
-        then:
-        lastEventValue("switch") == "off"
-        lastEventValue("level") == 0
-        testLog.errors.isEmpty()
-    }
-
-    def "update(status) with night_light='dim' emits switch=on and level=50"() {
-        given:
-        settings.descriptionTextEnable = true
-        def status = [result: [night_light: "dim"], code: 0]
-
-        when:
-        driver.update(status)
-
-        then:
-        lastEventValue("switch") == "on"
-        lastEventValue("level") == 50
-        testLog.errors.isEmpty()
+        where:
+        nl    | expectedSwitch | expectedLevel
+        "on"  | "on"           | 100
+        "off" | "off"          | 0
+        "dim" | "on"           | 50
     }
 
     def "setNightLight sends correct payload to parent.sendBypassRequest"() {
@@ -172,30 +152,23 @@ class LevoitCore200SLightSpec extends HubitatSpec {
         req.data.night_light == "off"
     }
 
-    def "setLevel(90) routes to setNightLight('on') since level > 75"() {
+    @Unroll
+    def "setLevel(#level) routes to setNightLight('#expected') (level-band routing)"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setLevel(90)
+        driver.setLevel(level)
 
         then:
         def req = testParent.allRequests.find { it.method == "setNightLight" }
         req != null
-        req.data.night_light == "on"
-    }
+        req.data.night_light == expected
 
-    def "setLevel(5) routes to setNightLight('off') since level < 10"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setLevel(5)
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setNightLight" }
-        req != null
-        req.data.night_light == "off"
+        where:
+        level | expected
+        90    | "on"      // level > 75 -> on
+        5     | "off"     // level < 10 -> off
     }
 
     def "setLevel(90, 30) 2-arg form delegates to 1-arg (SwitchLevel standard signature)"() {
@@ -241,26 +214,22 @@ class LevoitCore200SLightSpec extends HubitatSpec {
 
     // ---- BP25: setNightLight passes raw string to API as 'night_light' field ----
 
-    def "BP25: setNightLight('ON') sends night_light:'on' (lowercase), not 'ON' (BP25 regression guard)"() {
-        // Pre-fix: mode passed raw → API receives "ON" which the VeSync cloud may reject.
-        // Post-fix: m = mode.toLowerCase() → API receives "on".
+    // Pre-fix: mode passed raw → API receives the uppercase value which the VeSync
+    // cloud may reject. Post-fix: m = mode.toLowerCase() → API receives lowercase.
+    @Unroll
+    def "BP25: setNightLight('#raw') sends night_light:'#expected' (lowercase) (BP25 regression guard)"() {
         when:
-        driver.setNightLight("ON")
+        driver.setNightLight(raw)
 
-        then: "setNightLight API call made with night_light:'on' (lowercase)"
+        then: "setNightLight API call made with the lowercased night_light value"
         def req = testParent.allRequests.find { it.method == "setNightLight" }
         req != null
-        req.data.night_light == "on"
-    }
+        req.data.night_light == expected
 
-    def "BP25: setNightLight('DIM') sends night_light:'dim' (lowercase) (BP25 regression guard)"() {
-        when:
-        driver.setNightLight("DIM")
-
-        then: "setNightLight API call made with night_light:'dim' (lowercase)"
-        def req = testParent.allRequests.find { it.method == "setNightLight" }
-        req != null
-        req.data.night_light == "dim"
+        where:
+        raw   | expected
+        "ON"  | "on"
+        "DIM" | "dim"
     }
 
     // -------------------------------------------------------------------------
@@ -268,34 +237,62 @@ class LevoitCore200SLightSpec extends HubitatSpec {
     // blank Rule Machine slot — setLevel("") and setLevel("abc") must not throw
     // -------------------------------------------------------------------------
 
-    def "BP26: setLevel('') does not throw on empty-string input from Rule Machine (Core 200S Light)"() {
-        // Before D2 fix, `level < 10` on a blank-slot "" string threw GroovyCastException
-        // (swallowed silently by the Hubitat sandbox — no log entry, no effect).
-        // After D2 fix: safeIntArg("", 0, 0, 100) returns 0; 0 < 10 → setNightLight("off").
+    // Before D2 fix, `level < 10` on a blank-slot "" / non-numeric string threw
+    // GroovyCastException (swallowed silently by the Hubitat sandbox — no log entry,
+    // no effect). Under BP28: parseLevelOrNull returns null → setLevel ignores it
+    // (no night-light command, no exception, no error log).
+    @Unroll
+    def "BP26: setLevel('#raw') does not throw on #desc (Core 200S Light)"() {
         given:
         settings.descriptionTextEnable = false
 
-        when: "setLevel called with empty string (Rule Machine blank slot)"
-        driver.setLevel("")
+        when: "setLevel called with the non-numeric Rule Machine input"
+        driver.setLevel(raw)
 
         then: "no exception thrown"
         noExceptionThrown()
 
         and: "no error logged"
         testLog.errors.isEmpty()
+
+        where:
+        raw   | desc
+        ""    | "empty-string input from Rule Machine blank slot"
+        "abc" | "non-numeric string"
     }
 
-    def "BP26: setLevel('abc') does not throw on non-numeric string (Core 200S Light)"() {
+    // -------------------------------------------------------------------------
+    // BP28 regression guard: a non-numeric setLevel value must NOT switch the
+    // night-light off. Core 200S Light's off-form is setNightLight("off"), reached
+    // via the `pct < 10` threshold — the broadened off-form RULE40 now covers.
+    // Non-vacuity: (a) FAILS on pre-fix (safeIntArg("garbage",0,0,100)->0->`<10`->
+    // setNightLight("off")); PASSES post-fix (parseLevelOrNull->null->ignore).
+    // (b) guards the explicit-0/low contract so the fix can't over-correct.
+    // -------------------------------------------------------------------------
+
+    def "BP28: setLevel('garbage') is ignored — no setNightLight command (Core 200S Light)"() {
         given:
         settings.descriptionTextEnable = false
+        testParent.allRequests.clear()
 
-        when: "setLevel called with non-numeric string"
-        driver.setLevel("abc")
+        when: "setLevel called with a non-numeric typo"
+        driver.setLevel("garbage")
 
-        then: "no exception thrown"
-        noExceptionThrown()
+        then: "no setNightLight command was sent — non-numeric input ignored"
+        testParent.allRequests.findAll { it.method == "setNightLight" }.isEmpty()
+    }
 
-        and: "no error logged"
-        testLog.errors.isEmpty()
+    def "BP28: setLevel(0) still sends setNightLight('off') (Core 200S Light low/0 contract preserved)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.allRequests.clear()
+
+        when: "setLevel(0) is called — genuine numeric 0 routes through the < 10 band"
+        driver.setLevel(0)
+
+        then: "setNightLight('off') was sent (explicit-low off-form still fires)"
+        def req = testParent.allRequests.find { it.method == "setNightLight" }
+        req != null
+        req.data.night_light == "off"
     }
 }

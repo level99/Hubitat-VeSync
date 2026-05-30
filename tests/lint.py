@@ -170,8 +170,10 @@ def _collect_per_file_rules():
         bp25_case_sensitivity,
         bp14_poll_persistence, bp17_poll_health, bp22_network_breaker,
         bp26_unsafe_int_coercion,
+        bp28_level_off_ambiguity,
         process_token_scrub,
         changelog_tmi,
+        device_shorthand_leak,
     )
     rules = []
     for module in [
@@ -183,8 +185,10 @@ def _collect_per_file_rules():
         bp25_case_sensitivity,
         bp14_poll_persistence, bp17_poll_health, bp22_network_breaker,
         bp26_unsafe_int_coercion,
+        bp28_level_off_ambiguity,
         process_token_scrub,
         changelog_tmi,
+        device_shorthand_leak,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

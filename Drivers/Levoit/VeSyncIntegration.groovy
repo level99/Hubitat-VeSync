@@ -364,7 +364,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson (original); Dan Cox (fork: Vital 200S, Superior 6000S, parent fixes); elfege (contributor)",
         description: "Integrates Levoit air purifiers and humidifiers with Hubitat Elevation via VeSync cloud API",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"
@@ -1611,6 +1611,8 @@ private deviceType(code) {
         case "Core300S":
         case "LAP-C301S-WJP":
         case "LAP-C302S-WUSB":      // US Core 300S bundle SKU (v2.2 audit -- same VeSyncAirBypass class)
+        case "LAP-C301S-WAAA":      // Core 300S region variant -- pyvesync 3.4.2 VeSyncAirBypass class
+        case "LAP-C302S-WGC":       // Core 300S region variant -- pyvesync 3.4.2 VeSyncAirBypass class
             return "300S";
         case "Core400S":
         case "LAP-C401S-WJP":

@@ -27,7 +27,8 @@ library(
 
 // REQUIRES: #include level99.LevoitDiagnostics  (provides recordError)
 // REQUIRES: #include level99.LevoitChildBase    (provides logInfo/logDebug/logError/logWarn,
-//                                                ensureDebugWatchdog, ensureSwitchOn, requireNotNull)
+//                                                ensureDebugWatchdog, ensureSwitchOn, requireNotNull,
+//                                                hubBypass, httpOk)
 //
 // PROVIDES:
 //   Cross-family infra (12 methods):
@@ -45,6 +46,13 @@ library(
 //     doSetMuteSwitch      — inner body for setMute (payload {muteSwitch: int}, emits mute)
 //     doSetDisplayScreenSwitch — inner body for setDisplay (payload {screenSwitch: int}, emits displayOn)
 //
+//   Shared applyStatus body blocks (5 methods) — emit events, return locals for info HTML:
+//     applyFanCommonHead      — power + speed + mode; returns [powerOn, activeSpeed, reportedMode]
+//     applyFanMuteDisplay     — mute + display; returns muteState
+//     applyFanTemperature     — ambient temp (raw / 10 = °F, sanity-gated)
+//     applyFanSleepPreference — nested sleepPreference -> sleepPreferenceType
+//     applyFanErrorCode       — errorCode event + first-transition INFO log
+//
 // NOT in this lib — per-driver retained methods:
 //   update() [0-arg]: API status method names differ per driver:
 //       Tower Fan  → getTowerFanStatus
@@ -56,9 +64,14 @@ library(
 //   setMode:  API method name + valid mode set both differ (setTowerFanMode/auto vs setFanMode/eco)
 //   setSpeed: one-line semantic divergence — Tower maps "auto" enum to setMode("auto");
 //             Pedestal maps "auto" enum to setMode("eco").
-//   applyStatus: oscillation field structure is fundamentally different per device family
-//                (single-axis vs 2-axis + range + coordinate + calibration + high-temp fields).
-//                Info HTML content also differs (single Oscillation: vs H-Osc:/V-Osc:).
+//   applyStatus: the public entry point + preamble (ensureDebugWatchdog/seedPrefs/
+//                peelEnvelope/raw-dump) stays per-driver, as does the oscillation parsing
+//                (single-axis Tower setOscillationSwitch vs 2-axis Pedestal + range +
+//                coordinate + calibration + high-temp + childLock fields) and the info-HTML
+//                content (single "Oscillation:" + Timer vs "H-Osc:"/"V-Osc:"). The shared
+//                head/mute-display/temperature/sleepPreference/errorCode blocks ARE extracted
+//                into the applyFan* helpers above; each driver's applyStatus() orchestrates
+//                them interleaved with its divergent blocks to preserve event-emission order.
 
 // ---- Lifecycle ----
 
@@ -187,7 +200,10 @@ def setLevel(val, duration) {
 // BP23: setLevel(N>0) auto-turns-on when switch is off (SwitchLevel capability convention).
 def setLevel(val) {
     logDebug "setLevel(${val})"
-    Integer pct = safeIntArg(val, 0, 0, 100)
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer pct = parseLevelOrNull(val)
+    if (pct == null) { logWarn "setLevel: ignoring non-numeric value '${val}'"; return }
+    pct = Math.max(0, Math.min(100, pct))
     if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off (SwitchLevel capability convention).
     // state.turningOn re-entrance guard is inside ensureSwitchOn().
@@ -313,29 +329,98 @@ def doSetDisplayScreenSwitch(onOff) {
     }
 }
 
+// ---- Shared applyStatus body blocks ----
+// Tower Fan and Pedestal Fan share the head (power/speed/mode) and the
+// mute/display/temperature/sleepPreference/errorCode blocks verbatim. Only the
+// oscillation parsing (single-axis Tower vs 2-axis Pedestal + range/coordinate/
+// calibration/high-temp/childLock extras) and the info-HTML content differ — those
+// stay inline in each driver. Each driver's applyStatus() does the preamble
+// (ensureDebugWatchdog/seedPrefs/peelEnvelope/raw-dump) itself, then orchestrates
+// these shared blocks interleaved with its own divergent blocks so per-driver
+// event-emission ordering is preserved exactly.
+//
+// applyFanCommonHead returns a Map of locals downstream blocks + info HTML need:
+//   [powerOn: boolean, activeSpeed: Integer, reportedMode: String]
+
+// Power + fan speed + mode. Identical across both fan families.
+// Bug Pattern #6: when device is off, speed reports "off" regardless of last-set level.
+// Mode CROSS-CHECK: reverse-map API "advancedSleep" -> user-facing "sleep" (pyvesync
+// device_map.py LTF-F422S/LPF-R432S FanModes.SLEEP:'advancedSleep' + HA finding #d).
+// Other modes (Tower: normal/turbo/auto; Pedestal: normal/turbo/eco) pass through unchanged.
+private Map applyFanCommonHead(Map r) {
+    // ---- Power ----
+    boolean powerOn = (r.powerSwitch as Integer) == 1
+    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+
+    // ---- Fan speed ----
+    // Prefer fanSpeedLevel (currently active) over manualSpeedLevel (last-set)
+    // for the live active speed. Both are in range 1-12.
+    Integer fanSpeedRaw    = (r.fanSpeedLevel    != null) ? (r.fanSpeedLevel    as Integer) : null
+    Integer manualSpeedRaw = (r.manualSpeedLevel != null) ? (r.manualSpeedLevel as Integer) : null
+    Integer activeSpeed    = fanSpeedRaw ?: manualSpeedRaw ?: 1
+    state.fanLevel = activeSpeed
+    if (!powerOn) {
+        device.sendEvent(name:"speed", value:"off")
+        device.sendEvent(name:"level", value: percentFromLevel(activeSpeed))
+    } else {
+        String speedEnum = levelToFanControlEnum(activeSpeed)
+        device.sendEvent(name:"speed", value: speedEnum)
+        device.sendEvent(name:"level", value: percentFromLevel(activeSpeed))
+    }
+
+    // ---- Mode ----
+    String rawWorkMode  = (r.workMode ?: "normal") as String
+    String reportedMode = (rawWorkMode == "advancedSleep") ? "sleep" : rawWorkMode
+    state.mode = reportedMode
+    device.sendEvent(name:"mode", value: reportedMode)
+
+    return [powerOn: powerOn, activeSpeed: activeSpeed, reportedMode: reportedMode]
+}
+
+// Mute + display. Contiguous and identical in both drivers.
+// muteState/screenState = actual hardware state; *Switch = configured. Prefer actual.
+// Returns muteState (Integer) for the info-HTML "Mute:" line.
+private Integer applyFanMuteDisplay(Map r) {
+    Integer muteState = (r.muteState != null) ? (r.muteState as Integer) : (r.muteSwitch as Integer)
+    device.sendEvent(name:"mute", value: muteState == 1 ? "on" : "off")
+
+    Integer screenState = (r.screenState != null) ? (r.screenState as Integer) : (r.screenSwitch as Integer)
+    device.sendEvent(name:"displayOn", value: screenState == 1 ? "on" : "off")
+
+    return muteState
+}
+
+// Ambient temperature. Raw / 10 = degrees F (HA finding #1 / pyvesync vesyncfan.py:314).
+// Sanity gate: 0 raw is an uninitialized field — skip. Identical in both drivers.
+private void applyFanTemperature(Map r) {
+    if (r.temperature != null) {
+        Integer rawTemp = r.temperature as Integer
+        if (rawTemp > 0) {
+            Float tempF = rawTemp / 10.0f
+            device.sendEvent(name:"temperature", value: tempF, unit:"°F")
+        }
+    }
+}
+
+// Sleep preference (nested object). Identical in both drivers.
+private void applyFanSleepPreference(Map r) {
+    if (r.sleepPreference instanceof Map) {
+        String spType = r.sleepPreference?.sleepPreferenceType as String
+        if (spType) device.sendEvent(name:"sleepPreferenceType", value: spType)
+    }
+}
+
+// Error code with first-transition INFO log. Identical in both drivers.
+private void applyFanErrorCode(Map r) {
+    if (r.errorCode != null) {
+        Integer ec = r.errorCode as Integer
+        device.sendEvent(name:"errorCode", value: ec)
+        Integer lastEc = state.lastErrorCode as Integer
+        if (ec != 0 && (lastEc == null || lastEc == 0)) logInfo "Device error code: ${ec}"
+        state.lastErrorCode = ec
+    }
+}
+
 // ---- HTTP plumbing ----
 
-// Hub/parent call wrapper — matches sibling driver pattern
-private hubBypass(method, Map data=[:], tag=null, cb=null) {
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp) {
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]) {
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// hubBypass, httpOk are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).

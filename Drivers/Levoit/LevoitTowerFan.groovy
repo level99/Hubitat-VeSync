@@ -92,7 +92,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Tower Fan (LTF-F422S-WUS/WUSR/KEU/WJP) — power, fan speed 1-12, modes (normal/turbo/auto/sleep), oscillation, mute, display, timer, ambient temperature; canonical pyvesync payloads",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -163,26 +163,32 @@ def setSpeed(spd){
         if (early == "off") { off(); return }
         if (early == "on")  { on(); return }
     }
-    // BP24-B: auto-on when switch is off (SwitchLevel/FanControl capability convention).
-    // Placed after the off/on short-circuits so setSpeed("off") never triggers auto-on.
-    // ensureSwitchOn() is provided by #include level99.LevoitChildBase.
-    ensureSwitchOn()
-    // If numeric string or integer, treat as raw fan level (1-12 raw setSpeed command)
-    if (spd instanceof Number || (spd instanceof String && spd.isInteger())) {
+    // Resolve + validate the requested level BEFORE ensureSwitchOn() so an invalid speed
+    // never auto-powers the device on (BP24-class: reject-before-auto-on). Previously
+    // ensureSwitchOn() ran first, so setSpeed("turbo") from off turned the device ON and
+    // then no-op'd at the enum-null reject below -- a phantom power-on with no speed set.
+    Integer lvl
+    boolean isRaw = (spd instanceof Number || (spd instanceof String && spd.isInteger()))
+    if (isRaw) {
         Integer rawLevel = (spd as Integer)
         if (rawLevel < 1 || rawLevel > 12) {
             logError "setSpeed: invalid raw level ${rawLevel} -- must be 1-12"
             recordError("setSpeed: invalid raw level ${rawLevel}", [method:"setLevel"])
             return
         }
-        sendLevel(rawLevel)
-        return
+        lvl = rawLevel
+    } else {
+        // Enum string (FanControl capability path). "auto" is a mode, not a level.
+        String s = (spd as String).trim().toLowerCase()
+        if (s == "auto") { ensureSwitchOn(); setMode("auto"); return }
+        lvl = fanControlEnumToLevel(s)
+        if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; recordError("setSpeed: unknown enum '${s}'", [method:"setLevel"]); return }
     }
-    // Enum string (FanControl capability path)
-    String s = (spd as String).trim().toLowerCase()
-    if (s == "auto") { setMode("auto"); return }
-    Integer lvl = fanControlEnumToLevel(s)
-    if (lvl == null) { logError "setSpeed: unknown enum value '${s}'"; recordError("setSpeed: unknown enum '${s}'", [method:"setLevel"]); return }
+    // BP24-B: auto-on when switch is off (SwitchLevel/FanControl capability convention).
+    // Placed after the off/on short-circuits AND after speed validation so neither
+    // setSpeed("off") nor an invalid speed triggers auto-on.
+    // ensureSwitchOn() is provided by #include level99.LevoitChildBase.
+    ensureSwitchOn()
     sendLevel(lvl)
 }
 
@@ -206,8 +212,9 @@ def setSpeed(spd){
 //     independently confirmed this mapping.
 //   Source: https://github.com/webdjoe/pyvesync/blob/master/src/pyvesync/device_map.py
 //     (LTF-F422S FanModes.SLEEP: 'advancedSleep'); HA vesync cross-check bonus finding #d.
-//   Refutation: community user reports "advancedSleep" is rejected and "sleep" is the
-//     correct API literal --> remove the reverse-mapping and send "sleep" directly.
+//   If contradicted in the future: a community report showing "advancedSleep" is rejected
+//     and "sleep" is the correct literal would mean removing the reverse-mapping and
+//     sending "sleep" directly. No such report yet — current behavior follows pyvesync.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -334,76 +341,31 @@ def applyStatus(status){
     // Placed here so all three update() entry points (0-arg, 1-arg, 2-arg) trigger it.
     ensureDebugWatchdog()
 
-    // One-time pref seed: heal descriptionTextEnable=true default for users migrated
-    // from older Type without Save (forward-compat -- Bug Pattern #12)
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
-
-    def r = status?.result ?: [:]
-    // Defensive envelope peel -- Tower Fan bypassV2 responses are purifier-style
-    // (single-wrapped), but we run the same defensive peel loop used by all V2-line
-    // drivers in case a firmware update or API change introduces double-wrapping (BP#3).
-    int peelGuard = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-        r = r.result
-        peelGuard++
-    }
+    seedPrefs()
+    def r = peelEnvelope(status)
     // Diagnostic raw dump -- gated by debugOutput. Keep for ongoing field diagnostics.
     // Use this log line when a community member reports "device discovered but no data".
-    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
-    // ---- Power ----
-    boolean powerOn = (r.powerSwitch as Integer) == 1
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
-
-    // ---- Fan speed ----
-    // Prefer fanSpeedLevel (currently active) over manualSpeedLevel (last-set)
-    // for the live active speed. Both are in range 1-12.
-    Integer fanSpeedRaw = (r.fanSpeedLevel != null) ? (r.fanSpeedLevel as Integer) : null
-    Integer manualSpeedRaw = (r.manualSpeedLevel != null) ? (r.manualSpeedLevel as Integer) : null
-    Integer activeSpeed = fanSpeedRaw ?: manualSpeedRaw ?: 1
-    state.fanLevel = activeSpeed
-    // Bug Pattern #6: when device is off, speed reports "off" regardless of last-set level.
-    // Using FanControl enum: off when powerSwitch=0, otherwise map level to enum string.
-    if (!powerOn) {
-        device.sendEvent(name:"speed", value:"off")
-        device.sendEvent(name:"level", value: percentFromLevel(activeSpeed))
-    } else {
-        String speedEnum = levelToFanControlEnum(activeSpeed)
-        device.sendEvent(name:"speed", value: speedEnum)
-        device.sendEvent(name:"level", value: percentFromLevel(activeSpeed))
-    }
-
-    // ---- Mode ----
-    // CROSS-CHECK: reverse-map API "advancedSleep" -> user-facing "sleep".
+    // ---- Power + Fan speed + Mode (shared LevoitFanLib block) ----
+    // CROSS-CHECK [mode]: reverse-map API "advancedSleep" -> user-facing "sleep".
     // See setMode() CROSS-CHECK block above for full rationale (pyvesync device_map.py
     // LTF-F422S FanModes.SLEEP:'advancedSleep' + HA bonus finding #d).
-    String rawWorkMode = (r.workMode ?: "normal") as String
-    String reportedMode = (rawWorkMode == "advancedSleep") ? "sleep" : rawWorkMode
-    state.mode = reportedMode
-    device.sendEvent(name:"mode", value: reportedMode)
+    def head = applyFanCommonHead(r)
+    boolean powerOn      = head.powerOn
+    Integer activeSpeed  = head.activeSpeed
+    String  reportedMode = head.reportedMode
 
-    // ---- Oscillation ----
+    // ---- Oscillation (single-axis; Tower-specific) ----
     // oscillationState = actual hardware state; oscillationSwitch = configured setting.
     // Prefer state (actual) for reporting.
     Integer oscState = (r.oscillationState != null) ? (r.oscillationState as Integer) : (r.oscillationSwitch as Integer)
     device.sendEvent(name:"oscillation", value: oscState == 1 ? "on" : "off")
 
-    // ---- Mute ----
-    // muteState = actual; muteSwitch = configured. Prefer actual.
-    Integer muteState = (r.muteState != null) ? (r.muteState as Integer) : (r.muteSwitch as Integer)
-    device.sendEvent(name:"mute", value: muteState == 1 ? "on" : "off")
+    // ---- Mute + Display (shared LevoitFanLib block) ----
+    Integer muteState = applyFanMuteDisplay(r)
 
-    // ---- Display ----
-    // screenState = actual; screenSwitch = configured. Prefer actual.
-    Integer screenState = (r.screenState != null) ? (r.screenState as Integer) : (r.screenSwitch as Integer)
-    device.sendEvent(name:"displayOn", value: screenState == 1 ? "on" : "off")
-
-    // ---- Temperature ----
+    // ---- Temperature (shared LevoitFanLib block) ----
     // CROSS-CHECK [HA fixture tests/components/vesync/fixtures/fan-detail.json line 19 /
     //   pyvesync vesyncfan.py asymmetry]:
     //   Decision: divide temperature by 10 before emitting (raw / 10 = degrees F).
@@ -420,14 +382,7 @@ def applyStatus(status){
     //     VeSyncPedestalFan temperature handling asymmetry (cross-check finding #1, 2026-04-26).
     //   Refutation: community user reports temperature:72 (already degrees F without /10) -->
     //     remove the divide; emit raw as degrees F. Also check if pyvesync has been patched.
-    if (r.temperature != null) {
-        Integer rawTemp = r.temperature as Integer
-        // Sanity gate: 0 raw = 0°F which is almost certainly an uninitialized field, skip
-        if (rawTemp > 0) {
-            Float tempF = rawTemp / 10.0f
-            device.sendEvent(name:"temperature", value: tempF, unit:"°F")
-        }
-    }
+    applyFanTemperature(r)
 
     // ---- displayingType ----
     // CROSS-CHECK [HA cross-check finding #5 / pyvesync vesyncfan.py:166-176]:
@@ -447,24 +402,14 @@ def applyStatus(status){
         device.sendEvent(name:"displayingType", value: r.displayingType as Integer)
     }
 
-    // ---- Sleep preference (nested object) ----
-    // Read sleepPreferenceType from nested sleepPreference map if present.
-    if (r.sleepPreference instanceof Map) {
-        String spType = r.sleepPreference?.sleepPreferenceType as String
-        if (spType) device.sendEvent(name:"sleepPreferenceType", value: spType)
-    }
+    // ---- Sleep preference (shared LevoitFanLib block) ----
+    applyFanSleepPreference(r)
 
-    // ---- Timer remain ----
+    // ---- Timer remain (Tower-specific) ----
     if (r.timerRemain != null) device.sendEvent(name:"timerRemain", value: r.timerRemain as Integer)
 
-    // ---- Error code ----
-    if (r.errorCode != null) {
-        Integer ec = r.errorCode as Integer
-        device.sendEvent(name:"errorCode", value: ec)
-        Integer lastEc = state.lastErrorCode as Integer
-        if (ec != 0 && (lastEc == null || lastEc == 0)) logInfo "Device error code: ${ec}"
-        state.lastErrorCode = ec
-    }
+    // ---- Error code (shared LevoitFanLib block) ----
+    applyFanErrorCode(r)
 
     // ---- Info HTML (use local variables -- avoids device.currentValue race; BP#7) ----
     def parts = []

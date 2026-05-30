@@ -104,7 +104,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Sprout Humidifier (LEH-B381S-WUS/-WEU) — mist 1-2, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display, child lock, drying mode, nightlight (brightness + color temp). pyvesync VeSyncSproutHumid class; V2-style payloads. Auto mode wire value: 'autoPro' (not 'auto' — contrast OasisMist 1000S).",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -158,27 +158,9 @@ metadata {
 // are provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ---------- Power ----------
+// Power on/off provided by #include level99.LevoitHumidifier; payload supplied via this hook.
 // VeSyncSproutHumid toggle_switch: {powerSwitch: int, switchIdx: 0}
-def on(){
-    logDebug "on()"
-    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
-    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
-    state.turningOn = true
-    try {
-        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
-        if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
-    } finally {
-        state.turningOn = false
-    }
-}
-
-def off(){
-    logDebug "off()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
-    if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
-    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
-}
+Map powerPayload(boolean on){ [powerSwitch: on ? 1 : 0, switchIdx: 0] }
 
 // toggle: provided by #include level99.LevoitHumidifier
 
@@ -211,7 +193,10 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    Integer lvl = safeIntArg(level, 0)
+    // BP24: SHOULD-ON — mist-level command; calls ensureSwitchOn() below (SwitchLevel convention).
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer lvl = parseLevelOrNull(level)
+    if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
     if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(2, lvl))
     ensureSwitchOn()
@@ -256,7 +241,7 @@ def setChildLock(onOff){
     if (!requireNonEmptyEnum(onOff, "setChildLock")) return false
     // BP25: derive canonical on/off for sendEvent and C3 gate — never emit raw "true"/"1"/"yes".
     String val = (onOff as String).trim().toLowerCase()
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("childLock") == canon) return true
     Integer v = (canon == "on") ? 1 : 0
     def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${canon})")
@@ -283,7 +268,7 @@ def setDryingMode(onOff){
     // BP25: normalize to lowercase, then derive canonical on/off for sendEvent and C3 gate.
     // Attribute always emits "on" or "off"; the C3 gate compares canonical vs canonical.
     String v = (onOff as String).trim().toLowerCase()
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("dryingEnabled") == canon) return true
     Integer sw = (canon == "on") ? 1 : 0
@@ -312,8 +297,9 @@ def setDryingMode(onOff){
 def setNightlight(onOff, brightness = null, colorTemp = null){
     logDebug "setNightlight(${onOff}, ${brightness}, ${colorTemp})"
     if (!requireNonEmptyEnum(onOff, "setNightlight")) return
-    // BP25: normalize to lowercase before all comparisons.
-    String nl = (onOff as String).trim().toLowerCase()
+    // BP25: normalize + canonicalize truthy variants ("true"/"1"/"yes") before all comparisons.
+    String v = (onOff as String).trim().toLowerCase()
+    String nl = canonOnOff(v)
     Integer br   = (brightness  != null) ? Math.max(0, Math.min(100, safeIntArg(brightness, 0)))       : null   // BP26
     Integer ct   = (colorTemp   != null) ? Math.max(2000, Math.min(3500, safeIntArg(colorTemp, 3500))) : null   // BP26
     if (nl == "off") { br = 0; ct = ct ?: 3500 }
@@ -346,24 +332,10 @@ def applyStatus(status){
     // BP16 watchdog: auto-disable debugOutput after 30 min even across hub reboots.
     ensureDebugWatchdog()
 
-    // BP12 pref-seed: heal descriptionTextEnable=true default for migrated installs.
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
-
-    def r = status?.result ?: [:]
-    // BP#3: defensive envelope peel — bypassV2 responses can be wrapped in
-    // {code, result, traceId} envelope layers. Peel until device data is reached.
-    int peelGuard = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-        r = r.result
-        peelGuard++
-    }
+    seedPrefs()
+    def r = peelEnvelope(status)
     // Diagnostic raw dump (debugOutput-gated).
-    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     def powerRaw = r.powerSwitch

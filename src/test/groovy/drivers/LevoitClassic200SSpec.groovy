@@ -2,6 +2,7 @@ package drivers
 
 import support.HubitatSpec
 import support.TestParent
+import spock.lang.Unroll
 
 /**
  * Unit tests for LevoitClassic200S.groovy (Levoit Classic 200S Humidifier).
@@ -360,41 +361,33 @@ class LevoitClassic200SSpec extends HubitatSpec {
         !req.data.containsKey("workMode")
     }
 
-    def "setMode('sleep') is rejected with logError (no sleep mode on Classic 200S per device_map.py)"() {
+    @Unroll
+    def "setMode('#mode') is rejected with logError (no #mode mode on Classic 200S)"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setMode("sleep")
+        driver.setMode(mode)
 
         then:
         !testLog.errors.isEmpty()
         def req = testParent.allRequests.find { it.method == "setHumidityMode" }
         req == null
-    }
 
-    def "setMode('invalid') is rejected with logError"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setMode("turbo")
-
-        then:
-        !testLog.errors.isEmpty()
-        def req = testParent.allRequests.find { it.method == "setHumidityMode" }
-        req == null
+        where:
+        mode << ["sleep", "turbo"]
     }
 
     // -------------------------------------------------------------------------
     // Mode read-path normalization
     // -------------------------------------------------------------------------
 
-    def "applyStatus mode='humidity' normalized to user-facing 'auto' (defensive; consistent with sibling drivers)"() {
+    @Unroll
+    def "applyStatus mode='#apiMode' normalized to user-facing 'auto'"() {
         given:
         settings.descriptionTextEnable = false
         def deviceData = [enabled: true, humidity: 40, mist_virtual_level: 3, mist_level: 3,
-                          mode: "humidity", water_lacks: false, humidity_high: false,
+                          mode: apiMode, water_lacks: false, humidity_high: false,
                           water_tank_lifted: false, indicator_light_switch: true,
                           automatic_stop_reach_target: false, night_light_brightness: 0,
                           configuration: [auto_target_humidity: 50, automatic_stop: false]]
@@ -405,23 +398,9 @@ class LevoitClassic200SSpec extends HubitatSpec {
 
         then:
         lastEventValue("mode") == "auto"
-    }
 
-    def "applyStatus mode='autoPro' normalized to user-facing 'auto'"() {
-        given:
-        settings.descriptionTextEnable = false
-        def deviceData = [enabled: true, humidity: 40, mist_virtual_level: 3, mist_level: 3,
-                          mode: "autoPro", water_lacks: false, humidity_high: false,
-                          water_tank_lifted: false, indicator_light_switch: true,
-                          automatic_stop_reach_target: false, night_light_brightness: 0,
-                          configuration: [auto_target_humidity: 50, automatic_stop: false]]
-        def status = v2StatusEnvelope(deviceData)
-
-        when:
-        driver.applyStatus(status)
-
-        then:
-        lastEventValue("mode") == "auto"
+        where:
+        apiMode << ["humidity", "autoPro"]
     }
 
     // -------------------------------------------------------------------------
@@ -494,30 +473,23 @@ class LevoitClassic200SSpec extends HubitatSpec {
         !req.data.containsKey("targetHumidity")
     }
 
-    def "setHumidity clamps to 30 minimum"() {
+    @Unroll
+    def "setHumidity clamps #input to #expected"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setHumidity(10)
+        driver.setHumidity(input)
 
         then:
         def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
         req != null
-        req.data.target_humidity == 30
-    }
+        req.data.target_humidity == expected
 
-    def "setHumidity clamps to 80 maximum"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setHumidity(95)
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
-        req != null
-        req.data.target_humidity == 80
+        where:
+        input | expected
+        10    | 30
+        95    | 80
     }
 
     def "targetHumidity is read from configuration.auto_target_humidity (nested -- same as Classic 300S)"() {
@@ -592,24 +564,23 @@ class LevoitClassic200SSpec extends HubitatSpec {
         lastEventValue("nightLightBrightness") == 100
     }
 
-    def "driver declares no setNightLight command (features=[AUTO_STOP], no NIGHTLIGHT)"() {
+    // -------------------------------------------------------------------------
+    // Absent commands (hardware features not present): setNightLight (no NIGHTLIGHT),
+    // setWarmMistLevel (no warm mist hardware) — both must be undeclared.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "driver declares no #cmd command (hardware feature absent)"() {
         when:
-        driver.setNightLight("dim")
+        driver."$cmd"(arg)
 
         then:
         thrown(MissingMethodException)
-    }
 
-    // -------------------------------------------------------------------------
-    // No warm mist (hardware absent)
-    // -------------------------------------------------------------------------
-
-    def "driver declares no setWarmMistLevel command (Classic 200S has no warm mist hardware)"() {
-        when:
-        driver.setWarmMistLevel(2)
-
-        then:
-        thrown(MissingMethodException)
+        where:
+        cmd                | arg
+        "setNightLight"    | "dim"
+        "setWarmMistLevel" | 2
     }
 
     // -------------------------------------------------------------------------
@@ -740,26 +711,19 @@ class LevoitClassic200SSpec extends HubitatSpec {
         testParent.allRequests.find { it.method == "setAutomaticStop" } == null
     }
 
-    def "BP26: setMistLevel('') does not throw on empty-string input from Rule Machine (Classic 200S)"() {
+    @Unroll
+    def "BP26: setMistLevel('#badInput') does not throw on non-numeric input from Rule Machine (Classic 200S)"() {
         given:
         settings.descriptionTextEnable = false
-        when: "setMistLevel called with empty string (Rule Machine blank slot)"
-        driver.setMistLevel("")
+        when: "setMistLevel called with a non-numeric Rule Machine value"
+        driver.setMistLevel(badInput)
         then: "no exception thrown"
         noExceptionThrown()
         and: "no error logged"
         testLog.errors.isEmpty()
-    }
 
-    def "BP26: setMistLevel('abc') does not throw on non-numeric input from Rule Machine (Classic 200S)"() {
-        given:
-        settings.descriptionTextEnable = false
-        when: "setMistLevel called with non-numeric string"
-        driver.setMistLevel("abc")
-        then: "no exception thrown"
-        noExceptionThrown()
-        and: "no error logged"
-        testLog.errors.isEmpty()
+        where:
+        badInput << ["", "abc"]
     }
 
     // -----------------------------------------------------------------------
@@ -801,5 +765,40 @@ class LevoitClassic200SSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
         req != null
         req.data.target_humidity == 30
+    }
+
+    // -------------------------------------------------------------------------
+    // BP28 regression guard: non-numeric mist value must NOT turn device off.
+    // Non-vacuity: (a) FAILS on pre-fix (safeIntArg("garbage",0)->0->off());
+    // PASSES post-fix (parseLevelOrNull->null->ignore). (b) guards explicit-0 contract.
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel('garbage') is ignored — no off(), no cloud command (BP28)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel called with a non-numeric typo"
+        driver.setMistLevel("garbage")
+
+        then: "nothing was sent to the cloud (no off(), no setVirtualLevel)"
+        testParent.allRequests.isEmpty()
+    }
+
+    def "setMistLevel(0) still calls off() (BP28 explicit-0 contract preserved)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel(0) is called"
+        driver.setMistLevel(0)
+
+        then: "off() (setSwitch) was sent"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "no setVirtualLevel mist command was sent"
+        testParent.allRequests.every { it.method != "setVirtualLevel" }
     }
 }

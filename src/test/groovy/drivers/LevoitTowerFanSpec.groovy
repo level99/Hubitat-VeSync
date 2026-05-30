@@ -176,6 +176,32 @@ class LevoitTowerFanSpec extends HubitatSpec {
         testLog.errors.any { it.contains("0") || it.contains("invalid") || it.contains("must be") }
     }
 
+    def "BP24: setSpeed('turbo') on an off device does NOT turn it on and sends no speed command"() {
+        // Regression guard: the unknown-enum reject must run BEFORE ensureSwitchOn().
+        // Pre-fix, ensureSwitchOn() ran first, so setSpeed('turbo') from off powered the
+        // device on and then no-op'd at the fanControlEnumToLevel==null reject -- a phantom
+        // power-on with no speed set.
+        // NON-VACUITY: this assertion goes RED if ensureSwitchOn() is moved back ahead of
+        // the level-resolution/reject (the pre-fix ordering) — the off device would then
+        // receive a setSwitch powerSwitch=1, failing the first `then` block.
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove('turningOn')
+
+        when: "an unrecognized enum speed is requested on an off device"
+        driver.setSpeed("turbo")
+
+        then: "no on() — no setSwitch powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "no setLevel speed command was sent"
+        testParent.allRequests.findAll { it.method == "setLevel" }.size() == 0
+
+        and: "an error was logged for the unknown enum"
+        testLog.errors.any { it.contains("turbo") || it.contains("unknown") }
+    }
+
     def "setSpeed('on') calls on() -- Hubitat FanControl capability convention (Theme A)"() {
         // Hubitat FanControl.setSpeed accepts 'on' as a valid enum value meaning 'resume at
         // prior/default speed'. Previously this fell through to the unknown-enum error path.
@@ -474,28 +500,20 @@ class LevoitTowerFanSpec extends HubitatSpec {
         lastEventValue("mode") != "advancedSleep"
     }
 
-    def "setMode('normal') sends setTowerFanMode with workMode='normal' (no reverse-mapping)"() {
+    @Unroll
+    def "setMode('#mode') sends setTowerFanMode with workMode='#mode' (no reverse-mapping)"() {
         given: "default state"
 
         when:
-        driver.setMode("normal")
+        driver.setMode(mode)
 
-        then: "API receives 'normal' unchanged"
+        then: "API receives the mode literal unchanged"
         def req = testParent.allRequests.find { it.method == "setTowerFanMode" }
         req != null
-        req.data.workMode == "normal"
-    }
+        req.data.workMode == mode
 
-    def "setMode('turbo') sends setTowerFanMode with workMode='turbo'"() {
-        given: "default state"
-
-        when:
-        driver.setMode("turbo")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setTowerFanMode" }
-        req != null
-        req.data.workMode == "turbo"
+        where:
+        mode << ["normal", "turbo"]
     }
 
     def "setMode sends setTowerFanMode, NOT setPurifierMode"() {
@@ -623,30 +641,23 @@ class LevoitTowerFanSpec extends HubitatSpec {
     // Toggle pattern (NIT 1): state.lastSwitchSet preferred over currentValue
     // -------------------------------------------------------------------------
 
-    def "toggle() reads state.lastSwitchSet='on' and calls off()"() {
-        given: "state.lastSwitchSet was seeded by a prior on() call"
-        state.lastSwitchSet = "on"
+    @Unroll
+    def "toggle() reads state.lastSwitchSet='#lastSet' and sends setSwitch powerSwitch=#expectedPower"() {
+        given: "state.lastSwitchSet was seeded by a prior on()/off() call"
+        state.lastSwitchSet = lastSet
 
         when: "toggle() is called"
         driver.toggle()
 
-        then: "setSwitch with powerSwitch=0 was sent (off was called)"
+        then: "setSwitch with the inverted powerSwitch was sent"
         def req = testParent.allRequests.find { it.method == "setSwitch" }
         req != null
-        req.data.powerSwitch == 0
-    }
+        req.data.powerSwitch == expectedPower
 
-    def "toggle() reads state.lastSwitchSet='off' and calls on()"() {
-        given: "state.lastSwitchSet was seeded by a prior off() call"
-        state.lastSwitchSet = "off"
-
-        when:
-        driver.toggle()
-
-        then: "setSwitch with powerSwitch=1 was sent (on was called)"
-        def req = testParent.allRequests.find { it.method == "setSwitch" }
-        req != null
-        req.data.powerSwitch == 1
+        where:
+        lastSet | expectedPower
+        "on"    | 0
+        "off"   | 1
     }
 
     def "toggle() falls back to device.currentValue('switch') when state not seeded"() {
@@ -667,126 +678,84 @@ class LevoitTowerFanSpec extends HubitatSpec {
     // Oscillation / mute / display payloads
     // -------------------------------------------------------------------------
 
-    def "setOscillation('on') sends setOscillationSwitch with {oscillationSwitch:1}"() {
+    @Unroll
+    def "setOscillation('#arg') sends setOscillationSwitch with {oscillationSwitch:#expected}"() {
         when:
-        driver.setOscillation("on")
+        driver.setOscillation(arg)
 
         then:
         def req = testParent.allRequests.find { it.method == "setOscillationSwitch" }
         req != null
-        req.data.oscillationSwitch == 1
+        req.data.oscillationSwitch == expected
+
+        where:
+        arg   | expected
+        "on"  | 1
+        "off" | 0
     }
 
-    def "setOscillation('off') sends setOscillationSwitch with {oscillationSwitch:0}"() {
+    @Unroll
+    def "setMute('#arg') sends setMuteSwitch with {muteSwitch:#expected}"() {
         when:
-        driver.setOscillation("off")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setOscillationSwitch" }
-        req != null
-        req.data.oscillationSwitch == 0
-    }
-
-    def "setMute('on') sends setMuteSwitch with {muteSwitch:1}"() {
-        when:
-        driver.setMute("on")
+        driver.setMute(arg)
 
         then:
         def req = testParent.allRequests.find { it.method == "setMuteSwitch" }
         req != null
-        req.data.muteSwitch == 1
+        req.data.muteSwitch == expected
+
+        where:
+        arg   | expected
+        "on"  | 1
+        "off" | 0
     }
 
-    def "setMute('off') sends setMuteSwitch with {muteSwitch:0}"() {
+    @Unroll
+    def "setDisplay('#arg') sends setDisplay with {screenSwitch:#expected}"() {
         when:
-        driver.setMute("off")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setMuteSwitch" }
-        req != null
-        req.data.muteSwitch == 0
-    }
-
-    def "setDisplay('on') sends setDisplay with {screenSwitch:1}"() {
-        when:
-        driver.setDisplay("on")
+        driver.setDisplay(arg)
 
         then:
         def req = testParent.allRequests.find { it.method == "setDisplay" }
         req != null
-        req.data.screenSwitch == 1
+        req.data.screenSwitch == expected
+
+        where:
+        arg   | expected
+        "on"  | 1
+        "off" | 0
     }
 
-    def "setDisplay('off') sends setDisplay with {screenSwitch:0}"() {
+    // ---- BP18: null-arg guards across all single-string setters ----
+
+    @Unroll
+    def "#cmd(null) emits WARN and makes no API call (BP18)"() {
         when:
-        driver.setDisplay("off")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-        req.data.screenSwitch == 0
-    }
-
-    // ---- BP18: null-arg + invalid-enum guards on oscillation / mute / display ----
-
-    def "setOscillation(null) emits WARN and makes no API call (BP18)"() {
-        when:
-        driver.setOscillation(null)
+        driver."$cmd"(null)
 
         then:
         noExceptionThrown()
         testParent.allRequests.isEmpty()
-        testLog.warns.any { it.contains("setOscillation") && it.contains("null") }
+        testLog.warns.any { it.contains(cmd) && it.contains("null") }
+
+        where:
+        cmd << ["setOscillation", "setMute", "setDisplay", "setSpeed", "setMode"]
     }
 
-    def "setOscillation('yes') logs error and makes no API call (invalid enum)"() {
+    // ---- invalid-enum guards on oscillation / mute / display ----
+
+    @Unroll
+    def "#cmd('yes') logs error and makes no API call (invalid enum)"() {
         when:
-        driver.setOscillation("yes")
-
-        then:
-        noExceptionThrown()
-        testParent.allRequests.isEmpty()
-        testLog.errors.any { it.contains("yes") || it.contains("invalid") }
-    }
-
-    def "setMute(null) emits WARN and makes no API call (BP18)"() {
-        when:
-        driver.setMute(null)
-
-        then:
-        noExceptionThrown()
-        testParent.allRequests.isEmpty()
-        testLog.warns.any { it.contains("setMute") && it.contains("null") }
-    }
-
-    def "setMute('yes') logs error and makes no API call (invalid enum)"() {
-        when:
-        driver.setMute("yes")
+        driver."$cmd"("yes")
 
         then:
         noExceptionThrown()
         testParent.allRequests.isEmpty()
         testLog.errors.any { it.contains("yes") || it.contains("invalid") }
-    }
 
-    def "setDisplay(null) emits WARN and makes no API call (BP18)"() {
-        when:
-        driver.setDisplay(null)
-
-        then:
-        noExceptionThrown()
-        testParent.allRequests.isEmpty()
-        testLog.warns.any { it.contains("setDisplay") && it.contains("null") }
-    }
-
-    def "setDisplay('yes') logs error and makes no API call (invalid enum)"() {
-        when:
-        driver.setDisplay("yes")
-
-        then:
-        noExceptionThrown()
-        testParent.allRequests.isEmpty()
-        testLog.errors.any { it.contains("yes") || it.contains("invalid") }
+        where:
+        cmd << ["setOscillation", "setMute", "setDisplay"]
     }
 
     // -------------------------------------------------------------------------
@@ -908,26 +877,6 @@ class LevoitTowerFanSpec extends HubitatSpec {
         then: "info HTML contains temperature value (71.7)"
         def infoVal = lastEventValue("info") as String
         infoVal.contains("Temp") || infoVal.contains("71")
-    }
-
-    // ---- BP18: null-arg guard ----
-
-    def "setSpeed(null) does not throw and emits a WARN log (BP18)"() {
-        when:
-        driver.setSpeed(null)
-        then:
-        noExceptionThrown()
-        testLog.warns.any { it.contains("setSpeed") && it.contains("null") }
-        testParent.allRequests.isEmpty()
-    }
-
-    def "setMode(null) does not throw and emits a WARN log (BP18)"() {
-        when:
-        driver.setMode(null)
-        then:
-        noExceptionThrown()
-        testLog.warns.any { it.contains("setMode") && it.contains("null") }
-        testParent.allRequests.isEmpty()
     }
 
     // -------------------------------------------------------------------------
@@ -1256,9 +1205,10 @@ class LevoitTowerFanSpec extends HubitatSpec {
     // -------------------------------------------------------------------------
 
     @Unroll
-    def "BP26: setLevel('#badInput') does not throw and routes to off() (Tower Fan fallback=0)"() {
-        // safeIntArg maps "abc", "", true to 0. 0 → off() path. No setLevel API call.
-        // This test fails if safeIntArg is removed from LevoitFanLib.setLevel.
+    def "BP28: setLevel('#badInput') is ignored — no off(), no setLevel command (Tower Fan)"() {
+        // BP28 contract: parseLevelOrNull maps "abc"/""/true to null -> ignore (device unchanged).
+        // Previously safeIntArg mapped these to 0 -> off(); BP28 makes non-numeric a no-op while
+        // explicit 0 still routes to off(). Fails if parseLevelOrNull is removed from LevoitFanLib.setLevel.
         given: "device is on so the auto-on guard does not confuse the assertion"
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
@@ -1269,11 +1219,26 @@ class LevoitTowerFanSpec extends HubitatSpec {
         then: "no exception thrown"
         noExceptionThrown()
 
-        and: "no setLevel API call — 0 coercion routes to off()"
+        and: "no off() and no setLevel command — non-numeric input ignored"
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
         testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
 
         where:
         badInput << ["abc", "", true]
+    }
+
+    def "BP28: setLevel(0) still routes to off() (Tower Fan explicit-0 contract preserved)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when:
+        driver.setLevel(0)
+
+        then: "off() (setSwitch) was sent and no setLevel speed command"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
 
     def "BP26: setLevel('5.7') does not throw and makes a setLevel API call with truncated value (Tower Fan)"() {

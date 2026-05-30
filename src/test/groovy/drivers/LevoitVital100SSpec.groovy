@@ -564,20 +564,18 @@ class LevoitVital100SSpec extends HubitatSpec {
     // Theme C: state.lastSwitchSet consistency + state.speed after setLevel
     // -------------------------------------------------------------------------
 
-    def "on() seeds state.lastSwitchSet='on' (Theme C)"() {
-        when: "on() is called"
-        driver.on()
+    @Unroll
+    def "#switchMethod seeds state.lastSwitchSet='#expected' (Theme C)"() {
+        when: "#switchMethod is called"
+        driver."$switchMethod"()
 
-        then: "lastSwitchSet is 'on'"
-        state.lastSwitchSet == "on"
-    }
+        then: "lastSwitchSet is '#expected'"
+        state.lastSwitchSet == expected
 
-    def "off() seeds state.lastSwitchSet='off' (Theme C)"() {
-        when: "off() is called"
-        driver.off()
-
-        then: "lastSwitchSet is 'off'"
-        state.lastSwitchSet == "off"
+        where:
+        switchMethod | expected
+        "on"         | "on"
+        "off"        | "off"
     }
 
     def "toggle() uses state.lastSwitchSet='on' to call off() (Theme C)"() {
@@ -652,175 +650,127 @@ class LevoitVital100SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP24: invalid speed from off-state must NOT auto-power the device on
+    // -------------------------------------------------------------------------
+
+    def "BP24: setSpeed('turbo') on an off device does NOT turn it on and sends no speed command"() {
+        // Regression guard (shared LevoitVitalPurifierLib.setSpeed; same path on 100S/200S).
+        // The invalid-speed reject must run BEFORE ensureSwitchOn(). Pre-fix, ensureSwitchOn()
+        // ran first, so an unrecognized speed powered the device on and then mapSpeedToInteger's
+        // default→low (return 2) sent a real low-speed command.
+        // NON-VACUITY: this assertion goes RED if the reject is moved back after
+        // ensureSwitchOn() (the pre-fix ordering) — the off device would then receive a
+        // setSwitch powerSwitch=1 AND a setLevel command, failing both `then` blocks.
+        given: "device is off and turningOn flag is clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove('turningOn')
+
+        when: "setSpeed('turbo') is called on an off device"
+        driver.setSpeed("turbo")
+
+        then: "no on() — no setSwitch powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "no setLevel speed command was sent"
+        testParent.allRequests.find { it.method == "setLevel" } == null
+
+        and: "a warn was logged naming the method"
+        testLog.warns.any { it.contains("setSpeed") }
+    }
+
+    // -------------------------------------------------------------------------
     // C3: state-change gate — setChildLock and setDisplay
     // -------------------------------------------------------------------------
 
-    def "C3: setChildLock('on') when childLock is already 'on' is a no-op (no API call)"() {
-        given: "childLock is already on"
+    @Unroll
+    def "C3: #driverMethod('on') when #attr is already 'on' is a no-op (no API call)"() {
+        given: "#attr is already on"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "on"])
+        testDevice.events.add([name: attr, value: "on"])
 
         when:
-        driver.setChildLock("on")
+        driver."$driverMethod"("on")
 
-        then: "no setChildLock API call was made"
-        testParent.allRequests.find { it.method == "setChildLock" } == null
+        then: "no #apiMethod API call was made"
+        testParent.allRequests.find { it.method == apiMethod } == null
 
         and: "no errors logged"
         testLog.errors.isEmpty()
+
+        where:
+        driverMethod   | attr        | apiMethod
+        "setChildLock" | "childLock" | "setChildLock"
+        "setDisplay"   | "display"   | "setDisplay"
     }
 
-    def "C3: setChildLock('on') when childLock is 'off' does send the API call"() {
-        given: "childLock is currently off"
+    @Unroll
+    def "C3: #driverMethod('on') when #attr is 'off' does send the API call"() {
+        given: "#attr is currently off"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "off"])
+        testDevice.events.add([name: attr, value: "off"])
 
         when:
-        driver.setChildLock("on")
+        driver."$driverMethod"("on")
 
-        then: "setChildLock API call was made"
-        testParent.allRequests.find { it.method == "setChildLock" } != null
-    }
+        then: "#apiMethod API call was made"
+        testParent.allRequests.find { it.method == apiMethod } != null
 
-    def "C3: setDisplay('on') when display is already 'on' is a no-op (no API call)"() {
-        given: "display is already on"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "on"])
-
-        when:
-        driver.setDisplay("on")
-
-        then: "no setDisplay API call was made"
-        testParent.allRequests.find { it.method == "setDisplay" } == null
-
-        and: "no errors logged"
-        testLog.errors.isEmpty()
-    }
-
-    def "C3: setDisplay('on') when display is 'off' does send the API call"() {
-        given: "display is currently off"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "off"])
-
-        when:
-        driver.setDisplay("on")
-
-        then: "setDisplay API call was made"
-        testParent.allRequests.find { it.method == "setDisplay" } != null
+        where:
+        driverMethod   | attr        | apiMethod
+        "setChildLock" | "childLock" | "setChildLock"
+        "setDisplay"   | "display"   | "setDisplay"
     }
 
     // -------------------------------------------------------------------------
     // BP18: null-guard on Vital lib setters
     // -------------------------------------------------------------------------
 
-    def "BP18: setMode(null) returns silently with logWarn (no API call)"() {
+    @Unroll
+    def "BP18: #driverMethod(null) returns silently with logWarn (no API call)"() {
         when:
-        driver.setMode(null)
+        driver."$driverMethod"(null)
 
-        then: "no setPurifierMode API call was made"
-        testParent.allRequests.find { it.method == "setPurifierMode" } == null
+        then: "no #apiMethod API call was made"
+        testParent.allRequests.find { it.method == apiMethod } == null
 
         and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setMode") }
-    }
+        testLog.warns.any { it.contains(driverMethod) }
 
-    def "BP18: setSpeed(null) returns silently with logWarn (no API call)"() {
-        when:
-        driver.setSpeed(null)
-
-        then: "no setLevel API call was made"
-        testParent.allRequests.find { it.method == "setLevel" } == null
-
-        and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setSpeed") }
-    }
-
-    def "BP18: setDisplay(null) returns silently with logWarn (no API call)"() {
-        when:
-        driver.setDisplay(null)
-
-        then: "no setDisplay API call was made"
-        testParent.allRequests.find { it.method == "setDisplay" } == null
-
-        and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setDisplay") }
-    }
-
-    def "BP18: setChildLock(null) returns silently with logWarn (no API call)"() {
-        when:
-        driver.setChildLock(null)
-
-        then: "no setChildLock API call was made"
-        testParent.allRequests.find { it.method == "setChildLock" } == null
-
-        and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setChildLock") }
-    }
-
-    def "BP18: setAutoPreference(null) returns silently with logWarn (no API call)"() {
-        when:
-        driver.setAutoPreference(null)
-
-        then: "no setAutoPreference API call was made"
-        testParent.allRequests.find { it.method == "setAutoPreference" } == null
-
-        and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setAutoPreference") }
-    }
-
-    def "BP18: setPetMode(null) returns silently with logWarn (no API call)"() {
-        when:
-        driver.setPetMode(null)
-
-        then: "no setPurifierMode API call was made"
-        testParent.allRequests.find { it.method == "setPurifierMode" } == null
-
-        and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setPetMode") }
-    }
-
-    def "BP18: setRoomSize(null) returns silently with logWarn (no API call)"() {
-        when:
-        driver.setRoomSize(null)
-
-        then: "no setAutoPreference API call was made"
-        testParent.allRequests.find { it.method == "setAutoPreference" } == null
-
-        and: "logWarn fired with the method name"
-        testLog.warns.any { it.contains("setRoomSize") }
+        where:
+        driverMethod        | apiMethod
+        "setMode"           | "setPurifierMode"
+        "setSpeed"          | "setLevel"
+        "setDisplay"        | "setDisplay"
+        "setChildLock"      | "setChildLock"
+        "setAutoPreference" | "setAutoPreference"
+        "setPetMode"        | "setPurifierMode"
+        "setRoomSize"       | "setAutoPreference"
     }
 
     // ---- BP25: setPetMode (VitalPurifierLib shared) ----
 
-    def "BP25: setPetMode('ON') sends setPurifierMode with workMode:'pet', not 'auto' (BP25 regression guard)"() {
-        // Pre-fix: (onOff=="on") where onOff="ON" evaluates false → setMode("auto") instead of "pet".
-        // Post-fix: toLowerCase() normalizes "ON"→"on" → setMode("pet").
+    @Unroll
+    def "BP25: setPetMode('#input') sends setPurifierMode with workMode:'#expectedWorkMode' (BP25 regression guard)"() {
+        // Pre-fix: (onOff=="on") where onOff="ON" evaluates false → wrong workMode.
+        // Post-fix: toLowerCase() normalizes case → correct workMode (pet for on, auto for off).
         // setMode has an off-state guard; seed switch='on' so the guard passes.
         given:
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
 
         when:
-        driver.setPetMode("ON")
+        driver.setPetMode(input)
 
-        then: "setPurifierMode sent with workMode:'pet' (not 'auto')"
+        then: "setPurifierMode sent with workMode:'#expectedWorkMode'"
         def req = testParent.allRequests.find { it.method == "setPurifierMode" }
         req != null
-        req.data.workMode == "pet"
-    }
+        req.data.workMode == expectedWorkMode
 
-    def "BP25: setPetMode('OFF') sends setPurifierMode with workMode:'auto' (BP25 regression guard)"() {
-        given:
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "switch", value: "on"])
-
-        when:
-        driver.setPetMode("OFF")
-
-        then: "setPurifierMode sent with workMode:'auto'"
-        def req = testParent.allRequests.find { it.method == "setPurifierMode" }
-        req != null
-        req.data.workMode == "auto"
+        where:
+        input | expectedWorkMode
+        "ON"  | "pet"
+        "OFF" | "auto"
     }
 
     def "BP25: setSpeed('OFF') routes to off() sending setSwitch powerSwitch:0 (BP25 regression guard)"() {
@@ -845,8 +795,10 @@ class LevoitVital100SSpec extends HubitatSpec {
     // -----------------------------------------------------------------------
 
     @Unroll
-    def "BP26: setLevel('#badInput') does not throw and does not make a setLevel API call (Vital 100S fallback=0 → off)"() {
-        // safeIntArg maps "abc", "", true to 0. 0 → pct==0 → off() path; no setLevel API call.
+    def "BP28: setLevel('#badInput') is ignored — no off(), no setLevel command (Vital 100S)"() {
+        // BP28 contract: parseLevelOrNull maps "abc"/""/true to null -> ignore (device unchanged).
+        // Previously safeIntArg mapped these to 0 -> pct==0 -> off(); BP28 makes non-numeric a no-op
+        // while explicit 0 still routes to off(). Fails if parseLevelOrNull is removed from setLevel.
         given: "device is on so the auto-on guard does not confuse the assertion"
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
@@ -857,11 +809,26 @@ class LevoitVital100SSpec extends HubitatSpec {
         then: "no exception thrown"
         noExceptionThrown()
 
-        and: "no setLevel (speed) API call — 0 coercion routes to off()"
+        and: "no off() and no setLevel command — non-numeric input ignored"
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
         testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
 
         where:
         badInput << ["abc", "", true]
+    }
+
+    def "BP28: setLevel(0) still routes to off() (Vital 100S explicit-0 contract preserved)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when:
+        driver.setLevel(0)
+
+        then: "off() (setSwitch powerSwitch:0) was sent and no setLevel speed command"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 } != null
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
 
     def "BP26: setLevel('5.7') does not throw and makes a setLevel API call (Vital 100S)"() {
@@ -889,9 +856,12 @@ class LevoitVital100SSpec extends HubitatSpec {
     // -----------------------------------------------------------------------
 
     @Unroll
-    def "BP26: setRoomSize('#badInput') does not throw and makes setAutoPreference API call (Vital 100S)"() {
-        // safeIntArg maps non-numeric to 0; the method sends 0 to the API (no floor on setRoomSize).
+    def "BP26: setRoomSize('#badInput') does not throw and sends roomSize=600 fallback (Vital 100S)"() {
+        // safeIntArg(sz, 600) maps non-numeric input to the 600 fallback (LevoitVitalPurifierLib
+        // setRoomSize). The method sends that fallback to the API as roomSize.
         // Pre-fix: (sz as Integer) on non-numeric threw before the guard could fire.
+        // Regression guard: asserts the actual roomSize payload value (600), so a change to the
+        // fallback constant — or a regression to an unguarded cast — fails this test.
         given:
         settings.descriptionTextEnable = false
 
@@ -901,8 +871,10 @@ class LevoitVital100SSpec extends HubitatSpec {
         then: "no exception thrown"
         noExceptionThrown()
 
-        and: "a setAutoPreference API call was made (not a silent no-op)"
-        testParent.allRequests.find { it.method == "setAutoPreference" } != null
+        and: "a setAutoPreference API call was made with the 600 fallback roomSize"
+        def req = testParent.allRequests.find { it.method == "setAutoPreference" }
+        req != null
+        req.data.roomSize == 600
 
         where:
         badInput << ["abc", "", true]

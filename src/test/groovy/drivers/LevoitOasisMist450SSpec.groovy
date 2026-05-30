@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestParent
 
@@ -788,12 +789,13 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
     // Mode read-path normalization: "auto"/"autoPro"/"humidity" -> "auto"
     // -------------------------------------------------------------------------
 
-    def "applyStatus mode='humidity' normalized to 'auto' (alt-firmware auto alias, pyvesync PR #505)"() {
+    @Unroll
+    def "applyStatus mode='#apiMode' read-path resolves to '#expected' (#note)"() {
         given:
         settings.descriptionTextEnable = false
         def deviceData = [
             enabled: true, humidity: 50, mist_virtual_level: 3, mist_level: 3,
-            mode: "humidity", water_lacks: false, humidity_high: false,
+            mode: apiMode, water_lacks: false, humidity_high: false,
             automatic_stop_reach_target: false, warm_enabled: false, warm_level: 0,
             display: true, configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
         ]
@@ -802,62 +804,15 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         when:
         driver.applyStatus(status)
 
-        then: "mode='humidity' from API is normalized to user-facing 'auto'"
-        lastEventValue("mode") == "auto"
-    }
+        then: "mode='#apiMode' from API resolves to user-facing '#expected'"
+        lastEventValue("mode") == expected
 
-    def "applyStatus mode='autoPro' normalized to 'auto' (Superior-line alias that may appear on some variants)"() {
-        given:
-        settings.descriptionTextEnable = false
-        def deviceData = [
-            enabled: true, humidity: 50, mist_virtual_level: 3, mist_level: 3,
-            mode: "autoPro", water_lacks: false, humidity_high: false,
-            automatic_stop_reach_target: false, warm_enabled: false, warm_level: 0,
-            display: true, configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
-        ]
-        def status = v2StatusEnvelope(deviceData)
-
-        when:
-        driver.applyStatus(status)
-
-        then: "mode='autoPro' from API is normalized to user-facing 'auto'"
-        lastEventValue("mode") == "auto"
-    }
-
-    def "applyStatus mode='auto' passes through unchanged (std-firmware canonical)"() {
-        given:
-        settings.descriptionTextEnable = false
-        def deviceData = [
-            enabled: true, humidity: 50, mist_virtual_level: 3, mist_level: 3,
-            mode: "auto", water_lacks: false, humidity_high: false,
-            automatic_stop_reach_target: false, warm_enabled: false, warm_level: 0,
-            display: true, configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
-        ]
-        def status = v2StatusEnvelope(deviceData)
-
-        when:
-        driver.applyStatus(status)
-
-        then: "mode='auto' passes through as 'auto'"
-        lastEventValue("mode") == "auto"
-    }
-
-    def "applyStatus mode='sleep' passes through unchanged"() {
-        given:
-        settings.descriptionTextEnable = false
-        def deviceData = [
-            enabled: true, humidity: 50, mist_virtual_level: 3, mist_level: 3,
-            mode: "sleep", water_lacks: false, humidity_high: false,
-            automatic_stop_reach_target: false, warm_enabled: false, warm_level: 0,
-            display: true, configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
-        ]
-        def status = v2StatusEnvelope(deviceData)
-
-        when:
-        driver.applyStatus(status)
-
-        then: "mode='sleep' passes through unchanged"
-        lastEventValue("mode") == "sleep"
+        where:
+        apiMode    | expected || note
+        "humidity" | "auto"   || "alt-firmware auto alias, pyvesync PR #505"
+        "autoPro"  | "auto"   || "Superior-line alias that may appear on some variants"
+        "auto"     | "auto"   || "std-firmware canonical passes through"
+        "sleep"    | "sleep"  || "non-auto mode passes through unchanged"
     }
 
     // -------------------------------------------------------------------------
@@ -1216,58 +1171,27 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
     // WEU gate: all commands no-op when variant != WEU
     // -------------------------------------------------------------------------
 
-    def "setNightlightSwitch no-ops with INFO log when deviceType is NOT LUH-O451S-WEU"() {
-        given: "a US variant (default -- state.deviceType not set or not WEU)"
+    @Unroll
+    def "#desc no-ops with INFO log when deviceType is NOT LUH-O451S-WEU (#variant)"() {
+        given: "a non-WEU variant"
         settings.descriptionTextEnable = true
-        state.deviceType = "LUH-O451S-WUS"
+        state.deviceType = variant
 
         when:
-        driver.setNightlightSwitch("on")
+        invoke.call(driver)
 
         then: "no API call sent"
         testParent.allRequests.isEmpty()
 
         and: "INFO log mentions unsupported / variant"
         testLog.infos.any { it.contains("not supported") || it.contains("variant") || it.contains("ignoring") }
-    }
 
-    def "setColor no-ops with INFO log when deviceType is NOT LUH-O451S-WEU"() {
-        given:
-        settings.descriptionTextEnable = true
-        state.deviceType = "LUH-O451S-WUS"
-
-        when:
-        driver.setColor([hue: 50, saturation: 100, level: 80])
-
-        then:
-        testParent.allRequests.isEmpty()
-        testLog.infos.any { it.contains("not supported") || it.contains("variant") || it.contains("ignoring") }
-    }
-
-    def "setHue no-ops with INFO log when deviceType is NOT LUH-O451S-WEU"() {
-        given:
-        settings.descriptionTextEnable = true
-        state.deviceType = "LUH-O601S-KUS"
-
-        when:
-        driver.setHue(75)
-
-        then:
-        testParent.allRequests.isEmpty()
-        testLog.infos.any { it.contains("not supported") || it.contains("variant") || it.contains("ignoring") }
-    }
-
-    def "setSaturation no-ops with INFO log when deviceType is NOT LUH-O451S-WEU"() {
-        given:
-        settings.descriptionTextEnable = true
-        state.deviceType = "LUH-O601S-WUS"
-
-        when:
-        driver.setSaturation(50)
-
-        then:
-        testParent.allRequests.isEmpty()
-        testLog.infos.any { it.contains("not supported") || it.contains("variant") || it.contains("ignoring") }
+        where:
+        desc                  | variant          | invoke
+        "setNightlightSwitch" | "LUH-O451S-WUS"  | { d -> d.setNightlightSwitch("on") }
+        "setColor"            | "LUH-O451S-WUS"  | { d -> d.setColor([hue: 50, saturation: 100, level: 80]) }
+        "setHue"              | "LUH-O601S-KUS"  | { d -> d.setHue(75) }
+        "setSaturation"       | "LUH-O601S-WUS"  | { d -> d.setSaturation(50) }
     }
 
     def "setNightlightSwitch no-ops when state.deviceType is null (uninitialized)"() {
@@ -1587,68 +1511,24 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
     // colorSliderLocation: nearest-point match assertions
     // -------------------------------------------------------------------------
 
-    def "colorSliderLocation returns 0 for exact Red anchor (252,50,0)"() {
+    @Unroll
+    def "colorSliderLocation returns #expected for exact #anchor anchor (#r,#g,#b)"() {
         when:
-        int loc = driver.colorSliderLocation(252, 50, 0)
+        int loc = driver.colorSliderLocation(r, g, b)
 
         then:
-        loc == 0
-    }
+        loc == expected
 
-    def "colorSliderLocation returns 14 for exact Orange anchor (255,171,2)"() {
-        when:
-        int loc = driver.colorSliderLocation(255, 171, 2)
-
-        then:
-        loc == 14
-    }
-
-    def "colorSliderLocation returns 29 for exact Yellow-Green anchor (181,255,0)"() {
-        when:
-        int loc = driver.colorSliderLocation(181, 255, 0)
-
-        then:
-        loc == 29
-    }
-
-    def "colorSliderLocation returns 43 for exact Green anchor (2,255,120)"() {
-        when:
-        int loc = driver.colorSliderLocation(2, 255, 120)
-
-        then:
-        loc == 43
-    }
-
-    def "colorSliderLocation returns 57 for exact Cyan anchor (3,200,254)"() {
-        when:
-        int loc = driver.colorSliderLocation(3, 200, 254)
-
-        then:
-        loc == 57
-    }
-
-    def "colorSliderLocation returns 71 for exact Blue anchor (0,40,255)"() {
-        when:
-        int loc = driver.colorSliderLocation(0, 40, 255)
-
-        then:
-        loc == 71
-    }
-
-    def "colorSliderLocation returns 86 for exact Purple anchor (220,0,255)"() {
-        when:
-        int loc = driver.colorSliderLocation(220, 0, 255)
-
-        then:
-        loc == 86
-    }
-
-    def "colorSliderLocation returns 100 for exact Pink anchor (254,0,60)"() {
-        when:
-        int loc = driver.colorSliderLocation(254, 0, 60)
-
-        then:
-        loc == 100
+        where:
+        anchor         | r   | g   | b   || expected
+        "Red"          | 252 | 50  | 0   || 0
+        "Orange"       | 255 | 171 | 2   || 14
+        "Yellow-Green" | 181 | 255 | 0   || 29
+        "Green"        | 2   | 255 | 120 || 43
+        "Cyan"         | 3   | 200 | 254 || 57
+        "Blue"         | 0   | 40  | 255 || 71
+        "Purple"       | 220 | 0   | 255 || 86
+        "Pink"         | 254 | 0   | 60  || 100
     }
 
     def "colorSliderLocation for off-anchor pure blue (0,0,255) returns location nearest to Blue anchor"() {
@@ -1909,7 +1789,8 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
 
     // ---- BP24-B: auto-on-from-off regression guards ----
 
-    def "setMistLevel from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
+    @Unroll
+    def "#desc from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
         given: "device is off, turningOn flag not set"
         settings.descriptionTextEnable = false
         state.remove("turningOn")
@@ -1923,56 +1804,18 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         driver.applyStatus(v2StatusEnvelope(offData))
         testParent.allRequests.clear()
 
-        when: "setMistLevel called while device is off"
-        driver.setMistLevel(3)
+        when: "#desc called while device is off"
+        invoke.call(driver)
 
         then: "setSwitch(enabled:true) was sent -- Classic-family payload (auto-on via ensureSwitchOn)"
         def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
         onReq != null
-    }
 
-    def "setWarmMistLevel from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
-        given: "device is off, turningOn flag not set"
-        settings.descriptionTextEnable = false
-        state.remove("turningOn")
-        def offData = [
-            enabled: false, humidity: 45, mist_virtual_level: 0, mist_level: 0,
-            mode: "manual", water_lacks: false, humidity_high: false,
-            warm_enabled: false, warm_level: 0, display: false,
-            automatic_stop_reach_target: false,
-            configuration: [auto_target_humidity: 55, display: false, automatic_stop: false]
-        ]
-        driver.applyStatus(v2StatusEnvelope(offData))
-        testParent.allRequests.clear()
-
-        when: "setWarmMistLevel called while device is off"
-        driver.setWarmMistLevel(2)
-
-        then: "setSwitch(enabled:true) was sent -- Classic-family payload (auto-on via ensureSwitchOn)"
-        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
-        onReq != null
-    }
-
-    def "setMode('auto') from off-state triggers on() via ensureSwitchOn() (BP24-B)"() {
-        given: "device is off, turningOn flag not set"
-        settings.descriptionTextEnable = false
-        state.remove("turningOn")
-        def offData = [
-            enabled: false, humidity: 45, mist_virtual_level: 0, mist_level: 0,
-            mode: "manual", water_lacks: false, humidity_high: false,
-            warm_enabled: false, warm_level: 0, display: false,
-            automatic_stop_reach_target: false,
-            configuration: [auto_target_humidity: 55, display: false, automatic_stop: false]
-        ]
-        driver.applyStatus(v2StatusEnvelope(offData))
-        testParent.allRequests.clear()
-
-        when: "setMode called while device is off"
-        driver.setMode("auto")
-
-        then: "setSwitch(enabled:true) was sent -- Classic-family payload (auto-on via ensureSwitchOn)"
-        def onReq = testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true }
-        onReq != null
+        where:
+        desc               | invoke
+        "setMistLevel"     | { d -> d.setMistLevel(3) }
+        "setWarmMistLevel" | { d -> d.setWarmMistLevel(2) }
+        "setMode('auto')"  | { d -> d.setMode("auto") }
     }
 
     // ---- BP25: setNightlightSwitch (RGB-variant gate-guarded, WEU variant only) ----
@@ -2147,12 +1990,13 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
     // Restoring the guard emits the WARN and all three assertions pass.
     // -------------------------------------------------------------------------
 
-    def "P1: setWarmMistLevel(null) does not throw and logs a warn (OasisMist 450S)"() {
+    @Unroll
+    def "P1: #method(null) does not throw and logs a warn (OasisMist 450S)"() {
         given:
         settings.descriptionTextEnable = false
 
-        when: "setWarmMistLevel called with null (Rule Machine blank slot)"
-        driver.setWarmMistLevel(null)
+        when: "#method called with null (Rule Machine blank slot)"
+        invoke.call(driver)
 
         then: "no exception thrown"
         noExceptionThrown()
@@ -2161,41 +2005,13 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         testParent.allRequests.isEmpty()
 
         and: "a warning was logged naming the method"
-        testLog.warns.any { it.contains("setWarmMistLevel") }
-    }
+        testLog.warns.any { it.contains(method) }
 
-    def "P1: setHue(null) does not throw and logs a warn (OasisMist 450S)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when: "setHue called with null (Rule Machine blank slot)"
-        driver.setHue(null)
-
-        then: "no exception thrown"
-        noExceptionThrown()
-
-        and: "no API call was made"
-        testParent.allRequests.isEmpty()
-
-        and: "a warning was logged naming the method"
-        testLog.warns.any { it.contains("setHue") }
-    }
-
-    def "P1: setSaturation(null) does not throw and logs a warn (OasisMist 450S)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when: "setSaturation called with null (Rule Machine blank slot)"
-        driver.setSaturation(null)
-
-        then: "no exception thrown"
-        noExceptionThrown()
-
-        and: "no API call was made"
-        testParent.allRequests.isEmpty()
-
-        and: "a warning was logged naming the method"
-        testLog.warns.any { it.contains("setSaturation") }
+        where:
+        method             | invoke
+        "setWarmMistLevel" | { d -> d.setWarmMistLevel(null) }
+        "setHue"           | { d -> d.setHue(null) }
+        "setSaturation"    | { d -> d.setSaturation(null) }
     }
 
     // -------------------------------------------------------------------------
@@ -2283,5 +2099,40 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
 
         and: "no error was logged"
         testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // BP28 regression guard: non-numeric mist value must NOT turn device off.
+    // Non-vacuity: (a) FAILS on pre-fix code (safeIntArg("garbage",0)->0->off());
+    // PASSES post-fix (parseLevelOrNull->null->ignore). (b) guards explicit-0 contract.
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel('garbage') is ignored — no off(), no cloud command (BP28)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel called with a non-numeric typo"
+        driver.setMistLevel("garbage")
+
+        then: "nothing was sent to the cloud (no off(), no setVirtualLevel)"
+        testParent.allRequests.isEmpty()
+    }
+
+    def "setMistLevel(0) still calls off() (BP28 explicit-0 contract preserved)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel(0) is called"
+        driver.setMistLevel(0)
+
+        then: "off() (setSwitch) was sent"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "no setVirtualLevel mist command was sent"
+        testParent.allRequests.every { it.method != "setVirtualLevel" }
     }
 }

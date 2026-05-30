@@ -62,6 +62,7 @@ SOFTWARE.
 #include level99.LevoitDiagnostics
 #include level99.LevoitChildBase
 #include level99.LevoitCorePurifier
+#include level99.LevoitCoreAQPurifier
 
 metadata {
     definition(
@@ -69,7 +70,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson and elfege (contributor)",
         description: "Supports controlling the Levoit 400S air purifier",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -117,335 +118,22 @@ metadata {
     }
 }
 
-def updated() {
-	logDebug "Updated with settings: ${settings}"
-    state.clear()
-    unschedule()
-	initialize()
+// Core 400S supports auto mode — setSpeed/setMode (provided by the lib) enable the
+// auto branch + 3-value allowed-mode set via this hook (Bucket B2/B3, #142 Phase 2d).
+private boolean supportsAutoMode() { true }
 
-    runIn(3, "update")
-
-    // Turn off debug log in 30 minutes (happy path — no hub reboot)
-    if (settings?.debugOutput) {
-        runIn(1800, "logDebugOff")
-        state.debugEnabledAt = now()
-    } else {
-        state.remove("debugEnabledAt")
-    }
-}
-
-def on() {
-    logDebug "on()"
-
-    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
-    state.turningOn = true
-    try {
-        handlePower(true)
-        logInfo "Power on"
-        handleEvent("switch", "on")
-
-        if (state.speed != null) {
-            setSpeed(state.speed)
-        }
-        else {
-            setSpeed("low")
-        }
-
-        if (state.mode != null) {
-            setMode(state.mode)
-        }
-        else {
-            update()
-        }
-    } finally {
-        state.remove('turningOn')
-    }
-}
-
-def off() {
-    logDebug "off()"
-
-    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
-    state.turningOff = true
-    try {
-        handlePower(false)
-        logInfo "Power off"
-        handleEvent("switch", "off")
-        handleEvent("speed", "off")
-    } finally {
-        state.remove('turningOff')
-    }
-}
-
-def cycleSpeed() {
-    logDebug "cycleSpeed()"
-    ensureSwitchOn()
-
-    def speed = "low";
-
-    switch(state.speed) {
-        case "low":
-            speed = "medium";
-            break;
-        case "medium":
-            speed = "high";
-            break;
-        case "high":
-            speed = "max";
-            break;
-        case "max":
-            speed = "low";
-            break;
-    }
-
-    setSpeed(speed)
-}
-
-// 2-arg setLevel overload — Hubitat SwitchLevel capability standard signature.
-// VeSync devices do NOT support hardware-level fade/duration, so the duration
-// parameter is intentionally ignored. Delegates to the 1-arg version.
-// Without this overload, any caller using the standard 2-arg form (Rule Machine
-// with duration, dashboard tiles, MCP setLevel(N, D), third-party apps) throws
-// MissingMethodException — Hubitat sandbox catches it silently and the command
-// fails without user feedback.
-def setLevel(value, duration)
-{
-    setLevel(value)
-}
-
-def setLevel(value)
-{
-    logDebug "setLevel $value"
-    // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
-    Integer pct = safeIntArg(value, 0, 0, 100)
-    // SwitchLevel convention: setLevel(0) means off (Z-Wave dimmer platform expectation).
-    if (pct == 0) { off(); return }
-    // BP23: auto-on when switch is off (SwitchLevel capability convention).
-    // state.turningOn re-entrance guard is inside ensureSwitchOn().
-    ensureSwitchOn()
-    def speed = 0
-    setMode("manual") // always manual if setLevel() cmd was called
-
-    if(pct < 25) speed = 1
-    if(pct >= 25 && pct < 50) speed = 2
-    if(pct >= 50 && pct < 75) speed = 3
-    if(pct >= 75) speed = 4
-
-    device.sendEvent(name: "level", value: pct)
-    setSpeed(speed)
-}
-
-def setSpeed(speed) {
-    logDebug "setSpeed(${speed})"
-    if (!requireNonEmptyEnum(speed, "setSpeed")) return false                   // BP18 null/empty-guard
-    String s = (speed as String).trim().toLowerCase()
-    // Remap integer-string values from setLevel() path to named speed strings.
-    // setLevel() passes Integer 1-4; (speed as String) yields "1"-"4".
-    // Emit named speeds ("low"/"medium"/"high"/"max") for attribute consistency.
-    if (s in ["1", "2", "3", "4"]) s = mapIntegerStringToSpeed(s)
-    // Power short-circuits BEFORE ensureSwitchOn — setSpeed("off") must NOT auto-on first
-    if (s == "off") { off(); return }
-    ensureSwitchOn()                                                             // BP24-B auto-on (after short-circuit)
-    if (s == "auto") {
-        setMode(s)
-        state.speed = s
-        handleEvent("speed", s)
-    }
-    else if (s == "sleep") {
-        setMode(s)
-        handleEvent("speed", "on")
-    }
-    else if (state.mode == "manual") {
-        handleSpeed(s)
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
-    }
-    else if (state.mode == "sleep") {
-        setMode("manual")
-        handleSpeed(s)
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
-    }
-    else {
-        // Recover: unknown or null state.mode (e.g. fresh device, pre-first-poll).
-        // Guard against on() re-entrancy: when state.turningOn is set we are inside on()'s
-        // own setSpeed call — skip mode establishment to avoid issuing a spurious
-        // setPurifierMode that would clobber a concurrently-dispatched setMode command.
-        // on() will call setMode(state.mode) or update() after this setSpeed returns.
-        if (!state.turningOn) {
-            handleMode("manual")
-            state.mode = "manual"
-            handleEvent("mode", "manual")
-        }
-        handleSpeed(s)
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
-    }
-}
-
-def setMode(mode) {
-    logDebug "setMode(${mode})"
-    if (!requireNonEmptyEnum(mode, "setMode")) return false                     // BP18 null/empty-guard
-    String m = (mode as String).trim().toLowerCase()
-    if (!(m in ["manual", "sleep", "auto"])) {                                  // reject invalid BEFORE auto-on
-        logWarn "setMode: invalid mode '${m}' -- must be one of: manual, sleep, auto; ignoring"
-        return false
-    }
-    ensureSwitchOn()                                                             // BP24-B auto-on (after rejection checks)
-
-    handleMode(m)
-    state.mode = m
-	handleEvent("mode", m)
-    logInfo "Mode: ${m}"
-
-    switch(m)
-    {
-        case "manual":
-            handleEvent("speed",  state.speed)
-            break;
-        case "auto":
-            handleEvent("speed",  "auto")
-            break;
-        case "sleep":
-            handleEvent("speed",  "on")
-            break;
-    }
-}
-
-def mapSpeedToInteger(speed) {
-    switch(speed)
-    {
-        case "1":
-        case "low":
-            return 1;
-        case "2":
-        case "medium":
-            return 2;
-        case "3":
-        case "high":
-            return 3;
-    }
-    return 4;
-}
-
-def mapIntegerStringToSpeed(speed) {
-    switch(speed)
-    {
-        case "1":
-            return "low";
-        case "2":
-            return "medium";
-        case "3":
-            return "high";
-        case "4":
-            return "max";
-    }
-    return "max";
-}
-
-def mapIntegerToSpeed(speed) {
-    switch(speed)
-    {
-        case 1:
-            return "low";
-        case 2:
-            return "medium";
-        case 3:
-            return "high";
-    }
-    return "max";
-}
+// Speed-band table for Core 400S (4-band). Index = API integer level, value = named band.
+// Consumed by the lib's table-driven mapSpeedToInteger/mapIntegerToSpeed/
+// mapIntegerStringToSpeed helpers (Bucket B1, #142 Phase 2c).
+private Map getSpeedBands() { [1:"low", 2:"medium", 3:"high", 4:"max"] }
 
 // logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog, ensureSwitchOn
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
-// installed, uninstalled, initialize, toggle, setDisplay, handlePower, handleSpeed,
-// handleMode, handleDisplayOn, setChildLock, setTimer, cancelTimer, resetFilter,
-// checkHttpResponse, setAutoMode, handleAutoMode, handleEvent, updateAQIandFilter,
-// convertRange are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
+// installed, uninstalled, initialize, updated, on, off, toggle, setDisplay, handlePower,
+// handleSpeed, handleMode, handleDisplayOn, setChildLock, setTimer, cancelTimer, resetFilter,
+// checkHttpResponse, setLevel(value, duration), setLevel(value), cycleSpeed, mapSpeedToInteger,
+// mapIntegerToSpeed, mapIntegerStringToSpeed, setSpeed, setMode, handleEvent
+// are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
+// update, update(status, nightLight), setAutoMode, handleAutoMode, updateAQIandFilter,
+// convertRange are provided by #include level99.LevoitCoreAQPurifier (LevoitCoreAQPurifierLib.groovy).
 
-def update() {
-
-    logDebug "update()"
-
-    def result = null
-
-    parent.sendBypassRequest(device,  [
-                "method": "getPurifierStatus",
-                "source": "APP",
-                "data": [:]
-            ]) { resp ->
-			if (checkHttpResponse("update", resp))
-			{
-                def status = resp.data.result
-                if (status == null) {
-                    logError "No status returned from getPurifierStatus: ${resp.msg}"
-                    recordError("No status returned from getPurifierStatus", [site:"update"])
-                } else
-                    result = update(status, null)
-			}
-		}
-    return result
-}
-
-def update(status, nightLight)
-{
-    ensureDebugWatchdog()
-    logDebug "update(status, nightLight)"
-    // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
-
-    logDebug status
-
-    def speed = mapIntegerToSpeed(status.result.level)
-    def mode = status.result.mode
-    def auto_mode = status?.result?.configuration?.auto_preference?.type
-    def room_size = status?.result?.configuration?.auto_preference?.room_size
-
-    handleEvent("switch", status.result.enabled ? "on" : "off")
-    if (state.mode == null || mode != state.mode)
-        handleEvent("mode",   status.result.mode)
-    if (state.auto_mode == null || auto_mode != state.auto_mode)
-        handleEvent("auto_mode", auto_mode)
-
-    // state.mode must be set BEFORE switch evaluates — see Core 200S line 336/355 for canonical ordering
-    state.speed = speed
-    state.mode = status.result.mode
-    state.auto_mode = auto_mode
-    state.room_size = room_size
-
-    switch(state.mode)
-    {
-        case "manual":
-            handleEvent("speed",  speed)
-            break;
-        case "auto":
-            handleEvent("speed",  "auto")
-            break;
-        case "sleep":
-            handleEvent("speed",  "on")
-            break;
-    }
-
-    // New v2.3 fields: child_lock, display, timer, pm25, airQualityIndex
-    if (status.result?.child_lock != null)
-        handleEvent("childLock", status.result.child_lock ? "on" : "off")
-    if (status.result?.display != null)
-        handleEvent("display", status.result.display ? "on" : "off")
-    if (status.result?.extension?.timer_remain != null)
-        handleEvent("timerRemain", status.result.extension.timer_remain as Integer)
-    if (status.result?.air_quality_value != null)
-        handleEvent("pm25", status.result.air_quality_value as Integer)
-    if (status.result?.air_quality != null)
-        handleEvent("airQualityIndex", status.result.air_quality as Integer)
-
-    if (status.result?.air_quality_value != null)
-        updateAQIandFilter(status.result.air_quality_value.toString(), status.result.filter_life)
-}

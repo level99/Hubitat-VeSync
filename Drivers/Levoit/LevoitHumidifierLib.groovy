@@ -25,12 +25,14 @@ library(
     importUrl: "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/LevoitHumidifierLib.groovy"
 )
 
-// REQUIRES: #include level99.LevoitDiagnostics  (provides recordError used in update() + httpOk())
-// REQUIRES: #include level99.LevoitChildBase    (provides logInfo/logDebug/logError, ensureDebugWatchdog)
+// REQUIRES: #include level99.LevoitDiagnostics  (provides recordError used in update())
+// REQUIRES: #include level99.LevoitChildBase    (provides logInfo/logDebug/logError, ensureDebugWatchdog,
+//                                                hubBypass, httpOk)
 // PROVIDES: cross-family infrastructure + V2-line and Classic-family shared helpers:
 //   Lifecycle: installed, updated, uninstalled, initialize, refresh
 //   Polling: update() (no-arg), update(status) (1-arg), update(status, nightLight) (2-arg)
-//   Power: toggle (lastSwitchSet preferred-state pattern)
+//   Power: on, off (payload parameterized via per-driver powerPayload(boolean) hook),
+//          toggle (lastSwitchSet preferred-state pattern)
 //   HTTP plumbing: hubBypass, httpOk
 //   V2-line shared bodies (OM1000S + Sprout + Sup6000S + LV600SHC for setDisplay):
 //     doSetDisplayScreenSwitch — {screenSwitch: int} payload, emits displayOn
@@ -48,7 +50,8 @@ library(
 //   Groovy "duplicate method signature" conflicts.
 //
 // Per-driver methods retained (intentional family divergence):
-//   on/off (Classic vs V2 payload), setMode (5 wire-value variants),
+//   powerPayload(boolean) hook (Classic {enabled,id} vs V2 {powerSwitch,switchIdx}),
+//   setMode (5 wire-value variants),
 //   setMistLevel (range + payload varies), setWarmMistLevel (3 drivers, 2 shapes),
 //   setChildLock/setDryingMode (Sprout+Sup6000S only),
 //   nightlight methods (per-driver), applyStatus (structurally family-divergent),
@@ -98,6 +101,39 @@ def refresh() {
     update()
 }
 
+// ---- Power ----
+// Shared on()/off() bodies. The only per-driver difference is the setSwitch payload, supplied
+// by the powerPayload(boolean) hook each driver declares:
+//   Classic family (Classic 200S/300S, Dual 200S, OasisMist 450S, LV600S): {enabled: bool, id: 0}
+//   V2 family (LV600S HubConnect, OasisMist 1000S, Sprout, Superior 6000S):
+//                                                                  {powerSwitch: 0|1, switchIdx: 0}
+// The diagnostic tag string passed as hubBypass's 3rd arg is derived from the payload so it stays
+// accurate per-family without a second hook (the tag is a log string only; specs assert req.data,
+// not the tag). state.turningOn re-entrance guard on on() prevents the
+// ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn() recursion.
+// Each driver MUST declare: Map powerPayload(boolean on) { ... }
+def on(){
+    logDebug "on()"
+    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    state.turningOn = true
+    try {
+        Map payload = powerPayload(true)
+        def resp = hubBypass("setSwitch", payload, "setSwitch(${payload})")
+        if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
+        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+    } finally {
+        state.turningOn = false
+    }
+}
+
+def off(){
+    logDebug "off()"
+    Map payload = powerPayload(false)
+    def resp = hubBypass("setSwitch", payload, "setSwitch(${payload})")
+    if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
+    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+}
+
 // ---- Toggle ----
 // state.lastSwitchSet preferred over device.currentValue() to avoid the read-after-write
 // race (the new event from on()/off() may not be queryable yet on a same-tick toggle()).
@@ -140,30 +176,7 @@ def update(status, nightLight) {
 
 // ---- HTTP plumbing ----
 
-// Hub/parent call wrapper — matches sibling driver pattern
-private hubBypass(method, Map data=[:], tag=null, cb=null) {
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp) {
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]) {
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// hubBypass, httpOk are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 
 // ---- V2-line shared feature setters ----
 // Used by OM1000S, Sprout, Sup6000S, LV600SHC (setDisplay only).
@@ -184,7 +197,7 @@ def doSetDisplayScreenSwitch(onOff) {
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off",
     // never the raw normalized input ("true", "1", "yes"). The C3 gate compares canonical
     // vs canonical so truthy-variant input does not defeat same-state suppression.
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("displayOn") == canon) return true
     Integer v = (canon == "on") ? 1 : 0
     def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay(${canon})")
@@ -204,7 +217,7 @@ def doSetAutoStopSwitch(onOff) {
     if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
     String val = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("autoStopEnabled") == canon) return true
     Integer v = (canon == "on") ? 1 : 0
     def resp = hubBypass("setAutoStopSwitch", [autoStopSwitch: v], "setAutoStopSwitch(${canon})")
@@ -256,7 +269,7 @@ def doSetDisplayStateSwitch(onOff) {
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off",
     // never the raw normalized input ("true", "1", "yes"). The C3 gate compares canonical
     // vs canonical so truthy-variant input does not defeat same-state suppression.
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("displayOn") == canon) return true
     Boolean v = (canon == "on")
     def resp = hubBypass("setDisplay", [state: v], "setDisplay(${canon})")
@@ -278,7 +291,7 @@ def doSetAutoStopEnabled(onOff) {
     if (!requireNonEmptyEnum(onOff, "setAutoStop")) return false
     String val = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("autoStopEnabled") == canon) return true
     Boolean v = (canon == "on")
     def resp = hubBypass("setAutomaticStop", [enabled: v], "setAutomaticStop(${canon})")

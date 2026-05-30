@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestParent
 
@@ -327,24 +328,18 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
         !call.data.containsKey("mode") // NOT {mode: 'auto'} (VeSyncHumid200300S style)
     }
 
-    def "setMode('sleep') sends workMode='sleep'"() {
+    @Unroll
+    def "setMode('#mode') sends workMode='#mode'"() {
         when:
-        driver.setMode("sleep")
+        driver.setMode(mode)
 
         then:
         def call = testParent.allRequests.find { it.method == "setHumidityMode" }
         call != null
-        call.data.workMode == "sleep"
-    }
+        call.data.workMode == mode
 
-    def "setMode('manual') sends workMode='manual'"() {
-        when:
-        driver.setMode("manual")
-
-        then:
-        def call = testParent.allRequests.find { it.method == "setHumidityMode" }
-        call != null
-        call.data.workMode == "manual"
+        where:
+        mode << ["sleep", "manual"]
     }
 
     def "setMode with invalid mode logs error and does not call API"() {
@@ -359,9 +354,10 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
     // Mode read-path normalization
     // -------------------------------------------------------------------------
 
-    def "applyStatus workMode='humidity' normalizes to user-facing 'auto'"() {
-        given: "some firmware reports 'humidity' for auto mode"
-        def status = [code: 0, result: [powerSwitch: 1, workMode: "humidity", humidity: 55,
+    @Unroll
+    def "applyStatus workMode='#rawMode' normalizes to user-facing 'auto'"() {
+        given: "some firmware reports '#rawMode' for auto mode"
+        def status = [code: 0, result: [powerSwitch: 1, workMode: rawMode, humidity: 55,
                                         targetHumidity: 60, virtualLevel: 4,
                                         waterLacksState: 0, waterTankLifted: 0,
                                         autoStopSwitch: 1, autoStopState: 0, screenState: 1]]
@@ -370,19 +366,9 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
 
         then:
         lastEventValue("mode") == "auto"
-    }
 
-    def "applyStatus workMode='autoPro' normalizes to user-facing 'auto'"() {
-        given:
-        def status = [code: 0, result: [powerSwitch: 1, workMode: "autoPro", humidity: 55,
-                                        targetHumidity: 60, virtualLevel: 4,
-                                        waterLacksState: 0, waterTankLifted: 0,
-                                        autoStopSwitch: 1, autoStopState: 0, screenState: 1]]
-        when:
-        driver.applyStatus(status)
-
-        then:
-        lastEventValue("mode") == "auto"
+        where:
+        rawMode << ["humidity", "autoPro"]
     }
 
     // -------------------------------------------------------------------------
@@ -637,33 +623,25 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
     //                setNightlight(onOff, N) with explicit brightness → setLightStatus
     // -------------------------------------------------------------------------
 
-    def "setNightlight('on') with no brightness sends setNightLightStatus {nightLightSwitch:1}"() {
+    @Unroll
+    def "setNightlight('#onOff') with no brightness sends setNightLightStatus {nightLightSwitch:#expectedSwitch}"() {
         given:
         state.deviceType = "LUH-M101S-WEUR"
 
         when: "called with only onOff, no brightness arg"
-        driver.setNightlight("on")
+        driver.setNightlight(onOff)
 
         then: "toggle path used (NOT brightness path)"
         def call = testParent.allRequests.find { it.method == "setNightLightStatus" }
         call != null
-        call.data.nightLightSwitch == 1
+        call.data.nightLightSwitch == expectedSwitch
         // Must NOT call setLightStatus (that's the brightness path)
         testParent.allRequests.find { it.method == "setLightStatus" } == null
-    }
 
-    def "setNightlight('off') with no brightness sends setNightLightStatus {nightLightSwitch:0}"() {
-        given:
-        state.deviceType = "LUH-M101S-WEUR"
-
-        when:
-        driver.setNightlight("off")
-
-        then:
-        def call = testParent.allRequests.find { it.method == "setNightLightStatus" }
-        call != null
-        call.data.nightLightSwitch == 0
-        testParent.allRequests.find { it.method == "setLightStatus" } == null
+        where:
+        onOff | expectedSwitch
+        "on"  | 1
+        "off" | 0
     }
 
     def "setNightlight('on', 70) sends setLightStatus {brightness:70, nightLightSwitch:1}"() {
@@ -991,5 +969,40 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
 
         and: "emitted attribute is canonical 'on', not raw 'true'"
         lastEventValue("autoStopEnabled") == "on"
+    }
+
+    // -------------------------------------------------------------------------
+    // BP28 regression guard: non-numeric mist value must NOT turn device off.
+    // Non-vacuity: (a) FAILS on pre-fix (safeIntArg("garbage",0)->0->off());
+    // PASSES post-fix (parseLevelOrNull->null->ignore). (b) guards explicit-0 contract.
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel('garbage') is ignored — no off(), no cloud command (BP28)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel called with a non-numeric typo"
+        driver.setMistLevel("garbage")
+
+        then: "nothing was sent to the cloud (no off(), no mist command)"
+        testParent.allRequests.isEmpty()
+    }
+
+    def "setMistLevel(0) still calls off() (BP28 explicit-0 contract preserved)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel(0) is called"
+        driver.setMistLevel(0)
+
+        then: "off() (setSwitch) was sent"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "no virtualLevel mist command was sent"
+        testParent.allRequests.every { it.method != "virtualLevel" }
     }
 }

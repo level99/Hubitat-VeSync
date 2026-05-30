@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestParent
 
@@ -712,33 +713,22 @@ class LevoitEverestAirSpec extends HubitatSpec {
         testParent.allRequests.isEmpty()
     }
 
-    def "setDisplay(null) does not throw and emits a WARN log (BP18 — EverestAir requireNotNull added)"() {
+    @Unroll
+    def "#setter(null) does not throw and emits a WARN log (BP18 — EverestAir requireNotNull added)"() {
         // Before the BP25 fix, EverestAir's setDisplay lacked requireNotNull entirely.
         // The BP25 fix adds requireNotNull as the first guard (before the BP25 toLowerCase fix).
         when:
-        driver.setDisplay(null)
+        driver."$setter"(null)
         then:
         noExceptionThrown()
-        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
-        testLog.warns.any { it.contains("setDisplay") || it.contains("null") }
-    }
+        testParent.allRequests.findAll { it.method == apiMethod }.isEmpty()
+        testLog.warns.any { it.contains(setter) || it.contains("null") }
 
-    def "setChildLock(null) does not throw and emits a WARN log (BP18 — EverestAir requireNotNull added)"() {
-        when:
-        driver.setChildLock(null)
-        then:
-        noExceptionThrown()
-        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
-        testLog.warns.any { it.contains("setChildLock") || it.contains("null") }
-    }
-
-    def "setLightDetection(null) does not throw and emits a WARN log (BP18 — EverestAir requireNotNull added)"() {
-        when:
-        driver.setLightDetection(null)
-        then:
-        noExceptionThrown()
-        testParent.allRequests.findAll { it.method == "setLightDetection" }.isEmpty()
-        testLog.warns.any { it.contains("setLightDetection") || it.contains("null") }
+        where:
+        setter              | apiMethod
+        "setDisplay"        | "setDisplay"
+        "setChildLock"      | "setChildLock"
+        "setLightDetection" | "setLightDetection"
     }
 
     // -------------------------------------------------------------------------
@@ -748,69 +738,30 @@ class LevoitEverestAirSpec extends HubitatSpec {
     // suppress; then verify payload carries the correct integer value and event is lowercase.
     // -------------------------------------------------------------------------
 
-    def "BP25: setDisplay('ON') sends screenSwitch:1 (not 0) and emits displayOn='on'"() {
-        // Pre-fix: ("ON" == "on") is false → screenSwitch:0 sent (display off instead of on).
-        // Post-fix: toLowerCase() normalizes "ON" → "on" → screenSwitch:1 (correct).
+    @Unroll
+    def "BP25: #setter('#input') sends #field:#payloadVal and emits #attr='#expectedVal'"() {
+        // Pre-fix: ("ON" == "on") is false → wrong integer payload (inverted value).
+        // Post-fix: toLowerCase() normalizes uppercase → correct integer payload.
         when:
-        driver.setDisplay("ON")
+        driver."$setter"(input)
 
-        then: "setDisplay API call was made"
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        then: "API call was made"
+        def req = testParent.allRequests.find { it.method == apiMethod }
         req != null
 
-        and: "payload carries screenSwitch:1 (on), NOT 0 (off)"
-        req.data.screenSwitch == 1
+        and: "payload carries the correct integer value (not inverted)"
+        req.data[field] == payloadVal
 
-        and: "emitted displayOn event is lowercase 'on'"
-        lastEventValue("displayOn") == "on"
-    }
+        and: "emitted event value is lowercase"
+        lastEventValue(attr) == expectedVal
 
-    def "BP25: setDisplay('OFF') sends screenSwitch:0 (not 1) and emits displayOn='off'"() {
-        when:
-        driver.setDisplay("OFF")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-        req.data.screenSwitch == 0
-        lastEventValue("displayOn") == "off"
-    }
-
-    def "BP25: setChildLock('ON') sends childLockSwitch:1 (not 0) and emits childLock='on'"() {
-        // Pre-fix: ("ON" == "on") is false → childLockSwitch:0 (unlock instead of lock).
-        // Post-fix: normalize → childLockSwitch:1 (correct).
-        when:
-        driver.setChildLock("ON")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
-        req != null
-        req.data.childLockSwitch == 1
-        lastEventValue("childLock") == "on"
-    }
-
-    def "BP25: setLightDetection('ON') sends lightDetectionSwitch:1 (not 0) and emits lightDetection='on'"() {
-        // Pre-fix: ("ON" == "on") is false → lightDetectionSwitch:0 (off instead of on).
-        // Post-fix: normalize → lightDetectionSwitch:1 (correct).
-        when:
-        driver.setLightDetection("ON")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setLightDetection" }
-        req != null
-        req.data.lightDetectionSwitch == 1
-        lastEventValue("lightDetection") == "on"
-    }
-
-    def "BP25: setLightDetection('OFF') sends lightDetectionSwitch:0 (not 1) and emits lightDetection='off'"() {
-        when:
-        driver.setLightDetection("OFF")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setLightDetection" }
-        req != null
-        req.data.lightDetectionSwitch == 0
-        lastEventValue("lightDetection") == "off"
+        where:
+        setter              | apiMethod           | input | field                  | payloadVal | attr             | expectedVal
+        "setDisplay"        | "setDisplay"        | "ON"  | "screenSwitch"         | 1          | "displayOn"      | "on"
+        "setDisplay"        | "setDisplay"        | "OFF" | "screenSwitch"         | 0          | "displayOn"      | "off"
+        "setChildLock"      | "setChildLock"      | "ON"  | "childLockSwitch"      | 1          | "childLock"      | "on"
+        "setLightDetection" | "setLightDetection" | "ON"  | "lightDetectionSwitch" | 1          | "lightDetection" | "on"
+        "setLightDetection" | "setLightDetection" | "OFF" | "lightDetectionSwitch" | 0          | "lightDetection" | "off"
     }
 
     // -------------------------------------------------------------------------
@@ -820,78 +771,29 @@ class LevoitEverestAirSpec extends HubitatSpec {
     // "true" or "1" verbatim in the attribute, failing these assertions.
     // -------------------------------------------------------------------------
 
-    def "BP25-truthy: setDisplay('true') sends screenSwitch:1 and emits displayOn='on' (truthy-canon)"() {
-        // Pre-canon: v="true"; sendEvent(value:"true") stored "true" verbatim — consumers fail.
-        // Post-canon: canon = ("true" in [...]) ? "on" : "off" = "on"; sendEvent(value:"on").
+    @Unroll
+    def "BP25-truthy: #setter('#input') sends #field:1 and emits #attr='on' (truthy-canon)"() {
+        // Pre-canon: v="true"/"1"; sendEvent(value:v) stored truthy variant verbatim — consumers fail.
+        // Post-canon: canon = (v in [...]) ? "on" : "off" = "on"; sendEvent(value:"on").
         when:
-        driver.setDisplay("true")
+        driver."$setter"(input)
 
         then:
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
+        def req = testParent.allRequests.find { it.method == apiMethod }
         req != null
-        req.data.screenSwitch == 1
+        req.data[field] == 1
 
-        and: "emitted attribute is canonical 'on', not raw 'true'"
-        lastEventValue("displayOn") == "on"
-    }
+        and: "emitted attribute is canonical 'on', not raw truthy variant"
+        lastEventValue(attr) == "on"
 
-    def "BP25-truthy: setDisplay('1') sends screenSwitch:1 and emits displayOn='on' (truthy-canon)"() {
-        when:
-        driver.setDisplay("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-        req.data.screenSwitch == 1
-        lastEventValue("displayOn") == "on"
-    }
-
-    def "BP25-truthy: setChildLock('true') sends childLockSwitch:1 and emits childLock='on' (truthy-canon)"() {
-        // Pre-canon: v="true"; sendEvent(value:"true") — consumers comparing to "on" would fail.
-        // Post-canon: canon="on"; sendEvent(value:"on") — correct.
-        when:
-        driver.setChildLock("true")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
-        req != null
-        req.data.childLockSwitch == 1
-        lastEventValue("childLock") == "on"
-    }
-
-    def "BP25-truthy: setChildLock('1') sends childLockSwitch:1 and emits childLock='on' (truthy-canon)"() {
-        when:
-        driver.setChildLock("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
-        req != null
-        req.data.childLockSwitch == 1
-        lastEventValue("childLock") == "on"
-    }
-
-    def "BP25-truthy: setLightDetection('true') sends lightDetectionSwitch:1 and emits lightDetection='on' (truthy-canon)"() {
-        // Pre-canon: v="true"; sendEvent(value:"true") — consumers comparing to "on" would fail.
-        // Post-canon: canon="on"; sendEvent(value:"on") — correct.
-        when:
-        driver.setLightDetection("true")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setLightDetection" }
-        req != null
-        req.data.lightDetectionSwitch == 1
-        lastEventValue("lightDetection") == "on"
-    }
-
-    def "BP25-truthy: setLightDetection('1') sends lightDetectionSwitch:1 and emits lightDetection='on' (truthy-canon)"() {
-        when:
-        driver.setLightDetection("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setLightDetection" }
-        req != null
-        req.data.lightDetectionSwitch == 1
-        lastEventValue("lightDetection") == "on"
+        where:
+        setter              | apiMethod           | input  | field                  | attr
+        "setDisplay"        | "setDisplay"        | "true" | "screenSwitch"         | "displayOn"
+        "setDisplay"        | "setDisplay"        | "1"    | "screenSwitch"         | "displayOn"
+        "setChildLock"      | "setChildLock"      | "true" | "childLockSwitch"      | "childLock"
+        "setChildLock"      | "setChildLock"      | "1"    | "childLockSwitch"      | "childLock"
+        "setLightDetection" | "setLightDetection" | "true" | "lightDetectionSwitch" | "lightDetection"
+        "setLightDetection" | "setLightDetection" | "1"    | "lightDetectionSwitch" | "lightDetection"
     }
 
     // -------------------------------------------------------------------------
@@ -1004,124 +906,68 @@ class LevoitEverestAirSpec extends HubitatSpec {
     // the value already matches the current attribute (EverestAir D1 fix)
     // -------------------------------------------------------------------------
 
-    def "C3: setDisplay with already-current value makes no hubBypass call (EverestAir)"() {
-        // Regression guard: before D1 fix, EverestAir setDisplay had no C3 gate,
-        // so calling setDisplay("on") when the device was already on fired a redundant
-        // cloud call on every Rule Machine "refresh idempotency" evaluation.
-        // This test FAILS on pre-D1-fix code (gate absent → allRequests is non-empty)
-        // and PASSES with the gate present.
-        given: "displayOn attribute is already 'on'"
-        testDevice.events.add([name: "displayOn", value: "on"])
+    // C3 gate is a state-change guard: when the current attribute already matches the
+    // requested value, the cloud call is suppressed; when it differs, the call fires.
+    // FAILS on pre-D1-fix code (gate absent → call always fires).
 
-        when: "setDisplay called with the same value"
-        driver.setDisplay("on")
+    @Unroll
+    def "C3: #setter with already-current value makes no hubBypass call (EverestAir)"() {
+        given: "#attr attribute is already 'on'"
+        testDevice.events.add([name: attr, value: "on"])
 
-        then: "no setDisplay API call was made (C3 gate suppressed it)"
-        testParent.allRequests.findAll { it.method == "setDisplay" }.isEmpty()
+        when: "#setter called with the same value"
+        driver."$setter"("on")
+
+        then: "no #apiMethod API call was made (C3 gate suppressed it)"
+        testParent.allRequests.findAll { it.method == apiMethod }.isEmpty()
         noExceptionThrown()
+
+        where:
+        setter              | apiMethod           | attr
+        "setDisplay"        | "setDisplay"        | "displayOn"
+        "setChildLock"      | "setChildLock"      | "childLock"
+        "setLightDetection" | "setLightDetection" | "lightDetection"
     }
 
-    def "C3: setDisplay with different value does make a hubBypass call (EverestAir)"() {
-        // Confirm the gate is a state-change guard, not a complete no-op.
-        given: "displayOn attribute is 'off'"
-        testDevice.events.add([name: "displayOn", value: "off"])
+    @Unroll
+    def "C3: #setter with different value does make a hubBypass call (EverestAir)"() {
+        given: "#attr attribute is 'off'"
+        testDevice.events.add([name: attr, value: "off"])
 
-        when: "setDisplay called with 'on' (different from current)"
-        driver.setDisplay("on")
+        when: "#setter called with 'on' (different from current)"
+        driver."$setter"("on")
 
-        then: "setDisplay API call was made"
-        testParent.allRequests.any { it.method == "setDisplay" }
-    }
+        then: "#apiMethod API call was made"
+        testParent.allRequests.any { it.method == apiMethod }
 
-    def "C3: setChildLock with already-current value makes no hubBypass call (EverestAir)"() {
-        // Regression guard: parallel to the setDisplay C3 test above.
-        given: "childLock attribute is already 'on'"
-        testDevice.events.add([name: "childLock", value: "on"])
-
-        when: "setChildLock called with the same value"
-        driver.setChildLock("on")
-
-        then: "no setChildLock API call was made (C3 gate suppressed it)"
-        testParent.allRequests.findAll { it.method == "setChildLock" }.isEmpty()
-        noExceptionThrown()
-    }
-
-    def "C3: setChildLock with different value does make a hubBypass call (EverestAir)"() {
-        given: "childLock attribute is 'off'"
-        testDevice.events.add([name: "childLock", value: "off"])
-
-        when: "setChildLock called with 'on'"
-        driver.setChildLock("on")
-
-        then: "setChildLock API call was made"
-        testParent.allRequests.any { it.method == "setChildLock" }
-    }
-
-    // -------------------------------------------------------------------------
-    // C3 idempotency gate — setLightDetection must not re-call API when the value
-    // already matches the current lightDetection attribute (EverestAir)
-    // -------------------------------------------------------------------------
-
-    def "C3: setLightDetection with already-current value makes no hubBypass call (EverestAir)"() {
-        // Regression guard: before this fix, EverestAir setLightDetection had no C3 gate,
-        // so calling setLightDetection("on") when light detection was already on fired a
-        // redundant cloud call on every Rule Machine evaluation.
-        // This test FAILS on pre-fix code (gate absent → allRequests is non-empty)
-        // and PASSES with the gate present.
-        given: "lightDetection attribute is already 'on'"
-        testDevice.events.add([name: "lightDetection", value: "on"])
-
-        when: "setLightDetection called with the same value"
-        driver.setLightDetection("on")
-
-        then: "no setLightDetection API call was made (C3 gate suppressed it)"
-        testParent.allRequests.findAll { it.method == "setLightDetection" }.isEmpty()
-        noExceptionThrown()
-    }
-
-    def "C3: setLightDetection with different value does make a hubBypass call (EverestAir)"() {
-        // Confirm the gate is a state-change guard, not a complete no-op.
-        given: "lightDetection attribute is 'off'"
-        testDevice.events.add([name: "lightDetection", value: "off"])
-
-        when: "setLightDetection called with 'on' (different from current)"
-        driver.setLightDetection("on")
-
-        then: "setLightDetection API call was made"
-        testParent.allRequests.any { it.method == "setLightDetection" }
+        where:
+        setter              | apiMethod           | attr
+        "setDisplay"        | "setDisplay"        | "displayOn"
+        "setChildLock"      | "setChildLock"      | "childLock"
+        "setLightDetection" | "setLightDetection" | "lightDetection"
     }
 
     // -------------------------------------------------------------------------
     // BP26: safeIntArg regression — setTimer non-numeric RM inputs must not throw
     // -------------------------------------------------------------------------
 
-    def "BP26: setTimer('') does not throw on empty-string input from Rule Machine (EverestAir)"() {
-        // safeIntArg("", 0) returns 0; secs<=0 routes to cancelTimer(), no addTimerV2 call.
-        // Pre-fix: (seconds as Integer) on "" threw NumberFormatException (sandbox swallowed).
+    @Unroll
+    def "BP26: setTimer('#badInput') does not throw on non-numeric input from Rule Machine (EverestAir)"() {
+        // safeIntArg(badInput, 0) returns 0; secs<=0 routes to cancelTimer(), no addTimerV2 call.
+        // Pre-fix: (seconds as Integer) on non-numeric threw NumberFormatException (sandbox swallowed).
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setTimer("")
+        driver.setTimer(badInput)
 
         then: "no exception thrown"
         noExceptionThrown()
 
         and: "no addTimerV2 API call"
         testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
-    }
 
-    def "BP26: setTimer('abc') does not throw on non-numeric input from Rule Machine (EverestAir)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setTimer("abc")
-
-        then: "no exception thrown"
-        noExceptionThrown()
-
-        and: "no addTimerV2 API call"
-        testParent.allRequests.findAll { it.method == "addTimerV2" }.isEmpty()
+        where:
+        badInput << ["", "abc"]
     }
 }

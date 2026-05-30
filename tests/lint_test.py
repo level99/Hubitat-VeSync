@@ -194,7 +194,8 @@ class TestBP2HardcodedPurifierMethod:
 # ---------------------------------------------------------------------------
 
 class TestBP3EnvelopePeel:
-    GOOD = textwrap.dedent("""\
+    # must-not-catch: inline while-loop shape (status quo on most v2.8 drivers).
+    GOOD_INLINE = textwrap.dedent("""\
         def applyStatus(status) {
             def r = status?.result ?: [:]
             int peelGuard = 0
@@ -207,19 +208,89 @@ class TestBP3EnvelopePeel:
         }
     """)
 
+    # must-not-catch: helper-call shape (Task #140 Phase 2+ migration).
+    # Equivalent contract via peelEnvelope() from LevoitChildBaseLib.
+    GOOD_HELPER = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = peelEnvelope(status)
+            if (settings?.debugOutput) log.debug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
+        }
+    """)
+
+    # must-not-catch: lib-inheritance shape (Task #142 Phase 2b+ centerpiece migration).
+    # The driver has no applyStatus body locally — it inherits one from the lib.
+    # The lib's body must contain a complete applyStatus method with either the
+    # inline peel or the peelEnvelope() call inside.
+    #
+    # No production driver currently inherits applyStatus via lib (V2-line drivers
+    # all define their own; Core line uses update() not applyStatus). The rule
+    # supports this for future lib-extraction phases. The fixture below stages
+    # a synthetic lib on disk to exercise the resolution path.
+    GOOD_LIB_INHERITANCE = textwrap.dedent("""\
+        #include level99.LevoitSyntheticTestLib
+
+        // Driver inherits applyStatus + envelope-peel from the synthetic lib
+        // staged at Drivers/Levoit/LevoitSyntheticTestLibLib.groovy.
+    """)
+
+    # Synthetic lib content that the lib-inheritance test stages on disk.
+    SYNTHETIC_LIB_NAME = "LevoitSyntheticTestLib"
+    SYNTHETIC_LIB_CONTENT = textwrap.dedent("""\
+        // Synthetic lib file used by test_good_lib_inheritance_passes.
+        // Provides applyStatus with peelEnvelope() helper call so the BP3 rule
+        // finds the contract satisfied via #include lookup.
+        def applyStatus(status) {
+            def r = peelEnvelope(status)
+            if (settings?.debugOutput) log.debug "applyStatus raw r keys=${r?.keySet()}"
+        }
+    """)
+
+    # must-catch: neither inline loop NOR helper call — bug class still flagged.
     BAD = textwrap.dedent("""\
         def applyStatus(status) {
             def r = status?.result ?: [:]
-            // no peel loop
+            // no peel loop, no helper call
             def mode = r.workMode
         }
     """)
 
-    def test_good_passes(self):
-        findings = run_rule(check_bp3_envelope_peel, self.GOOD, "LevoitVital200S")
+    # Backward-compat alias so any out-of-class reference to GOOD keeps working.
+    GOOD = GOOD_INLINE
+
+    def test_good_inline_passes(self):
+        # Direction B (inline shape): rule accepts inline while-loop pattern.
+        findings = run_rule(check_bp3_envelope_peel, self.GOOD_INLINE, "LevoitVital200S")
         assert findings == []
 
+    def test_good_helper_passes(self):
+        # Direction B (helper shape): rule accepts peelEnvelope() helper call.
+        findings = run_rule(check_bp3_envelope_peel, self.GOOD_HELPER, "LevoitVital200S")
+        assert findings == []
+
+    def test_good_lib_inheritance_passes(self, tmp_path):
+        # Direction B (lib-inheritance shape, Task #142 Phase 2b-pre): rule accepts
+        # a driver that inherits applyStatus + envelope peel from an #include'd lib.
+        # Resolves via tests/lint_rules/_helpers.py:included_lib_texts which reads
+        # the lib file sibling-of-driver from disk. We stage a synthetic lib in
+        # Drivers/Levoit/ for the duration of this test (real path required; the
+        # _helpers.py:_lib_text_cache caches by Path, and the test uses a unique
+        # synthetic lib name to avoid collisions with real libs).
+        lib_path = REPO_ROOT / "Drivers" / "Levoit" / f"{self.SYNTHETIC_LIB_NAME}Lib.groovy"
+        lib_path.write_text(self.SYNTHETIC_LIB_CONTENT, encoding='utf-8')
+        try:
+            findings = run_rule(check_bp3_envelope_peel, self.GOOD_LIB_INHERITANCE, "LevoitVital200S")
+            assert findings == []
+        finally:
+            try:
+                lib_path.unlink()
+            except FileNotFoundError:
+                pass
+            # Evict the per-path cache entry so subsequent tests don't see stale data.
+            from lint_rules._helpers import _lib_text_cache
+            _lib_text_cache.pop(lib_path, None)
+
     def test_bad_fails(self):
+        # Direction A: rule still catches the bug class when neither shape present.
         findings = run_rule(check_bp3_envelope_peel, self.BAD, "LevoitVital200S")
         assert any(f['rule_id'] == 'BP3_missing_envelope_peel' for f in findings)
         assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP3_missing_envelope_peel')
@@ -453,7 +524,8 @@ class TestBP11DocumentationLink:
 # ---------------------------------------------------------------------------
 
 class TestBP12PrefSeed:
-    GOOD = textwrap.dedent("""\
+    # must-not-catch: inline state.prefsSeeded gate (status quo on most v2.8 drivers).
+    GOOD_INLINE = textwrap.dedent("""\
         def applyStatus(status) {
             if (!state.prefsSeeded) {
                 if (settings?.descriptionTextEnable == null) {
@@ -464,17 +536,61 @@ class TestBP12PrefSeed:
         }
     """)
 
+    # must-not-catch: helper-call shape (Task #140 Phase 2+ migration).
+    # Equivalent contract via seedPrefs() from LevoitChildBaseLib.
+    GOOD_HELPER = textwrap.dedent("""\
+        def applyStatus(status) {
+            seedPrefs()
+            def r = peelEnvelope(status)
+        }
+    """)
+
+    # must-not-catch: lib-inheritance shape (Task #142 Phase 2b+ centerpiece migration).
+    # The driver has no pref-seed pattern locally — it inherits a method (e.g.
+    # update(status, nightLight)) from an #include'd lib whose body has the pattern.
+    # Resolves to the real LevoitChildBaseLib.groovy on disk via _helpers.py:
+    # included_lib_texts (the lib contains both the inline-gate and helper-call shapes).
+    #
+    # Fixture is intentionally bare — no comment or code containing the inline
+    # token "state.prefsSeeded" or helper-call token "seedPrefs(" — otherwise the
+    # rule's regex would match the fixture text itself and the test would pass for
+    # the wrong reason (defeating the non-vacuity proof that the lib lookup matters).
+    GOOD_LIB_INHERITANCE = textwrap.dedent("""\
+        #include level99.LevoitChildBase
+
+        // Driver inherits pref-seed via a method defined in the lib body.
+    """)
+
+    # must-catch: neither inline gate NOR helper call — bug class still flagged.
     BAD = textwrap.dedent("""\
         def applyStatus(status) {
             def r = status?.result ?: [:]
         }
     """)
 
-    def test_good_passes(self):
-        findings = run_rule(check_bp12_pref_seed, self.GOOD, "LevoitVital200S")
+    # Backward-compat alias so any out-of-class reference to GOOD keeps working.
+    GOOD = GOOD_INLINE
+
+    def test_good_inline_passes(self):
+        # Direction B (inline shape): rule accepts state.prefsSeeded gate.
+        findings = run_rule(check_bp12_pref_seed, self.GOOD_INLINE, "LevoitVital200S")
+        assert findings == []
+
+    def test_good_helper_passes(self):
+        # Direction B (helper shape): rule accepts seedPrefs() helper call.
+        findings = run_rule(check_bp12_pref_seed, self.GOOD_HELPER, "LevoitVital200S")
+        assert findings == []
+
+    def test_good_lib_inheritance_passes(self):
+        # Direction B (lib-inheritance shape, Task #142 Phase 2b-pre): rule accepts
+        # a driver that inherits the pref-seed pattern from an #include'd lib.
+        # Resolves via tests/lint_rules/_helpers.py:included_lib_texts which reads
+        # the real LevoitChildBaseLib.groovy from disk.
+        findings = run_rule(check_bp12_pref_seed, self.GOOD_LIB_INHERITANCE, "LevoitVital200S")
         assert findings == []
 
     def test_bad_fails(self):
+        # Direction A: rule still catches the bug class when neither shape present.
         findings = run_rule(check_bp12_pref_seed, self.BAD, "LevoitVital200S")
         assert any(f['rule_id'] == 'BP12_missing_pref_seed' for f in findings)
         assert any(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'BP12_missing_pref_seed')
@@ -2459,6 +2575,186 @@ class TestRule37BP26RelationalComparison:
         findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_STATE_COMPARISON)
         assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
             f"state.field comparison must not flag RULE37, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE40 — BP28 level/mist setter safeIntArg(param,0) -> off() ambiguity
+# ---------------------------------------------------------------------------
+
+class TestRule40BP28LevelOffAmbiguity:
+    """
+    RULE40 (Bug Pattern #28): a set* method that assigns a local from
+    ``safeIntArg(<param>, 0)`` and routes it into a numeric-threshold branch
+    (``<= 0`` / ``== 0`` / ``< <int-literal>``) whose body calls an off-form
+    (``off()`` OR ``set*("off")``), without a ``parseLevelOrNull`` null-ignore
+    guard, silently turns the device (or a sub-feature) OFF on non-numeric input.
+    The fix uses ``parseLevelOrNull``.
+    """
+
+    from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity as _rule
+
+    # MUST-NOT-CATCH: the fixed shape (parseLevelOrNull guard present).
+    GOOD_PARSE_LEVEL_OR_NULL = textwrap.dedent("""\
+        def setMistLevel(level) {
+            if (!requireNotNull(level, "setMistLevel")) return
+            Integer lvl = parseLevelOrNull(level)
+            if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
+            if (lvl <= 0) { off(); return }
+            Integer clamped = Math.max(1, Math.min(9, lvl))
+            ensureSwitchOn()
+            hubBypass("setVirtualLevel", [level: clamped], "setVirtualLevel(${clamped})")
+        }
+    """)
+
+    # MUST-NOT-CATCH: setLevel via the 4-arg clamp overload, fixed with parseLevelOrNull.
+    GOOD_PARSE_LEVEL_CLAMP = textwrap.dedent("""\
+        def setLevel(val) {
+            Integer pct = parseLevelOrNull(val)
+            if (pct == null) { logWarn "setLevel: ignoring non-numeric value '${val}'"; return }
+            pct = Math.max(0, Math.min(100, pct))
+            if (pct == 0) { off(); return }
+            ensureSwitchOn()
+            sendLevel(pct)
+        }
+    """)
+
+    # MUST-NOT-CATCH: safeIntArg(param,0) but NO off()-on-zero branch (setTimer: 0 = no timer).
+    GOOD_SAFEINTARG_NO_OFF = textwrap.dedent("""\
+        def setTimer(seconds) {
+            int secs = safeIntArg(seconds, 0)
+            if (secs <= 0) { delTimer(); return }
+            hubBypass("addTimer", [clkSec: secs], "addTimer(${secs})")
+        }
+    """)
+
+    # MUST-NOT-CATCH: off()-on-zero but the zero comes from a NON-param source
+    # (computed internal value, never raw user garbage).
+    GOOD_OFF_FROM_NON_PARAM = textwrap.dedent("""\
+        def setSomething(arg) {
+            Integer derived = computeBand(arg)
+            if (derived == 0) { off(); return }
+            hubBypass("x", [v: derived], "x(${derived})")
+        }
+    """)
+
+    # MUST-CATCH: the OLD ambiguous shape — safeIntArg(level,0) -> if(lvl<=0){off()}.
+    BAD_SAFEINTARG_OFF = textwrap.dedent("""\
+        def setMistLevel(level) {
+            if (!requireNotNull(level, "setMistLevel")) return
+            Integer lvl = safeIntArg(level, 0)
+            if (lvl <= 0) { off(); return }
+            Integer clamped = Math.max(1, Math.min(9, lvl))
+            ensureSwitchOn()
+            hubBypass("setVirtualLevel", [level: clamped], "setVirtualLevel(${clamped})")
+        }
+    """)
+
+    # MUST-CATCH: setLevel with safeIntArg 4-arg clamp -> if(pct==0){off()}.
+    BAD_SAFEINTARG_CLAMP_OFF = textwrap.dedent("""\
+        def setLevel(val) {
+            Integer pct = safeIntArg(val, 0, 0, 100)
+            if (pct == 0) { off(); return }
+            ensureSwitchOn()
+            sendLevel(pct)
+        }
+    """)
+
+    # MUST-CATCH: Core 200S Light shape — safeIntArg(level,0,0,100) -> if(pct<10){setNightLight("off")}.
+    # The off-form is set*("off"), not bare off(); the threshold is `< N`, not `<= 0`. RULE40 must
+    # catch this broadened off-form / threshold pair (the blind spot QA flagged).
+    BAD_SETNIGHTLIGHT_OFF = textwrap.dedent("""\
+        def setLevel(level) {
+            if (!requireNotNull(level, "setLevel")) return
+            Integer pct = safeIntArg(level, 0, 0, 100)
+            if (pct < 10) { setNightLight("off") }
+            else if (pct > 75) { setNightLight("on") }
+            else setNightLight("dim")
+        }
+    """)
+
+    # MUST-NOT-CATCH: a safeIntArg-fed `< N` branch whose body does NOT call an off-form.
+    # Proves the four-way conjunction gates correctly — fallback-0 + `< N` threshold alone
+    # is NOT enough; condition (iii) (off-form in branch body) must also hold.
+    GOOD_SAFEINTARG_LT_NO_OFFFORM = textwrap.dedent("""\
+        def setBrightness(level) {
+            Integer pct = safeIntArg(level, 0)
+            if (pct < 10) { pct = 10 }
+            hubBypass("setBrightness", [brightness: pct], "setBrightness(${pct})")
+        }
+    """)
+
+    def test_parse_level_or_null_passes(self):
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.GOOD_PARSE_LEVEL_OR_NULL)
+        assert not any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"parseLevelOrNull guard must not flag RULE40, got: {findings}"
+        )
+
+    def test_parse_level_clamp_passes(self):
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.GOOD_PARSE_LEVEL_CLAMP)
+        assert not any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"parseLevelOrNull clamp form must not flag RULE40, got: {findings}"
+        )
+
+    def test_safeintarg_without_off_passes(self):
+        """safeIntArg(param,0) with no off()-on-zero branch is out of scope."""
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.GOOD_SAFEINTARG_NO_OFF)
+        assert not any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"safeIntArg without off()-on-zero must not flag RULE40, got: {findings}"
+        )
+
+    def test_off_from_non_param_passes(self):
+        """off()-on-zero whose zero is a computed value (not safeIntArg(param,0)) is out of scope."""
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.GOOD_OFF_FROM_NON_PARAM)
+        assert not any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"off() from non-param value must not flag RULE40, got: {findings}"
+        )
+
+    def test_safeintarg_off_fails(self):
+        """OLD shape: safeIntArg(level,0) -> if(lvl<=0){off()} must flag RULE40 with FAIL."""
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.BAD_SAFEINTARG_OFF)
+        assert any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"Expected RULE40_level_off_ambiguity for safeIntArg->off shape, got: {findings}"
+        )
+        # Regression guard: missing severity key is a dead-gate — verify present and FAIL.
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE40_level_off_ambiguity'), (
+            f"RULE40 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_safeintarg_clamp_off_fails(self):
+        """OLD shape: safeIntArg(val,0,0,100) -> if(pct==0){off()} must flag RULE40."""
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.BAD_SAFEINTARG_CLAMP_OFF)
+        assert any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"Expected RULE40_level_off_ambiguity for safeIntArg clamp->off shape, got: {findings}"
+        )
+
+    def test_setnightlight_off_form_fails(self):
+        """Core 200S Light shape: safeIntArg(level,0,0,100) -> if(pct<10){setNightLight("off")}
+        must flag RULE40 — the set*("off") off-form + `< N` threshold blind spot."""
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.BAD_SETNIGHTLIGHT_OFF)
+        assert any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"Expected RULE40_level_off_ambiguity for setNightLight('off') off-form, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE40_level_off_ambiguity'), (
+            f"RULE40 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_safeintarg_lt_without_offform_passes(self):
+        """A safeIntArg-fed `< N` branch whose body does NOT call an off-form must NOT flag —
+        proves the four-way conjunction gates (condition iii: off-form in branch body)."""
+        from lint_rules.bp28_level_off_ambiguity import check_rule40_level_off_ambiguity
+        findings = run_rule(check_rule40_level_off_ambiguity, self.GOOD_SAFEINTARG_LT_NO_OFFFORM)
+        assert not any(f['rule_id'] == 'RULE40_level_off_ambiguity' for f in findings), (
+            f"safeIntArg-fed `< N` clamp without off-form must not flag RULE40, got: {findings}"
         )
 
 
@@ -5784,6 +6080,256 @@ class TestRule37BP26DoSetMethod:
 
 
 # ---------------------------------------------------------------------------
+# RULE37 Pass-1 partial-guard — scalar-param safeIntArg must not exempt OTHER
+# unguarded raw casts in the same method (closed-mechanism fix #9).
+# ---------------------------------------------------------------------------
+
+class TestRule37BP26ScalarPartialGuard:
+    """
+    RULE37 scalar-param partial-guard: the original Pass-1 implementation bailed
+    out of the per-param cast scan the moment ``safeIntArg(`` appeared ANYWHERE
+    in the method body.  A method that guards one param via safeIntArg but
+    raw-casts the FIRST (untyped) param on a different statement therefore went
+    unflagged.  The fix mirrors the Map-field partial-guard: only the SPECIFIC
+    safeIntArg-guarded receiver is exempt; an unguarded raw cast on the first
+    param is still flagged.
+    """
+
+    # Bad: setX(level) guards `other` via safeIntArg but raw-casts the first param `level`.
+    BAD_SCALAR_PARTIAL_GUARD = textwrap.dedent("""\
+        def setX(level) {
+            Integer o = safeIntArg(other, 0)
+            Integer v = level as Integer
+            hubBypass("setX", [v: v, o: o])
+        }
+    """)
+
+    # Good: the first param `level` itself goes through safeIntArg; the other coercion is also guarded.
+    GOOD_SCALAR_FULLY_GUARDED = textwrap.dedent("""\
+        def setX(level) {
+            Integer v = safeIntArg(level, 0)
+            Integer o = safeIntArg(other, 0)
+            hubBypass("setX", [v: v, o: o])
+        }
+    """)
+
+    def test_scalar_partial_guard_flags_unguarded_first_param(self):
+        """
+        Must-catch: safeIntArg on a non-first param does NOT exempt a raw
+        ``level as Integer`` cast on the first param.
+
+        Non-vacuity: reverting the fix (restoring the unconditional
+        ``if SAFE_INT_ARG_RE.search(body_clean): ... continue``) makes the rule
+        return [] for BAD_SCALAR_PARTIAL_GUARD, failing this assertion.
+        """
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.BAD_SCALAR_PARTIAL_GUARD)
+        assert any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Expected RULE37 for scalar partial-guard (level raw-cast, other guarded), got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE37_unsafe_int_coercion'), (
+            f"RULE37 scalar partial-guard finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_scalar_fully_guarded_passes(self):
+        """
+        Must-not-catch: when the first param itself is safeIntArg-guarded (and all
+        other coercions too), the method must NOT flag.
+        """
+        from lint_rules.bp26_unsafe_int_coercion import check_rule37_unsafe_int_coercion
+        findings = run_rule(check_rule37_unsafe_int_coercion, self.GOOD_SCALAR_FULLY_GUARDED)
+        assert not any(f['rule_id'] == 'RULE37_unsafe_int_coercion' for f in findings), (
+            f"Fully-guarded scalar method must not flag RULE37, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE32 delegation-following — SHOULD-ON method delegating to a lib helper that
+# lacks ensureSwitchOn() must be flagged (closed-mechanism fix #10).
+# ---------------------------------------------------------------------------
+
+class TestRule32DelegationFollowing:
+    """
+    RULE32 delegation-following: a SHOULD-ON method (setSpeed/setMode/etc.) with
+    no DIRECT API call previously escaped the auto-on scan entirely
+    (``if not API_CALL_RE.search(body_clean): continue``).  The fix follows a
+    same-file delegate (handleX/doSetX/setFanSpeed-style); if the delegate makes
+    the API call but neither the caller nor the delegate calls ensureSwitchOn(),
+    the auto-on guard is missing across the delegation boundary → BP24-B.
+    """
+
+    # Bad: setSpeed delegates to handleSpeed (which makes the API call) but neither
+    # setSpeed nor handleSpeed calls ensureSwitchOn().
+    BAD_DELEGATE_NO_GUARD = textwrap.dedent("""\
+        def setSpeed(spd) {
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Good: the delegate handleSpeed carries the ensureSwitchOn() guard.
+    GOOD_DELEGATE_CALLEE_GUARDED = textwrap.dedent("""\
+        def setSpeed(spd) {
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            ensureSwitchOn()
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Also-good: the caller itself carries the guard before delegating.
+    GOOD_DELEGATE_CALLER_GUARDED = textwrap.dedent("""\
+        def setSpeed(spd) {
+            ensureSwitchOn()
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Bad (multi-delegate gap): setSpeed delegates FIRST to setMode (an auto-path
+    # helper with NO direct API call — itself guarded) and THEN to handleSpeed
+    # (the normal path, which makes the real API call and has NO own guard).
+    # setSpeed itself has no ensureSwitchOn().  This is the exact shape RULE32's
+    # first-delegate-only resolution missed: it followed setMode (no direct API
+    # → bailed) and never reached handleSpeed.  Following all first-hop delegates
+    # must flag this.
+    BAD_MULTI_DELEGATE_LATER_UNGUARDED = textwrap.dedent("""\
+        def setSpeed(spd) {
+            if (spd == "auto") {
+                setMode(spd)
+                return
+            }
+            handleSpeed(spd)
+        }
+
+        def setMode(mode) {
+            ensureSwitchOn()
+            handleMode(mode)
+        }
+
+        def handleMode(mode) {
+            hubBypass("setPurifierMode", [mode: mode])
+        }
+
+        def handleSpeed(spd) {
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Good (multi-delegate, all protected): setSpeed delegates to setMode (no
+    # direct API, guarded) AND handleSpeed — but handleSpeed carries its own
+    # ensureSwitchOn().  Every API-calling delegate is guarded → no finding.
+    GOOD_MULTI_DELEGATE_ALL_GUARDED = textwrap.dedent("""\
+        def setSpeed(spd) {
+            if (spd == "auto") {
+                setMode(spd)
+                return
+            }
+            handleSpeed(spd)
+        }
+
+        def setMode(mode) {
+            ensureSwitchOn()
+            handleMode(mode)
+        }
+
+        def handleMode(mode) {
+            hubBypass("setPurifierMode", [mode: mode])
+        }
+
+        def handleSpeed(spd) {
+            ensureSwitchOn()
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    def test_delegate_callee_unguarded_flags(self):
+        """
+        Must-catch: SHOULD-ON method delegating to an unguarded API-calling callee
+        must flag RULE32 BP24-B.
+
+        Non-vacuity: reverting the fix (restoring ``if not API_CALL_RE.search:
+        continue``) makes the rule return [] for BAD_DELEGATE_NO_GUARD (setSpeed
+        has no direct API call so it would be skipped entirely), failing this.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.BAD_DELEGATE_NO_GUARD)
+        assert any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            f"Expected RULE32 for SHOULD-ON method delegating to unguarded callee, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE32_auto_on_guard_missing'), (
+            f"RULE32 delegation finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_delegate_callee_guarded_passes(self):
+        """Must-not-catch: when the delegate callee has ensureSwitchOn(), no finding."""
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.GOOD_DELEGATE_CALLEE_GUARDED)
+        assert not any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            f"Delegate callee with ensureSwitchOn() must not flag RULE32, got: {findings}"
+        )
+
+    def test_delegate_caller_guarded_passes(self):
+        """Must-not-catch: when the caller itself has ensureSwitchOn() before delegating, no finding."""
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.GOOD_DELEGATE_CALLER_GUARDED)
+        assert not any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            f"Caller with ensureSwitchOn() before delegate must not flag RULE32, got: {findings}"
+        )
+
+    def test_multi_delegate_later_unguarded_flags(self):
+        """
+        Must-catch (closed-mechanism gap fix): SHOULD-ON method with NO own guard
+        that delegates FIRST to a no-direct-API (guarded) helper (setMode) and
+        THEN to an unguarded API-calling helper (handleSpeed) must flag RULE32.
+
+        This is the exact setSpeed→setMode→handleSpeed shape that first-delegate-
+        only resolution missed: it followed setMode (no direct API → bailed) and
+        never reached handleSpeed.  Following ALL first-hop delegates catches it.
+
+        Non-vacuity: reverting the fix (returning only the FIRST resolvable
+        delegate body) makes the rule resolve setMode, find no direct API call,
+        skip, and return [] for this fixture — failing this assertion.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(
+            check_rule32_auto_on_guard_missing, self.BAD_MULTI_DELEGATE_LATER_UNGUARDED
+        )
+        assert any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            "Expected RULE32 for SHOULD-ON method whose LATER delegate makes an "
+            f"unguarded API call, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE32_auto_on_guard_missing'), (
+            f"RULE32 multi-delegate finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_multi_delegate_all_guarded_passes(self):
+        """
+        Must-not-catch: SHOULD-ON method delegating to multiple helpers where
+        every API-calling delegate carries ensureSwitchOn() — no finding even
+        though following all delegates now reaches handleSpeed.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(
+            check_rule32_auto_on_guard_missing, self.GOOD_MULTI_DELEGATE_ALL_GUARDED
+        )
+        assert not any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            f"All API-calling delegates guarded must not flag RULE32, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # RULE39 -- CHANGELOG user-facing TMI lint
 # ---------------------------------------------------------------------------
 
@@ -6586,4 +7132,338 @@ class TestRule39ChangelogTmi:
         assert not jargon_findings, (
             f"'handleEvent' (bare, no parens) is NOT in _INTERNAL_JARGON_NAMES and must not flag, "
             f"got: {jargon_findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE41 -- internal device-name shorthand leak into user-facing prose
+# ---------------------------------------------------------------------------
+
+from lint_rules.device_shorthand_leak import check_rule41_device_shorthand_leak
+
+
+class TestRule41DeviceShorthandLeak:
+    """
+    RULE41: internal device-name shorthands (Sup6000S, OM1000S, Core200S, ...)
+    must not appear in user-facing prose (levoitManifest.json releaseNotes,
+    CHANGELOG.md, Drivers/Levoit/readme.md).
+
+    Non-vacuity contracts:
+      - must-catch tests FAIL if the denylist entry is removed or the scan is
+        disabled.
+      - must-not-catch tests FAIL if the rule over-fires on public names, real
+        hardware model codes, or out-of-scope dev-doc paths.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    @staticmethod
+    def _run(src: str, basename: str = 'CHANGELOG.md', parent: str = None) -> list:
+        """Invoke RULE41 against src as a named in-scope user-facing file."""
+        if basename == 'readme.md':
+            path = REPO_ROOT / 'Drivers' / 'Levoit' / 'readme.md'
+        elif basename == 'levoitManifest.json':
+            path = REPO_ROOT / 'levoitManifest.json'
+        else:
+            path = REPO_ROOT / basename
+        raw_lines = src.splitlines()
+        from lint_rules.groovy_lite import clean_source
+        _, cleaned_lines = clean_source(src)
+        return check_rule41_device_shorthand_leak(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+
+    @staticmethod
+    def _run_at_path(src: str, path: Path) -> list:
+        """Invoke RULE41 against src at an arbitrary path (for out-of-scope tests)."""
+        raw_lines = src.splitlines()
+        from lint_rules.groovy_lite import clean_source
+        _, cleaned_lines = clean_source(src)
+        return check_rule41_device_shorthand_leak(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-catch
+    # -----------------------------------------------------------------------
+
+    def test_catches_sup6000s_in_releasenotes_shaped_string(self):
+        """
+        'Sup6000S' in the manifest releaseNotes value must flag RULE41 with the
+        'Superior 6000S' suggestion. This is the confirmed v2.6 leak.
+
+        Non-vacuity: removing the 'Sup6000S' denylist entry returns [] here.
+        """
+        src = '  "releaseNotes": "2.6 - Fixes Sup6000S setDisplay in sleep mode.",'
+        findings = self._run(src, basename='levoitManifest.json')
+        matches = [f for f in findings if f['rule_id'] == 'RULE41_device_shorthand_leak'
+                   and 'Sup6000S' in f['title']]
+        assert matches, f"Expected Sup6000S RULE41 finding, got: {findings}"
+        assert 'Superior 6000S' in matches[0]['title'], (
+            f"Finding should suggest the public name 'Superior 6000S', got: {matches[0]['title']}"
+        )
+
+    def test_catches_om1000s_in_changelog(self):
+        """'OM1000S' in a CHANGELOG user-facing subsection must flag with 'OasisMist 1000S'."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - Fixes OM1000S mist level reporting.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        matches = [f for f in findings if f['rule_id'] == 'RULE41_device_shorthand_leak'
+                   and 'OM1000S' in f['title']]
+        assert matches, f"Expected OM1000S RULE41 finding, got: {findings}"
+        assert 'OasisMist 1000S' in matches[0]['title'], (
+            f"Should suggest 'OasisMist 1000S', got: {matches[0]['title']}"
+        )
+
+    def test_catches_om450s_in_readme(self):
+        """'OM450S' contraction in bare readme prose must flag with 'OasisMist 450S'."""
+        src = "OM450S now reports humidity."
+        findings = self._run(src, basename='readme.md')
+        assert any(f['rule_id'] == 'RULE41_device_shorthand_leak' and 'OM450S' in f['title']
+                   for f in findings), f"Expected OM450S finding, got: {findings}"
+
+    def test_catches_multiple_shorthands_one_line(self):
+        """Two contraction shorthands on one line produce two findings."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - Sup6000S and OM1000S now share the mist-level logic.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        names = {f['title'].split("'")[1] for f in findings
+                 if f['rule_id'] == 'RULE41_device_shorthand_leak'}
+        assert 'Sup6000S' in names and 'OM1000S' in names, (
+            f"Expected both Sup6000S and OM1000S, got: {names}"
+        )
+
+    def test_catches_lv600shc_abbreviation(self):
+        """'LV600SHC' must flag with 'LV600S Hub Connect'."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - LV600SHC mist fix.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert any('LV600S Hub Connect' in f['title'] for f in findings
+                   if f['rule_id'] == 'RULE41_device_shorthand_leak'), (
+            f"Expected LV600S Hub Connect suggestion, got: {findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch
+    # -----------------------------------------------------------------------
+
+    def test_does_not_catch_public_superior_name(self):
+        """The public 'Superior 6000S' (with space) must NOT flag."""
+        src = '  "releaseNotes": "2.6 - Fixes Superior 6000S setDisplay in sleep mode.",'
+        findings = self._run(src, basename='levoitManifest.json')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Public name 'Superior 6000S' must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_real_model_code(self):
+        """A real hardware model code 'LEH-S601S-WUS' must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Added
+
+            - Adds support for LEH-S601S-WUS regional variant.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Real model code must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_public_oasismist_with_space(self):
+        """The public 'OasisMist 1000S' (with space) must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - OasisMist 1000S mist fix.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Public 'OasisMist 1000S' must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_lv600s_public_name(self):
+        """'LV600S' alone IS the public name (not a leak) -- must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - LV600S mist level fix.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"'LV600S' is the public name and must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_core_family_public_no_space_name(self):
+        """
+        'Core200S'/'Core600S' (no space) ARE the manifest public names, NOT
+        leaks -- must NOT flag. This is the authoritative-derivation correction:
+        the Core family genuinely uses the no-space form in driver metadata.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Fixed
+
+            - Core200S and Core600S now report PM2.5 on dashboards.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Core family no-space form is the public name and must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_manifest_non_releasenotes_line(self):
+        """
+        A manifest line that is NOT the releaseNotes value is out of scope, even
+        if it contains a contraction -- only the releaseNotes value is scanned.
+        Uses a contraction (Sup6000S) so the scope gate is genuinely exercised:
+        if the rule scanned all manifest lines, this WOULD flag.
+        """
+        src = '      "description": "alias Sup6000S for the Superior 6000S driver",'
+        findings = self._run(src, basename='levoitManifest.json')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Non-releaseNotes manifest line is out of scope, got: {findings}"
+        )
+
+    def test_does_not_catch_real_vesync_device_type_literal(self):
+        """
+        'Dual200S' / 'Classic200S' / 'Vital200S' are real VeSync device-type
+        literals the cloud API reports verbatim -- they legitimately appear in
+        technical user-facing prose and must NOT flag (they are NOT contractions).
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Added
+
+            - Levoit Dual 200S Humidifier driver (Dual200S literal device type);
+              Classic200S and Vital200S routing unchanged.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Real VeSync device-type literals must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_backticked_contraction(self):
+        """
+        A backticked contraction (`` `Sup6000S` ``) is suppressed as a code
+        reference (defense in depth) -- must NOT flag.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Added
+
+            - Internal device-type alias `Sup6000S` documented for contributors.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Backticked contraction must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_contraction_filename(self):
+        """A '*.yaml' filename context suppresses a contraction match -- must NOT flag."""
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Added
+
+            - Vendored fixture sourced from upstream Sup6000S.yaml.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Filename context must not flag, got: {findings}"
+        )
+
+    def test_does_not_catch_changelog_internal_subsection(self):
+        """
+        A contraction in the CHANGELOG ### Internal subsection is OUT of scope --
+        implementation detail belongs there; must NOT flag.
+        """
+        src = textwrap.dedent("""\
+            ## [Unreleased]
+
+            ### Internal
+
+            - Sup6000S router wiring refactor; no user-visible change.
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"### Internal subsection is out of scope, got: {findings}"
+        )
+
+    def test_does_not_catch_changelog_preamble(self):
+        """
+        A contraction in the top-of-file CHANGELOG preamble (before the first
+        ``## [`` section) is OUT of scope -- must NOT flag.
+        """
+        src = textwrap.dedent("""\
+            # Changelog
+
+            Notes for maintainers: Sup6000S is the dev shorthand we avoid in prose.
+
+            ## [Unreleased]
+        """)
+        findings = self._run(src, basename='CHANGELOG.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"CHANGELOG preamble is out of scope, got: {findings}"
+        )
+
+    def test_out_of_scope_dev_doc_path_not_scanned(self):
+        """
+        The shorthand 'Sup6000S' appearing in a dev-doc path (CLAUDE.md) is
+        OUT of scope and must NOT flag -- internal shorthand is fine there.
+        """
+        src = "BP25 fix re-blessed; Sup6000S was the v2.6 leak example."
+        findings = self._run_at_path(src, REPO_ROOT / 'CLAUDE.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Dev-doc CLAUDE.md is out of scope and must not flag, got: {findings}"
+        )
+
+    def test_out_of_scope_roadmap_not_scanned(self):
+        """ROADMAP.md is dev-facing -- out of scope, must NOT flag."""
+        src = "Future: OM450S regional variants under evaluation."
+        findings = self._run_at_path(src, REPO_ROOT / 'ROADMAP.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"ROADMAP.md is out of scope and must not flag, got: {findings}"
+        )
+
+    def test_out_of_scope_stray_readme_not_scanned(self):
+        """
+        A readme.md outside Drivers/Levoit/ must NOT be scanned. Uses a
+        contraction (Sup6000S) so the parent-dir scope gate is genuinely
+        exercised: the same content under Drivers/Levoit/readme.md WOULD flag.
+        """
+        src = "Sup6000S example."
+        findings = self._run_at_path(src, REPO_ROOT / 'readme.md')
+        assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
+            f"Stray top-level readme.md is out of scope, got: {findings}"
         )

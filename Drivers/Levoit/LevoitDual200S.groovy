@@ -74,7 +74,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.2] Levoit Dual 200S (LUH-D301S-WUSR/-WJP/-WEU/-KEUR + 'Dual200S' literal) -- mist 1-2 (2-level only), target humidity 30-80%, auto/manual modes, auto-stop, display; canonical pyvesync VeSyncHumid200300S payloads. No night-light command (feature flag absent); no sleep mode (not in device_map.py mist_modes). Night-light brightness read passively if API returns it.",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -148,28 +148,10 @@ metadata {
 // settings save -- firmware updates are re-detected on next setMode("auto") call.
 
 // ---------- Power ----------
+// Power on/off provided by #include level99.LevoitHumidifier; payload supplied via this hook.
 // Humidifier switch payload: {enabled: bool, id: 0}
 // NOT purifier shape {powerSwitch: int, switchIdx: 0}
-def on(){
-    logDebug "on()"
-    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
-    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
-    state.turningOn = true
-    try {
-        def resp = hubBypass("setSwitch", [enabled: true, id: 0], "setSwitch(enabled=true)")
-        if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
-    } finally {
-        state.turningOn = false
-    }
-}
-
-def off(){
-    logDebug "off()"
-    def resp = hubBypass("setSwitch", [enabled: false, id: 0], "setSwitch(enabled=false)")
-    if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
-}
+Map powerPayload(boolean on){ [enabled: on, id: 0] }
 
 // ---------- Mode ----------
 // CROSS-CHECK [pyvesync Dual200S.yaml (commit c98729c) / device_map.py LUH-D301S entry]:
@@ -262,7 +244,10 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    Integer lvl = safeIntArg(level, 0)
+    // BP24: SHOULD-ON — mist-level command; calls ensureSwitchOn() below (SwitchLevel convention).
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer lvl = parseLevelOrNull(level)
+    if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
     if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(2, lvl))
     ensureSwitchOn()
@@ -311,28 +296,10 @@ def applyStatus(status){
     // Placed here so all three update() entry points (0-arg, 1-arg, 2-arg) trigger it.
     ensureDebugWatchdog()
 
-    // One-time pref seed: heal descriptionTextEnable=true default for users migrated
-    // from older Type without Save (forward-compat -- BP#12)
-    // Insertion point: top of applyStatus() per V1-humidifier-base pref-seed convention
-    // (same as Classic 300S, LV600S, OasisMist 450S -- all VeSyncHumid200300S class).
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
-
-    def r = status?.result ?: [:]
-    // Defensive envelope peel -- humidifier bypassV2 responses can be double-wrapped (BP#3).
-    // Peel through any [code, result, traceId] envelope layers until device data is reached.
-    // Dual 200S is typically single-wrapped like Classic 300S, but the peel loop is defensive.
-    int peelGuard = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-        r = r.result
-        peelGuard++
-    }
+    seedPrefs()
+    def r = peelEnvelope(status)
     // Diagnostic raw dump -- gated by debugOutput. Keep for ongoing field diagnostics.
-    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // Dual 200S response uses `enabled` (boolean), NOT `powerSwitch` (int)

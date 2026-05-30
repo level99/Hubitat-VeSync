@@ -248,30 +248,23 @@ class LevoitCore200SSpec extends HubitatSpec {
     // v2.3 new features: childLock, display, timer, resetFilter
     // -------------------------------------------------------------------------
 
-    def "setChildLock('on') sends setChildLock with child_lock=true"() {
+    @Unroll
+    def "setChildLock('#input') sends setChildLock with child_lock=#expected"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setChildLock("on")
+        driver.setChildLock(input)
 
-        then: "setChildLock request sent with child_lock=true"
+        then: "setChildLock request sent with child_lock=#expected"
         def req = testParent.allRequests.find { it.method == "setChildLock" }
         req != null
-        req.data.child_lock == true
-    }
+        req.data.child_lock == expected
 
-    def "setChildLock('off') sends setChildLock with child_lock=false"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setChildLock("off")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
-        req != null
-        req.data.child_lock == false
+        where:
+        input | expected
+        "on"  | true
+        "off" | false
     }
 
     def "update() parses child_lock=true from fixture and emits childLock='on'"() {
@@ -320,54 +313,30 @@ class LevoitCore200SSpec extends HubitatSpec {
     // SwitchLevel 2-arg overload
     // -------------------------------------------------------------------------
 
-    def "setLevel(20) maps to speed 1 (low band: pct < 33)"() {
+    @Unroll
+    def "setLevel(#pct) maps to speed #expectedLevel (band mapping)"() {
         // Regression guard: before the Fix 3 band-mapping fix, mapSpeedToInteger("1") returned 3
         // (default branch) so setLevel(20) → setLevel(50) → setLevel(80) all sent speed 3 (high).
+        // Bands: pct < 33 → 1; 33 <= pct < 66 → 2; pct >= 66 → 3.
         given: "device is on and in manual mode"
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
         state.mode = "manual"
 
-        when: "setLevel(20) is called -- falls in pct < 33 band → speed 1"
-        driver.setLevel(20)
+        when: "setLevel(#pct) is called"
+        driver.setLevel(pct)
 
-        then: "Core-line setLevel request was sent with level=1"
+        then: "Core-line setLevel request was sent with level=#expectedLevel"
         noExceptionThrown()
         def req = testParent.allRequests.find { it.method == "setLevel" }
         req != null
-        req.data.level == 1
-    }
+        req.data.level == expectedLevel
 
-    def "setLevel(50) maps to speed 2 (mid band: 33 <= pct < 66)"() {
-        given: "device is on and in manual mode"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "switch", value: "on"])
-        state.mode = "manual"
-
-        when: "setLevel(50) is called -- 33 <= 50 < 66 → speed 2"
-        driver.setLevel(50)
-
-        then: "Core-line setLevel request was sent with level=2"
-        noExceptionThrown()
-        def req = testParent.allRequests.find { it.method == "setLevel" }
-        req != null
-        req.data.level == 2
-    }
-
-    def "setLevel(80) maps to speed 3 (high band: pct >= 66)"() {
-        given: "device is on and in manual mode"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "switch", value: "on"])
-        state.mode = "manual"
-
-        when: "setLevel(80) is called -- pct >= 66 → speed 3"
-        driver.setLevel(80)
-
-        then: "Core-line setLevel request was sent with level=3"
-        noExceptionThrown()
-        def req = testParent.allRequests.find { it.method == "setLevel" }
-        req != null
-        req.data.level == 3
+        where:
+        pct | expectedLevel
+        20  | 1
+        50  | 2
+        80  | 3
     }
 
     def "setLevel(50, 30) 2-arg form delegates to 1-arg (SwitchLevel standard signature)"() {
@@ -522,58 +491,43 @@ class LevoitCore200SSpec extends HubitatSpec {
     // C3: state-change gate — setChildLock and setDisplay (retroactive fix via lib)
     // -------------------------------------------------------------------------
 
-    def "C3: setChildLock('on') when childLock is already 'on' is a no-op (no API call)"() {
-        given: "childLock is already on"
+    @Unroll
+    def "C3: #driverMethod('on') when #attr is already 'on' is a no-op (no API call)"() {
+        given: "#attr is already on"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "on"])
+        testDevice.events.add([name: attr, value: "on"])
 
         when:
-        driver.setChildLock("on")
+        driver."$driverMethod"("on")
 
-        then: "no setChildLock API call was made"
-        testParent.allRequests.find { it.method == "setChildLock" } == null
+        then: "no #apiMethod API call was made"
+        testParent.allRequests.find { it.method == apiMethod } == null
 
         and: "no errors logged"
         testLog.errors.isEmpty()
+
+        where:
+        driverMethod   | attr        | apiMethod
+        "setChildLock" | "childLock" | "setChildLock"
+        "setDisplay"   | "display"   | "setDisplay"
     }
 
-    def "C3: setChildLock('on') when childLock is 'off' does send the API call"() {
-        given: "childLock is currently off"
+    @Unroll
+    def "C3: #driverMethod('on') when #attr is 'off' does send the API call"() {
+        given: "#attr is currently off"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "off"])
+        testDevice.events.add([name: attr, value: "off"])
 
         when:
-        driver.setChildLock("on")
+        driver."$driverMethod"("on")
 
-        then: "setChildLock API call was made"
-        testParent.allRequests.find { it.method == "setChildLock" } != null
-    }
+        then: "#apiMethod API call was made"
+        testParent.allRequests.find { it.method == apiMethod } != null
 
-    def "C3: setDisplay('on') when display is already 'on' is a no-op (no API call)"() {
-        given: "display is already on"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "on"])
-
-        when:
-        driver.setDisplay("on")
-
-        then: "no setDisplay API call was made"
-        testParent.allRequests.find { it.method == "setDisplay" } == null
-
-        and: "no errors logged"
-        testLog.errors.isEmpty()
-    }
-
-    def "C3: setDisplay('on') when display is 'off' does send the API call"() {
-        given: "display is currently off"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "off"])
-
-        when:
-        driver.setDisplay("on")
-
-        then: "setDisplay API call was made"
-        testParent.allRequests.find { it.method == "setDisplay" } != null
+        where:
+        driverMethod   | attr        | apiMethod
+        "setChildLock" | "childLock" | "setChildLock"
+        "setDisplay"   | "display"   | "setDisplay"
     }
 
     // -------------------------------------------------------------------------
@@ -757,72 +711,51 @@ class LevoitCore200SSpec extends HubitatSpec {
     // Bug Pattern #25: C3 gate case-sensitivity — uppercase "ON"/"OFF" input
     // -------------------------------------------------------------------------
 
-    def "BP25: setChildLock('ON') uppercase makes the API call and sends child_lock:true (not false)"() {
-        // Pre-fix: ("ON" == "on") is false → child_lock:false sent (unlock instead of lock).
-        // Post-fix: toLowerCase() normalizes "ON" → "on" → child_lock:true (correct).
-        given: "childLock is currently 'off' so the C3 gate does not block"
+    @Unroll
+    def "BP25: #driverMethod('ON') uppercase makes the API call and sends #payloadField:true (not false)"() {
+        // Pre-fix: ("ON" == "on") is false → payloadField:false sent (inverted).
+        // Post-fix: toLowerCase() normalizes "ON" → "on" → payloadField:true (correct).
+        given: "#attr is currently 'off' so the C3 gate does not block"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "off"])
+        testDevice.events.add([name: attr, value: "off"])
 
-        when: "setChildLock is called with uppercase 'ON'"
-        driver.setChildLock("ON")
+        when: "#driverMethod is called with uppercase 'ON'"
+        driver."$driverMethod"("ON")
 
         then: "API call was made"
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        def req = testParent.allRequests.find { it.method == apiMethod }
         req != null
 
-        and: "payload carries child_lock:true (lock), NOT false (unlock)"
-        req.data.child_lock == true
+        and: "payload carries #payloadField:true, NOT false"
+        req.data[payloadField] == true
 
         and: "emitted event value is lowercase 'on'"
-        lastEventValue("childLock") == "on"
+        lastEventValue(attr) == "on"
+
+        where:
+        driverMethod   | apiMethod      | payloadField | attr
+        "setChildLock" | "setChildLock" | "child_lock" | "childLock"
+        "setDisplay"   | "setDisplay"   | "state"      | "display"
     }
 
-    def "BP25: setChildLock('ON') when childLock is already 'on' is a no-op (C3 gate works with uppercase)"() {
+    @Unroll
+    def "BP25: #driverMethod('ON') when #attr is already 'on' is a no-op (C3 gate works with uppercase)"() {
         // Pre-fix: ("on" == "ON") is false → gate bypassed, redundant API call made.
         // Post-fix: toLowerCase() yields "on" == "on" → gate fires, no API call.
-        given: "childLock is already 'on'"
+        given: "#attr is already 'on'"
         settings.descriptionTextEnable = false
-        testDevice.events.add([name: "childLock", value: "on"])
+        testDevice.events.add([name: attr, value: "on"])
 
-        when: "setChildLock called with uppercase 'ON'"
-        driver.setChildLock("ON")
+        when: "#driverMethod called with uppercase 'ON'"
+        driver."$driverMethod"("ON")
 
         then: "no API call was made (C3 gate worked correctly)"
-        testParent.allRequests.find { it.method == "setChildLock" } == null
-    }
+        testParent.allRequests.find { it.method == apiMethod } == null
 
-    def "BP25: setDisplay('ON') uppercase makes the API call and sends state:true (not false)"() {
-        // Pre-fix: ("ON" == "on") is false → state:false sent (turn off instead of on).
-        // Post-fix: toLowerCase() normalizes "ON" → "on" → state:true (correct).
-        given: "display is currently 'off' so the C3 gate does not block"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "off"])
-
-        when: "setDisplay is called with uppercase 'ON'"
-        driver.setDisplay("ON")
-
-        then: "API call was made"
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-
-        and: "payload carries state:true (on), NOT false (off)"
-        req.data.state == true
-
-        and: "emitted event value is lowercase 'on'"
-        lastEventValue("display") == "on"
-    }
-
-    def "BP25: setDisplay('ON') when display is already 'on' is a no-op (C3 gate works with uppercase)"() {
-        given: "display is already 'on'"
-        settings.descriptionTextEnable = false
-        testDevice.events.add([name: "display", value: "on"])
-
-        when:
-        driver.setDisplay("ON")
-
-        then: "no API call was made"
-        testParent.allRequests.find { it.method == "setDisplay" } == null
+        where:
+        driverMethod   | apiMethod      | attr
+        "setChildLock" | "setChildLock" | "childLock"
+        "setDisplay"   | "setDisplay"   | "display"
     }
 
     def "BP24-B + invalid mode: setMode('badvalue') from off-state does NOT auto-on (Core 200S)"() {
@@ -937,65 +870,29 @@ class LevoitCore200SSpec extends HubitatSpec {
     // BP25-truthy: CorePurifierLib setChildLock and setDisplay truthy-canon emission
     // -----------------------------------------------------------------------
 
-    def "BP25-truthy: setChildLock('true') sends child_lock:true and emits 'on' (Core 200S)"() {
-        // Pre-fix: v = "true"; sendEvent(value:"true"). Post-fix: canon="on"; sendEvent(value:"on").
+    @Unroll
+    def "BP25-truthy: #driverMethod('#input') sends #payloadField:true and emits #attr='on' (Core 200S)"() {
+        // Pre-fix: v = "true"/"1"; sendEvent(value verbatim). Post-fix: canon="on"; sendEvent(value:"on").
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setChildLock("true")
+        driver."$driverMethod"(input)
 
-        then: "API call sent with child_lock:true"
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
+        then: "API call sent with #payloadField:true"
+        def req = testParent.allRequests.find { it.method == apiMethod }
         req != null
-        req.data.child_lock == true
+        req.data[payloadField] == true
 
-        and: "emitted attribute is canonical 'on', not raw 'true'"
-        lastEventValue("childLock") == "on"
-    }
+        and: "emitted attribute is canonical 'on', not raw input"
+        lastEventValue(attr) == "on"
 
-    def "BP25-truthy: setDisplay('true') sends state:true and emits 'on' (Core 200S)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setDisplay("true")
-
-        then: "API call sent with state:true"
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-        req.data.state == true
-
-        and: "emitted attribute is canonical 'on', not raw 'true'"
-        lastEventValue("display") == "on"
-    }
-
-    def "BP25-truthy: setChildLock('1') sends child_lock:true and emits 'on' (Core 200S)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setChildLock("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setChildLock" }
-        req != null
-        req.data.child_lock == true
-        lastEventValue("childLock") == "on"
-    }
-
-    def "BP25-truthy: setDisplay('1') sends state:true and emits 'on' (Core 200S)"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setDisplay("1")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setDisplay" }
-        req != null
-        req.data.state == true
-        lastEventValue("display") == "on"
+        where:
+        driverMethod   | input  | apiMethod      | payloadField | attr
+        "setChildLock" | "true" | "setChildLock" | "child_lock" | "childLock"
+        "setDisplay"   | "true" | "setDisplay"   | "state"      | "display"
+        "setChildLock" | "1"    | "setChildLock" | "child_lock" | "childLock"
+        "setDisplay"   | "1"    | "setDisplay"   | "state"      | "display"
     }
 
     def "BP25-truthy: C3 gate suppresses setChildLock when childLock='on' and input is 'true'"() {
@@ -1077,42 +974,25 @@ class LevoitCore200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // NIT 4: setAutoMode string-enum guard upgraded to requireNonEmptyEnum
-    // setAutoMode(mode, roomSize): the `mode` param is a user-callable string enum.
-    // Empty "" slipped past the former requireNotNull guard and reached the cloud.
+    // Phase 2b-cleanup: setAutoMode no longer exists on Core 200S.
+    // The auto-mode commands relocated from LevoitCorePurifier (which 200S #includes)
+    // into LevoitCoreAQPurifier (which 200S does NOT #include), so setAutoMode is no
+    // longer part of the 200S method surface. Core 200S has no AQ sensor and no
+    // setAutoMode command declaration, so no user/internal path ever reached it. The
+    // prior typeName-based runtime guard was dead once the method left the surface and
+    // has been dropped. (Replaces the two former NIT 4 setAutoMode-guard specs, which
+    // asserted the now-removed shared-method behavior.)
     // -------------------------------------------------------------------------
 
-    def "NIT 4: setAutoMode('') silently exits without API call (empty-string RM blank slot) (Core 200S/CorePurifierLib)"() {
-        // Pre-fix: requireNotNull("") returned true; "" was sent as mode to the cloud.
-        // Post-fix: requireNonEmptyEnum("") returns false silently; no API call.
-        given:
-        testParent.allRequests.clear()
-        int warnsBefore = testLog.warns.size()
-
-        when:
-        driver.setAutoMode("")
-
-        then: "no API call for setAutoMode or setLevel or autoPreference"
-        testParent.allRequests.isEmpty()
-
-        and: "no WARN logged (empty string is the RM blank-slot path — silent)"
-        testLog.warns.size() == warnsBefore
-
-        and: "no exception thrown"
-        noExceptionThrown()
-    }
-
-    def "NIT 4: setAutoMode(null) still warns (null path unchanged) (Core 200S/CorePurifierLib)"() {
-        given:
-        testParent.allRequests.clear()
-
-        when:
-        driver.setAutoMode(null)
-
-        then: "WARN logged for null"
-        testLog.warns.any { it.toLowerCase().contains("setautomode") }
-
-        and: "no API call"
-        testParent.allRequests.isEmpty()
+    def "Phase 2b-cleanup: Core 200S does not expose setAutoMode (relocated to AQ lib it does not include)"() {
+        expect: "calling setAutoMode throws MissingMethodException — the method is not on 200S's surface"
+        // Hubitat's sandbox swallows this at runtime; the Spock harness surfaces it directly.
+        // 200S declares no setAutoMode command and makes no internal call, so this is unreachable in practice.
+        try {
+            driver.setAutoMode("efficient")
+            assert false : "expected MissingMethodException — setAutoMode should not exist on Core 200S"
+        } catch (groovy.lang.MissingMethodException expected) {
+            assert expected.method == "setAutoMode"
+        }
     }
 }

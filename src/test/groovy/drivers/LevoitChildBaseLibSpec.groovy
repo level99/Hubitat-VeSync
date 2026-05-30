@@ -56,26 +56,21 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         testLog.infos.contains("hello info")
     }
 
-    def "logInfo is silent when descriptionTextEnable is false"() {
+    @Unroll
+    def "logInfo is silent when descriptionTextEnable is #pref"() {
         given:
-        settings.descriptionTextEnable = false
+        settings.descriptionTextEnable = pref
 
         when:
-        driver.logInfo("suppressed info")
+        driver.logInfo(msg)
 
         then:
-        !testLog.infos.contains("suppressed info")
-    }
+        !testLog.infos.contains(msg)
 
-    def "logInfo is silent when descriptionTextEnable is null (unsaved preference)"() {
-        given:
-        settings.descriptionTextEnable = null
-
-        when:
-        driver.logInfo("null-pref info")
-
-        then:
-        !testLog.infos.contains("null-pref info")
+        where:
+        pref  | msg
+        false | "suppressed info"
+        null  | "null-pref info"   // null = unsaved preference
     }
 
     // -------------------------------------------------------------------------
@@ -93,26 +88,21 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         testLog.debugs.contains("debug trace")
     }
 
-    def "logDebug is silent when debugOutput is false"() {
+    @Unroll
+    def "logDebug is silent when debugOutput is #pref"() {
         given:
-        settings.debugOutput = false
+        settings.debugOutput = pref
 
         when:
-        driver.logDebug("suppressed debug")
+        driver.logDebug(msg)
 
         then:
-        !testLog.debugs.contains("suppressed debug")
-    }
+        !testLog.debugs.contains(msg)
 
-    def "logDebug is silent when debugOutput is null (unsaved preference)"() {
-        given:
-        settings.debugOutput = null
-
-        when:
-        driver.logDebug("null-pref debug")
-
-        then:
-        !testLog.debugs.contains("null-pref debug")
+        where:
+        pref  | msg
+        false | "suppressed debug"
+        null  | "null-pref debug"   // null = unsaved preference
     }
 
     // -------------------------------------------------------------------------
@@ -360,37 +350,22 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
     // logAlways
     // -------------------------------------------------------------------------
 
-    def "logAlways emits info regardless of descriptionTextEnable=true"() {
+    @Unroll
+    def "logAlways emits info regardless of descriptionTextEnable=#pref"() {
         given:
-        settings.descriptionTextEnable = true
+        settings.descriptionTextEnable = pref
 
         when:
-        driver.logAlways("probe result always-on")
+        driver.logAlways(msg)
 
-        then:
-        testLog.infos.contains("probe result always-on")
-    }
+        then: "logAlways has no pref gate — output regardless of the preference value"
+        testLog.infos.contains(msg)
 
-    def "logAlways emits info even when descriptionTextEnable=false"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.logAlways("probe result pref disabled")
-
-        then: "logAlways has no pref gate — output regardless"
-        testLog.infos.contains("probe result pref disabled")
-    }
-
-    def "logAlways emits info even when descriptionTextEnable is null"() {
-        given:
-        settings.descriptionTextEnable = null
-
-        when:
-        driver.logAlways("probe result pref null")
-
-        then: "logAlways has no pref gate — null pref does not suppress it"
-        testLog.infos.contains("probe result pref null")
+        where:
+        pref  | msg
+        true  | "probe result always-on"
+        false | "probe result pref disabled"
+        null  | "probe result pref null"
     }
 
     // -------------------------------------------------------------------------
@@ -419,161 +394,186 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         "decimal '5.0' = 5"          | "5.0"                     | 5
         "integer 7 (boxed)"          | 7                         | 7
         "integer -3 (boxed)"         | -3                        | -3
+        // non-numeric / boolean-string / over-range all return the fallback
+        "non-numeric 'abc'"          | "abc"                     | 99
+        "boolean 'true' string"      | "true"                    | 99
+        "over-range BigDecimal (W1)" | "999999999999999999999"   | 99
     }
 
-    def "safeIntArg: non-numeric non-empty string returns fallback"() {
-        given:
-        settings.debugOutput = false
-        settings.descriptionTextEnable = false
-
-        expect:
-        driver.safeIntArg("abc", 99) == 99
-    }
-
-    def "safeIntArg: boolean 'true' string returns fallback"() {
-        given:
-        settings.debugOutput = false
-        settings.descriptionTextEnable = false
-
-        expect:
-        driver.safeIntArg("true", 99) == 99
-    }
-
-    def "safeIntArg: over-range BigDecimal returns fallback (W1 — no bit-narrowing)"() {
-        given:
-        settings.debugOutput = false
-        settings.descriptionTextEnable = false
-
-        // A value larger than Integer.MAX_VALUE (2147483647)
-        String overRange = "999999999999999999999"
-
-        expect:
-        driver.safeIntArg(overRange, 99) == 99
-    }
-
-    def "safeIntArg W2: non-numeric non-empty input logs a WARN"() {
+    @Unroll
+    def "safeIntArg W2: #desc"() {
         given:
         settings.debugOutput = false
         settings.descriptionTextEnable = false
 
         when:
-        driver.safeIntArg("abc", 99)
+        driver.safeIntArg(input, 99)
 
-        then: "a WARN was emitted for the non-parseable input"
-        testLog.warns.any { it.contains("safeIntArg") && it.contains("abc") }
+        then: "a WARN naming safeIntArg and containing the diagnostic substring was emitted"
+        testLog.warns.any { it.contains("safeIntArg") && it.contains(substring) }
+
+        where:
+        desc                                            | input                       | substring
+        "non-numeric non-empty input logs a WARN"       | "abc"                       | "abc"
+        "over-range input logs a WARN"                  | "999999999999999999999"     | "out-of-range"
     }
 
-    def "safeIntArg W2: over-range input logs a WARN"() {
+    @Unroll
+    def "safeIntArg W2: #desc (silent fallback, no WARN)"() {
         given:
         settings.debugOutput = false
         settings.descriptionTextEnable = false
 
         when:
-        driver.safeIntArg("999999999999999999999", 99)
+        driver.safeIntArg(input, 99)
 
-        then: "a WARN was emitted for the out-of-range input"
-        testLog.warns.any { it.contains("safeIntArg") && it.contains("out-of-range") }
-    }
-
-    def "safeIntArg W2: null input does NOT log a WARN (silent fallback)"() {
-        given:
-        settings.debugOutput = false
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.safeIntArg(null, 99)
-
-        then: "null is the requireNotNull path — safeIntArg does not double-warn"
+        then: "no WARN — this is the requireNotNull / Rule Machine blank-slot path, not a parse failure"
         testLog.warns.isEmpty()
-    }
 
-    def "safeIntArg W2: empty string input does NOT log a WARN (silent fallback)"() {
-        given:
-        settings.debugOutput = false
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.safeIntArg("", 99)
-
-        then: "empty string is the Rule Machine blank-slot path — safeIntArg does not warn"
-        testLog.warns.isEmpty()
+        where:
+        desc                                 | input
+        "null input does NOT log a WARN"     | null
+        "empty string does NOT log a WARN"   | ""
     }
 
     // -------------------------------------------------------------------------
     // safeIntArg (BP26) — 4-arg clamp overload (I1)
     // -------------------------------------------------------------------------
 
-    def "safeIntArg 4-arg: value within range is returned unchanged"() {
+    @Unroll
+    def "safeIntArg 4-arg: #desc -> #expected"() {
         given:
         settings.debugOutput = false
         settings.descriptionTextEnable = false
 
         expect:
-        driver.safeIntArg("5", 1, 1, 9) == 5
+        driver.safeIntArg(input, fb, lo, hi) == expected
+
+        where:
+        desc                                                  | input | fb | lo | hi | expected
+        "value within range returned unchanged"               | "5"   | 1  | 1  | 9  | 5
+        "value below lo clamped to lo"                        | "0"   | 1  | 1  | 9  | 1
+        "value above hi clamped to hi"                        | "99"  | 1  | 1  | 9  | 9
+        "fallback used for non-numeric input before clamp"    | "abc" | 5  | 1  | 9  | 5
+        "fallback outside range clamped after non-numeric"    | "abc" | 0  | 1  | 9  | 1
+        "null input uses fallback then clamps"                | null  | 3  | 1  | 9  | 3
+        "boundary value at lo returned as-is"                 | "1"   | 5  | 1  | 9  | 1
+        "boundary value at hi returned as-is"                 | "9"   | 5  | 1  | 9  | 9
     }
 
-    def "safeIntArg 4-arg: value below lo is clamped to lo"() {
+    // -------------------------------------------------------------------------
+    // parseLevelOrNull (BP28) — numeric -> Integer; non-numeric/null/empty -> null
+    // -------------------------------------------------------------------------
+
+    def "parseLevelOrNull: numeric input '#raw' returns Integer #expected (BP28)"() {
         given:
         settings.debugOutput = false
         settings.descriptionTextEnable = false
 
         expect:
-        driver.safeIntArg("0", 1, 1, 9) == 1
+        driver.parseLevelOrNull(raw) == expected
+
+        where:
+        raw    | expected
+        "0"    | 0
+        "5"    | 5
+        "9"    | 9
+        5      | 5
+        "5.7"  | 5     // decimal truncates toward zero (matches safeIntArg int() semantics)
+        "0.0"  | 0
     }
 
-    def "safeIntArg 4-arg: value above hi is clamped to hi"() {
+    def "parseLevelOrNull: non-numeric/null/empty input '#raw' returns null (BP28)"() {
         given:
         settings.debugOutput = false
         settings.descriptionTextEnable = false
 
         expect:
-        driver.safeIntArg("99", 1, 1, 9) == 9
+        driver.parseLevelOrNull(raw) == null
+
+        where:
+        raw << ["garbage", "hgih", "abc", "", "  ", null, "true", "1.2.3"]
     }
 
-    def "safeIntArg 4-arg: fallback is used for non-numeric input before clamping"() {
+    def "parseLevelOrNull: out-of-int-range BigDecimal returns null (W1 guard, BP28)"() {
         given:
         settings.debugOutput = false
         settings.descriptionTextEnable = false
 
-        // fallback=5 is within [1,9] → result is 5
-        expect:
-        driver.safeIntArg("abc", 5, 1, 9) == 5
+        expect: "beyond Integer range -> null (treated as garbage, not bit-wrapped)"
+        driver.parseLevelOrNull("99999999999999") == null
     }
 
-    def "safeIntArg 4-arg: fallback outside range is clamped after non-numeric input"() {
+    // -------------------------------------------------------------------------
+    // canonOnOff (BP25) — single blessed source for the permissive truthy-variant
+    // on/off coercion. Returns "on" for on/true/1/yes (case/whitespace-insensitive),
+    // "off" otherwise. Re-normalizes its input internally so it is idempotent and
+    // safe whether passed the raw arg or the already-normalized form.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "canonOnOff: '#raw' -> '#expected' (BP25 permissive truthy coercion)"() {
         given:
         settings.debugOutput = false
         settings.descriptionTextEnable = false
 
-        // fallback=0 is below lo=1 → result is clamped to 1
         expect:
-        driver.safeIntArg("abc", 0, 1, 9) == 1
+        driver.canonOnOff(raw) == expected
+
+        where:
+        raw       | expected
+        // truthy variants -> "on"
+        "on"      | "on"
+        "true"    | "on"
+        "1"       | "on"
+        "yes"     | "on"
+        // explicit off and the rest -> "off"
+        "off"     | "off"
+        "false"   | "off"
+        "0"       | "off"
+        "no"      | "off"
+        // anything unrecognized -> "off"
+        "garbage" | "off"
+        ""        | "off"
+        "   "     | "off"
     }
 
-    def "safeIntArg 4-arg: null input uses fallback then clamps"() {
+    @Unroll
+    def "canonOnOff: case-insensitive + whitespace-trimmed '#raw' -> '#expected'"() {
         given:
         settings.debugOutput = false
         settings.descriptionTextEnable = false
 
-        expect:
-        driver.safeIntArg(null, 3, 1, 9) == 3
+        expect: "input is normalized (trim + lowercase) internally before the truthy test"
+        driver.canonOnOff(raw) == expected
+
+        where:
+        raw       | expected
+        "ON"      | "on"
+        " On "    | "on"
+        "TRUE"    | "on"
+        " yes"    | "on"
+        "OFF"     | "off"
+        " Off "   | "off"
+        "FALSE"   | "off"
     }
 
-    def "safeIntArg 4-arg: boundary value at lo is returned as-is"() {
+    def "canonOnOff: null input -> 'off' (no exception)"() {
         given:
         settings.debugOutput = false
         settings.descriptionTextEnable = false
 
-        expect:
-        driver.safeIntArg("1", 5, 1, 9) == 1
+        expect: "explicit `if (v == null) return 'off'` guard returns off before any .toString(); never throws"
+        driver.canonOnOff(null) == "off"
     }
 
-    def "safeIntArg 4-arg: boundary value at hi is returned as-is"() {
+    def "canonOnOff: boxed integer 1 -> 'on', 0 -> 'off' (toString coercion)"() {
         given:
         settings.debugOutput = false
         settings.descriptionTextEnable = false
 
         expect:
-        driver.safeIntArg("9", 5, 1, 9) == 9
+        driver.canonOnOff(1) == "on"
+        driver.canonOnOff(0) == "off"
     }
 }

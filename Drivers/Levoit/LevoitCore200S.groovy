@@ -30,8 +30,8 @@ SOFTWARE.
 //                  setLevel's internal setSpeed() call. Added cases for "1"/"2"/"3" matching Core
 //                  300S canonical pattern; added integer-string remap in setSpeed() to emit named
 //                  speed attributes ("low"/"medium"/"high") not "1"/"2"/"3".
-//                  Fix: setLevel(null) NPE (BP18) — added Math.max/min/(val as Integer)?:0 coercion
-//                  before null-unsafe arithmetic comparisons.
+//                  Fix: setLevel(null) NPE (BP18) — null-guard via safeIntArg() (the
+//                  fork's null-safe coercion helper) before arithmetic comparisons.
 // 2026-05-03: v2.5  Migrated to LevoitCorePurifier shared library (Phase 2).
 //                  Removed 14 shared methods now provided by LevoitCorePurifierLib.
 //                  BP24-A fix: cycleSpeed() dead state.switch branch replaced with
@@ -75,7 +75,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S / 300S air purifiers",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -111,204 +111,21 @@ metadata {
     }
 }
 
-def updated() {
-	logDebug "Updated with settings: ${settings}"
+// Core 200S has no AQ sensor and no auto mode — setSpeed/setMode (provided by the lib)
+// gate the auto branch + allowed-mode set on this hook (Bucket B2/B3, #142 Phase 2d).
+private boolean supportsAutoMode() { false }
 
-    state.clear()
-    unschedule()
-	initialize()
-
-    runIn(3, "update")
-
-    // Turn off debug log in 30 minutes (happy path — no hub reboot)
-    if (settings?.debugOutput) {
-        runIn(1800, "logDebugOff")
-        state.debugEnabledAt = now()
-    } else {
-        state.remove("debugEnabledAt")
-    }
-}
-
-def on() {
-    logDebug "on()"
-
-    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
-    state.turningOn = true
-    try {
-        handlePower(true)
-        logInfo "Power on"
-        handleEvent("switch", "on")
-
-        if (state.speed != null) {
-            setSpeed(state.speed)
-        }
-        else {
-            setSpeed("low")
-        }
-
-        if (state.mode != null) {
-            setMode(state.mode)
-        }
-        else {
-            update()
-        }
-    } finally {
-        state.remove('turningOn')
-    }
-}
-
-def off() {
-    logDebug "off()"
-
-    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
-    state.turningOff = true
-    try {
-        handlePower(false)
-        logInfo "Power off"
-        handleEvent("switch", "off")
-        handleEvent("speed", "off")
-    } finally {
-        state.remove('turningOff')
-    }
-}
-
-def cycleSpeed() {
-    logDebug "cycleSpeed()"
-    ensureSwitchOn()    // BP24-A fix — replaces dead state.switch == "off" branch
-
-    def speed = (state.speed == "low") ? "medium" : ( (state.speed == "medium") ? "high" : "low")
-    setSpeed(speed)
-}
-
-// 2-arg setLevel overload — Hubitat SwitchLevel capability standard signature.
-// VeSync devices do NOT support hardware-level fade/duration, so the duration
-// parameter is intentionally ignored. Delegates to the 1-arg version.
-// Without this overload, any caller using the standard 2-arg form (Rule Machine
-// with duration, dashboard tiles, MCP setLevel(N, D), third-party apps) throws
-// MissingMethodException — Hubitat sandbox catches it silently and the command
-// fails without user feedback.
-def setLevel(value, duration)
-{
-    setLevel(value)
-}
-
-def setLevel(value)
-{
-    logDebug "setLevel $value"
-    // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
-    Integer pct = safeIntArg(value, 0, 0, 100)
-    // SwitchLevel convention: setLevel(0) means off (Z-Wave dimmer platform expectation).
-    if (pct == 0) { off(); return }
-    // BP23: auto-on when switch is off (SwitchLevel capability convention).
-    // state.turningOn re-entrance guard is inside ensureSwitchOn().
-    ensureSwitchOn()
-    def speed = 0
-    setMode("manual") // always manual if setLevel() cmd was called
-
-    if(pct < 33) speed = 1
-    if(pct >= 33 && pct < 66) speed = 2
-    if(pct >= 66) speed = 3
-
-    device.sendEvent(name: "level", value: pct)
-    setSpeed(speed)
-}
-
-def setSpeed(speed) {
-    logDebug "setSpeed(${speed})"
-    if (!requireNonEmptyEnum(speed, "setSpeed")) return false                   // BP18 null/empty-guard
-    String s = (speed as String).trim().toLowerCase()
-    // Remap integer-string values from setLevel() path to named speed strings.
-    // setLevel() passes Integer 1/2/3; (speed as String) yields "1"/"2"/"3".
-    // Emit named speeds ("low"/"medium"/"high") for attribute consistency.
-    if (s in ["1", "2", "3"]) s = mapIntegerStringToSpeed(s)
-    // Power short-circuits BEFORE ensureSwitchOn — setSpeed("off") must NOT auto-on first
-    if (s == "off") { off(); return }
-    ensureSwitchOn()                                                             // BP24-B auto-on (after short-circuit)
-    if (s == "sleep") {
-        setMode(s)
-        handleEvent("speed", "on")
-    }
-    else if (state.mode == "manual") {
-        handleSpeed(s)
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
-    }
-    else if (state.mode == "sleep") {
-        setMode("manual")
-        handleSpeed(s)
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
-    }
-    else {
-        // Recover: unknown or null state.mode (e.g. fresh device, pre-first-poll).
-        // Guard against on() re-entrancy: when state.turningOn is set we are inside on()'s
-        // own setSpeed call — skip mode establishment to avoid issuing a spurious
-        // setPurifierMode that would clobber a concurrently-dispatched setMode command.
-        // on() will call setMode(state.mode) or update() after this setSpeed returns.
-        if (!state.turningOn) {
-            handleMode("manual")
-            state.mode = "manual"
-            handleEvent("mode", "manual")
-        }
-        handleSpeed(s)
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
-    }
-}
-
-def setMode(mode) {
-    logDebug "setMode(${mode})"
-    if (!requireNonEmptyEnum(mode, "setMode")) return false                     // BP18 null/empty-guard
-    String m = (mode as String).trim().toLowerCase()
-    if (!(m in ["manual", "sleep"])) {                                          // reject invalid BEFORE auto-on
-        logWarn "setMode: invalid mode '${m}' -- must be one of: manual, sleep; ignoring"
-        return false
-    }
-    ensureSwitchOn()                                                             // BP24-B auto-on (after rejection checks)
-    handleMode(m)
-    state.mode = m
-    handleEvent("mode", m)
-    logInfo "Mode: ${m}"
-    switch(m)
-    {
-        case "manual":
-            handleEvent("speed", state.speed)
-            break;
-        case "sleep":
-            handleEvent("speed", "on")
-            break;
-    }
-}
-
-def mapSpeedToInteger(speed) {
-    switch(speed)
-    {
-        case "1":
-        case "low":
-            return 1;
-        case "2":
-        case "medium":
-            return 2;
-    }
-    return 3;
-}
-
-def mapIntegerStringToSpeed(speed) {
-    return (speed == "1") ? "low" : ( (speed == "2") ? "medium" : "high")
-}
-
-def mapIntegerToSpeed(speed) {
-    return (speed == 1) ? "low" : ( (speed == 2) ? "medium" : "high")
-}
+// Speed-band table for Core 200S (3-band). Index = API integer level, value = named band.
+// Consumed by the lib's table-driven mapSpeedToInteger/mapIntegerToSpeed/
+// mapIntegerStringToSpeed helpers (Bucket B1, #142 Phase 2c).
+private Map getSpeedBands() { [1:"low", 2:"medium", 3:"high"] }
 
 // logDebug, logError, logInfo, logDebugOff, ensureDebugWatchdog, ensureSwitchOn
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
-// installed, uninstalled, initialize, toggle, setDisplay, handlePower, handleSpeed,
-// handleMode, handleDisplayOn, setChildLock, setTimer, cancelTimer, resetFilter,
-// checkHttpResponse are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
+// installed, uninstalled, initialize, updated, on, off, toggle, setDisplay, handlePower,
+// handleSpeed, handleMode, handleDisplayOn, setChildLock, setTimer, cancelTimer, resetFilter,
+// checkHttpResponse, setLevel(value, duration), setLevel(value), cycleSpeed, mapSpeedToInteger,
+// mapIntegerToSpeed, mapIntegerStringToSpeed, setSpeed, setMode are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
 
 def update() {
 
@@ -340,13 +157,7 @@ def update(status, nightLight)
 {
     ensureDebugWatchdog()
     logDebug "update(status, nightLight)"
-    // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
+    seedPrefs()
 
     logDebug status
 

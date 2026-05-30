@@ -1,5 +1,6 @@
 package drivers
 
+import spock.lang.Unroll
 import support.HubitatSpec
 import support.TestDevice
 
@@ -884,72 +885,140 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Test 13: fan — LTF-F422S setTowerFanMode round-trip
-    // Regression guard for BLOCKING #1 fix: verifies the fan-mode-setter
-    // (driver-side extension absent from pyvesync's upstream YAML) is now
-    // reachable through FIXTURE_OPS and updates canonical state correctly.
+    // Tests 13 & 14: fan mode-setter round-trips (driver-side extensions absent
+    // from pyvesync's upstream YAML; reachable through FIXTURE_OPS via
+    // virtual_parent_extensions.json). Regression guard for BLOCKING #1 fix.
+    // Both cases share an identical assertion shape — snapshot.workMode mutated,
+    // synthesizeStatusResponse carries it in the single-wrapped fan envelope,
+    // no ERROR, DEBUG "Payload validated" naming the method — and vary only in
+    // (fixture, label, method, workMode), so they collapse into one @Unroll.
     // -------------------------------------------------------------------------
 
-    def "sendBypassRequest setTowerFanMode on LTF-F422S updates workMode and logs DEBUG not ERROR"() {
-        given: "Tower Fan child spawned"
+    @Unroll
+    def "sendBypassRequest #method on #fixture updates workMode and logs DEBUG not ERROR"() {
+        given: "fan child spawned"
         state.realParentDetected = false
-        driver.spawnFromFixture("LTF-F422S", "FanModeTest")
-        String dni = "VirtualVeSync-LTF-F422S-FanModeTest"
+        driver.spawnFromFixture(fixture, label)
+        String dni = "VirtualVeSync-${fixture}-${label}"
         def child = childRegistry[dni]
         testLog.reset()
 
-        when: "send setTowerFanMode (workMode=sleep) — extension method added in virtual_parent_extensions.json"
+        when: "send the fan-mode setter — extension method added in virtual_parent_extensions.json"
         driver.sendBypassRequest(child, [
-            method: "setTowerFanMode",
+            method: method,
             source: "APP",
-            data  : [workMode: "sleep"]
+            data  : [workMode: workMode]
         ], { resp -> /* closure */ })
 
-        then: "canonical snapshot reflects workMode=sleep"
-        state.fixtureSnapshots[dni]?.workMode == "sleep"
+        then: "canonical snapshot reflects the new workMode"
+        state.fixtureSnapshots[dni]?.workMode == workMode
 
         and: "synthesizeStatusResponse carries updated workMode in fan envelope"
-        def response = driver.synthesizeStatusResponse(dni, "LTF-F422S")
-        response.result.workMode == "sleep"
+        def response = driver.synthesizeStatusResponse(dni, fixture)
+        response.result.workMode == workMode
 
         and: "no ERROR logged (method is now found in FIXTURE_OPS)"
         testLog.errors.isEmpty()
 
         and: "DEBUG logged confirming payload validated"
-        testLog.debugs.any { it.contains("Payload validated") && it.contains("setTowerFanMode") }
+        testLog.debugs.any { it.contains("Payload validated") && it.contains(method) }
+
+        where:
+        fixture     | label             | method            | workMode
+        "LTF-F422S" | "FanModeTest"     | "setTowerFanMode" | "sleep"
+        "LPF-R423S" | "PedestalModeTest"| "setFanMode"      | "auto"
     }
 
     // -------------------------------------------------------------------------
-    // Test 14: fan — LPF-R423S setFanMode round-trip
-    // Companion regression guard: pedestal fan mode-setter extension.
+    // Multi-variant payload validation: setOscillationStatus on the Pedestal Fan
+    // sends FOUR distinct legitimate key-sets depending on the caller
+    // (setHorizontalOscillation / setVerticalOscillation / setHorizontalRange /
+    // setVerticalRange). FIXTURE_OPS therefore carries dataKeyVariants (a list of
+    // allowed key-Sets) for this op rather than a single union dataKeys Set.
+    //
+    // Regression guard for the strict union-exact-match bug: the old validator
+    // compared ourKeys against the 7-key UNION as a single Set, so EVERY one of
+    // the four real variants mismatched and ERRORed — the harness never actually
+    // validated this op and silently masked any genuine payload regression.
+    //
+    // If someone reverts fixtureKeyVariants / the validator back to strict
+    // exact-match against the union Set, the "validates cleanly" cases below go
+    // RED (they would log the mismatch ERROR and lack the "Payload validated"
+    // DEBUG), and the wrong-key cases would still pass — proving the guard's
+    // direction.
     // -------------------------------------------------------------------------
 
-    def "sendBypassRequest setFanMode on LPF-R423S updates workMode and logs DEBUG not ERROR"() {
+    @Unroll
+    def "sendBypassRequest setOscillationStatus variant '#variantName' validates cleanly (no mismatch ERROR)"() {
         given: "Pedestal Fan child spawned"
         state.realParentDetected = false
-        driver.spawnFromFixture("LPF-R423S", "PedestalModeTest")
-        String dni = "VirtualVeSync-LPF-R423S-PedestalModeTest"
+        driver.spawnFromFixture("LPF-R423S", "PedestalOsc-${variantName}")
+        String dni = "VirtualVeSync-LPF-R423S-PedestalOsc-${variantName}"
+        def child = childRegistry[dni]
+        settings.debugOutput = true
+        testLog.reset()
+
+        when: "send setOscillationStatus with one of the four legitimate Pedestal payload variants"
+        driver.sendBypassRequest(child, [
+            method: "setOscillationStatus",
+            source: "APP",
+            data  : data
+        ], { resp -> /* no-op closure */ })
+
+        then: "no key-mismatch ERROR logged for this legitimate variant"
+        !testLog.errors.any { it.contains("mismatch") }
+
+        and: "DEBUG confirms the payload validated against a key-set variant"
+        testLog.debugs.any { it.contains("Payload validated") && it.contains("setOscillationStatus") }
+
+        where:
+        variantName | data
+        "H-toggle"  | [horizontalOscillationState: 1, actType: "default"]
+        "V-toggle"  | [verticalOscillationState: 1, actType: "default"]
+        "H-range"   | [horizontalOscillationState: 1, actType: "default", left: 30, right: 30]
+        "V-range"   | [verticalOscillationState: 1, actType: "default", top: 30, bottom: 30]
+    }
+
+    def "sendBypassRequest setOscillationStatus with a bogus extra key still logs mismatch ERROR"() {
+        given:
+        state.realParentDetected = false
+        driver.spawnFromFixture("LPF-R423S", "PedestalOscBogus")
+        String dni = "VirtualVeSync-LPF-R423S-PedestalOscBogus"
         def child = childRegistry[dni]
         testLog.reset()
 
-        when: "send setFanMode (workMode=auto) — extension method added in virtual_parent_extensions.json"
+        when: "send a variant-shaped payload plus an unexpected key"
         driver.sendBypassRequest(child, [
-            method: "setFanMode",
+            method: "setOscillationStatus",
             source: "APP",
-            data  : [workMode: "auto"]
+            data  : [horizontalOscillationState: 1, actType: "default", bogusKey: 99]
         ], { resp -> /* closure */ })
 
-        then: "canonical snapshot reflects workMode=auto"
-        state.fixtureSnapshots[dni]?.workMode == "auto"
+        then: "no variant matches → mismatch ERROR logged naming the method"
+        testLog.errors.any { it.contains("mismatch") && it.contains("setOscillationStatus") }
+    }
 
-        and: "synthesizeStatusResponse carries updated workMode in fan envelope"
-        def response = driver.synthesizeStatusResponse(dni, "LPF-R423S")
-        response.result.workMode == "auto"
+    def "sendBypassRequest setOscillationStatus with an illegal cross-axis combo still logs mismatch ERROR"() {
+        given:
+        state.realParentDetected = false
+        driver.spawnFromFixture("LPF-R423S", "PedestalOscCross")
+        String dni = "VirtualVeSync-LPF-R423S-PedestalOscCross"
+        def child = childRegistry[dni]
+        testLog.reset()
 
-        and: "no ERROR logged"
-        testLog.errors.isEmpty()
+        when: "send horizontal state with vertical-range top/bottom keys — a combo no real caller sends"
+        // [horizontalOscillationState, actType, top, bottom] matches none of the four
+        // legitimate variants: H-toggle is [horizontalOscillationState, actType],
+        // H-range is [horizontalOscillationState, actType, left, right], and the
+        // top/bottom keys only ever accompany verticalOscillationState. The fix must
+        // reject this plausible-but-illegal cross-axis combination.
+        driver.sendBypassRequest(child, [
+            method: "setOscillationStatus",
+            source: "APP",
+            data  : [horizontalOscillationState: 1, actType: "default", top: 30, bottom: 30]
+        ], { resp -> /* closure */ })
 
-        and: "DEBUG logged confirming payload validated"
-        testLog.debugs.any { it.contains("Payload validated") && it.contains("setFanMode") }
+        then: "illegal combo matches no variant → mismatch ERROR logged"
+        testLog.errors.any { it.contains("mismatch") && it.contains("setOscillationStatus") }
     }
 }

@@ -28,7 +28,8 @@ library(
 // Library contract:
 //   REQUIRES: #include level99.LevoitDiagnostics  (provides recordError)
 //   REQUIRES: #include level99.LevoitChildBase    (provides logInfo/logDebug/logError/logWarn/
-//                                                  ensureDebugWatchdog/ensureSwitchOn/requireNotNull)
+//                                                  ensureDebugWatchdog/ensureSwitchOn/requireNotNull/
+//                                                  hubBypass/httpOk)
 //   PROVIDES: 31 shared methods covering lifecycle, power, speed/level, mode,
 //             feature setters, timer, polling, and HTTP plumbing. See sections below.
 //   BEHAVIOR CONTRACTS:
@@ -196,7 +197,10 @@ def setLevel(val, duration) {
 // BP18: null-guard converts null → 0 (null < N throws NPE; 0 routes cleanly to off() below).
 def setLevel(val) {
     logDebug "setLevel $val"
-    Integer pct = safeIntArg(val, 0, 0, 100)
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer pct = parseLevelOrNull(val)
+    if (pct == null) { logWarn "setLevel: ignoring non-numeric value '${val}'"; return }
+    pct = Math.max(0, Math.min(100, pct))
     if (pct == 0) { off(); return }
     // BP23: auto-on when switch is off.
     // state.turningOn is set by on() while configureOnState() runs async;
@@ -227,6 +231,18 @@ def setSpeed(spd) {
     String s = (spd as String).trim().toLowerCase()
     if (s == "off") return off()
     if (s == "sleep") { setMode("sleep"); device.sendEvent(name:"speed", value:"on"); return }
+
+    // Reject unknown speed values BEFORE ensureSwitchOn() and before any cloud write.
+    // Without this, an unrecognized value (e.g. "turbo") falls through to mapSpeedToInteger,
+    // which defaults unknown input to the "low" band (default: return 2) -- silently widening
+    // garbage to a real speed AND auto-powering the device on. setMode already rejects invalid
+    // modes; mirror that here so a malformed FanControl/Rule Machine speed does not turn the
+    // device on. (BP24-class: reject-before-auto-on.)
+    List validSpeeds = ["low", "medium", "high", "max"]
+    if (!(s in validSpeeds)) {
+        logWarn "setSpeed: invalid speed '${s}' -- must be one of: ${(validSpeeds + ['sleep','off']).join(', ')}; ignoring"
+        return
+    }
 
     ensureSwitchOn()
 
@@ -299,9 +315,10 @@ def setMode(mode) {
 
 def setPetMode(onOff) {
     if (!requireNonEmptyEnum(onOff, "setPetMode")) return
-    // BP25: normalize to lowercase before mode selection.
+    // BP25: normalize + canonicalize truthy variants ("true"/"1"/"yes") before mode selection.
     String v = (onOff as String).trim().toLowerCase()
-    setMode(v == "on" ? "pet" : "auto")
+    String canon = canonOnOff(v)
+    setMode(canon == "on" ? "pet" : "auto")
 }
 
 def setAutoPreference(pref) {
@@ -329,7 +346,7 @@ def setChildLock(onOff) {
     // the caller intended to lock. Both the gate and the coercion must see the same form.
     String v = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
     if (device.currentValue("childLock") == canon) return
     def resp = hubBypass("setChildLock", [childLockSwitch: canon == "on" ? 1 : 0], "setChildLock")
@@ -346,7 +363,7 @@ def setDisplay(onOff) {
     // BP25: normalize to lowercase before C3 gate and payload coercion (same rationale as setChildLock).
     String v = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (v in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(v)
     // C3 state-change gate: no-op when value matches current attribute (suppresses redundant events)
     if (device.currentValue("display") == canon) return
     def resp = hubBypass("setDisplay", [screenSwitch: canon == "on" ? 1 : 0], "setDisplay")
@@ -427,32 +444,7 @@ def update(status, nightLight) {
 
 // ---- HTTP plumbing ----
 
-// Hub/parent call wrapper
-private hubBypass(method, Map data=[:], tag=null, cb=null) {
-    def rspObj = [ status: -1, data: null ]
-    parent.sendBypassRequest(device, [ method: method, source:"APP", data: data ]) { resp ->
-        rspObj = [ status: resp?.status, data: resp?.data ]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp) {
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]) {
-        def inner = resp?.data?.result?.code
-        if (inner == null) return true
-        if (inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"
-    recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// hubBypass, httpOk are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 
 // ---- Power (canonical V2-line payload) ----
 // Canonical payload per pyvesync LAP-V102S.yaml / LAP-V201S.yaml:

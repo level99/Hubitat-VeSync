@@ -2,6 +2,7 @@ package drivers
 
 import support.HubitatSpec
 import support.TestParent
+import spock.lang.Unroll
 
 /**
  * Unit tests for LevoitClassic300S.groovy (Levoit Classic 300S Humidifier).
@@ -399,30 +400,21 @@ class LevoitClassic300SSpec extends HubitatSpec {
         !req.data.containsKey("workMode")
     }
 
-    def "setMode('sleep') sends setHumidityMode with {mode:'sleep'}"() {
+    @Unroll
+    def "setMode('#mode') sends setHumidityMode with {mode:'#mode'}"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setMode("sleep")
+        driver.setMode(mode)
 
         then:
         def req = testParent.allRequests.find { it.method == "setHumidityMode" }
         req != null
-        req.data.mode == "sleep"
-    }
+        req.data.mode == mode
 
-    def "setMode('manual') sends setHumidityMode with {mode:'manual'}"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setMode("manual")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setHumidityMode" }
-        req != null
-        req.data.mode == "manual"
+        where:
+        mode << ["sleep", "manual"]
     }
 
     def "setMode with invalid value logs error and sends no request"() {
@@ -459,73 +451,47 @@ class LevoitClassic300SSpec extends HubitatSpec {
         !req.data.containsKey("targetHumidity")
     }
 
-    def "setHumidity clamps values below 30 to 30"() {
+    @Unroll
+    def "setHumidity clamps #input to #expected"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setHumidity(10)
+        driver.setHumidity(input)
 
         then:
         def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
         req != null
-        req.data.target_humidity == 30
-    }
+        req.data.target_humidity == expected
 
-    def "setHumidity clamps values above 80 to 80"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setHumidity(95)
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setTargetHumidity" }
-        req != null
-        req.data.target_humidity == 80
+        where:
+        input | expected
+        10    | 30
+        95    | 80
     }
 
     // -------------------------------------------------------------------------
     // Night-light enum (HA finding #9 — discrete 3-step)
     // -------------------------------------------------------------------------
 
-    def "setNightLight('off') sends setNightLightBrightness with {night_light_brightness:0}"() {
+    @Unroll
+    def "setNightLight('#nl') sends setNightLightBrightness with {night_light_brightness:#brightness}"() {
         given:
         settings.descriptionTextEnable = false
 
         when:
-        driver.setNightLight("off")
+        driver.setNightLight(nl)
 
         then:
         def req = testParent.allRequests.find { it.method == "setNightLightBrightness" }
         req != null
-        req.data.night_light_brightness == 0
-    }
+        req.data.night_light_brightness == brightness
 
-    def "setNightLight('dim') sends setNightLightBrightness with {night_light_brightness:50}"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setNightLight("dim")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setNightLightBrightness" }
-        req != null
-        req.data.night_light_brightness == 50
-    }
-
-    def "setNightLight('bright') sends setNightLightBrightness with {night_light_brightness:100}"() {
-        given:
-        settings.descriptionTextEnable = false
-
-        when:
-        driver.setNightLight("bright")
-
-        then:
-        def req = testParent.allRequests.find { it.method == "setNightLightBrightness" }
-        req != null
-        req.data.night_light_brightness == 100
+        where:
+        nl       | brightness
+        "off"    | 0
+        "dim"    | 50
+        "bright" | 100
     }
 
     def "setNightLight with invalid value logs error and sends NO request (HA finding #9 safety)"() {
@@ -542,49 +508,25 @@ class LevoitClassic300SSpec extends HubitatSpec {
         testLog.errors.any { it.contains("medium") || it.contains("Invalid") || it.contains("nightLight") }
     }
 
-    def "applyStatus parses night_light_brightness=50 as 'dim' (HA finding #9)"() {
+    @Unroll
+    def "applyStatus parses night_light_brightness=#brightness as '#expectedNl' (HA finding #9)"() {
         given:
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = v2StatusEnvelope(fixture.responses.device_on_manual_speed5 as Map)
-        // device_on_manual_speed5: night_light_brightness=50
+        def status = v2StatusEnvelope(fixture.responses[fixtureKey] as Map)
 
         when:
         driver.applyStatus(status)
 
         then:
-        lastEventValue("nightLight") == "dim"
-        lastEventValue("nightLightBrightness") == 50
-    }
+        lastEventValue("nightLight") == expectedNl
+        lastEventValue("nightLightBrightness") == brightness
 
-    def "applyStatus parses night_light_brightness=0 as 'off'"() {
-        given:
-        settings.descriptionTextEnable = false
-        def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = v2StatusEnvelope(fixture.responses.device_off as Map)
-        // device_off: night_light_brightness=0
-
-        when:
-        driver.applyStatus(status)
-
-        then:
-        lastEventValue("nightLight") == "off"
-        lastEventValue("nightLightBrightness") == 0
-    }
-
-    def "applyStatus parses night_light_brightness=100 as 'bright'"() {
-        given:
-        settings.descriptionTextEnable = false
-        def fixture = loadYamlFixture("Classic300S.yaml")
-        def status = v2StatusEnvelope(fixture.responses.device_legacy_display_alias as Map)
-        // device_legacy_display_alias: night_light_brightness=100
-
-        when:
-        driver.applyStatus(status)
-
-        then:
-        lastEventValue("nightLight") == "bright"
-        lastEventValue("nightLightBrightness") == 100
+        where:
+        fixtureKey                    | brightness | expectedNl
+        "device_on_manual_speed5"     | 50         | "dim"
+        "device_off"                  | 0          | "off"
+        "device_legacy_display_alias" | 100        | "bright"
     }
 
     def "applyStatus snaps unknown night_light_brightness to 'off' (HA finding #9 safety)"() {
@@ -744,22 +686,17 @@ class LevoitClassic300SSpec extends HubitatSpec {
 
     // ---- BP18: null-arg guard ----
 
-    def "setMode(null) does not throw and emits a WARN log (BP18)"() {
+    @Unroll
+    def "#cmd(null) does not throw and emits a WARN log (BP18)"() {
         when:
-        driver.setMode(null)
+        driver."$cmd"(null)
         then:
         noExceptionThrown()
-        testLog.warns.any { it.contains("setMode") && it.contains("null") }
+        testLog.warns.any { it.contains(cmd) && it.contains("null") }
         testParent.allRequests.isEmpty()
-    }
 
-    def "setNightLight(null) does not throw and emits a WARN log (BP18)"() {
-        when:
-        driver.setNightLight(null)
-        then:
-        noExceptionThrown()
-        testLog.warns.any { it.contains("setNightLight") && it.contains("null") }
-        testParent.allRequests.isEmpty()
+        where:
+        cmd << ["setMode", "setNightLight"]
     }
 
     // -------------------------------------------------------------------------
@@ -1193,5 +1130,40 @@ class LevoitClassic300SSpec extends HubitatSpec {
         then:
         noExceptionThrown()
         testParent.allRequests.findAll { it.method == "setAutomaticStop" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // BP28 regression guard: non-numeric mist value must NOT turn device off.
+    // Non-vacuity: (a) FAILS on pre-fix (safeIntArg("garbage",0)->0->off());
+    // PASSES post-fix (parseLevelOrNull->null->ignore). (b) guards explicit-0 contract.
+    // -------------------------------------------------------------------------
+
+    def "setMistLevel('garbage') is ignored — no off(), no cloud command (BP28)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel called with a non-numeric typo"
+        driver.setMistLevel("garbage")
+
+        then: "nothing was sent to the cloud (no off(), no setVirtualLevel)"
+        testParent.allRequests.isEmpty()
+    }
+
+    def "setMistLevel(0) still calls off() (BP28 explicit-0 contract preserved)"() {
+        given: "device is on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setMistLevel(0) is called"
+        driver.setMistLevel(0)
+
+        then: "off() (setSwitch) was sent"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "no setVirtualLevel mist command was sent"
+        testParent.allRequests.every { it.method != "setVirtualLevel" }
     }
 }

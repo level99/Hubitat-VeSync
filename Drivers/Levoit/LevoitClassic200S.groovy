@@ -84,7 +84,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Classic 200S (literal deviceType 'Classic200S') — mist 1-9, target humidity 30-80%, auto/manual modes only (no sleep), auto-stop, display (via setIndicatorLightSwitch -- different from Classic 300S). No warm mist. Night-light brightness passive read-only. pyvesync VeSyncHumid200S class. CROSS-CHECK: different from Classic 300S (VeSyncHumid200300S).",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -141,28 +141,10 @@ metadata {
 // Provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ---------- Power ----------
+// Power on/off provided by #include level99.LevoitHumidifier; payload supplied via this hook.
 // Humidifier switch payload: {enabled: bool, id: 0}
 // NOT purifier shape {powerSwitch: int, switchIdx: 0}
-def on(){
-    logDebug "on()"
-    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
-    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
-    state.turningOn = true
-    try {
-        def resp = hubBypass("setSwitch", [enabled: true, id: 0], "setSwitch(enabled=true)")
-        if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
-    } finally {
-        state.turningOn = false
-    }
-}
-
-def off(){
-    logDebug "off()"
-    def resp = hubBypass("setSwitch", [enabled: false, id: 0], "setSwitch(enabled=false)")
-    if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
-}
+Map powerPayload(boolean on){ [enabled: on, id: 0] }
 
 // ---------- Mode ----------
 // CROSS-CHECK [pyvesync Classic200S.yaml (commit c98729c) / device_map.py Classic200S entry]:
@@ -207,7 +189,10 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    Integer lvl = safeIntArg(level, 0)
+    // BP24: SHOULD-ON — mist-level command; calls ensureSwitchOn() below (SwitchLevel convention).
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer lvl = parseLevelOrNull(level)
+    if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
     if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
@@ -244,7 +229,7 @@ def setDisplay(onOff){
     if (!requireNonEmptyEnum(onOff, "setDisplay")) return false
     String val = (onOff as String).trim().toLowerCase()
     // Canonical on/off derived from truthy test — sendEvent always emits "on" or "off".
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("displayOn") == canon) return  // C3 state-change gate
     Boolean v = (canon == "on")
     // Classic 200S: setIndicatorLightSwitch with {enabled, id} -- NOT setDisplay with {state}
@@ -271,24 +256,10 @@ def applyStatus(status){
     // BP16 watchdog: auto-disable debugOutput after 30 min even across hub reboots.
     ensureDebugWatchdog()
 
-    // One-time pref seed: heal descriptionTextEnable=true default (BP#12)
-    // Insertion point: top of applyStatus() per V1-humidifier-base convention
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
-
-    def r = status?.result ?: [:]
-    // Defensive envelope peel -- humidifier bypassV2 responses can be double-wrapped (BP#3).
-    int peelGuard = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-        r = r.result
-        peelGuard++
-    }
+    seedPrefs()
+    def r = peelEnvelope(status)
     // Diagnostic raw dump -- gated by debugOutput.
-    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     // ---- Power ----
     // Classic 200S response uses `enabled` (boolean), same as other VeSyncHumid200300S class devices

@@ -63,7 +63,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Levoit Superior 6000S (LEH-S601S) evaporative humidifier — mist 1-9, target humidity, modes, drying mode, auto-stop, water pump cleaning, ambient temp; canonical pyvesync payloads",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -114,26 +114,9 @@ metadata {
 // are provided by #include level99.LevoitHumidifier (LevoitHumidifierLib.groovy).
 
 // ---------- Power ----------
-def on(){
-    logDebug "on()"
-    // state.turningOn prevents re-entrance: ensureSwitchOn() -> on() -> setMistLevel() -> ensureSwitchOn()
-    if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
-    state.turningOn = true
-    try {
-        def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(power=1)")
-        if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
-    } finally {
-        state.turningOn = false
-    }
-}
-
-def off(){
-    logDebug "off()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(power=0)")
-    if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
-}
+// Power on/off provided by #include level99.LevoitHumidifier; payload supplied via this hook.
+// V2-family switch payload: {powerSwitch: 0|1, switchIdx: 0}
+Map powerPayload(boolean on){ [powerSwitch: on ? 1 : 0, switchIdx: 0] }
 
 // toggle: provided by #include level99.LevoitHumidifier (state.lastSwitchSet preferred pattern)
 
@@ -160,14 +143,20 @@ def setMode(mode){
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
-    // BUG #212: Sup6000S V2 firmware rejects setVirtualLevel during sleep mode (inner code -1).
-    // BP24: NO-ON — preference setter; firmware-rejects during sleep mode (Sup6000S V2 constraint).
+    // BP24: SHOULD-ON — mist-level command; calls ensureSwitchOn() below (SwitchLevel convention).
+    // setMistLevel(0) means "turn off" (SwitchLevel/MistLevel convention; release-notes contract for
+    // all humidifiers). Evaluate the power-off branch BEFORE the sleep-mode short-circuit so a
+    // setMistLevel(0) issued while sleeping still powers the device off rather than silently skipping.
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer lvl = parseLevelOrNull(level)
+    if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
+    if (lvl <= 0) { off(); return }
+    // Sup6000S V2 firmware rejects setVirtualLevel while in sleep mode (inner code -1), so a
+    // positive-level mist write short-circuits during sleep mode before any cloud write or ensureSwitchOn.
     if (device.currentValue("mode") == "sleep") {
         logInfo "Skipping setMistLevel during sleep mode (Sup6000S firmware rejects preference writes in sleep mode; change mode first)"
         return
     }
-    Integer lvl = safeIntArg(level, 0)
-    if (lvl <= 0) { off(); return }
     Integer clamped = Math.max(1, Math.min(9, lvl))
     ensureSwitchOn()
     def resp = hubBypass("setVirtualLevel", [levelIdx: 0, virtualLevel: clamped, levelType: "mist"], "setVirtualLevel(${clamped})")
@@ -199,7 +188,10 @@ def setLevel(val, duration) {
 // turns an off device ON at level 1 — inverted behaviour.
 def setLevel(val){
     logDebug "setLevel(${val})"
-    Integer pct = safeIntArg(val, 0, 0, 100)
+    // BP28: distinguish explicit 0 (-> off) from non-numeric garbage (-> ignore, device unchanged).
+    Integer pct = parseLevelOrNull(val)
+    if (pct == null) { logWarn "setLevel: ignoring non-numeric value '${val}'"; return }
+    pct = Math.max(0, Math.min(100, pct))
     if (pct == 0) { off(); return }
     Integer lvl = levelFromPercent(pct)
     sendEvent(name:"level", value: pct)
@@ -246,7 +238,7 @@ def setChildLock(onOff){
     if (!requireNonEmptyEnum(onOff, "setChildLock")) return false
     // BP25: derive canonical on/off for sendEvent and C3 gate — never emit raw "true"/"1"/"yes".
     String val = (onOff as String).trim().toLowerCase()
-    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"
+    String canon = canonOnOff(val)
     if (device.currentValue("childLock") == canon) return true
     Integer v = (canon == "on") ? 1 : 0
     def resp = hubBypass("setChildLock", [childLockSwitch: v], "setChildLock(${canon})")
@@ -264,9 +256,10 @@ def setDryingMode(onOff){
     // state (active/complete/idle/off), not the autoDryingSwitch user preference that this
     // method writes. Comparing against dryingMode would incorrectly suppress the write when
     // the device is mid-cycle (state="active", user-pref="on").
-    Integer v = ((onOff as String).trim().toLowerCase() in ["on","true","1","yes"]) ? 1 : 0
-    def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${onOff})")
-    if (httpOk(resp)) logInfo "Drying mode auto-switch set: ${onOff}"
+    String canon = canonOnOff(onOff)
+    Integer v = (canon == "on") ? 1 : 0
+    def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${canon})")
+    if (httpOk(resp)) logInfo "Drying mode auto-switch set: ${canon}"
     else { logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"]) }
 }
 
@@ -280,24 +273,10 @@ def applyStatus(status){
     // Placed here so all three update() entry points (0-arg, 1-arg, 2-arg) trigger it.
     ensureDebugWatchdog()
 
-    // One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
-    def r = status?.result ?: [:]
-    // Humidifier responses are double-wrapped (envelope inside envelope on bypassV2 for some
-    // device classes). Peel through any [code, result, traceId] layers until we find device data.
-    // V201S purifier was single-wrapped; this peel is robust for both.
-    int peelGuard = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-        r = r.result
-        peelGuard++
-    }
+    seedPrefs()
+    def r = peelEnvelope(status)
     // Diagnostic raw dump — gated by debugOutput. Keep for ongoing field diagnostics.
-    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     // Power
     def powerOn = (r.powerSwitch as Integer) == 1

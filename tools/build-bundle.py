@@ -6,8 +6,10 @@ Produces bundles/levoit_libraries.zip with the layout Hubitat expects:
   level99.LevoitChildBase.groovy        <- renamed copy of LevoitChildBaseLib.groovy
   level99.LevoitDiagnostics.groovy      <- renamed copy of LevoitDiagnosticsLib.groovy
   level99.LevoitCorePurifier.groovy     <- renamed copy of LevoitCorePurifierLib.groovy
+  level99.LevoitCoreAQPurifier.groovy   <- renamed copy of LevoitCoreAQPurifierLib.groovy
   level99.LevoitVitalPurifier.groovy    <- renamed copy of LevoitVitalPurifierLib.groovy
   level99.LevoitHumidifier.groovy       <- renamed copy of LevoitHumidifierLib.groovy
+  level99.LevoitFan.groovy              <- renamed copy of LevoitFanLib.groovy
   install.txt                           <- bundle install manifest
   update.txt                            <- bundle update manifest (same content)
 
@@ -54,6 +56,10 @@ LIBS = [
     {
         "source": DRIVERS_DIR / "LevoitCorePurifierLib.groovy",
         "dest":   f"{NAMESPACE}.LevoitCorePurifier.groovy",
+    },
+    {
+        "source": DRIVERS_DIR / "LevoitCoreAQPurifierLib.groovy",
+        "dest":   f"{NAMESPACE}.LevoitCoreAQPurifier.groovy",
     },
     {
         "source": DRIVERS_DIR / "LevoitVitalPurifierLib.groovy",

@@ -53,7 +53,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Fall-through diagnostic driver for unsupported Levoit models. Provides best-effort power control and diagnostic capture for new-device-support issue filing.",
-        version: "2.7",
+        version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -166,10 +166,9 @@ def setLevel(val){
     if (!requireNotNull(val, "setLevel")) return   // BP18: null-guard (blank RM slot; safeIntArg is null-safe but produces 0 with no log)
     logDebug "setLevel(${val})"
     // Intentional divergence from typed drivers: val==0 does NOT route to off() here.
-    // Typed purifier drivers (Core/Vital) treat level:0 as power-off (SwitchLevel convention).
-    // Typed humidifier drivers treat level:0 as zero-mist-level (not power-off).
-    // Since the Generic driver cannot know the device shape until captureDiagnostics runs,
-    // neither semantic can be inferred safely. Callers must use off() explicitly.
+    // The Generic driver cannot know the device shape until captureDiagnostics runs,
+    // so it cannot tell whether a caller intends power-off (SwitchLevel convention)
+    // or a passive level event for an unknown device. Callers must use off() explicitly.
     // Record the level; we can't know which speed/mist command applies until we know
     // the device shape, so just store and emit for rules/automations.
     device.sendEvent(name:"level", value: safeIntArg(val, 0))
@@ -225,27 +224,10 @@ def applyStatus(status){
     // Placed here so all three update() entry points (0-arg, 1-arg, 2-arg) trigger it.
     ensureDebugWatchdog()
 
-    // One-time pref seed: heal descriptionTextEnable=true default for users
-    // migrated from older Type without clicking Save Preferences (Bug Pattern #12).
-    if (!state.prefsSeeded) {
-        if (settings?.descriptionTextEnable == null) {
-            device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
-        }
-        state.prefsSeeded = true
-    }
-
-    def r = status?.result ?: [:]
-    // Defensive envelope peel: V2-line bypassV2 responses can be double-wrapped.
-    // Peel through any [code, result, traceId] envelope layers until device data.
-    // Handles single-wrap (purifiers) and double-wrap (humidifiers) transparently.
-    // (Bug Pattern #3)
-    int peelGuard = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
-        r = r.result
-        peelGuard++
-    }
+    seedPrefs()
+    def r = peelEnvelope(status)
     // Diagnostic raw dump — gated by debugOutput
-    logDebug "applyStatus raw r (after peel=${peelGuard}) keys=${r?.keySet()}, values=${r}"
+    logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     // Detect device shape by field presence
     String detectedCompat = detectShape(r)
@@ -469,11 +451,7 @@ private String detectShape(Map r){
  */
 private boolean hasDeviceFields(data){
     if (!data) return false
-    def r = data?.result ?: [:]
-    int pg = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && pg < 4) {
-        r = r.result; pg++
-    }
+    def r = peelEnvelope(data instanceof Map ? data : [:])
     return r instanceof Map && (r.containsKey('powerSwitch') || r.containsKey('humidity') || r.containsKey('PM25'))
 }
 
@@ -488,30 +466,9 @@ private boolean hasDeviceFields(data){
 // MissingMethodException on top of the original error.
 private void recordError(String msg, Map ctx = [:], String overrideDni = null) { /* no-op */ }
 
-// Hub/parent call wrapper
-private hubBypass(method, Map data=[:], tag=null, cb=null){
-    def rspObj = [status: -1, data: null]
-    parent.sendBypassRequest(device, [method: method, source:"APP", data: data]) { resp ->
-        rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
-        if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
-        if (cb) cb(resp)
-    }
-    return rspObj
-}
-
-private boolean httpOk(resp){
-    if (!resp) return false
-    def st = resp.status as Integer
-    if (st in [200,201,204]){
-        def inner = resp?.data?.result?.code
-        if (inner == null || inner == 0) return true
-        logDebug "HTTP 200, innerCode ${inner}"
-        return false
-    }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
-    return false
-}
+// hubBypass, httpOk are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
+// httpOk's recordError("HTTP ...") call resolves to the local no-op stub above
+// (Generic does not #include level99.LevoitDiagnostics).
 
 /**
  * shouldFallback — returns true only when a V2 setSwitch call was received by the
