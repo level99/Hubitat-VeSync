@@ -347,54 +347,25 @@ def applyStatus(status){
     // Use this log line when a community member reports "device discovered but no data".
     logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
-    // ---- Power ----
-    boolean powerOn = (r.powerSwitch as Integer) == 1
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
-
-    // ---- Fan speed ----
-    // Prefer fanSpeedLevel (currently active) over manualSpeedLevel (last-set)
-    // for the live active speed. Both are in range 1-12.
-    Integer fanSpeedRaw = (r.fanSpeedLevel != null) ? (r.fanSpeedLevel as Integer) : null
-    Integer manualSpeedRaw = (r.manualSpeedLevel != null) ? (r.manualSpeedLevel as Integer) : null
-    Integer activeSpeed = fanSpeedRaw ?: manualSpeedRaw ?: 1
-    state.fanLevel = activeSpeed
-    // Bug Pattern #6: when device is off, speed reports "off" regardless of last-set level.
-    // Using FanControl enum: off when powerSwitch=0, otherwise map level to enum string.
-    if (!powerOn) {
-        device.sendEvent(name:"speed", value:"off")
-        device.sendEvent(name:"level", value: percentFromLevel(activeSpeed))
-    } else {
-        String speedEnum = levelToFanControlEnum(activeSpeed)
-        device.sendEvent(name:"speed", value: speedEnum)
-        device.sendEvent(name:"level", value: percentFromLevel(activeSpeed))
-    }
-
-    // ---- Mode ----
-    // CROSS-CHECK: reverse-map API "advancedSleep" -> user-facing "sleep".
+    // ---- Power + Fan speed + Mode (shared LevoitFanLib block) ----
+    // CROSS-CHECK [mode]: reverse-map API "advancedSleep" -> user-facing "sleep".
     // See setMode() CROSS-CHECK block above for full rationale (pyvesync device_map.py
     // LTF-F422S FanModes.SLEEP:'advancedSleep' + HA bonus finding #d).
-    String rawWorkMode = (r.workMode ?: "normal") as String
-    String reportedMode = (rawWorkMode == "advancedSleep") ? "sleep" : rawWorkMode
-    state.mode = reportedMode
-    device.sendEvent(name:"mode", value: reportedMode)
+    def head = applyFanCommonHead(r)
+    boolean powerOn      = head.powerOn
+    Integer activeSpeed  = head.activeSpeed
+    String  reportedMode = head.reportedMode
 
-    // ---- Oscillation ----
+    // ---- Oscillation (single-axis; Tower-specific) ----
     // oscillationState = actual hardware state; oscillationSwitch = configured setting.
     // Prefer state (actual) for reporting.
     Integer oscState = (r.oscillationState != null) ? (r.oscillationState as Integer) : (r.oscillationSwitch as Integer)
     device.sendEvent(name:"oscillation", value: oscState == 1 ? "on" : "off")
 
-    // ---- Mute ----
-    // muteState = actual; muteSwitch = configured. Prefer actual.
-    Integer muteState = (r.muteState != null) ? (r.muteState as Integer) : (r.muteSwitch as Integer)
-    device.sendEvent(name:"mute", value: muteState == 1 ? "on" : "off")
+    // ---- Mute + Display (shared LevoitFanLib block) ----
+    Integer muteState = applyFanMuteDisplay(r)
 
-    // ---- Display ----
-    // screenState = actual; screenSwitch = configured. Prefer actual.
-    Integer screenState = (r.screenState != null) ? (r.screenState as Integer) : (r.screenSwitch as Integer)
-    device.sendEvent(name:"displayOn", value: screenState == 1 ? "on" : "off")
-
-    // ---- Temperature ----
+    // ---- Temperature (shared LevoitFanLib block) ----
     // CROSS-CHECK [HA fixture tests/components/vesync/fixtures/fan-detail.json line 19 /
     //   pyvesync vesyncfan.py asymmetry]:
     //   Decision: divide temperature by 10 before emitting (raw / 10 = degrees F).
@@ -411,14 +382,7 @@ def applyStatus(status){
     //     VeSyncPedestalFan temperature handling asymmetry (cross-check finding #1, 2026-04-26).
     //   Refutation: community user reports temperature:72 (already degrees F without /10) -->
     //     remove the divide; emit raw as degrees F. Also check if pyvesync has been patched.
-    if (r.temperature != null) {
-        Integer rawTemp = r.temperature as Integer
-        // Sanity gate: 0 raw = 0°F which is almost certainly an uninitialized field, skip
-        if (rawTemp > 0) {
-            Float tempF = rawTemp / 10.0f
-            device.sendEvent(name:"temperature", value: tempF, unit:"°F")
-        }
-    }
+    applyFanTemperature(r)
 
     // ---- displayingType ----
     // CROSS-CHECK [HA cross-check finding #5 / pyvesync vesyncfan.py:166-176]:
@@ -438,24 +402,14 @@ def applyStatus(status){
         device.sendEvent(name:"displayingType", value: r.displayingType as Integer)
     }
 
-    // ---- Sleep preference (nested object) ----
-    // Read sleepPreferenceType from nested sleepPreference map if present.
-    if (r.sleepPreference instanceof Map) {
-        String spType = r.sleepPreference?.sleepPreferenceType as String
-        if (spType) device.sendEvent(name:"sleepPreferenceType", value: spType)
-    }
+    // ---- Sleep preference (shared LevoitFanLib block) ----
+    applyFanSleepPreference(r)
 
-    // ---- Timer remain ----
+    // ---- Timer remain (Tower-specific) ----
     if (r.timerRemain != null) device.sendEvent(name:"timerRemain", value: r.timerRemain as Integer)
 
-    // ---- Error code ----
-    if (r.errorCode != null) {
-        Integer ec = r.errorCode as Integer
-        device.sendEvent(name:"errorCode", value: ec)
-        Integer lastEc = state.lastErrorCode as Integer
-        if (ec != 0 && (lastEc == null || lastEc == 0)) logInfo "Device error code: ${ec}"
-        state.lastErrorCode = ec
-    }
+    // ---- Error code (shared LevoitFanLib block) ----
+    applyFanErrorCode(r)
 
     // ---- Info HTML (use local variables -- avoids device.currentValue race; BP#7) ----
     def parts = []
