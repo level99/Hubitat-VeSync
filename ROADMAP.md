@@ -6,14 +6,13 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 ---
 
-## v2.8 — next release candidates
+## v2.9 — next release candidates
 
 Items locked to the next release because they're internally actionable (no external blockers).
 
 ### Refactor / lint coverage
 
-- **RULE32 regex broadening for delegation chains.** Surfaced by Phase 5c senior audit: the rule's algorithm skipped delegation methods (e.g., Core line `setSpeed` → `LevoitCorePurifierLib.handleSpeed`), missing the Core BP24-B gap. Fix needs simple call-graph analysis, not just regex extension.
-- **Core 300S `setLevel` band-2 regression spec** — optional coverage hardening on the existing speed-band specs (200S/400S/600S band coverage is exercised; 300S band-2 is implied-correct but not independently asserted). Pure test-coverage breadth; no behavior gap. Same optional-regression-guard tier as the Fan spec edge-case item above.
+- **RULE32 two-hop delegation residual.** v2.8 taught RULE32 to follow all *first-hop* same-file delegates (closing the Core line `setSpeed` → `handleSpeed` BP24-B gap). A second-hop chain — a delegate that itself delegates — is still not traversed. No current driver exhibits this shape, so widen reactively if one appears.
 - **`cycleSpeed` ternary → `switch` readability** (Core line + fan drivers). Reviewer-classified cosmetic-only: the nested-ternary speed-step is correct but a `switch`/map form reads cleaner. No behavior change. Pursue only if the surrounding block is being touched for another reason. The related Core line on/off-body 4× duplication is already tracked under the library-extraction backlog (Core line consolidation, task #142) — not duplicated here.
 - **RULE37 / RULE39 deferred-coverage scope decisions.** Three theoretical bypass shapes are known but unexercised by any current driver or CHANGELOG and are intentionally not covered: snake_case setter names; multi-param command methods where only the first arg is guarded (the rest's casts aren't checked); and a `####` sub-header nested inside a changelog section (which wouldn't reset the section-scope tracker). All three are deliberate scope calls — widen reactively if a real instance ever appears.
 - **RULE39's internal-jargon name set is curated-small by design, not exhaustive.** Compound-camelCase identifiers that can legitimately appear in technical `### Fixed`/`### Added` prose — VeSync API fields, parent-driver internals, API method names — are deliberately excluded so the rule doesn't strip audience-meaningful fix-mechanism detail that power-users and Maker API integrators rely on. Grow the set only when such a name lands in prose as a jargon-dump rather than as fix-explanation context.
