@@ -638,6 +638,26 @@ class LevoitCore300SSpec extends HubitatSpec {
         testLog.errors.isEmpty()
     }
 
+    def "setLevel(50) maps to speed band 2 in the API request (Core 300S 3-band: 50% → medium)"() {
+        // Band-coverage parity with 200S/400S/600S: Core 300S is 3-band
+        // [1:low, 2:medium, 3:high]; 50% falls in the medium band → data.level == 2.
+        given: "device is on in manual mode so the speed path fires directly"
+        settings.descriptionTextEnable = false
+        state.mode = "manual"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel(50) is called"
+        driver.setLevel(50)
+
+        then: "the Core-line setLevel request carries level == 2 (medium band)"
+        def req = testParent.allRequests.find { it.method == "setLevel" }
+        req != null
+        req.data.level == 2   // 50 → speed band 2 (medium)
+
+        and: "no error was logged"
+        testLog.errors.isEmpty()
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #26: safeIntArg regression — non-numeric RM inputs must not throw
     // -------------------------------------------------------------------------
