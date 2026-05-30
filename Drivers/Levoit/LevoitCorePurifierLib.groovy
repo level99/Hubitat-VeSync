@@ -38,7 +38,9 @@ library(
 //             false for 200S (no AQ sensor / no auto mode), true for 300S/400S/600S.
 //             setSpeed/setMode consume it to gate the auto branch + allowed-mode set
 //             (Bucket B2/B3, #142 Phase 2d).
-//   PROVIDES: see Group 1 + Group 2 sections below for the 32 methods supplied.
+//   PROVIDES: the shared Core-purifier methods used by all four Core drivers
+//             (200S/300S/400S/600S), including handleEvent. The auto-mode commands +
+//             AQI/filter parsing (used only by the AQ trio) live in LevoitCoreAQPurifier.
 
 // ---- Group 1: Shared 18 — called by all four Core drivers (200S/300S/400S/600S) ----
 
@@ -568,181 +570,13 @@ def setLevel(value, duration) {
     setLevel(value)
 }
 
-// ---- Group 2: AQ-group 7 — called by 300S/400S/600S only (200S does not have AQ sensor) ----
-
-def setAutoMode(mode) {
-    // Re-use last-set value so the device keeps its prior room-size calibration.
-    // Fall back to 800 (pyvesync VeSyncAirBypass canonical default) when no prior
-    // value exists, so the device doesn't receive an unrealistic sentinel.
-    setAutoMode(mode, state.room_size ?: 800);
-}
-
-def setAutoMode(mode, roomSize) {
-    if (!requireNonEmptyEnum(mode, "setAutoMode")) return
-    // BP26: safe integer coercion — Rule Machine passes "" or null for blank numeric slots.
-    // Nested safeIntArg: the inner call guards the fallback expression itself.
-    // An unguarded `(state.room_size ?: 800) as Integer` cast can throw NumberFormatException
-    // if state.room_size holds a non-numeric String written raw from the VeSync API response.
-    // safeIntArg's try/catch cannot protect the fallback expression if it throws before the call
-    // — nesting avoids the unguarded cast entirely.
-    // Fallback chain: roomSize → state.room_size (safeIntArg-guarded) → 800 (literal, always safe).
-    Integer sz = safeIntArg(roomSize, safeIntArg(state.room_size, 800))
-    // Floor: room_size must be ≥1 (negative values from e.g. safeIntArg("-50"→-50 on valid-but-
-    // negative RM input would self-poison state and send an invalid API value on every blank call).
-    // Max clamp deferred: no authoritative upper bound confirmed from pyvesync or VeSync API docs.
-    sz = Math.max(1, sz)
-    // 200S guard: 200S firmware doesn't support setAutoPreference (no AQ sensor).
-    // The lib is shared but the cloud rejects this call on 200S. Block at lib boundary
-    // to prevent state divergence + log noise on Rule Machine / MCP misuse.
-    if (device.typeName?.contains("Core200S")) {
-        logDebug "setAutoMode is not supported on Core 200S (no AQ sensor); ignoring"
-        return
-    }
-
-    logDebug "setAutoMode(${mode}, ${sz})"
-
-    if (mode == "efficient") {
-        handleAutoMode(mode, sz);
-    }
-    else {
-        handleAutoMode(mode);
-    }
-
-    handleMode("auto");
-    state.mode = "auto";
-    state.auto_mode = mode;
-    state.room_size = sz;
-
-	handleEvent("auto_mode", mode)
-	handleEvent("mode", "auto")
-    handleEvent("speed",  "auto")
-}
-
-def handleAutoMode(mode) {
-
-    def result = false
-
-    parent.sendBypassRequest(device, [
-                data: [ "type": mode ],
-                "method": "setAutoPreference",
-                "source": "APP"
-            ]) { resp ->
-			if (checkHttpResponse("handleMode", resp))
-			{
-                logDebug "Set mode"
-				result = true
-			}
-		}
-    return result
-}
-
-def handleAutoMode(mode, size) {
-
-    def result = false
-
-    parent.sendBypassRequest(device, [
-                data: [ "type": mode, "room_size": size ],
-                "method": "setAutoPreference",
-                "source": "APP"
-            ]) { resp ->
-			if (checkHttpResponse("handleMode", resp))
-			{
-                logDebug "Set mode"
-				result = true
-			}
-		}
-    return result
-}
-
+// handleEvent stays in LevoitCorePurifier (NOT moved to LevoitCoreAQPurifier in Phase 2b-cleanup):
+// it is load-bearing for Core 200S, which calls it via the shared on()/off()/setSpeed()/setMode()
+// in Group 1 above. The AQ trio (300S/400S/600S) also consumes it from here via #include.
+// The auto-mode commands + AQI/filter parsing (setAutoMode/handleAutoMode/updateAQIandFilter/
+// convertRange) relocated to LevoitCoreAQPurifierLib — 200S never references those.
 private void handleEvent(name, val)
 {
     logDebug "handleEvent(${name}, ${val})"
     device.sendEvent(name: name, value: val)
-}
-
-private void updateAQIandFilter(String val, filter) {
-
-    logDebug "updateAQI(${val})"
-
-    //
-    // Conversions based on https://en.wikipedia.org/wiki/Air_quality_index
-    //
-    BigDecimal pm = val.toBigDecimal();
-
-    BigDecimal aqi;
-
-    if (state.prevPM == null || state.prevPM != pm || state.prevFilter == null || state.prevFilter != filter) {
-
-        state.prevPM = pm;
-        state.prevFilter = filter;
-
-        if      (pm <  12.1) aqi = convertRange(pm,   0.0,  12.0,   0,  50);
-        else if (pm <  35.5) aqi = convertRange(pm,  12.1,  35.4,  51, 100);
-        else if (pm <  55.5) aqi = convertRange(pm,  35.5,  55.4, 101, 150);
-        else if (pm < 150.5) aqi = convertRange(pm,  55.5, 150.4, 151, 200);
-        else if (pm < 250.5) aqi = convertRange(pm, 150.5, 250.4, 201, 300);
-        else if (pm < 350.5) aqi = convertRange(pm, 250.5, 350.4, 301, 400);
-        else                 aqi = convertRange(pm, 350.5, 500.4, 401, 500);
-
-        handleEvent("aqi", aqi);
-        // Adds a conventional `airQuality` NUMBER (US-AQI) attribute for Rule Machine / dashboard
-        // ergonomics. The AirQuality capability's required attribute (`airQualityIndex`) is emitted
-        // by the per-driver applyStatus before this method is called; this adds `airQuality` as
-        // additive convenience under the conventional name, not a capability-contract fix.
-        // airQualityIndex and aqi are unchanged — backward-compatible.
-        handleEvent("airQuality", aqi);
-
-        String danger;
-        String color;
-
-        if      (aqi <  51) { danger = "Good";                           color = "7e0023"; }
-        else if (aqi < 101) { danger = "Moderate";                       color = "fff300"; }
-        else if (aqi < 151) { danger = "Unhealthy for Sensitive Groups"; color = "f18b00"; }
-        else if (aqi < 201) { danger = "Unhealthy";                      color = "e53210"; }
-        else if (aqi < 301) { danger = "Very Unhealthy";                 color = "b567a4"; }
-        else if (aqi < 401) { danger = "Hazardous";                      color = "7e0023"; }
-        else {                danger = "Hazardous";                      color = "7e0023"; }
-
-        if (state.lastAqiDanger != danger) logInfo "Air quality: ${danger}"
-        state.lastAqiDanger = danger
-
-        handleEvent("aqiColor", color)
-        handleEvent("aqiDanger", danger)
-
-        // Filter life threshold alerts
-        if (filter != null) {
-            Integer flInt = filter as Integer
-            Integer lastFl = state.lastFilterLife as Integer
-            if (lastFl == null || lastFl >= 20) {
-                if (flInt < 10) logInfo "Filter life critically low at ${flInt}%"
-                else if (flInt < 20) logInfo "Filter life at ${flInt}% — consider replacement"
-            } else if (lastFl >= 10 && flInt < 10) {
-                logInfo "Filter life critically low at ${flInt}%"
-            }
-            state.lastFilterLife = flInt
-        }
-
-        def html = "AQI: ${aqi}<br>PM2.5: ${pm} &micro;g/m&sup3;<br>Filter: ${filter}%"
-
-        handleEvent("info", html)
-        handleEvent("filter", filter)
-    }
-}
-
-private BigDecimal convertRange(BigDecimal val, BigDecimal inMin, BigDecimal inMax, BigDecimal outMin, BigDecimal outMax, Boolean returnInt = true) {
-  // Let make sure ranges are correct
-  assert (inMin <= inMax);
-  assert (outMin <= outMax);
-
-  // Restrain input value
-  if (val < inMin) val = inMin;
-  else if (val > inMax) val = inMax;
-
-  val = ((val - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin;
-  if (returnInt) {
-    // If integer is required we use the Float round because the BigDecimal one is not supported/not working on Hubitat
-    val = val.toFloat().round().toBigDecimal();
-  }
-
-  return (val);
 }

@@ -725,7 +725,7 @@ class LevoitCore300SSpec extends HubitatSpec {
     }
 
     // -----------------------------------------------------------------------
-    // BP26: LevoitCorePurifierLib.setAutoMode — numeric coercion on roomSize
+    // BP26: LevoitCoreAQPurifierLib.setAutoMode — numeric coercion on roomSize
     // Both-ways: revert safeIntArg in setAutoMode → this spec FAILs; restore → PASSes.
     // -----------------------------------------------------------------------
 
@@ -756,7 +756,7 @@ class LevoitCore300SSpec extends HubitatSpec {
 
     def "BP26: setAutoMode('efficient', '5.7') does not throw and makes the API call with truncated value (Core 300S)"() {
         // safeIntArg("5.7") → 5. Math.max(1, 5) → 5. API call made with room_size=5.
-        // This test fails if safeIntArg is removed from LevoitCorePurifierLib.setAutoMode.
+        // This test fails if safeIntArg is removed from LevoitCoreAQPurifierLib.setAutoMode.
         given:
         settings.descriptionTextEnable = false
 

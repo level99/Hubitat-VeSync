@@ -7,9 +7,9 @@ import support.HubitatSpec
  * Unit tests for LevoitCorePurifierLib.groovy + LevoitCoreAQPurifierLib.groovy.
  *
  * Loaded through LevoitCore400S.groovy — an AQ-capable 4-band driver that
- * includes both LevoitCorePurifier (Group 1 shared 18 + Group 2 AQ-7) AND
- * LevoitCoreAQPurifier (the centerpiece update() + update(status, nightLight)
- * extracted in Task #142 Phase 2b-amended). HubitatSpec.loadDriverClass()
+ * includes both LevoitCorePurifier (Group 1 shared methods incl. handleEvent) AND
+ * LevoitCoreAQPurifier (update() + update(status, nightLight) plus the auto-mode
+ * commands + AQI/filter parsing relocated in Phase 2b-cleanup). HubitatSpec.loadDriverClass()
  * resolves all four #include directives, inlining the library bodies before
  * compiling.
  *
@@ -31,10 +31,10 @@ import support.HubitatSpec
  *   handleMode(mode)     — sends setPurifierMode with raw mode string
  *   handlePower(on)      — sends setSwitch with enabled bool
  *
- * Group 2 setAutoMode (load-bearing for Phase 2c — the 200S guard convention):
+ * AQ-group setAutoMode (relocated to LevoitCoreAQPurifier in Phase 2b-cleanup):
  *   setAutoMode(mode)               — 1-arg form reuses state.room_size
  *   setAutoMode(mode, roomSize)     — 2-arg form, mode-aware handler dispatch
- *   setAutoMode 200S guard          — short-circuits when device.typeName contains "Core200S"
+ *   setAutoMode no-200S-guard       — guard dropped; 200S can no longer reach this method
  *
  * AQ Group update() + update(status, nightLight) (Phase 2b-extracted):
  *   update() 0-arg       — bypassV2 envelope + dispatch to 2-arg
@@ -286,7 +286,7 @@ class LevoitCorePurifierLibSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Group 2: setAutoMode — 1-arg + 2-arg + 200S guard (load-bearing for Phase 2c)
+    // setAutoMode — 1-arg + 2-arg (LevoitCoreAQPurifier; AQ trio only)
     // -------------------------------------------------------------------------
 
     def "setAutoMode(mode) 1-arg form re-uses state.room_size as fallback"() {
@@ -335,18 +335,24 @@ class LevoitCorePurifierLibSpec extends HubitatSpec {
         !req?.data?.containsKey("room_size")
     }
 
-    def "setAutoMode 200S guard: device.typeName containing 'Core200S' short-circuits before any API call"() {
-        given: "simulate Core 200S device type via testDevice.typeName"
+    def "Phase 2b-cleanup: setAutoMode has no 200S typeName guard (relocated to AQ-only lib; 200S can't reach it)"() {
+        // setAutoMode now lives in LevoitCoreAQPurifier, which only the AQ trio
+        // (300S/400S/600S) #includes. Core 200S has no path to this method at all,
+        // so the former typeName-based runtime guard was dead and was dropped.
+        // On an AQ-capable driver the typeName is irrelevant: the call proceeds normally.
+        given: "device typeName set to a 200S-looking value — must NOT short-circuit anything now"
         testDevice.typeName = "Levoit Core200S Air Purifier"
 
         when:
         driver.setAutoMode("efficient", 300)
 
-        then: "no setAutoPreference request was sent — guard returned early"
-        !testParent.allRequests.any { it.method == "setAutoPreference" }
+        then: "setAutoPreference IS sent — no guard short-circuits the body any more"
+        def req = testParent.allRequests.find { it.method == "setAutoPreference" }
+        req?.data?.type == "efficient"
+        req?.data?.room_size == 300
 
-        and: "no setPurifierMode request either — entire setAutoMode body short-circuited"
-        !testParent.allRequests.any { it.method == "setPurifierMode" }
+        and: "setPurifierMode auto is also sent — full body executed"
+        testParent.allRequests.any { it.method == "setPurifierMode" && it.data?.mode == "auto" }
     }
 
     def "setAutoMode happy-path emits auto_mode + mode:auto + speed:auto events"() {

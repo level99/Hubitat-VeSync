@@ -132,8 +132,8 @@ private Map getSpeedBands() { [1:"low", 2:"medium", 3:"high", 4:"max"] }
 // installed, uninstalled, initialize, updated, on, off, toggle, setDisplay, handlePower,
 // handleSpeed, handleMode, handleDisplayOn, setChildLock, setTimer, cancelTimer, resetFilter,
 // checkHttpResponse, setLevel(value, duration), setLevel(value), cycleSpeed, mapSpeedToInteger,
-// mapIntegerToSpeed, mapIntegerStringToSpeed, setSpeed, setMode, setAutoMode, handleAutoMode,
-// handleEvent, updateAQIandFilter, convertRange are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
-// update, update(status, nightLight) are provided by
-// #include level99.LevoitCoreAQPurifier (LevoitCoreAQPurifierLib.groovy).
+// mapIntegerToSpeed, mapIntegerStringToSpeed, setSpeed, setMode, handleEvent
+// are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
+// update, update(status, nightLight), setAutoMode, handleAutoMode, updateAQIandFilter,
+// convertRange are provided by #include level99.LevoitCoreAQPurifier (LevoitCoreAQPurifierLib.groovy).
 

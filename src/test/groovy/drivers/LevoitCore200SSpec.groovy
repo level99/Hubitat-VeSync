@@ -974,42 +974,25 @@ class LevoitCore200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // NIT 4: setAutoMode string-enum guard upgraded to requireNonEmptyEnum
-    // setAutoMode(mode, roomSize): the `mode` param is a user-callable string enum.
-    // Empty "" slipped past the former requireNotNull guard and reached the cloud.
+    // Phase 2b-cleanup: setAutoMode no longer exists on Core 200S.
+    // The auto-mode commands relocated from LevoitCorePurifier (which 200S #includes)
+    // into LevoitCoreAQPurifier (which 200S does NOT #include), so setAutoMode is no
+    // longer part of the 200S method surface. Core 200S has no AQ sensor and no
+    // setAutoMode command declaration, so no user/internal path ever reached it. The
+    // prior typeName-based runtime guard was dead once the method left the surface and
+    // has been dropped. (Replaces the two former NIT 4 setAutoMode-guard specs, which
+    // asserted the now-removed shared-method behavior.)
     // -------------------------------------------------------------------------
 
-    def "NIT 4: setAutoMode('') silently exits without API call (empty-string RM blank slot) (Core 200S/CorePurifierLib)"() {
-        // Pre-fix: requireNotNull("") returned true; "" was sent as mode to the cloud.
-        // Post-fix: requireNonEmptyEnum("") returns false silently; no API call.
-        given:
-        testParent.allRequests.clear()
-        int warnsBefore = testLog.warns.size()
-
-        when:
-        driver.setAutoMode("")
-
-        then: "no API call for setAutoMode or setLevel or autoPreference"
-        testParent.allRequests.isEmpty()
-
-        and: "no WARN logged (empty string is the RM blank-slot path — silent)"
-        testLog.warns.size() == warnsBefore
-
-        and: "no exception thrown"
-        noExceptionThrown()
-    }
-
-    def "NIT 4: setAutoMode(null) still warns (null path unchanged) (Core 200S/CorePurifierLib)"() {
-        given:
-        testParent.allRequests.clear()
-
-        when:
-        driver.setAutoMode(null)
-
-        then: "WARN logged for null"
-        testLog.warns.any { it.toLowerCase().contains("setautomode") }
-
-        and: "no API call"
-        testParent.allRequests.isEmpty()
+    def "Phase 2b-cleanup: Core 200S does not expose setAutoMode (relocated to AQ lib it does not include)"() {
+        expect: "calling setAutoMode throws MissingMethodException — the method is not on 200S's surface"
+        // Hubitat's sandbox swallows this at runtime; the Spock harness surfaces it directly.
+        // 200S declares no setAutoMode command and makes no internal call, so this is unreachable in practice.
+        try {
+            driver.setAutoMode("efficient")
+            assert false : "expected MissingMethodException — setAutoMode should not exist on Core 200S"
+        } catch (groovy.lang.MissingMethodException expected) {
+            assert expected.method == "setAutoMode"
+        }
     }
 }
