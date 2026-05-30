@@ -2100,14 +2100,14 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     // =========================================================================
     // Section K — Model code routing: v2.2 audit additions
     //
-    // Six regional / variant model codes added to deviceType() by the v2.2 pyvesync
-    // audit. All map to existing dtypes and existing drivers -- no new driver
-    // behavior. Tests are a single parameterized spec so the where: table is the
-    // single source of truth for the routing contract.
+    // Regional / variant model codes added to deviceType() by the pyvesync audits.
+    // All map to existing dtypes and existing drivers -- no new driver behavior.
+    // Tests are a single parameterized spec so the where: table is the single source
+    // of truth for the routing contract.
     //
-    // Deferred (v2.3+ candidates): LAP-C301S-WAAA, LAP-C302S-WGC -- unknown-region
-    // suffix codes; pyvesync supports them but suffix meaning is unclear. Not added
-    // here to avoid silently misrouting if the API behavior differs.
+    // LAP-C301S-WAAA, LAP-C302S-WGC: Core 300S region variants now enumerated by
+    // pyvesync 3.4.2 device_map.py under the same VeSyncAirBypass class as the other
+    // 300S codes; routed to "300S" rather than falling through to Generic.
     // =========================================================================
 
     def "deviceType() routes v2.2 audit model codes to correct dtype (K1)"(String code, String expected) {
@@ -2128,6 +2128,8 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         "LAP-C202S-WUSR"   | "200S"    // US Core 200S variant -- same VeSyncAirBypass class
         "LAP-V201S-WJP"    | "V200S"   // Japan V201S variant -- same VeSyncAirBypass class
         "LAP-C302S-WUSB"   | "300S"    // US Core 300S bundle SKU -- same VeSyncAirBypass class
+        "LAP-C301S-WAAA"   | "300S"    // Core 300S region variant -- pyvesync 3.4.2 VeSyncAirBypass class
+        "LAP-C302S-WGC"    | "300S"    // Core 300S region variant -- pyvesync 3.4.2 VeSyncAirBypass class
     }
 
     // =========================================================================

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Core 300S region variants `LAP-C301S-WAAA` and `LAP-C302S-WGC` now route to the Core 300S driver** instead of falling through to the Generic driver. Owners of these regional variants get full Core 300S support automatically.
+
 ### Fixed
 
 - **Superior 6000S `setMistLevel(0)` now turns the device off even while in sleep mode.** Previously, calling `setMistLevel(0)` while the humidifier was in sleep mode silently did nothing (the sleep-mode skip ran before the power-off check), contradicting the release-notes promise that `setMistLevel(0)` turns the device off for all humidifiers. The power-off branch now runs first, so a `setMistLevel(0)` from a dashboard slider or Rule Machine powers the device off regardless of mode.

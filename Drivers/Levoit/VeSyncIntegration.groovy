@@ -1611,6 +1611,8 @@ private deviceType(code) {
         case "Core300S":
         case "LAP-C301S-WJP":
         case "LAP-C302S-WUSB":      // US Core 300S bundle SKU (v2.2 audit -- same VeSyncAirBypass class)
+        case "LAP-C301S-WAAA":      // Core 300S region variant -- pyvesync 3.4.2 VeSyncAirBypass class
+        case "LAP-C302S-WGC":       // Core 300S region variant -- pyvesync 3.4.2 VeSyncAirBypass class
             return "300S";
         case "Core400S":
         case "LAP-C401S-WJP":
