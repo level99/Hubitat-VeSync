@@ -6195,6 +6195,63 @@ class TestRule32DelegationFollowing:
         }
     """)
 
+    # Bad (multi-delegate gap): setSpeed delegates FIRST to setMode (an auto-path
+    # helper with NO direct API call — itself guarded) and THEN to handleSpeed
+    # (the normal path, which makes the real API call and has NO own guard).
+    # setSpeed itself has no ensureSwitchOn().  This is the exact shape RULE32's
+    # first-delegate-only resolution missed: it followed setMode (no direct API
+    # → bailed) and never reached handleSpeed.  Following all first-hop delegates
+    # must flag this.
+    BAD_MULTI_DELEGATE_LATER_UNGUARDED = textwrap.dedent("""\
+        def setSpeed(spd) {
+            if (spd == "auto") {
+                setMode(spd)
+                return
+            }
+            handleSpeed(spd)
+        }
+
+        def setMode(mode) {
+            ensureSwitchOn()
+            handleMode(mode)
+        }
+
+        def handleMode(mode) {
+            hubBypass("setPurifierMode", [mode: mode])
+        }
+
+        def handleSpeed(spd) {
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Good (multi-delegate, all protected): setSpeed delegates to setMode (no
+    # direct API, guarded) AND handleSpeed — but handleSpeed carries its own
+    # ensureSwitchOn().  Every API-calling delegate is guarded → no finding.
+    GOOD_MULTI_DELEGATE_ALL_GUARDED = textwrap.dedent("""\
+        def setSpeed(spd) {
+            if (spd == "auto") {
+                setMode(spd)
+                return
+            }
+            handleSpeed(spd)
+        }
+
+        def setMode(mode) {
+            ensureSwitchOn()
+            handleMode(mode)
+        }
+
+        def handleMode(mode) {
+            hubBypass("setPurifierMode", [mode: mode])
+        }
+
+        def handleSpeed(spd) {
+            ensureSwitchOn()
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
     def test_delegate_callee_unguarded_flags(self):
         """
         Must-catch: SHOULD-ON method delegating to an unguarded API-calling callee
@@ -6228,6 +6285,47 @@ class TestRule32DelegationFollowing:
         findings = run_rule(check_rule32_auto_on_guard_missing, self.GOOD_DELEGATE_CALLER_GUARDED)
         assert not any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
             f"Caller with ensureSwitchOn() before delegate must not flag RULE32, got: {findings}"
+        )
+
+    def test_multi_delegate_later_unguarded_flags(self):
+        """
+        Must-catch (closed-mechanism gap fix): SHOULD-ON method with NO own guard
+        that delegates FIRST to a no-direct-API (guarded) helper (setMode) and
+        THEN to an unguarded API-calling helper (handleSpeed) must flag RULE32.
+
+        This is the exact setSpeed→setMode→handleSpeed shape that first-delegate-
+        only resolution missed: it followed setMode (no direct API → bailed) and
+        never reached handleSpeed.  Following ALL first-hop delegates catches it.
+
+        Non-vacuity: reverting the fix (returning only the FIRST resolvable
+        delegate body) makes the rule resolve setMode, find no direct API call,
+        skip, and return [] for this fixture — failing this assertion.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(
+            check_rule32_auto_on_guard_missing, self.BAD_MULTI_DELEGATE_LATER_UNGUARDED
+        )
+        assert any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            "Expected RULE32 for SHOULD-ON method whose LATER delegate makes an "
+            f"unguarded API call, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE32_auto_on_guard_missing'), (
+            f"RULE32 multi-delegate finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_multi_delegate_all_guarded_passes(self):
+        """
+        Must-not-catch: SHOULD-ON method delegating to multiple helpers where
+        every API-calling delegate carries ensureSwitchOn() — no finding even
+        though following all delegates now reaches handleSpeed.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(
+            check_rule32_auto_on_guard_missing, self.GOOD_MULTI_DELEGATE_ALL_GUARDED
+        )
+        assert not any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            f"All API-calling delegates guarded must not flag RULE32, got: {findings}"
         )
 
 

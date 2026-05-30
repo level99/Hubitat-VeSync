@@ -55,8 +55,15 @@ Detection algorithm:
             nowhere in the method body → BP24-C FAIL.
          d. If ``ensureSwitchOn()`` is present → PASS (re-entrance check is
             inside the helper; ``state.turningOn`` need not appear in caller).
-      4. If no API call (pure delegation method, e.g. setSpeed(numeric) that
-         only calls setSpeed(string)) → skip (no direct cloud interaction).
+      4. If no API call and no ``ensureSwitchOn()`` of its own (pure delegation),
+         follow EVERY first-hop same-file delegate (one hop only — no transitive
+         multi-hop). If ANY delegate makes an API call but lacks
+         ``ensureSwitchOn()`` → BP24-B FAIL (delegation-following). A delegate
+         with no direct API call, or one that carries its own guard, is fine.
+         Following all first-hop delegates (not just the first) closes the
+         ``setSpeed → setMode (no direct API) → handleSpeed (unguarded API)``
+         gap where the first delegate is guard-clean and the unguarded API call
+         lives in a later delegate.
 
 Exemptions:
   Add ``bp24_auto_on_exemptions`` list to lint_config.yaml:
@@ -138,28 +145,44 @@ _DELEGATE_CALL_RE = re.compile(
 ANY_METHOD_RE = re.compile(r'^\s*def\s+(\w+)\s*\(', re.MULTILINE)
 
 
-def _resolve_delegate_callee_body(
+def _resolve_delegate_callee_bodies(
     caller_name: str, caller_body: str, source: str
 ):
     """
-    Resolve the first same-file delegate callee named in ``caller_body``.
+    Resolve ALL distinct same-file first-hop delegate callees named in
+    ``caller_body``.
 
-    Scans ``caller_body`` for the first _DELEGATE_CALL_RE match, extracts the
-    callee name, looks it up via ANY_METHOD_RE, and returns the callee's
-    brace-balanced body string (or None if no resolvable, non-self callee).
+    Scans ``caller_body`` for every _DELEGATE_CALL_RE match, extracts each
+    callee name, looks it up via ANY_METHOD_RE, and yields the callee's
+    brace-balanced body string for each resolvable, non-self callee.  Earlier
+    designs returned only the FIRST resolvable callee; that missed the
+    ``setSpeed → setMode (guarded, no direct API) → handleSpeed (unguarded API)``
+    shape, where the first delegate (setMode) has no direct API call so the
+    scan bailed before ever reaching the unguarded API-calling delegate
+    (handleSpeed).  Following all first-hop delegates closes that gap.
+
+    Scope is deliberately ONE hop (first-hop delegates only) — no transitive
+    multi-hop following.  The current driver corpus only requires one hop;
+    deeper following is YAGNI.
 
     Two guards prevent false positives (matching check_c3_gate_coverage.py):
       - Self-reference: a callee name equal to ``caller_name`` is a method name
         appearing inside a string literal (e.g. logDebug "setMode()") — skip it.
       - Not-defined: a callee name with no matching def in ``source`` — skip it.
+
+    Each distinct callee is yielded once even if delegated to multiple times.
     """
     method_positions = {}
     for am in ANY_METHOD_RE.finditer(source):
         method_positions.setdefault(am.group(1), am)
+    seen = set()
+    bodies = []
     for dm in _DELEGATE_CALL_RE.finditer(caller_body):
         raw = dm.group(0)
         callee_name = raw[:raw.index('(')].strip()
         if callee_name == caller_name:
+            continue
+        if callee_name in seen:
             continue
         callee_match = method_positions.get(callee_name)
         if callee_match is None:
@@ -170,8 +193,9 @@ def _resolve_delegate_callee_body(
         end = _find_method_body_end(source, brace)
         if end == -1:
             continue
-        return source[brace:end]
-    return None
+        seen.add(callee_name)
+        bodies.append(source[brace:end])
+    return bodies
 
 
 def _find_method_body_end(source: str, brace_start: int) -> int:
@@ -282,29 +306,44 @@ def check_rule32_auto_on_guard_missing(
             #     regardless of where the cloud write happens.  PASS.
             #
             # (2) Pure delegation with NO self-guard: the method reaches the cloud
-            #     through a same-file delegate (handleSpeed/doSetX/setFanSpeed-style).
-            #     Follow the delegation and check the callee for the guard — a
-            #     SHOULD-ON method must not escape the auto-on scan just because the
-            #     API call lives one hop away.  If the callee makes an API call but
-            #     lacks ensureSwitchOn(), the auto-on guard is missing → BP24-B.
+            #     through one or more same-file delegates
+            #     (handleSpeed/doSetX/setFanSpeed-style).  Follow EVERY first-hop
+            #     delegate and check each for the guard — a SHOULD-ON method must
+            #     not escape the auto-on scan just because the API call lives one
+            #     hop away, and must not be let off the hook just because the FIRST
+            #     delegate happens to be guard-clean (e.g. an auto-path setMode with
+            #     no direct API call).  If ANY first-hop delegate makes an API call
+            #     but lacks ensureSwitchOn(), the auto-on guard is missing → BP24-B.
             if ENSURE_SWITCH_ON_RE.search(body_clean):
                 continue
 
-            callee_body = _resolve_delegate_callee_body(
+            callee_bodies = _resolve_delegate_callee_bodies(
                 method_name, body_clean, raw_text
             )
-            if callee_body is None:
-                # No resolvable same-file delegate — nothing to follow.
+            # Scan every first-hop delegate; flag if any makes an unguarded API
+            # call.  A delegate with no direct API call is out of scope (skipped).
+            # A delegate that both calls the API and carries ensureSwitchOn() is
+            # protected (skipped).  Only a delegate that calls the API WITHOUT the
+            # guard fails — and one such delegate is enough to flag the caller.
+            delegate_unguarded = False
+            for callee_body in callee_bodies:
+                callee_clean = _strip_line_comments(callee_body)
+                if not API_CALL_RE.search(callee_clean):
+                    # Delegate does not itself reach the cloud — out of scope.
+                    continue
+                if ENSURE_SWITCH_ON_RE.search(callee_clean):
+                    # Callee carries the guard — this hop is protected.
+                    continue
+                # Delegate makes an API call but does not guard the power state.
+                delegate_unguarded = True
+                break
+
+            if not delegate_unguarded:
+                # No unguarded API-calling delegate found — nothing to flag.
                 continue
-            callee_clean = _strip_line_comments(callee_body)
-            if not API_CALL_RE.search(callee_clean):
-                # Delegate does not itself reach the cloud — out of scope here.
-                continue
-            if ENSURE_SWITCH_ON_RE.search(callee_clean):
-                # Callee carries the guard — the SHOULD-ON chain is protected. PASS.
-                continue
-            # Delegate makes an API call but neither caller nor callee guards the
-            # power state → auto-on guard missing across the delegation boundary.
+            # At least one first-hop delegate makes an API call without
+            # ensureSwitchOn(), and the caller itself has no guard → auto-on
+            # guard missing across the delegation boundary.
             findings.append(make_finding(
                 severity="FAIL",
                 rule_id="RULE32_auto_on_guard_missing",
