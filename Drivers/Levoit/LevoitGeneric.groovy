@@ -451,11 +451,7 @@ private String detectShape(Map r){
  */
 private boolean hasDeviceFields(data){
     if (!data) return false
-    def r = data?.result ?: [:]
-    int pg = 0
-    while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && pg < 4) {
-        r = r.result; pg++
-    }
+    def r = peelEnvelope(data instanceof Map ? data : [:])
     return r instanceof Map && (r.containsKey('powerSwitch') || r.containsKey('humidity') || r.containsKey('PM25'))
 }
 

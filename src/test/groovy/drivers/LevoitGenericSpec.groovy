@@ -107,6 +107,25 @@ class LevoitGenericSpec extends HubitatSpec {
         lastEventValue("switch") == "on"
     }
 
+    def "update() self-fetch peels a double-wrapped envelope in hasDeviceFields and applies status (Bug Pattern #3)"() {
+        // Guards the hasDeviceFields() peel path (Phase 3c migration to shared peelEnvelope).
+        // hasDeviceFields(resp.data) must peel the double-wrap to recognize device fields;
+        // if the peel under-shoots, hasDeviceFields returns false, applyStatus never runs on
+        // the first response, and no humidity event is emitted from this path.
+        given: "getPurifierStatus returns a double-wrapped humidifier-shape response with real device fields"
+        def fixture = loadYamlFixture("LevoitGeneric.yaml")
+        def deviceData = fixture.responses.humidifier_on_auto as Map
+        testParent.cannedResponse = [status: 200, data: humidifierStatusEnvelope(deviceData)]
+
+        when: "0-arg update() self-fetch runs"
+        driver.update()
+
+        then: "hasDeviceFields peeled the double-wrap, so applyStatus emitted device events"
+        lastEventValue("humidity") != null
+        lastEventValue("switch") == "on"
+        noExceptionThrown()
+    }
+
     def "applyStatus handles null status gracefully without throwing"() {
         when: "applyStatus is called with null"
         driver.applyStatus(null)
