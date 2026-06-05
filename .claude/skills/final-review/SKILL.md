@@ -1,15 +1,15 @@
 ---
 name: final-review
-description: Final pre-PR multi-agent QA review for Hubitat-VeSync driver fork. Runs the Haiku pre-flight gate, then dispatches up to 6 specialized sub-agents in parallel (coverage, platform, protocol, adversarial, design, operator) PLUS the OpenAI Codex CLI as a different-model second-opinion pass, synthesizes their findings into a unified report. Use BEFORE opening or marking a PR ready-for-review. Distinct from the cheaper pipeline-stage `vesync-driver-qa` agent. Usage: /final-review [PR# OR base..HEAD OR brief context]
+description: Final pre-PR multi-agent QA review for Hubitat-VeSync driver fork. Runs the Haiku pre-flight gate, then dispatches up to 6 specialized sub-agents in parallel (coverage, platform, protocol, adversarial, design, operator) PLUS two different-family external reviewers — the OpenAI Codex CLI and the Google Gemini CLI — as second-opinion passes, synthesizes their findings into a unified report. Use BEFORE opening or marking a PR ready-for-review. Distinct from the cheaper pipeline-stage `vesync-driver-qa` agent. Usage: /final-review [PR# OR base..HEAD OR brief context]
 context: hubitat-vesync-fork
 disable-model-invocation: true
 ---
 
 # VeSync Driver Final Review — Multi-Agent Fan-Out
 
-Run the comprehensive multi-agent QA review before opening or marking a PR ready-for-review. You (main session) are the orchestrator — dispatch pre-flight first, then in a single parallel beat dispatch the 6 specialized Claude sub-agents AND fire the OpenAI Codex CLI as a different-model second-opinion pass, gather all reports, synthesize into a unified report.
+Run the comprehensive multi-agent QA review before opening or marking a PR ready-for-review. You (main session) are the orchestrator — dispatch pre-flight first, then in a single parallel beat dispatch the 6 specialized Claude sub-agents AND fire two different-family external reviewers (the OpenAI Codex CLI and the Google Gemini CLI) as second-opinion passes, gather all reports, synthesize into a unified report.
 
-Codex is **not a Claude sub-agent** — it's orchestrated via a `Bash` call from this skill in the same parallel dispatch message as the 6 `Agent({...})` calls. Different model family = different blind spots. Empirically calibrated to catch doc-vs-code drift and sibling-pattern incompleteness the 6-agent Claude fan-out misses.
+The two external reviewers are **not Claude sub-agents** — each is orchestrated via a `Bash` call from this skill in the same parallel dispatch message as the 6 `Agent({...})` calls. Different model family = different blind spots, and the benefit **compounds**: across consecutive ship gates the three families (Claude lenses + Codex + Gemini) each repeatedly catch real BLOCKINGs the *other two* miss — including cross-variant correctness bugs no single-family panel surfaces. Both external reviewers consume the SAME shared prompt file (authored once in Step 4b) and review the FULL change independently — they are not gap-fillers; their highest-value catches are independent findings.
 
 ## When to use this skill vs the pipeline `vesync-driver-qa` agent
 
@@ -33,23 +33,30 @@ Parse `$ARGUMENTS`:
 
 Confirm the audit scope to the user briefly before dispatching: which branch, which base, what's in the diff.
 
-### Step 1b — Codex auth/install/usage pre-check
+### Step 1b — External-reviewer auth/install/usage pre-check (Codex + Gemini, independent)
 
-Before dispatching anything else, check whether the OpenAI Codex CLI is installed, authenticated, and not usage-blocked. This determines whether the parallel fan-out includes the Codex second-opinion pass or runs Claude-agents-only.
+Before dispatching anything else, probe BOTH external CLIs **independently** — each has its own availability flag, and a missing/blocked one never aborts the skill (graceful degrade, per external reviewer). Calibrate each new family independently before trusting it; verify-before-trust is permanent and per-finding for every external family, not a calibration-phase-only step.
 
+**Codex (`codex_available`):**
 ```bash
 codex login status 2>&1
 ```
+- `Logged in using ChatGPT` / `Logged in using API key` → `codex_available = true`.
+- `Not logged in` → `codex_available = false`. Warn once: *"Codex CLI installed but not authenticated (`codex login`). Proceeding without it."*
+- Exit non-zero / `command not found` → `codex_available = false`. Warn once: *"Codex CLI not on PATH. Proceeding without it. Install: `npm install -g @openai/codex`."*
+- Output indicates the ChatGPT plan's usage window is exhausted / rate-limited (substrings `usage limit`, `rate limit`, `quota`, `429`, `reset at`) → `codex_available = false`. Warn once: *"Codex authenticated but ChatGPT usage window exhausted (resets later). Proceeding without it."* Do NOT burn a probe message to confirm.
 
-Interpret:
-- `Logged in using ChatGPT` or `Logged in using API key` → set `codex_available = true`. Codex will participate in the parallel dispatch.
-- `Not logged in` → set `codex_available = false`. Warn the user once: *"Codex CLI is installed but not authenticated (`codex login`). Proceeding with 6-agent Claude fan-out only."* Do NOT abort the skill.
-- Exit non-zero / `command not found` / similar → set `codex_available = false`. Warn the user once: *"Codex CLI is not installed on PATH. Proceeding with 6-agent Claude fan-out only. To install: `npm install -g @openai/codex`."* Do NOT abort the skill.
-- Output (or a `codex login status --json` plan/usage field, when the installed CLI version emits one) indicates the ChatGPT plan's usage window is exhausted / rate-limited (substrings like `usage limit`, `rate limit`, `quota`, `429`, `reset at`) → set `codex_available = false`. Warn the user once: *"Codex CLI is authenticated but the ChatGPT plan's usage window is exhausted (resets later). Proceeding with 6-agent Claude fan-out only."* Do NOT abort, and do NOT burn a probe message trying to confirm.
+**Gemini (`gemini_available`):**
+```bash
+gemini --version 2>&1
+```
+- Prints a version → `gemini_available = true`.
+- `command not found` / exit non-zero → `gemini_available = false`. Warn once: *"Gemini CLI not on PATH. Proceeding without it. Install: `npm install -g @google/gemini-cli`."*
+- Gemini's free/shared-capacity tier hits short **auto-recovering** throttles; do NOT treat that as unavailable at pre-check time — it's handled at run time (Step 6 throttle-WAIT policy). `--version` only gates install presence.
 
-**Do NOT spend a real `codex exec` probe message just to test usage** — on ChatGPT Plus the message budget is the scarce resource the whole gate exists to protect. `codex login status` is free; rely on it plus the Step 6 runtime guard (which catches a usage-exhaustion that only surfaces once the real fan-out call runs).
+**Do NOT spend a real `codex exec` / `gemini -p` probe message just to test usage** — on the metered/per-message tiers the message budget is the scarce resource the gate exists to protect. The free `--version` / `login status` checks plus the Step 6 runtime guard (which catches a usage-exhaustion that only surfaces once the real call runs) are sufficient.
 
-When `codex_available = false`, the rest of the skill behaves as if Codex did not exist — the 6 Claude sub-agents still fan out and produce the unified report. The synthesis step skips the Codex-merge logic.
+When an external reviewer's flag is `false`, the rest of the skill behaves as if it did not exist — the Claude fan-out (and the other external reviewer, if available) still runs and produces the unified report; synthesis skips that reviewer's merge logic. If BOTH are false, it's a pure Claude-only fan-out.
 
 ### Step 2 — Dispatch pre-flight agent (gate)
 
@@ -93,9 +100,9 @@ The pre-flight agent's report includes a structured dispatch plan:
 | codex | YES | … |
 ```
 
-Dispatch the reviewers marked YES. Brief the user: "Pre-flight PASS. Dispatching N of 6 Claude sub-agents — <list> — in parallel, plus Codex second-opinion pass." If skipping any, the user sees why.
+Dispatch the reviewers marked YES. Brief the user: "Pre-flight PASS. Dispatching N of 6 Claude sub-agents — <list> — in parallel, plus external second-opinion passes: <Codex and/or Gemini, per availability>." If skipping any, the user sees why.
 
-**Codex override**: regardless of pre-flight's classification, force the `codex` row to NO when `codex_available = false` (Step 1b set this). Pre-flight does not know whether Codex is installed/authenticated; the skill owns that gate.
+**The `codex` matrix column gates BOTH external reviewers** — Codex and Gemini review the same diff against the same shared prompt, so the per-diff "is an external pass worth it?" decision is shared. When that row is YES, fire *each* external reviewer whose Step-1b availability flag is `true` (`codex_available`, `gemini_available` independently). When it's NO (trivial mechanical diff), fire neither. Pre-flight does not know whether either CLI is installed/authenticated; the skill owns that gate via the two flags.
 
 For reference, the matrix the pre-flight agent applies (don't re-compute it; trust pre-flight's classification):
 
@@ -113,11 +120,11 @@ For reference, the matrix the pre-flight agent applies (don't re-compute it; tru
 | CI / workflow change | NO | YES | NO | NO | NO | NO | NO |
 | Cut-release skill / agent def | NO | NO | NO | NO | YES | maybe | YES |
 
-Codex column rationale: `maybe` for pure-docs (Codex is strong at doc-vs-code drift), `YES` for new driver / behavior change / new library / cut-release-skill (sibling-pattern incompleteness + stale-narration axes pay off), `maybe` for spec-only (vacuous-guard axis), `maybe` for lint rule change (over-zealous enforcement axis), `NO` for trivial mechanical changes (version bump / manifest-only / CI). When in doubt, lean YES — Codex is one message on Plus billing.
+External-reviewer (`codex` column) rationale: `maybe` for pure-docs (externals are strong at doc-vs-code drift), `YES` for new driver / behavior change / new library / cut-release-skill (sibling-pattern incompleteness + stale-narration + cross-variant correctness pay off), `maybe` for spec-only (vacuous-guard axis), `maybe` for lint rule change (over-zealous enforcement axis), `NO` for trivial mechanical changes (version bump / manifest-only / CI). When in doubt, lean YES — Codex is ~one ChatGPT-Plus message and Gemini is free-tier (per-run, not per-token), so both are cheap relative to the catch value.
 
-### Step 4a — Codex CWD selection (skip if `codex_available = false`)
+### Step 4a — External-reviewer CWD selection (skip if both external flags false)
 
-Codex runs against a working tree on disk. Pick one of two modes for the `-C` argument:
+Both external reviewers run against a working tree on disk; the tree-selection logic is shared. Codex can run `git` in its sandbox (so it reviews a real diff); Gemini's read-only `plan` mode **blocks shell entirely** (no git) — so Gemini reviews the files directly from the same cwd. Pick one of two modes for the working tree:
 
 **Mode A — current HEAD (default).** Use when the audit SHA equals the current local HEAD AND the working tree has no uncommitted changes touching `*.groovy`, `*.md`, or `tests/**`:
 
@@ -126,20 +133,24 @@ git rev-parse HEAD                            # must equal the audit HEAD SHA
 git status --porcelain -- '*.groovy' '*.md' 'tests/**'   # must produce no output
 ```
 
-If both checks pass, set `CODEX_CWD=<repo-root>` and skip the worktree step. Typical case (self-audit of current HEAD).
+If both checks pass, set `REVIEW_CWD=<repo-root>` and skip the worktree step. Typical case (self-audit of current HEAD).
 
 **Mode B — temporary worktree (fallback).** Use when Mode A's preconditions fail (cross-PR audit, historical SHA review, dirty working tree, branch checkout mid-review):
 
 ```bash
 git worktree add ../codex_review_<short-sha> <HEAD-SHA>
-# CODEX_CWD=<repo-parent>/codex_review_<short-sha>
+# REVIEW_CWD=<repo-parent>/codex_review_<short-sha>
 ```
 
 The `<short-sha>` is the first 8 chars of the audit HEAD SHA. Remember to clean up via `git worktree remove ../codex_review_<short-sha>` in Step 6 after synthesis completes.
 
+**Both reviewers share this cwd** (`REVIEW_CWD`): Codex gets it via `-C`, Gemini is launched with it as the process cwd. Since Gemini can't run git, the shared prompt (Step 4b) uses a dual "diff-or-files" framing — Codex takes the git path, Gemini reads the listed files directly from `REVIEW_CWD`. In Mode B, that's the worktree, so Gemini sees the audit SHA's files correctly.
+
 ### Step 4b — Issue the parallel fan-out
 
-Dispatch the YES Claude sub-agents in a SINGLE message with multiple `Agent({...})` calls, AND in the same message fire the Codex Bash call if `codex_available = true`. All run concurrently. Each Claude sub-agent gets the same diff context but its scope is its specialization:
+**First author the shared prompt file (ONCE).** Both external reviewers consume the SAME prompt — identical input makes the cross-reviewer comparison meaningful and saves authoring two prompts. Build the Step-4c prompt (with `<BASE_SHA>`/`<HEAD_SHA>` and the per-diff HUNT invariants substituted) and `Write` it to a file *outside the repo* so the working tree stays clean: `<repo-parent>/.final_review_prompt_<short-sha>.md`. (Pass it as a FILE both CLIs read — never piped on the command line; a large prompt on argv blows the OS limit with "Argument list too long".)
+
+Then dispatch the YES Claude sub-agents in a SINGLE message with multiple `Agent({...})` calls, AND in the same message fire one background `Bash` call per *available* external reviewer (`codex_available`, `gemini_available`). All run concurrently. Each Claude sub-agent gets the same diff context but its scope is its specialization:
 
 ```
 Agent({
@@ -156,23 +167,24 @@ Workdir: <workdir>.
 Return your standard structured report per your definition.
 `
 })
-Agent({
-  subagent_type: 'vesync-driver-qa-platform',
-  name: 'qa-platform',
-  prompt: <same shape>
-})
-... (other Claude sub-agents) ...
+Agent({ subagent_type: 'vesync-driver-qa-platform', name: 'qa-platform', prompt: <same shape> })
+... (other YES Claude sub-agents) ...
+
+// External reviewer 1 — Codex (can run git in its read-only sandbox; reads prompt from stdin):
 Bash({
-  command: `cat <<'CODEX_PROMPT' | codex exec -C $CODEX_CWD -s read-only --skip-git-repo-check -o <repo-parent>/.codex_review_<short-sha>.md
-<calibrated prompt from Step 4c, with <BASE_SHA> and <HEAD_SHA> substituted>
-CODEX_PROMPT`,
-  run_in_background: true,
-  timeout: 1200000,
-  description: 'Codex CLI second-opinion pass'
-})
+  command: `codex exec -s read-only -C $REVIEW_CWD - < <repo-parent>/.final_review_prompt_<short-sha>.md > <repo-parent>/.codex_review_<short-sha>.md 2>&1`,
+  run_in_background: true, timeout: 1200000, description: 'Codex CLI second-opinion pass'
+})   // only if codex_available
+
+// External reviewer 2 — Gemini (plan mode = read-only, NO shell → reviews files directly;
+// run with $REVIEW_CWD as cwd; grant read access to the out-of-repo prompt dir):
+Bash({
+  command: `cd $REVIEW_CWD && gemini --approval-mode plan --include-directories <repo-parent> -p "Read <repo-parent>/.final_review_prompt_<short-sha>.md and carry out the review it describes against this repo (the current working directory). You cannot run git — read the relevant files directly. Output [BLOCKING|WARNING|NIT] file:line + a one-line verdict." > <repo-parent>/.gemini_review_<short-sha>.md 2>&1`,
+  run_in_background: true, timeout: 1200000, description: 'Gemini CLI second-opinion pass'
+})   // only if gemini_available
 ```
 
-The Bash call uses `run_in_background: true` so it returns immediately; the orchestrator gets notified when the codex job exits. Output is written to `<repo-parent>/.codex_review_<short-sha>.md` (a sibling of the repo, not inside the worktree) so it persists after Mode B's worktree is cleaned up.
+Each `Bash` uses `run_in_background: true` so it returns immediately; you're notified when each job exits. Outputs go to `<repo-parent>/.{codex,gemini}_review_<short-sha>.md` (siblings of the repo, not inside the worktree) so they survive Mode B cleanup. Note the per-CLI differences (do NOT assume one recipe transfers): Codex reads the prompt via stdin redirect (`- < file`) and can run git; Gemini's `plan` mode blocks shell, so it's pointed AT the prompt file via a SHORT `-p` instruction (the file is *named*, not piped) and reads the listed source files directly. Both `--include-directories`/`-C` are needed because the prompt file lives outside the repo sandbox.
 
 **Capture each Claude sub-agent's agent ID** from the dispatch result. Store for SendMessage on re-review rounds. The pattern:
 
@@ -180,11 +192,15 @@ The Bash call uses `run_in_background: true` so it returns immediately; the orch
 agentId: <id> (use SendMessage with to: '<id>' to continue this agent)
 ```
 
-Record these in your working memory for this skill invocation. Codex does not have a transcript-resume API — re-review rounds re-run Codex fresh (see Re-review rounds section below).
+Record these in your working memory for this skill invocation. Neither external CLI has a transcript-resume API — re-review rounds re-run each available external reviewer fresh (see Re-review rounds section below).
 
-### Step 4c — Codex prompt template
+### Step 4c — Shared external-reviewer prompt (both Codex & Gemini consume it)
 
-This is the calibrated 7-axis prompt that Step 4b's heredoc inlines. Substitute `<BASE_SHA>` and `<HEAD_SHA>` with the actual commit refs from Step 1. The template was calibrated against PR #13 (v2.6) pre-merge HEAD `d6f9a35`; in that run Codex caught 4 real findings (1 latent NUL byte in an agent definition, 2 stale comments contradicting current code, 1 stale tooling docstring) that 30 sweeps of the existing pipeline + Gemini review had missed.
+This is the SINGLE prompt both external CLIs read (authored to `<repo-parent>/.final_review_prompt_<short-sha>.md` in Step 4b). Substitute `<BASE_SHA>`/`<HEAD_SHA>` with the Step-1 refs, the explicit `<file list>` (Gemini can't compute a diff — list the changed files so it can read them), and a per-diff **HUNT** list of the load-bearing invariants THIS change must preserve.
+
+**Frame it as a FULL independent review — NOT "find what our lenses missed."** This is the load-bearing reframe: the external reviewers' highest-value catches are INDEPENDENT findings (in this project: cross-variant correctness bugs and a missed state-freshness gate — none flagged by the in-house lenses). Priming with the full invariant set AND an open-ended "flag anything beyond this" surfaces those; narrowing to "just the gaps" suppresses the second-opinion value they exist to provide. (This broad-and-doc-loading framing applies to the EXTERNAL reviewers ONLY — the Claude lenses stay durably specialized per their per-lens defs; do not collapse them into freeform prompts.) A *soft* "our in-house lenses already cover X well" hint is fine to cut duplicate noise, but never as a scope boundary.
+
+The role/domain-priming + read-docs-at-task-time structure was calibrated against PR #13 (v2.6) pre-merge HEAD `d6f9a35`, where the external pass caught 4 real findings (latent NUL byte in an agent def, 2 stale comments, 1 stale tooling docstring) that 30 sweeps + a bot review had missed.
 
 ````
 # Your role
@@ -196,35 +212,38 @@ You are a senior Hubitat Elevation platform engineer reviewing a Hubitat Groovy 
 - **pyvesync (webdjoe/pyvesync)** is the canonical reference for VeSync API behavior. When the driver code's payload, field name, or response shape is in question, pyvesync's `src/pyvesync/` for the matching device family is ground truth.
 - **Groovy semantics in the Hubitat sandbox** — closure scope, `@Field static final` (Hubitat-allowed), `def` vs typed params (sandbox dispatches differently — typed primitive params get enforced at dispatch time, untyped don't), the `as Integer` / `.toInteger()` exception-throw-before-Elvis trap (Groovy's `?:` catches null but NOT thrown exceptions).
 
-# Required reading FIRST (before reviewing the diff)
+# Required reading FIRST (before you start)
 
 Read these files in the working tree to load the fork's specific conventions, architecture, and bug-pattern catalog into your context. They're the canonical, always-current source of truth — read them at task time, do not rely on training-data knowledge:
 
 1. **`CONTRIBUTING.md`** — full bug-pattern catalog (BP1-BPN), every lint rule's purpose, the 5-driver-family layout, parent-child architecture, HPM packaging via `bundles[]`, every convention this codebase enforces.
 2. **`CLAUDE.md`** — fork-specific AI-pipeline overlay; contains the architecture summary, family-line cleavage, bug-pattern conventions, and the cross-cutting / fix-scope discipline rules.
-3. **`.claude/agents/vesync-driver-qa-preflight.md`** + **`.claude/agents/vesync-driver-qa-coverage.md`** + **`.claude/agents/vesync-driver-qa-platform.md`** + **`.claude/agents/vesync-driver-qa-protocol.md`** + **`.claude/agents/vesync-driver-qa-adversarial.md`** + **`.claude/agents/vesync-driver-qa-design.md`** + **`.claude/agents/vesync-driver-qa-operator.md`** — the 6 parallel Claude sub-agents reviewing this PR alongside you. Read these to understand exactly what they cover, so you can focus your output on what they're likely to miss.
+3. **`.claude/agents/vesync-driver-qa-*.md`** (coverage, platform, protocol, adversarial, design, operator + preflight) — the parallel Claude sub-agents reviewing this PR alongside you. Read these so you know what's already well-covered — a SOFT dedup hint to cut duplicate noise, NOT a scope boundary. Review the WHOLE change against the invariant set + your own judgement; your most valuable findings are the independent ones the in-house lenses didn't think to look for.
 4. **`Drivers/Levoit/readme.md`** — per-driver feature/capability/attribute reference (helps you tell whether a doc row is drifted from code).
 5. **`docs/oauth-flow.md`** (if it exists) — internal-debugging reference for the two-stage OAuth login flow introduced in v2.7. Worth reading if the diff touches `VeSyncIntegration.groovy` auth code.
 
-# Your task
+# Your task — FULL independent review
 
-Review the diff: `git diff <BASE_SHA>..<HEAD_SHA>` in the current working directory. Read whatever additional files you need for context.
+Review the entire change. **If you can run git, review `git diff <BASE_SHA>..<HEAD_SHA>`; otherwise read these files directly: `<explicit changed-file list>`.** Read whatever additional files you need for context. Exclude generated/vendored paths and the dependency dir.
 
-Surface findings the maintainer would flag in review — bugs, regressions, dishonest commit messages, BREAKING changes that aren't called out as BREAKING, comments/docs that drift from code, sibling-pattern incompleteness across the 5 driver families (Core / Vital / Classic / V2-humidifier / Fan).
+WHAT THIS CHANGE IS: `<2-3 lines: what the diff does, what must stay true>`.
 
-# What we want from you (focus areas where our 6 sub-agents are weakest)
+HUNT — verify EACH of these against the actual code (these are the load-bearing invariants for THIS change; substitute per-diff):
+  1. `<load-bearing invariant #1>`
+  2. `<invariant #2>`
+  ... `<the full set of properties that must hold for this change to be correct>` ...
 
-The 6 parallel Claude sub-agents (whose definitions you've now read) cover most of the well-trodden ground. Their blind spots — where your output adds the most value — tend to be:
+Also flag ANYTHING beyond this list — spec gaps, missed cases, anything the spec or I overlooked. Do not limit yourself to the items above. The kinds of things this fork's maintainer cares about (use as a checklist of *shapes*, not a scope limit):
 
-- **Doc/comment-vs-code drift.** A docstring, comment, README row, BREAKING note, or BP-catalog entry that contradicts what the code now does. Triangulate across files when the drift spans multiple places.
-- **Sibling-pattern incompleteness across drivers in the same family.** When a fix lands on driver A but the same pattern exists on driver B in the same family and didn't get the fix.
-- **Vacuous regression-guards.** A Spock spec or assertion declared to "prove" a fix that would pass identically with or without the fix applied.
-- **Over-zealous code-side enforcement.** A new lint rule, verifier, or assertion that flags real existing patterns as wrong, OR that is structurally easy to circumvent.
-- **Stale narration.** A commit message, BREAKING note, or BP-catalog entry that overstates or understates what the diff actually changes.
-- **HPM-bundle integrity gaps.** `levoitManifest.json bundles[].location` URL drift, `LIBS` array in `tools/build-bundle.py` vs files in the to-be-built ZIP, `install.txt` / `update.txt` line mismatch.
-- **Anything else a senior maintainer would catch on first read** that doesn't fit the categories above. You're not bound to these axes — they're hints, not a checklist.
+- **Cross-variant / sibling-pattern correctness.** A fix on driver A whose siblings in the same family (Core / Vital / Classic / V2-humidifier / Fan) didn't get it; a per-variant payload/field that's wrong on one model.
+- **Doc/comment-vs-code drift.** A docstring, comment, README row, BREAKING note, or BP-catalog entry that contradicts what the code now does.
+- **Vacuous regression-guards.** A spec/assertion declared to "prove" a fix that would pass identically with or without the fix.
+- **Over-zealous code-side enforcement.** A new lint rule/verifier that flags real existing patterns, or is structurally easy to circumvent.
+- **Stale narration.** A commit message, BREAKING note, or catalog entry that over/understates what the diff changes.
+- **HPM-bundle integrity.** `levoitManifest.json bundles[].location` URL drift; `LIBS` in `tools/build-bundle.py` vs files in the built ZIP; `install.txt`/`update.txt` mismatch.
+- **Anything a senior maintainer would catch on first read.**
 
-Don't waste output re-flagging things in the 6 sub-agents' scopes unless you spot a specific gap in their coverage on this diff.
+Our in-house Claude lenses already cover the well-trodden ground (you read their defs) — that's a soft hint to avoid duplicate noise, NOT a boundary. Verify every claim against the actual code; do not assume.
 
 # Output format
 
@@ -250,9 +269,19 @@ If the PR is large and the user is doing other work, dispatch each sub-agent wit
 
 ### Step 6 — Gather reports + synthesize
 
-When all dispatched Claude sub-agents return AND the Codex background job notifies completion (if dispatched), read `<repo-parent>/.codex_review_<short-sha>.md` into your context. If Codex was not dispatched (auth/usage gate failed in Step 1b, or matrix marked it NO), skip the Codex-merge logic below and proceed with Claude-only synthesis.
+When all dispatched Claude sub-agents return AND each dispatched external background job notifies completion, read each available external reviewer's output (`<repo-parent>/.codex_review_<short-sha>.md`, `<repo-parent>/.gemini_review_<short-sha>.md`) into your context. For any external reviewer not dispatched (flag false in Step 1b, or matrix marked the external column NO), skip its merge logic.
 
-**Runtime usage-exhaustion guard (the Step 1b pre-check's safety net).** Step 1b can't always detect a usage block up front — the ChatGPT plan's window can be fine at `codex login status` time but exhaust mid-run, so the failure only surfaces in the background job's output. Before merging Codex findings, sanity-check the output file: if `.codex_review_<short-sha>.md` is **missing, empty, or its body is a usage/rate-limit/auth error rather than a findings report** (substrings like `usage limit`, `rate limit`, `quota`, `429`, `stream error`, `not logged in`), treat Codex as unavailable for this run — note `Codex: unavailable this run (usage/rate-limit)` in the unified report's **Sub-agents dispatched** line, skip the Codex-merge logic, and proceed with Claude-only synthesis. Do NOT surface the raw error text as a "finding", and do NOT block or retry (a retry just burns another message against the same exhausted window). The 6-agent Claude fan-out is the authoritative result; Codex is always additive.
+**Pull the verdict out of the noisy logs.** Both logs carry spinner frames, retries, and boilerplate; the findings are at the END:
+```bash
+# Codex: content follows the final `codex` banner line
+awk '/^codex$/{f=1} f' <repo-parent>/.codex_review_<short-sha>.md | tail -40
+# Gemini: strip spinner/retry/boilerplate, then tail
+grep -vE "^(Loaded|Loading|Attempt [0-9]|Warning:|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏)" <repo-parent>/.gemini_review_<short-sha>.md | tail -60
+```
+
+**Throttle-WAIT, don't drop, on capacity limits (esp. Gemini free tier).** Free/shared-capacity CLIs hit short auto-recovering throttles (a Gemini run may retry several times over ~40s and still complete). Because the fan-out is parallel, a throttled reviewer normally still lands within the pack's window. Policy: synthesize when the pack (lenses + tester + the other external) finishes; if one external is still retrying, grant a short grace (≈ the slowest reviewer's runtime, capped a couple minutes past the pack), then proceed. **Drop an external reviewer only on a *sustained* outage that makes it the long pole — and state the drop EXPLICITLY in synthesis, never silently** (a drop is itself availability data).
+
+**Runtime usage-exhaustion guard (the Step 1b pre-check's safety net), per external reviewer.** Step 1b can't always detect a usage block up front — a plan's window can be fine at pre-check time but exhaust mid-run, surfacing only in the background job's output. Before merging an external reviewer's findings, sanity-check its output file: if it's **missing, empty, or its body is a usage/rate-limit/auth error rather than a findings report** (substrings `usage limit`, `rate limit`, `quota`, `429`, `stream error`, `not logged in`), treat THAT reviewer as unavailable for this run — note e.g. `Codex: unavailable this run (usage/rate-limit)` or `Gemini: dropped (sustained throttle)` in the unified report's **Sub-agents dispatched** line, skip its merge, and proceed with the rest. Do NOT surface the raw error text as a "finding", and do NOT block or retry (a retry burns another message/quota against the same exhausted window). The Claude fan-out is the authoritative result; the external reviewers are always additive.
 
 Produce a unified report with this structure:
 
@@ -292,18 +321,18 @@ Produce a unified report with this structure:
 - adversarial: <id>
 - design: <id>
 - operator: <id>
-- codex: re-runs fresh each round (no transcript resume; see Re-review rounds)
+- codex / gemini: external CLIs — re-run fresh each round (no transcript resume; see Re-review rounds)
 ```
 
 **Synthesis rules**:
 
-- **Deduplicate**: if two reviewers flag the same file:line (likely on doc-vs-code or lint-vs-spec boundary), merge into one finding noting both perspectives. When Codex and a Claude sub-agent agree on a finding, that agreement strengthens severity — note both in the merged entry.
+- **Deduplicate**: if two reviewers flag the same file:line, merge into one finding noting both perspectives. Agreement across families (a Claude lens + Codex + Gemini on the same finding) strengthens severity — note all that flagged it.
 - **Severity merge**: if any reviewer flags BLOCKING, the unified finding is BLOCKING. Use the strongest reasoning.
 - **Cross-cutting findings**: some issues span multiple reviewer scopes (a new SHOULD-ON method with no auto-on guard AND missing from-off Spock spec AND no CHANGELOG bullet). Merge into a single finding with multi-scope attribution.
 - **Preserve reviewer voice**: cite the original reports verbatim in the appendix when clear. Don't paraphrase if it loses precision.
-- **Codex-only findings**: if Codex caught something no Claude sub-agent flagged, label it `[codex-only]` in the unified report. This is exactly the second-opinion value the integration exists to capture — surface it prominently, not buried.
-- **Codex-vs-Claude disagreement**: if Codex contradicts a Claude sub-agent's verdict on the same finding (e.g., Claude says PASS on a scope, Codex flags a BLOCKING in that same scope), present both perspectives in the unified report and explicitly note the disagreement. Let the user judge rather than auto-picking a side.
-- **Worktree cleanup**: if Step 4a chose Mode B (temporary worktree), run `git worktree remove ../codex_review_<short-sha>` after the unified report is delivered. Skip cleanup in Mode A (no worktree was created). The `.codex_review_<short-sha>.md` output file is left in place as an audit artifact — clean it up manually if no longer needed.
+- **External-only findings**: if an external reviewer caught something no Claude lens flagged, label it `[codex-only]` / `[gemini-only]` in the unified report. This is exactly the second-opinion value the integration exists to capture — surface it prominently, not buried. **Verify each external finding against the actual code before acting on it** (permanent, per-finding, every family — a hallucinated finding caught late costs a wasted fix round).
+- **Disagreement — reviewer-vs-reviewer too, not just external-vs-Claude**: if any two reviewers contradict on the same finding (Claude-vs-external, OR the two externals **split** with each other — they reason independently and will sometimes disagree), present both perspectives in the unified report, adjudicate against the actual code first, and surface the residual to the user. Don't auto-pick a side.
+- **Worktree cleanup**: if Step 4a chose Mode B (temporary worktree), run `git worktree remove ../codex_review_<short-sha>` after the unified report is delivered. Skip in Mode A. The `.codex_review_<short-sha>.md` / `.gemini_review_<short-sha>.md` output files and the `.final_review_prompt_<short-sha>.md` prompt file are left as audit artifacts — clean up manually if no longer needed.
 
 ### Verdict rules
 
@@ -331,21 +360,21 @@ When the dev pushes fixes addressing prior findings, the user will re-invoke `/f
    ```
 4. **Sub-agents NOT to re-dispatch**: any whose scope wasn't touched by the fix. Their prior PASS verdicts still hold. Note in the unified report ("Platform: not re-reviewed — scope unchanged, prior PASS holds.").
 5. If `SendMessage` returns `success: false` (agent transcript evicted), fall back to fresh `Agent({...})` with full context.
-6. **Codex re-runs fresh each round.** The Codex CLI has no transcript-resume API — every invocation is independent. Decide whether to re-run based on whether the fix touched production code:
-   - If the fix touched `Drivers/Levoit/*.groovy`, `Drivers/Levoit/*Lib.groovy`, `tests/lint_rules/`, `tests/check_*.py`, `levoitManifest.json`, or `tools/build-bundle.py` → re-run Codex (its findings may have shifted).
-   - If the fix was doc-only (CHANGELOG `[Unreleased]`, README rows, BP-catalog entries) → skip Codex re-run; its prior findings on production code are still valid. The re-review is Claude-side only.
-   - Re-running Codex spends +1 ChatGPT Plus message per round.
+6. **Both external CLIs re-run fresh each round.** Neither has a transcript-resume API — every invocation is independent. Re-author the shared prompt file for the updated tree, then re-fire each available external. Decide whether to re-run by what the fix touched:
+   - If the fix touched `Drivers/Levoit/*.groovy`, `Drivers/Levoit/*Lib.groovy`, `tests/lint_rules/`, `tests/check_*.py`, `levoitManifest.json`, or `tools/build-bundle.py` → re-run the externals (findings may have shifted).
+   - If the fix was doc-only (CHANGELOG `[Unreleased]`, README rows, BP-catalog entries) → skip the external re-run; their prior production-code findings still hold. The re-review is Claude-side only.
+   - Re-running spends +1 ChatGPT-Plus message (Codex) and one Gemini free-tier run per round.
 
 ### Cost discipline
 
 | Scenario | Cost estimate |
 |---|---|
-| Full round-1 (all 6 sub-agents + Codex) | ~200-300K Claude tokens, ~8-12 min wall time, +1 ChatGPT Plus message |
-| Re-review with 1 sub-agent resumed (no Codex) | ~40-70K tokens, ~3-5 min |
-| Re-review with 3 sub-agents resumed + Codex | ~100-150K tokens, ~5-8 min, +1 ChatGPT Plus message |
-| Trivial doc-only fix re-review (no re-dispatch, no Codex) | ~10-20K tokens, ~30s |
+| Full round-1 (all 6 sub-agents + Codex + Gemini) | ~200-300K Claude tokens, ~8-12 min wall, +1 ChatGPT-Plus message, +1 Gemini free-tier run |
+| Re-review with 1 sub-agent resumed (no externals) | ~40-70K tokens, ~3-5 min |
+| Re-review with 3 sub-agents resumed + externals | ~100-150K tokens, ~5-8 min, +1 ChatGPT-Plus message, +1 Gemini run |
+| Trivial doc-only fix re-review (no re-dispatch, no externals) | ~10-20K tokens, ~30s |
 
-Target: 2-3 round convergence for a typical PR. A typical PR cycle spends ~2-3 ChatGPT Plus messages across all Codex runs — well inside Plus's weekly headroom unless you also use Codex heavily for unrelated interactive coding.
+Target: 2-3 round convergence for a typical PR. A typical cycle spends ~2-3 ChatGPT-Plus messages across all Codex runs (well inside Plus's weekly headroom) plus matching Gemini free-tier runs (no message cost; just the auto-recovering throttle).
 
 ## When NOT to use this skill
 
@@ -363,7 +392,7 @@ If you (main session) start doing the audit work directly instead of dispatching
 
 ## Reviewer reference
 
-8 reviewers total: 7 Claude sub-agents (defined in `.claude/agents/`) + the OpenAI Codex CLI. Pre-flight runs first as a gate; the 6 deep-audit Claude agents AND Codex fan out in parallel per pre-flight's dispatch plan:
+9 reviewers total: 7 Claude sub-agents (defined in `.claude/agents/`) + 2 different-family external CLIs (OpenAI Codex + Google Gemini). Pre-flight runs first as a gate; the 6 deep-audit Claude agents AND both available externals fan out in parallel per pre-flight's dispatch plan:
 
 | Reviewer | Model / Family | Orchestration | Dispatch order | Scope |
 |---|---|---|---|---|
@@ -374,4 +403,5 @@ If you (main session) start doing the audit work directly instead of dispatching
 | `vesync-driver-qa-adversarial` | Claude / Opus | Claude sub-agent | Parallel | Input adversaries (null/empty/unicode/MAX_INT), state adversaries (guard-bypass), concurrency adversaries (async race, re-entrance), environment adversaries (BP14/16/17/19/21/22), Rule Machine adversaries (BP18 blank slots, C3 idempotency, BP23/BP24 from-off) |
 | `vesync-driver-qa-design` | Claude / Sonnet | Claude sub-agent | Parallel | Lib boundary integrity (Phase 1-5 architecture), cross-line consistency (Core/Vital/Classic/V2/Fan family), helper-extraction opportunities, intentional-asymmetry rationale, BP24 SHOULD-ON/NO-ON/SKIP-OK classification |
 | `vesync-driver-qa-operator` | Claude / Sonnet | Claude sub-agent | Parallel | BREAKING flag honesty (what breaks vs what's preserved), TMI filter (no impl-detail in user-facing prose), CHANGELOG `[Unreleased]` per-commit discipline, dashboard/RM impact disclosure, log discipline + PII sanitize routing, `Drivers/Levoit/readme.md` device-row updates, cut-release invariant trips |
-| Codex CLI | OpenAI / GPT family | Skill-orchestrated `Bash` call (NOT a Claude sub-agent) | Parallel | Broad-review second-opinion pass with soft prioritization toward doc-vs-code drift, sibling-pattern incompleteness across driver families, vacuous regression-guards, over-zealous code-side enforcement, stale narration, HPM-bundle integrity. Different model family = different blind spots than the 6 Claude sub-agents. Prompt baked inline in Step 4c. |
+| Codex CLI | OpenAI / GPT family | Skill-orchestrated `Bash` call (NOT a Claude sub-agent) | Parallel | FULL independent second-opinion review (reads the git diff in its read-only sandbox). Highest-value catches are independent findings — cross-variant correctness, doc-vs-code drift, sibling-pattern incompleteness, vacuous guards, stale narration, HPM-bundle integrity. Consumes the shared prompt file (Step 4b/4c). |
+| Gemini CLI | Google / Gemini family | Skill-orchestrated `Bash` call (NOT a Claude sub-agent) | Parallel | FULL independent second-opinion review from a THIRD model family — blind-spot benefit compounds with Codex (each catches BLOCKINGs the other two families miss). `plan` mode blocks shell, so it reads the changed files directly (no git diff). Consumes the SAME shared prompt file. Free-tier throttles auto-recover (Step 6 wait-don't-drop). |
