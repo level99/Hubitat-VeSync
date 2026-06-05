@@ -46,13 +46,15 @@ codex login status 2>&1
 - Exit non-zero / `command not found` → `codex_available = false`. Warn once: *"Codex CLI not on PATH. Proceeding without it. Install: `npm install -g @openai/codex`."*
 - Output indicates the ChatGPT plan's usage window is exhausted / rate-limited (substrings `usage limit`, `rate limit`, `quota`, `429`, `reset at`) → `codex_available = false`. Warn once: *"Codex authenticated but ChatGPT usage window exhausted (resets later). Proceeding without it."* Do NOT burn a probe message to confirm.
 
-**Gemini (`gemini_available`):**
+**Gemini (`gemini_available`) — gated on BOTH the CLI and `rg`, same graceful-degrade as Codex:**
 ```bash
-gemini --version 2>&1
+gemini --version 2>&1     # CLI present?
+command -v rg             # ripgrep on PATH? Gemini shells out to it for repo search
 ```
-- Prints a version → `gemini_available = true`.
-- `command not found` / exit non-zero → `gemini_available = false`. Warn once: *"Gemini CLI not on PATH. Proceeding without it. Install: `npm install -g @google/gemini-cli`."*
-- Gemini's free/shared-capacity tier hits short **auto-recovering** throttles; do NOT treat that as unavailable at pre-check time — it's handled at run time (Step 6 throttle-WAIT policy). `--version` only gates install presence.
+- `gemini` prints a version AND `rg` is on PATH → `gemini_available = true`.
+- `gemini` `command not found` / exit non-zero → `gemini_available = false`. Warn once: *"Gemini CLI not on PATH. Proceeding without it. Install: `npm install -g @google/gemini-cli`."*
+- `gemini` present but **`rg` absent** → `gemini_available = false`. Warn once: *"Gemini CLI present but ripgrep (`rg`) is not on PATH — Gemini falls back to a built-in grep that times out (~30s) on large files and stalls the review. Install `rg` (or have Step 4b prepend its dir to PATH). Proceeding without Gemini."*
+- **Assume the PAID Google Gemini API tier is configured.** A FULL PR-sized review re-sends accumulated context across many agentic turns, spiking *input-tokens-per-minute*; the free tier's ~250K input-TPM cap (shared across all the vendor's free models — model-switching does NOT help) walls mid-review. `--version` only gates install presence — it does NOT verify the tier. **Smoke-test trap:** a one-token auth ping passes on the free tier and tells you nothing; only the real multi-turn review exercises the cap, caught by the Step 6 runtime guard. Do NOT burn a probe run to test the tier.
 
 **Do NOT spend a real `codex exec` / `gemini -p` probe message just to test usage** — on the metered/per-message tiers the message budget is the scarce resource the gate exists to protect. The free `--version` / `login status` checks plus the Step 6 runtime guard (which catches a usage-exhaustion that only surfaces once the real call runs) are sufficient.
 
@@ -120,31 +122,24 @@ For reference, the matrix the pre-flight agent applies (don't re-compute it; tru
 | CI / workflow change | NO | YES | NO | NO | NO | NO | NO |
 | Cut-release skill / agent def | NO | NO | NO | NO | YES | maybe | YES |
 
-External-reviewer (`codex` column) rationale: `maybe` for pure-docs (externals are strong at doc-vs-code drift), `YES` for new driver / behavior change / new library / cut-release-skill (sibling-pattern incompleteness + stale-narration + cross-variant correctness pay off), `maybe` for spec-only (vacuous-guard axis), `maybe` for lint rule change (over-zealous enforcement axis), `NO` for trivial mechanical changes (version bump / manifest-only / CI). When in doubt, lean YES — Codex is ~one ChatGPT-Plus message and Gemini is free-tier (per-run, not per-token), so both are cheap relative to the catch value.
+External-reviewer (`codex` column) rationale: `maybe` for pure-docs (externals are strong at doc-vs-code drift), `YES` for new driver / behavior change / new library / cut-release-skill (sibling-pattern incompleteness + stale-narration + cross-variant correctness pay off), `maybe` for spec-only (vacuous-guard axis), `maybe` for lint rule change (over-zealous enforcement axis), `NO` for trivial mechanical changes (version bump / manifest-only / CI). When in doubt, lean YES — Codex is ~one ChatGPT-Plus message and Gemini on the paid API tier is per-token but a huge-input/tiny-output review is pennies, so both are cheap relative to the catch value.
 
-### Step 4a — External-reviewer CWD selection (skip if both external flags false)
+### Step 4a — External-reviewer working tree (skip if both external flags false)
 
-Both external reviewers run against a working tree on disk; the tree-selection logic is shared. Codex can run `git` in its sandbox (so it reviews a real diff); Gemini's read-only `plan` mode **blocks shell entirely** (no git) — so Gemini reviews the files directly from the same cwd. Pick one of two modes for the working tree:
+Both externals should run `git diff <base>..HEAD` themselves so they review the *change* (a git-less reviewer handed a file list reviews the whole file and surfaces real-but-out-of-scope findings). Their sandboxes differ, which drives the tree choice:
 
-**Mode A — current HEAD (default).** Use when the audit SHA equals the current local HEAD AND the working tree has no uncommitted changes touching `*.groovy`, `*.md`, or `tests/**`:
+- **Codex** runs `-s read-only` (no writes) — safe pointed straight at the repo-root.
+- **Gemini** runs `--yolo` (auto-approves shell + writes, so it CAN run `git diff` like Codex). That auto-approve blast radius MUST be contained in a **disposable git worktree** at the audit SHA — never the live tree.
 
-```bash
-git rev-parse HEAD                            # must equal the audit HEAD SHA
-git status --porcelain -- '*.groovy' '*.md' 'tests/**'   # must produce no output
-```
+**Decision:**
 
-If both checks pass, set `REVIEW_CWD=<repo-root>` and skip the worktree step. Typical case (self-audit of current HEAD).
+- **If Gemini will run (`gemini_available` + matrix YES):** create one disposable worktree at the audit SHA and run BOTH externals in it (Codex `-C` it, read-only; Gemini `cd` into it, `--yolo` contained):
+  ```bash
+  git worktree add ../review_<short-sha> <HEAD-SHA>   # REVIEW_CWD=<repo-parent>/review_<short-sha>
+  ```
+- **If only Codex will run:** *Mode A* — when the audit SHA == current HEAD and the tree is clean (`git status --porcelain -- '*.groovy' '*.md' 'tests/**'` is empty), set `REVIEW_CWD=<repo-root>`, no worktree. Else *Mode B* — `git worktree add ../review_<short-sha> <HEAD-SHA>`.
 
-**Mode B — temporary worktree (fallback).** Use when Mode A's preconditions fail (cross-PR audit, historical SHA review, dirty working tree, branch checkout mid-review):
-
-```bash
-git worktree add ../codex_review_<short-sha> <HEAD-SHA>
-# REVIEW_CWD=<repo-parent>/codex_review_<short-sha>
-```
-
-The `<short-sha>` is the first 8 chars of the audit HEAD SHA. Remember to clean up via `git worktree remove ../codex_review_<short-sha>` in Step 6 after synthesis completes.
-
-**Both reviewers share this cwd** (`REVIEW_CWD`): Codex gets it via `-C`, Gemini is launched with it as the process cwd. Since Gemini can't run git, the shared prompt (Step 4b) uses a dual "diff-or-files" framing — Codex takes the git path, Gemini reads the listed files directly from `REVIEW_CWD`. In Mode B, that's the worktree, so Gemini sees the audit SHA's files correctly.
+`<short-sha>` = first 8 chars of the audit HEAD SHA. Remove any worktree created here via `git worktree remove ../review_<short-sha>` in Step 6. (Containing `--yolo` in a throwaway worktree is enough for our own repo; add a `--sandbox`-style flag only when reviewing UNTRUSTED code.)
 
 ### Step 4b — Issue the parallel fan-out
 
@@ -176,15 +171,15 @@ Bash({
   run_in_background: true, timeout: 1200000, description: 'Codex CLI second-opinion pass'
 })   // only if codex_available
 
-// External reviewer 2 — Gemini (plan mode = read-only, NO shell → reviews files directly;
-// run with $REVIEW_CWD as cwd; grant read access to the out-of-repo prompt dir):
+// External reviewer 2 — Gemini (--yolo = auto-approve shell so it runs git itself, contained
+// by the disposable worktree cwd; needs rg on PATH; grant read of the out-of-repo prompt dir):
 Bash({
-  command: `cd $REVIEW_CWD && gemini --approval-mode plan --include-directories <repo-parent> -p "Read <repo-parent>/.final_review_prompt_<short-sha>.md and carry out the review it describes against this repo (the current working directory). You cannot run git — read the relevant files directly. Output [BLOCKING|WARNING|NIT] file:line + a one-line verdict." > <repo-parent>/.gemini_review_<short-sha>.md 2>&1`,
+  command: `cd $REVIEW_CWD && PATH="<dir-of-rg>:$PATH" gemini --yolo -m <model> --include-directories <repo-parent> -p "Read <repo-parent>/.final_review_prompt_<short-sha>.md and carry out the review it describes against this repo (the current working directory). Run 'git diff <base>..HEAD' yourself to see the change; read files for sibling context. Output [BLOCKING|WARNING|NIT] file:line + a one-line verdict." > <repo-parent>/.gemini_review_<short-sha>.md 2>&1`,
   run_in_background: true, timeout: 1200000, description: 'Gemini CLI second-opinion pass'
 })   // only if gemini_available
 ```
 
-Each `Bash` uses `run_in_background: true` so it returns immediately; you're notified when each job exits. Outputs go to `<repo-parent>/.{codex,gemini}_review_<short-sha>.md` (siblings of the repo, not inside the worktree) so they survive Mode B cleanup. Note the per-CLI differences (do NOT assume one recipe transfers): Codex reads the prompt via stdin redirect (`- < file`) and can run git; Gemini's `plan` mode blocks shell, so it's pointed AT the prompt file via a SHORT `-p` instruction (the file is *named*, not piped) and reads the listed source files directly. Both `--include-directories`/`-C` are needed because the prompt file lives outside the repo sandbox.
+Each `Bash` uses `run_in_background: true` so it returns immediately; you're notified when each job exits. Outputs go to `<repo-parent>/.{codex,gemini}_review_<short-sha>.md` (siblings of the repo, not inside the worktree) so they survive worktree cleanup. Per-CLI differences (do NOT assume one recipe transfers): **Codex** reads the prompt via stdin redirect (`- < file`), runs git in its read-only sandbox. **Gemini** can't be both read-only AND shell-capable, so it runs `--yolo` (auto-approves shell/writes) **inside the disposable worktree** (Step 4a) — that containment is why the worktree is mandatory whenever Gemini runs; it then runs `git diff` itself and reviews the *change*, not whole files. Gemini needs `rg` on PATH (prepend `<dir-of-rg>` if not already there — without it, it stalls on a built-in-grep timeout). The prompt is *named* via a SHORT `-p` (never piped — argv limit), and `--include-directories`/`-C` grant the out-of-repo prompt dir. The CLI may silently resolve `-m <flash-vN>` to a newer flash variant — harmless; verify in the run log if it matters.
 
 **Capture each Claude sub-agent's agent ID** from the dispatch result. Store for SendMessage on re-review rounds. The pattern:
 
@@ -279,7 +274,13 @@ awk '/^codex$/{f=1} f' <repo-parent>/.codex_review_<short-sha>.md | tail -40
 grep -vE "^(Loaded|Loading|Attempt [0-9]|Warning:|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏)" <repo-parent>/.gemini_review_<short-sha>.md | tail -60
 ```
 
-**Throttle-WAIT, don't drop, on capacity limits (esp. Gemini free tier).** Free/shared-capacity CLIs hit short auto-recovering throttles (a Gemini run may retry several times over ~40s and still complete). Because the fan-out is parallel, a throttled reviewer normally still lands within the pack's window. Policy: synthesize when the pack (lenses + tester + the other external) finishes; if one external is still retrying, grant a short grace (≈ the slowest reviewer's runtime, capped a couple minutes past the pack), then proceed. **Drop an external reviewer only on a *sustained* outage that makes it the long pole — and state the drop EXPLICITLY in synthesis, never silently** (a drop is itself availability data).
+**Tell a brief throttle (wait) apart from a structural rate cap (needs paid tier) — by the reset interval in the error text.** Two different failure modes:
+- **Brief throttle** — "retry after *N **seconds***", auto-recovers (a Gemini run may retry several times over ~40s and complete). Because the fan-out is parallel, a throttled reviewer normally lands within the pack's window. Policy: synthesize when the pack (lenses + tester + other external) finishes; if one external is still retrying, grant a short grace (≈ the slowest reviewer's runtime, capped a couple minutes past the pack), then proceed.
+- **Structural rate cap** — "reset after *N **hours***" / "quota exhausted". A FULL-review re-sends accumulated context across many agentic turns, spiking input-tokens-per-minute; the **free** tier caps exactly that (~250K input-TPM, shared across all the vendor's free models — switching models does NOT help). **Waiting will NOT fix this and neither will a model switch — it needs the paid API tier** (we assume paid is configured; if it isn't, this is the symptom). Don't retry-loop against a structural cap.
+
+**Drop an external reviewer only on a *sustained* outage (or an unconfigured-paid-tier structural cap), and state the drop EXPLICITLY in synthesis, never silently** (a drop is itself availability/cost data). Absent at dispatch → proceed without it; briefly throttled mid-run → wait within the window; structurally capped → note "Gemini: dropped (free-tier structural cap — needs paid API tier)" and synthesize with the rest.
+
+**Filter out-of-scope findings from a git-less reviewer.** If a reviewer ran without git (fallback mode — it read whole files, not a diff), it may flag real bugs in *unchanged* code that merely shares a file with the diff. Those are correct-but-out-of-PR-scope; note them separately (or as follow-ups), don't treat them as blocking *this* PR. With both externals on the `--yolo`/git path this shouldn't arise, but verify each external finding is actually in the diff's scope before escalating.
 
 **Runtime usage-exhaustion guard (the Step 1b pre-check's safety net), per external reviewer.** Step 1b can't always detect a usage block up front — a plan's window can be fine at pre-check time but exhaust mid-run, surfacing only in the background job's output. Before merging an external reviewer's findings, sanity-check its output file: if it's **missing, empty, or its body is a usage/rate-limit/auth error rather than a findings report** (substrings `usage limit`, `rate limit`, `quota`, `429`, `stream error`, `not logged in`), treat THAT reviewer as unavailable for this run — note e.g. `Codex: unavailable this run (usage/rate-limit)` or `Gemini: dropped (sustained throttle)` in the unified report's **Sub-agents dispatched** line, skip its merge, and proceed with the rest. Do NOT surface the raw error text as a "finding", and do NOT block or retry (a retry burns another message/quota against the same exhausted window). The Claude fan-out is the authoritative result; the external reviewers are always additive.
 
@@ -363,18 +364,18 @@ When the dev pushes fixes addressing prior findings, the user will re-invoke `/f
 6. **Both external CLIs re-run fresh each round.** Neither has a transcript-resume API — every invocation is independent. Re-author the shared prompt file for the updated tree, then re-fire each available external. Decide whether to re-run by what the fix touched:
    - If the fix touched `Drivers/Levoit/*.groovy`, `Drivers/Levoit/*Lib.groovy`, `tests/lint_rules/`, `tests/check_*.py`, `levoitManifest.json`, or `tools/build-bundle.py` → re-run the externals (findings may have shifted).
    - If the fix was doc-only (CHANGELOG `[Unreleased]`, README rows, BP-catalog entries) → skip the external re-run; their prior production-code findings still hold. The re-review is Claude-side only.
-   - Re-running spends +1 ChatGPT-Plus message (Codex) and one Gemini free-tier run per round.
+   - Re-running spends +1 ChatGPT-Plus message (Codex) and one Gemini paid-API run (pennies) per round.
 
 ### Cost discipline
 
 | Scenario | Cost estimate |
 |---|---|
-| Full round-1 (all 6 sub-agents + Codex + Gemini) | ~200-300K Claude tokens, ~8-12 min wall, +1 ChatGPT-Plus message, +1 Gemini free-tier run |
+| Full round-1 (all 6 sub-agents + Codex + Gemini) | ~200-300K Claude tokens, ~8-12 min wall, +1 ChatGPT-Plus message, +1 Gemini paid-API run (pennies) |
 | Re-review with 1 sub-agent resumed (no externals) | ~40-70K tokens, ~3-5 min |
 | Re-review with 3 sub-agents resumed + externals | ~100-150K tokens, ~5-8 min, +1 ChatGPT-Plus message, +1 Gemini run |
 | Trivial doc-only fix re-review (no re-dispatch, no externals) | ~10-20K tokens, ~30s |
 
-Target: 2-3 round convergence for a typical PR. A typical cycle spends ~2-3 ChatGPT-Plus messages across all Codex runs (well inside Plus's weekly headroom) plus matching Gemini free-tier runs (no message cost; just the auto-recovering throttle).
+Target: 2-3 round convergence for a typical PR. A typical cycle spends ~2-3 ChatGPT-Plus messages across all Codex runs (well inside Plus's weekly headroom) plus matching Gemini paid-API runs (a few pennies total; the *free* tier's input-TPM cap, not dollar cost, is what forces the paid tier — see Step 1b/Step 6).
 
 ## When NOT to use this skill
 
@@ -404,4 +405,4 @@ If you (main session) start doing the audit work directly instead of dispatching
 | `vesync-driver-qa-design` | Claude / Sonnet | Claude sub-agent | Parallel | Lib boundary integrity (Phase 1-5 architecture), cross-line consistency (Core/Vital/Classic/V2/Fan family), helper-extraction opportunities, intentional-asymmetry rationale, BP24 SHOULD-ON/NO-ON/SKIP-OK classification |
 | `vesync-driver-qa-operator` | Claude / Sonnet | Claude sub-agent | Parallel | BREAKING flag honesty (what breaks vs what's preserved), TMI filter (no impl-detail in user-facing prose), CHANGELOG `[Unreleased]` per-commit discipline, dashboard/RM impact disclosure, log discipline + PII sanitize routing, `Drivers/Levoit/readme.md` device-row updates, cut-release invariant trips |
 | Codex CLI | OpenAI / GPT family | Skill-orchestrated `Bash` call (NOT a Claude sub-agent) | Parallel | FULL independent second-opinion review (reads the git diff in its read-only sandbox). Highest-value catches are independent findings — cross-variant correctness, doc-vs-code drift, sibling-pattern incompleteness, vacuous guards, stale narration, HPM-bundle integrity. Consumes the shared prompt file (Step 4b/4c). |
-| Gemini CLI | Google / Gemini family | Skill-orchestrated `Bash` call (NOT a Claude sub-agent) | Parallel | FULL independent second-opinion review from a THIRD model family — blind-spot benefit compounds with Codex (each catches BLOCKINGs the other two families miss). `plan` mode blocks shell, so it reads the changed files directly (no git diff). Consumes the SAME shared prompt file. Free-tier throttles auto-recover (Step 6 wait-don't-drop). |
+| Gemini CLI | Google / Gemini family | Skill-orchestrated `Bash` call (NOT a Claude sub-agent) | Parallel | FULL independent second-opinion review from a THIRD model family — blind-spot benefit compounds with Codex (each catches BLOCKINGs the other two families miss). Runs `--yolo` inside the disposable worktree so it executes `git diff` itself (contained blast radius); needs `rg` on PATH and the **paid Gemini API tier** (free tier's input-TPM cap walls a large review). Consumes the SAME shared prompt file. |
