@@ -178,15 +178,16 @@ Bash({
 })   // only if codex_available
 
 // External family 2 — OpenCode PACK: one background Bash call PER MEMBER, all in this beat.
-// Standard pack = free-curated tier + paid-cheap tier + paid-premium tier(s). --dir . scopes
-// file access to the cwd (auto-rejects /tmp), so the prompt points at the pre-staged diff.
-Bash({
-  command: `cd $REVIEW_CWD && opencode run --model <free-curated-A> --dir . "$(cat <repo-parent>/.final_review_prompt_<short-sha>.md)" > <repo-parent>/.opencode_<free-curated-A>_<short-sha>.md 2>&1`,
-  run_in_background: true, timeout: 1200000, description: 'OpenCode pack — free-curated A'
-})
-Bash({ command: `cd $REVIEW_CWD && opencode run --model <paid-cheap> --dir . "$(cat <repo-parent>/.final_review_prompt_<short-sha>.md)" > <repo-parent>/.opencode_<paid-cheap>_<short-sha>.md 2>&1`, run_in_background: true, timeout: 1200000, description: 'OpenCode pack — paid-cheap' })
-Bash({ command: `... --model <paid-premium> ...`, run_in_background: true, timeout: 1200000, description: 'OpenCode pack — paid-premium' })
-// ... one Bash per standard pack member; only if opencode_available
+// Standard 5-pack (2 free seats anchor it + 3 paid Go) ≈ $0.85/run. --dir . scopes file
+// access to the cwd (auto-rejects /tmp), so the prompt points at the pre-staged diff.
+// PROMPT="$(cat <repo-parent>/.final_review_prompt_<short-sha>.md)"; OUT=<repo-parent>/.opencode_<model>_<short-sha>.md
+Bash({ command: `cd $REVIEW_CWD && opencode run --model opencode/mimo-v2.5-free   --dir . "$PROMPT" > .opencode_mimo_<short-sha>.md     2>&1`, run_in_background: true, timeout: 1200000, description: 'OpenCode pack — mimo-v2.5-free (FREE, distinct-family lens)' })
+Bash({ command: `cd $REVIEW_CWD && opencode run --model opencode/big-pickle       --dir . "$PROMPT" > .opencode_bigpickle_<short-sha>.md 2>&1`, run_in_background: true, timeout: 1200000, description: 'OpenCode pack — big-pickle (FREE, concise high-signal)' })
+Bash({ command: `cd $REVIEW_CWD && opencode run --model opencode-go/deepseek-v4-flash --dir . "$PROMPT" > .opencode_dsflash_<short-sha>.md 2>&1`, run_in_background: true, timeout: 1200000, description: 'OpenCode pack — deepseek-v4-flash (PAID ~$0.033, dominant $/finding)' })
+Bash({ command: `cd $REVIEW_CWD && opencode run --model opencode-go/kimi-k2.6       --dir . "$PROMPT" > .opencode_kimi_<short-sha>.md     2>&1`, run_in_background: true, timeout: 1200000, description: 'OpenCode pack — kimi-k2.6 (PAID ~$0.50, sibling-gap specialist)' })
+Bash({ command: `cd $REVIEW_CWD && opencode run --model opencode-go/deepseek-v4-pro  --dir . "$PROMPT" > .opencode_dspro_<short-sha>.md   2>&1`, run_in_background: true, timeout: 1200000, description: 'OpenCode pack — deepseek-v4-pro (PAID ~$0.31, premium voice)' })
+// All 5 only if opencode_available; dispatch ALL if the family gate is YES (no cherry-pick).
+// The 2 free seats keep distinct-family signal at $0 even if the paid Go account is rate-capped.
 ```
 
 Each `Bash` uses `run_in_background: true` so it returns immediately; you're notified when each job exits. Outputs go to `<repo-parent>/.{codex,opencode_<model>}_review-ish_<short-sha>.md` (siblings of the repo) so they survive Mode B worktree cleanup. Per-family differences (do NOT assume one recipe transfers): **Codex** reads the prompt via stdin redirect (`- < file`) and runs git in its read-only sandbox. **OpenCode pack members** take the prompt as a positional arg (`"$(cat promptfile)"` — fine, individual prompts are <100K), run `--dir .` scoped to `REVIEW_CWD`, and read the **pre-staged** `.review_diff_<short-sha>.txt` (the `--dir .` policy blocks `/tmp`, so a `git diff > /tmp` pattern self-rejects — §4a pre-stage avoids it). `opencode run`'s TUI emits ANSI even non-interactively → **strip ANSI before parsing** (Step 6). Pack members are stateless (no resume); cherry-picking members at dispatch is a process bug — dispatch all if the gate is YES.
@@ -375,13 +376,13 @@ When the dev pushes fixes addressing prior findings, the user will re-invoke `/f
 6. **All externals re-run fresh each round.** None has a transcript-resume API — every invocation is independent. Re-stage the diff + re-author the shared prompt for the updated tree, then re-fire Codex + each OpenCode pack member. Decide whether to re-run by what the fix touched:
    - If the fix touched `Drivers/Levoit/*.groovy`, `Drivers/Levoit/*Lib.groovy`, `tests/lint_rules/`, `tests/check_*.py`, `levoitManifest.json`, or `tools/build-bundle.py` → re-run the externals (findings may have shifted).
    - If the fix was doc-only (CHANGELOG `[Unreleased]`, README rows, BP-catalog entries) → skip the external re-run; their prior production-code findings still hold. The re-review is Claude-side only.
-   - Re-running spends +1 ChatGPT-Plus message (Codex) and one OpenCode pack run (per-token, a few cents) per round.
+   - Re-running spends +1 ChatGPT-Plus message (Codex) and one OpenCode 5-pack run (~$0.85; 2 free seats + 3 paid Go) per round.
 
 ### Cost discipline
 
 | Scenario | Cost estimate |
 |---|---|
-| Full round-1 (6 sub-agents + Codex + OpenCode pack) | ~200-300K Claude tokens, ~8-12 min wall, +1 ChatGPT-Plus message, +1 OpenCode pack run (a few cents, per-token against the monthly cap) |
+| Full round-1 (6 sub-agents + Codex + OpenCode 5-pack) | ~200-300K Claude tokens, ~8-12 min wall, +1 ChatGPT-Plus message, +1 OpenCode 5-pack run (~$0.85 = $0+$0 free seats + $0.033+$0.50+$0.31 paid Go) |
 | Re-review with 1 sub-agent resumed (no externals) | ~40-70K tokens, ~3-5 min |
 | Re-review with 3 sub-agents resumed + externals | ~100-150K tokens, ~5-8 min, +1 ChatGPT-Plus message, +1 OpenCode pack run |
 | Trivial doc-only fix re-review (no re-dispatch, no externals) | ~10-20K tokens, ~30s |
@@ -416,5 +417,5 @@ If you (main session) start doing the audit work directly instead of dispatching
 | `vesync-driver-qa-design` | Claude / Sonnet | Claude sub-agent | Parallel | Lib boundary integrity (Phase 1-5 architecture), cross-line consistency (Core/Vital/Classic/V2/Fan family), helper-extraction opportunities, intentional-asymmetry rationale, BP24 SHOULD-ON/NO-ON/SKIP-OK classification |
 | `vesync-driver-qa-operator` | Claude / Sonnet | Claude sub-agent | Parallel | BREAKING flag honesty (what breaks vs what's preserved), TMI filter (no impl-detail in user-facing prose), CHANGELOG `[Unreleased]` per-commit discipline, dashboard/RM impact disclosure, log discipline + PII sanitize routing, `Drivers/Levoit/readme.md` device-row updates, cut-release invariant trips |
 | Codex CLI | OpenAI / GPT family | Skill-orchestrated `Bash` call (NOT a Claude sub-agent) | Parallel | FULL independent second-opinion review (runs git in its read-only sandbox). Highest-value catches are independent findings — cross-variant correctness, doc-vs-code drift, sibling-pattern incompleteness, vacuous guards, stale narration, HPM-bundle integrity. Consumes the shared prompt (Step 4b/4c). |
-| OpenCode pack | Multi-provider router → N model siblings (free-curated + paid-cheap + paid-premium tiers) | Skill-orchestrated `Bash` call PER MEMBER (NOT Claude sub-agents) | Parallel | FULL independent second-opinion review from several distinct model families at once — blind-spot benefit compounds (each member catches BLOCKINGs the others miss). Runs `--dir .` scoped to the cwd; reads the pre-staged `.review_diff_<short-sha>.txt` (the `--dir .` policy blocks `/tmp`); needs `rg` on PATH. Per-member auth-fail/cost varies — drop a member, keep the pack (Step 6). Consumes the SAME shared prompt. |
+| OpenCode pack (standard 5) | Multi-provider router → 5 siblings: `opencode/mimo-v2.5-free` (FREE) + `opencode/big-pickle` (FREE) + `opencode-go/deepseek-v4-flash` (PAID ~$0.033) + `opencode-go/kimi-k2.6` (PAID ~$0.50) + `opencode-go/deepseek-v4-pro` (PAID ~$0.31) ≈ **$0.85/run** | Skill-orchestrated `Bash` call PER MEMBER (NOT Claude sub-agents) | Parallel | FULL independent second-opinion review from several distinct model families at once — blind-spot benefit compounds (each catches BLOCKINGs the others miss). Two free seats anchor the pack so a rate-capped session keeps distinct-family signal at $0. Runs `--dir .` scoped to the cwd; reads the pre-staged `.review_diff_<short-sha>.txt` (the `--dir .` policy blocks `/tmp`); needs `rg` on PATH. Dispatch ALL 5 if the family gate is YES (no cherry-pick); per-member auth-fail/cost varies — drop a member, keep the pack (Step 6). Consumes the SAME shared prompt. |
 | ~~Gemini CLI~~ | Google / Gemini family | — | **DEFERRED** | Not in the active fan-out — its required paid Google AI/Vertex tier is cost-uncompetitive vs the OpenCode pack at ship-gate scale. Recipe preserved (documented-but-dormant) in handoff doc §5b-ter; re-evaluate if pricing/usage changes. |
