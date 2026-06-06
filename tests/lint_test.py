@@ -7467,3 +7467,94 @@ class TestRule41DeviceShorthandLeak:
         assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
             f"Stray top-level readme.md is out of scope, got: {findings}"
         )
+
+
+# ---------------------------------------------------------------------------
+# RULE42 — Malformed capability name (embedded space)
+# ---------------------------------------------------------------------------
+
+class TestRule42MalformedCapability:
+    """
+    RULE42: a `capability "..."` declaration MUST NOT contain a space in the
+    capability name. Hubitat capability identifiers are single CamelCase tokens
+    (e.g. "SwitchLevel"); an embedded space (e.g. "Switch Level") is silently
+    ignored by the platform, so the capability fails to register with no error.
+    """
+
+    from lint_rules.malformed_capability import check_rule42_malformed_capability as _rule
+
+    # MUST-CATCH: the reported typo — "Switch Level" (two words).
+    BAD_SWITCH_LEVEL = textwrap.dedent("""\
+        metadata {
+            definition(name: "Levoit Core200S Air Purifier Light") {
+                capability "Switch"
+                capability "Switch Level"
+            }
+        }
+    """)
+
+    # MUST-CATCH: a different multi-word capability typo, to prove the rule is
+    # class-wide (any embedded space), not pinned to the one reported instance.
+    BAD_FAN_CONTROL = textwrap.dedent("""\
+        metadata {
+            definition(name: "Some Fan") {
+                capability "Fan Control"
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: the canonical one-word form.
+    GOOD_SWITCH_LEVEL = textwrap.dedent("""\
+        metadata {
+            definition(name: "Levoit Core 200S Air Purifier") {
+                capability "Switch"
+                capability "SwitchLevel"
+                capability "FanControl"
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: a normal string literal with a space that is NOT a
+    # capability declaration (proves the rule is anchored to `capability`).
+    GOOD_OTHER_STRING = textwrap.dedent("""\
+        metadata {
+            definition(name: "Levoit Pedestal Fan", description: "fan speed 1-12") {
+                capability "SwitchLevel"
+                command "setMode", [[name:"Mode*", type:"ENUM"]]
+            }
+        }
+    """)
+
+    def test_switch_level_typo_fails(self):
+        from lint_rules.malformed_capability import check_rule42_malformed_capability
+        findings = run_rule(check_rule42_malformed_capability, self.BAD_SWITCH_LEVEL)
+        assert any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
+            f'Expected RULE42 for `capability "Switch Level"`, got: {findings}'
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE42_malformed_capability'), (
+            f"RULE42 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_fan_control_typo_fails(self):
+        """Class-wide: any embedded-space capability name flags, not just the reported one."""
+        from lint_rules.malformed_capability import check_rule42_malformed_capability
+        findings = run_rule(check_rule42_malformed_capability, self.BAD_FAN_CONTROL)
+        assert any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
+            f'Expected RULE42 for `capability "Fan Control"`, got: {findings}'
+        )
+
+    def test_canonical_one_word_passes(self):
+        from lint_rules.malformed_capability import check_rule42_malformed_capability
+        findings = run_rule(check_rule42_malformed_capability, self.GOOD_SWITCH_LEVEL)
+        assert not any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
+            f"Canonical one-word capability names must not flag RULE42, got: {findings}"
+        )
+
+    def test_non_capability_string_with_space_passes(self):
+        """A space in a non-capability string literal must NOT flag (anchored to `capability`)."""
+        from lint_rules.malformed_capability import check_rule42_malformed_capability
+        findings = run_rule(check_rule42_malformed_capability, self.GOOD_OTHER_STRING)
+        assert not any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
+            f"Non-capability string with a space must not flag RULE42, got: {findings}"
+        )

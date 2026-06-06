@@ -393,8 +393,30 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         and: "errorCode is 0"
         lastEventValue("errorCode") == 0
 
+        and: "timerRemain is emitted (0 from fixture; mirrors Tower Fan)"
+        lastEventValue("timerRemain") == 0
+
         and: "no errors logged"
         testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // timerRemain emission (mirrors Tower Fan; regression guard for the
+    // previously-orphaned declared-but-never-emitted attribute)
+    // -------------------------------------------------------------------------
+
+    def "applyStatus emits timerRemain from a response that carries a non-zero value"() {
+        given: "a device-on response with an active timer (timerRemain=120)"
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("LPF-R432S.yaml")
+        def deviceData = (fixture.responses.device_on_normal_speed5 as Map) + [timerRemain: 120]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "timerRemain attribute reflects the response value (was previously never emitted)"
+        lastEventValue("timerRemain") == 120
     }
 
     // -------------------------------------------------------------------------

@@ -56,7 +56,7 @@ metadata {
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
-            capability "Switch Level"
+            capability "SwitchLevel"
 
             command "setNightLight", [[name:"Night Light*", type: "ENUM", description: "Display", constraints: ["on", "off", "dim"] ] ]
 

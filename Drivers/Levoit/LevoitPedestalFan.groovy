@@ -494,7 +494,9 @@ def setChildLock(onOff){
 //   (poll fields suggest this: scheduleCount, isTimerSupportPowerOn capability flag).
 //   Resolution path: maintainer captures VeSync app's timer-set request via mitmproxy
 //   to identify the actual API method + payload shape; revisit in a clean v2.5 cycle.
-//   The `timerRemain` read-only attribute stays declared for status visibility.
+//   The `timerRemain` read-only attribute is populated from the getFanStatus poll
+//   response (the device reports remaining seconds even though we cannot SET a timer
+//   via the cloud API yet); see applyStatus emission below.
 
 // CROSS-CHECK [maintainer's hardware capture, device 1132 LPF-R432S-AUK, 2026-05-01]:
 //   The following write-path commands were attempted with educated-guess payloads
@@ -675,6 +677,10 @@ def applyStatus(status){
     // ---- Sleep preference (shared LevoitFanLib block) ----
     applyFanSleepPreference(r)
 
+    // ---- Timer remain (mirrors Tower Fan) ----
+    // getFanStatus returns timerRemain (seconds; 0 = no active timer).
+    if (r.timerRemain != null) device.sendEvent(name:"timerRemain", value: r.timerRemain as Integer)
+
     // ---- Error code (shared LevoitFanLib block) ----
     applyFanErrorCode(r)
 
@@ -688,6 +694,9 @@ def applyStatus(status){
     if (r.temperature != null && (r.temperature as Integer) > 0) {
         Float tf = (r.temperature as Integer) / 10.0f
         parts << "Temp: ${tf}°F"
+    }
+    if (r.timerRemain != null && (r.timerRemain as Integer) > 0) {
+        parts << "Timer: ${r.timerRemain as Integer}s"
     }
     device.sendEvent(name:"info", value: parts.join("<br>"))
 }
