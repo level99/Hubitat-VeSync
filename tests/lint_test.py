@@ -7558,3 +7558,140 @@ class TestRule42MalformedCapability:
         assert not any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
             f"Non-capability string with a space must not flag RULE42, got: {findings}"
         )
+
+
+# ---------------------------------------------------------------------------
+# RULE43 — recordError ctx-map key style (site: -> method:)
+# ---------------------------------------------------------------------------
+
+from lint_rules.recordError_key_style import check_rule43_recordError_key_style
+
+
+class TestRule43RecordErrorKeyStyle:
+    """
+    RULE43: recordError ctx maps must use the canonical 'method:' key, never 'site:'.
+
+    Non-vacuity contracts:
+      - must-catch tests FAIL if the rule predicate is disabled or narrowed
+        (the rule returns [] and the `any(...)` assertion fails).
+      - must-not-catch tests FAIL if the rule over-fires on canonical 'method:'
+        content or on a bare 'site:' outside a recordError call.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    @staticmethod
+    def _run(src: str) -> list:
+        """Invoke RULE43 against src as a .groovy file via the shared run_rule helper."""
+        return run_rule(check_rule43_recordError_key_style, src, fname="TestDriver.groovy")
+
+    # -----------------------------------------------------------------------
+    # Must-catch
+    # -----------------------------------------------------------------------
+
+    def test_catches_site_key(self):
+        """A recordError call with a [site:...] ctx map must flag RULE43."""
+        src = textwrap.dedent("""\
+            def setMode(mode) {
+                recordError("Mode write failed", [site:"setMode"])
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Expected RULE43 for [site:...] recordError ctx, got: {findings}"
+        )
+
+    def test_catches_site_key_with_other_keys_preserved(self):
+        """
+        The 'site:' key flags even when other keys (value:) are present —
+        the rename target is the 'site' key only, not the whole map.
+        """
+        src = textwrap.dedent("""\
+            def setMode(mode) {
+                recordError("Mode write failed", [site:"setMode", value:requestedMode])
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Expected RULE43 for [site:..., value:...] recordError ctx, got: {findings}"
+        )
+
+    def test_catches_site_key_with_trailing_dni_arg(self):
+        """A 3-arg recordError(msg, [site:...], dni) still flags on the site key."""
+        src = textwrap.dedent("""\
+            def updateDevices() {
+                recordError("No status returned", [site:"updateDevices"], dni)
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Expected RULE43 for 3-arg recordError with [site:...] ctx, got: {findings}"
+        )
+
+    def test_catches_multiline_site_key(self):
+        """
+        A recordError call whose ctx map wraps onto a continuation line must
+        flag — the parent app's auth-flow calls use this shape.
+
+        Non-vacuity: a single-line-only predicate returns [] here, FAILing this
+        test.  Guards the multi-line awareness of _record_error_spans.
+        """
+        src = textwrap.dedent("""\
+            def getAuthorizationCode() {
+                recordError("getAuthorizationCode: cross-region at Stage 1",
+                            [site:"getAuthorizationCode"])
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Expected RULE43 for multi-line recordError with [site:...] ctx, got: {findings}"
+        )
+
+    def test_catches_multiline_site_key_with_paren_in_message(self):
+        """
+        A recordError call whose message contains parentheses AND whose ctx map
+        wraps onto a continuation line must still flag — paren-balancing must not
+        terminate the span early on a paren inside the message string.
+        """
+        src = textwrap.dedent("""\
+            def exchangeAuthCode() {
+                recordError("exchangeAuthCode: inner failure (code=${innerCode})",
+                            [site:"exchangeAuthCode"])
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Expected RULE43 for multi-line recordError with paren-in-message, got: {findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch
+    # -----------------------------------------------------------------------
+
+    def test_method_key_passes(self):
+        """The canonical 'method:' ctx key must NOT flag RULE43."""
+        src = textwrap.dedent("""\
+            def setMode(mode) {
+                recordError("Mode write failed", [method:"setMode", value:requestedMode])
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Canonical [method:...] recordError ctx must not flag RULE43, got: {findings}"
+        )
+
+    def test_bare_site_outside_recordError_passes(self):
+        """
+        A bare 'site:' map key NOT inside a recordError call must NOT flag —
+        the rule requires the recordError( co-occurrence.
+        """
+        src = textwrap.dedent("""\
+            def buildPayload() {
+                def cfg = [site:"home", region:"us"]
+                return cfg
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Bare [site:...] outside recordError must not flag RULE43, got: {findings}"
+        )

@@ -132,13 +132,20 @@ def on() {
 
 def off() {
     logDebug "off()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(power=0)")
-    if (httpOk(resp)) {
-        logInfo "Power off"
-        state.lastSwitchSet = "off"
-        device.sendEvent(name:"switch", value:"off")
-    } else {
-        logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"])
+    // Defensive symmetry with on()'s guard; no active re-entrance vector into off() today.
+    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
+    state.turningOff = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(power=0)")
+        if (httpOk(resp)) {
+            logInfo "Power off"
+            state.lastSwitchSet = "off"
+            device.sendEvent(name:"switch", value:"off")
+        } else {
+            logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"])
+        }
+    } finally {
+        state.remove('turningOff')
     }
 }
 

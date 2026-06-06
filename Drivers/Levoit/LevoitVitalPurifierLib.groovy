@@ -98,7 +98,7 @@ def on() {
             runInMillis(500, "configureOnState")
         } else {
             logError "Failed to turn on device"
-            recordError("Failed to turn on device", [site:"on"])
+            recordError("Failed to turn on device", [method:"on"])
         }
     } finally {
         state.remove('turningOn')
@@ -155,7 +155,7 @@ def off() {
             device.sendEvent(name:"switch", value:"off")
         } else {
             logError "Failed to turn off device"
-            recordError("Failed to turn off device", [site:"off"])
+            recordError("Failed to turn off device", [method:"off"])
         }
     } finally {
         state.remove('turningOff')
@@ -262,7 +262,7 @@ def setSpeed(spd) {
 def setSpeedLevel(level) {
     logDebug "setSpeedLevel(${level})"
     def ok = writeSpeedPreferred(level)
-    if (!ok) { logError "Speed write failed for level ${level}"; recordError("Speed write failed for level ${level}", [site:"setSpeedLevel"]) }
+    if (!ok) { logError "Speed write failed for level ${level}"; recordError("Speed write failed for level ${level}", [method:"setSpeedLevel"]) }
     return ok
 }
 
@@ -286,7 +286,7 @@ def setMode(mode) {
 
     if (!(m in ["manual", "auto", "sleep", "pet"])) {
         logError "Unknown mode: ${m}"
-        recordError("Unknown mode: ${m}", [site:"setMode"])
+        recordError("Unknown mode: ${m}", [method:"setMode"])
         return false
     }
 
@@ -313,7 +313,7 @@ def setMode(mode) {
         logInfo "Mode: ${m}"
     } else {
         logError "Mode write failed for ${m}"
-        recordError("Mode write failed for ${m}", [site:"setMode"])
+        recordError("Mode write failed for ${m}", [method:"setMode"])
     }
     return ok
 }
@@ -427,7 +427,7 @@ def update() {
     def resp = hubBypass("getPurifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) { logError "No status returned from getPurifierStatus"; recordError("No status returned from getPurifierStatus", [site:"update"]) }
+        if (!status?.result) { logError "No status returned from getPurifierStatus"; recordError("No status returned from getPurifierStatus", [method:"update"]) }
         else applyStatus(status)
     }
 }

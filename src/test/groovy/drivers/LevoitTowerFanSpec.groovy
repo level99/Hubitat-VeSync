@@ -202,6 +202,21 @@ class LevoitTowerFanSpec extends HubitatSpec {
         testLog.errors.any { it.contains("turbo") || it.contains("unknown") }
     }
 
+    def "off() re-entrance guard: second call while turningOff=true is a no-op"() {
+        // Regression guard: FanLib off() symmetric re-entrance guard (state.turningOff).
+        // Defensive symmetry with on(); a re-entrant off() must short-circuit.
+        given:
+        settings.descriptionTextEnable = false
+        state.turningOff = true
+
+        when:
+        driver.off()
+
+        then: "no setSwitch API call because re-entrance was blocked"
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
+        noExceptionThrown()
+    }
+
     def "setSpeed('on') calls on() -- Hubitat FanControl capability convention (Theme A)"() {
         // Hubitat FanControl.setSpeed accepts 'on' as a valid enum value meaning 'resume at
         // prior/default speed'. Previously this fell through to the unknown-enum error path.

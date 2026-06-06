@@ -464,7 +464,7 @@ def initialize() {
         getDevices()
     } else {
         logError "Login failed - check credentials and retry"
-        recordError("Login failed - check credentials and retry", [site:"initialize"])
+        recordError("Login failed - check credentials and retry", [method:"initialize"])
     }
 }
 
@@ -879,16 +879,16 @@ private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCal
                     continue
                 }
                 logError "${label}: Connection pool shut down after ${maxAttempts} attempts"
-                recordError("${label}: Connection pool shut down after ${maxAttempts} attempts", [site:"retryableHttp"])
+                recordError("${label}: Connection pool shut down after ${maxAttempts} attempts", [method:"retryableHttp"])
             } else {
                 logError "${label}: IllegalStateException - ${e.message}"
-                recordError("${label}: IllegalStateException - ${e.message}", [site:"retryableHttp"])
+                recordError("${label}: IllegalStateException - ${e.message}", [method:"retryableHttp"])
             }
             return false
         }
         catch (Exception e) {
             logError "${label}: ${e.toString()}"
-            recordError("${label}: ${e.toString()}", [site:"retryableHttp"])
+            recordError("${label}: ${e.toString()}", [method:"retryableHttp"])
             if (e.metaClass.respondsTo(e, 'getResponse')) {
                 try {
                     checkHttpResponse(label, e.getResponse())
@@ -1048,7 +1048,7 @@ private Map getAuthorizationCode() {
         if (innerCode == CROSS_REGION_ERROR_CODE) {
             logError "getAuthorizationCode: Account is registered in a different VeSync region. Toggle the deviceRegion preference between US and EU and try again."
             recordError("getAuthorizationCode: cross-region at Stage 1 — toggle deviceRegion preference",
-                        [site:"getAuthorizationCode"])
+                        [method:"getAuthorizationCode"])
             return
         }
 
@@ -1056,7 +1056,7 @@ private Map getAuthorizationCode() {
             def innerMsg = resp.data?.msg
             logError "getAuthorizationCode: VeSync inner code=${innerCode} msg='${innerMsg}'"
             recordError("getAuthorizationCode: inner failure code=${innerCode} msg='${innerMsg}'",
-                        [site:"getAuthorizationCode"])
+                        [method:"getAuthorizationCode"])
             return
         }
         // Inner code == 0 — extract result fields. Defensive against missing fields:
@@ -1073,7 +1073,7 @@ private Map getAuthorizationCode() {
         } else {
             logError "getAuthorizationCode: HTTP 200 + code=0 but missing authorizeCode/accountID — VeSync API shape changed?"
             recordError("getAuthorizationCode: missing result fields (HTTP 200 + code=0)",
-                        [site:"getAuthorizationCode"])
+                        [method:"getAuthorizationCode"])
         }
     }
     return result
@@ -1101,7 +1101,7 @@ private Map getAuthorizationCode() {
 private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String bizToken, String regionChange, int retryDepth) {
     if (retryDepth >= MAX_CROSS_REGION_RETRIES) {
         logError "exchangeAuthCode: cross-region retry depth ${retryDepth} exceeded MAX_CROSS_REGION_RETRIES=${MAX_CROSS_REGION_RETRIES} — giving up"
-        recordError("exchangeAuthCode: cross-region retry depth exceeded", [site:"exchangeAuthCode"])
+        recordError("exchangeAuthCode: cross-region retry depth exceeded", [method:"exchangeAuthCode"])
         return false
     }
 
@@ -1196,7 +1196,7 @@ private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String
             } else {
                 logError "exchangeAuthCode: cross-region (code=${innerCode}) but no bizToken in response — cannot retry"
                 recordError("exchangeAuthCode: cross-region without bizToken (code=${innerCode})",
-                            [site:"exchangeAuthCode"])
+                            [method:"exchangeAuthCode"])
             }
             return
         }
@@ -1205,7 +1205,7 @@ private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String
             def innerMsg = resp.data?.msg
             logError "exchangeAuthCode: VeSync inner code=${innerCode} msg='${innerMsg}'"
             recordError("exchangeAuthCode: inner failure code=${innerCode} msg='${innerMsg}'",
-                        [site:"exchangeAuthCode"])
+                        [method:"exchangeAuthCode"])
             return
         }
 
@@ -1229,7 +1229,7 @@ private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String
         } else {
             logError "exchangeAuthCode: HTTP 200 + code=0 but missing token — VeSync API shape changed?"
             recordError("exchangeAuthCode: missing token in result (HTTP 200 + code=0)",
-                        [site:"exchangeAuthCode"])
+                        [method:"exchangeAuthCode"])
         }
     }
 
@@ -1484,7 +1484,7 @@ def Boolean updateDevices()
                             // DEBUG for counts 1-4; ensurePollHealth() fires the INFO at count==5.
                             logDebug "BP21: ${method} returned empty for ${dni} (${newCount} consecutive)"
                         }
-                        recordError("No status returned from ${method}", [site:"updateDevices"], dni)
+                        recordError("No status returned from ${method}", [method:"updateDevices"], dni)
                     } else {
                         // Successful poll — clear the stale-configModule counter for this DNI.
                         // Same whole-map-reassignment discipline: remove on snapshot, then reassign.
@@ -2615,7 +2615,7 @@ private Boolean getDevices() {
                         return
                     } else {
                         logError "Re-auth failed during getDevices -- check VeSync credentials"
-                        recordError("Re-auth failed during getDevices -- check VeSync credentials", [site:"getDevices"])
+                        recordError("Re-auth failed during getDevices -- check VeSync credentials", [method:"getDevices"])
                     }
                 } finally {
                     state.remove('reAuthInProgress')
@@ -2775,7 +2775,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
                     return
                 } else {
                     logError "Re-auth failed -- VeSync credentials may need to be updated in driver settings"
-                    recordError("Re-auth failed -- VeSync credentials may need to be updated in driver settings", [site:"sendBypassRequest"])
+                    recordError("Re-auth failed -- VeSync credentials may need to be updated in driver settings", [method:"sendBypassRequest"])
                 }
             } finally {
                 state.remove('reAuthInProgress')
@@ -2842,7 +2842,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
             }
         } else {
             logError "sendBypassRequest: ${e.toString()}"
-            recordError("sendBypassRequest: ${e.toString()}", [site:"sendBypassRequest"])
+            recordError("sendBypassRequest: ${e.toString()}", [method:"sendBypassRequest"])
         }
         return false
     }

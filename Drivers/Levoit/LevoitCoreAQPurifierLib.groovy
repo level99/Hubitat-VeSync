@@ -59,7 +59,7 @@ def update() {
                 def status = resp.data.result
                 if (status == null) {
                     logError "No status returned from getPurifierStatus: ${resp.msg}"
-                    recordError("No status returned from getPurifierStatus", [site:"update"])
+                    recordError("No status returned from getPurifierStatus", [method:"update"])
                 } else
                     result = update(status, null)
 			}

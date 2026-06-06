@@ -340,7 +340,7 @@ private boolean httpOk(resp) {
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [method:"httpOk"])
     return false
 }
 

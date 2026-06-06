@@ -553,13 +553,13 @@ def checkHttpResponse(action, resp) {
 	else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500)
 	{
 		logError "${action}: ${resp.status} - ${resp.getData()}"
-		recordError("${action}: ${resp.status}", [site:"checkHttpResponse"])
+		recordError("${action}: ${resp.status}", [method:"checkHttpResponse"])
 		return false
 	}
 	else
 	{
 		logError "${action}: unexpected HTTP response: ${resp.status}"
-		recordError("${action}: unexpected HTTP response: ${resp.status}", [site:"checkHttpResponse"])
+		recordError("${action}: unexpected HTTP response: ${resp.status}", [method:"checkHttpResponse"])
 		return false
 	}
 }

@@ -170,15 +170,22 @@ def on(){
         if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
         else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
     } finally {
-        state.turningOn = false
+        state.remove('turningOn')
     }
 }
 
 def off(){
     logDebug "off()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
-    if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
-    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+    // Defensive symmetry with on()'s guard; no active re-entrance vector into off() today.
+    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
+    state.turningOff = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
+        if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
+        else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+    } finally {
+        state.remove('turningOff')
+    }
 }
 
 def toggle(){

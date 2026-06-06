@@ -161,7 +161,7 @@ This is the most common substantive contribution. The flow is:
     command "captureDiagnostics"
     attribute "diagnostics", "string"
     ```
-    Where the driver currently calls `log.error(...)` (parser failures, write-failure paths, etc.), add a parallel `recordError(message, contextMap)` call with relevant context (`[site:"setMode", value:requestedMode]` etc.). The library handles ring-buffer storage and pre-fills bug-report URLs from this data. See any v2.4+ driver for examples.
+    Where the driver currently calls `log.error(...)` (parser failures, write-failure paths, etc.), add a parallel `recordError(message, contextMap)` call with relevant context (`[method:"setMode", value:requestedMode]` etc.). The library handles ring-buffer storage and pre-fills bug-report URLs from this data. See any v2.4+ driver for examples.
 11. **Apply BP24 auto-on-from-off discipline.** For each command method you declare, classify it per Bug Pattern #24's taxonomy (MUST-ON / SHOULD-ON / SKIP-OK / NO-ON — see `.claude/agents/vesync-driver-qa.md` BP24 catalog entry for the full classification chart and sub-shape descriptions):
     - **SHOULD-ON methods** (`cycleSpeed`, `setSpeed`, `setMistLevel`, `setWarmMistLevel`, `setFanSpeed`, `setMode` on most device families): add the canonical guard at method entry (after parameter validation, before the API call):
       ```groovy

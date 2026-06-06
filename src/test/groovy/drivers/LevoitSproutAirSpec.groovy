@@ -608,6 +608,20 @@ class LevoitSproutAirSpec extends HubitatSpec {
         noExceptionThrown()
     }
 
+    def "off() re-entrance guard: second call while turningOff=true is a no-op"() {
+        // Regression guard: off() symmetric re-entrance guard (state.turningOff).
+        // Defensive symmetry with on(); a re-entrant off() must short-circuit.
+        given:
+        state.turningOff = true
+
+        when:
+        driver.off()
+
+        then: "no setSwitch API call because re-entrance was blocked"
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
+        noExceptionThrown()
+    }
+
     def "setFanSpeed(null) is rejected with logWarn and no API call (BP18 Fix 2)"() {
         // Pre-fix: (null as Integer) -> NPE in sandbox.
         // Post-fix: requireNotNull rejects null before any coercion.

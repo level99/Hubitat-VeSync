@@ -4415,11 +4415,11 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         // "VeSync inner code=" path; assert that path was NOT taken.
         !testLog.errors.any { it.contains("VeSync inner code=-11260022") }
 
-        and: "recordError was invoked with site='getAuthorizationCode' AND the cross-region tag"
+        and: "recordError was invoked with method='getAuthorizationCode' AND the cross-region tag"
         Map history = state.errorHistory as Map
         def slot = (history["test-device-001"] ?: []) as List
         slot.any { entry ->
-            (entry.ctx as Map)?.site == "getAuthorizationCode" &&
+            (entry.ctx as Map)?.method == "getAuthorizationCode" &&
             (entry.msg as String).contains("cross-region at Stage 1")
         }
 
@@ -4956,7 +4956,7 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         history["test-device-001"] != null
         def slot = history["test-device-001"] as List
         slot.any { entry ->
-            (entry.ctx as Map)?.site == "exchangeAuthCode" &&
+            (entry.ctx as Map)?.method == "exchangeAuthCode" &&
             (entry.msg as String).contains("cross-region retry depth exceeded")
         }
 
