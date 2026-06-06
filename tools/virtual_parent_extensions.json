@@ -38,5 +38,19 @@
       {"method": "setFanMode", "dataKeys": ["workMode"]},
       {"method": "setDisplay", "dataKeys": ["screenSwitch"]}
     ]
+  },
+
+  "LEH-B381S": {
+    "_comment": "pyvesync vendored LEH-B381S.yaml omits setLightStatus — the SproutNightlight nightlight command is a driver-side v2.x addition (LevoitSproutHumidifier.setNightlight sends {brightness, colorTemperature, nightLightSwitch}). Not in pyvesync's canonical LEH-B381S fixture.",
+    "method_extensions": [
+      {"method": "setLightStatus", "dataKeys": ["brightness", "colorTemperature", "nightLightSwitch"]}
+    ]
+  },
+
+  "LUH-O451S-WEU": {
+    "_comment": "EU/RGB variant. pyvesync vendored fixture (no LUH-O451S-WEU.yaml upstream; based on PR #502, OPEN) omits setLightStatus — the RGB nightlight command is a driver-side v2.x addition (LevoitOasisMist450S.setNightlightSwitch/setColor send {action, brightness, red, green, blue, colorMode, speed, colorSliderLocation}). RGB hardware is LUH-O451S-WEU only; runtime-gated on state.deviceType in the driver.",
+    "method_extensions": [
+      {"method": "setLightStatus", "dataKeys": ["action", "brightness", "red", "green", "blue", "colorMode", "speed", "colorSliderLocation"]}
+    ]
   }
 }

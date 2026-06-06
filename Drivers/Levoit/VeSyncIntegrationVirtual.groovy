@@ -74,10 +74,13 @@ import groovy.transform.Field
     "LUH-A602S-WUS"  : "Levoit LV600S Humidifier",
     "LUH-A603S-WUS"  : "Levoit LV600S Hub Connect Humidifier",
     "LUH-M101S-WUS"  : "Levoit OasisMist 1000S Humidifier",
-    "LUH-O451S-WUS"  : "Levoit OasisMist 450S Humidifier"
+    "LUH-O451S-WUS"  : "Levoit OasisMist 450S Humidifier",
+    "LUH-O451S-WEU"  : "Levoit OasisMist 450S Humidifier"
 ]
 
 // deviceType values stored on children via updateDataValue("deviceType", ...).
+// LUH-O451S-WEU shares the OasisMist 450S child driver but a distinct deviceType so the
+// driver's runtime RGB-nightlight gate (state.deviceType == "LUH-O451S-WEU") engages.
 // These must match what the real VeSync cloud API returns for each model,
 // as that's what the real parent stores (and what deviceType() switch reads).
 @Field static final Map FIXTURE_TO_DEVICETYPE = [
@@ -99,7 +102,8 @@ import groovy.transform.Field
     "LUH-A602S-WUS"  : "LUH-A602S-WUS",
     "LUH-A603S-WUS"  : "LUH-A603S-WUS",
     "LUH-M101S-WUS"  : "LUH-M101S-WUS",
-    "LUH-O451S-WUS"  : "LUH-O451S-WUS"
+    "LUH-O451S-WUS"  : "LUH-O451S-WUS",
+    "LUH-O451S-WEU"  : "LUH-O451S-WEU"
 ]
 
 // configModule values from pyvesync device_map.py.
@@ -124,7 +128,8 @@ import groovy.transform.Field
     "LUH-A602S-WUS"  : "WifiBTOnboardingNotificationsLV600S",            // TBD: confirm from device_map
     "LUH-A603S-WUS"  : "WifiBTOnboardingNotificationsLV600SHubConnect",  // TBD: confirm from device_map
     "LUH-M101S-WUS"  : "WifiBTOnboardingNotificationsOasisMist1000S",    // TBD: confirm from device_map
-    "LUH-O451S-WUS"  : "WifiBTOnboardingNotificationsOasisMist450S"      // TBD: confirm from device_map
+    "LUH-O451S-WUS"  : "WifiBTOnboardingNotificationsOasisMist450S",     // TBD: confirm from device_map
+    "LUH-O451S-WEU"  : "WifiBTOnboardingNotificationsOasisMist450S"      // TBD: confirm from device_map
 ]
 
 // Family assignment for each fixture — drives STATE_MUTATORS dispatch and
@@ -148,7 +153,8 @@ import groovy.transform.Field
     "LUH-A602S-WUS"  : "v1_humidifier",
     "LUH-A603S-WUS"  : "v2_humidifier",
     "LUH-M101S-WUS"  : "v2_humidifier",
-    "LUH-O451S-WUS"  : "v1_humidifier"
+    "LUH-O451S-WUS"  : "v1_humidifier",
+    "LUH-O451S-WEU"  : "v1_humidifier"
 ]
 
 // ---------------------------------------------------------------------------
@@ -399,7 +405,9 @@ import groovy.transform.Field
         [methodName: "setSwitch",            dataKeys: ["powerSwitch", "switchIdx"] as Set],
         [methodName: "setAutoStopSwitch",    dataKeys: ["autoStopSwitch"] as Set],
         [methodName: "setDisplay",           dataKeys: ["screenSwitch"] as Set],
-        [methodName: "getHumidifierStatus",  dataKeys: [] as Set]
+        [methodName: "getHumidifierStatus",  dataKeys: [] as Set],
+        // pyvesync vendored LEH-B381S.yaml omits setLightStatus — the SproutNightlight nightlight command is a driver-side v2.x addition (LevoitSproutHumidifier.setNightlight sends {brightness, colorTemperature, nightLightSwitch}). Not in pyvesync's canonical LEH-B381S fixture.
+        [methodName: "setLightStatus",       dataKeys: ["brightness", "colorTemperature", "nightLightSwitch"] as Set]
     ],
     "LEH-S601S": [
         [methodName: "setHumidityMode",      dataKeys: ["workMode"] as Set],
@@ -456,6 +464,17 @@ import groovy.transform.Field
         [methodName: "setAutoStopSwitch",    dataKeys: ["autoStopSwitch"] as Set],
         [methodName: "setDisplay",           dataKeys: ["screenSwitch"] as Set],
         [methodName: "getHumidifierStatus",  dataKeys: [] as Set]
+    ],
+    "LUH-O451S-WEU": [
+        [methodName: "setHumidityMode",      dataKeys: ["mode"] as Set],
+        [methodName: "setTargetHumidity",    dataKeys: ["target_humidity"] as Set],
+        [methodName: "setVirtualLevel",      dataKeys: ["id", "level", "type"] as Set],
+        [methodName: "setSwitch",            dataKeys: ["enabled", "id"] as Set],
+        [methodName: "setAutomaticStop",     dataKeys: ["enabled"] as Set],
+        [methodName: "setDisplay",           dataKeys: ["state"] as Set],
+        [methodName: "getHumidifierStatus",  dataKeys: [] as Set],
+        // EU/RGB variant. pyvesync vendored fixture (no LUH-O451S-WEU.yaml upstream; based on PR #502, OPEN) omits setLightStatus — the RGB nightlight command is a driver-side v2.x addition (LevoitOasisMist450S.setNightlightSwitch/setColor send {action, brightness, red, green, blue, colorMode, speed, colorSliderLocation}). RGB hardware is LUH-O451S-WEU only; runtime-gated on state.deviceType in the driver.
+        [methodName: "setLightStatus",       dataKeys: ["action", "blue", "brightness", "colorMode", "colorSliderLocation", "green", "red", "speed"] as Set]
     ],
     "LUH-O451S-WUS": [
         [methodName: "setHumidityMode",      dataKeys: ["mode"] as Set],
@@ -562,6 +581,16 @@ import groovy.transform.Field
                 snap.configuration = snap.configuration ?: [:]
                 snap.configuration.automatic_stop = data.enabled
             }
+        },
+        // LUH-O451S-WEU RGB nightlight: {action, brightness, red, green, blue, colorMode, speed, colorSliderLocation}
+        "setLightStatus": { Map snap, Map data ->
+            snap.rgbNightLight = snap.rgbNightLight ?: [:]
+            if (data?.containsKey("action"))     snap.rgbNightLight.action     = data.action
+            if (data?.containsKey("brightness")) snap.rgbNightLight.brightness = data.brightness
+            if (data?.containsKey("red"))        snap.rgbNightLight.red        = data.red
+            if (data?.containsKey("green"))      snap.rgbNightLight.green      = data.green
+            if (data?.containsKey("blue"))       snap.rgbNightLight.blue       = data.blue
+            if (data?.containsKey("colorMode"))  snap.rgbNightLight.colorMode  = data.colorMode
         }
     ],
 
@@ -592,6 +621,13 @@ import groovy.transform.Field
                 snap.dryingMode = snap.dryingMode ?: [:]
                 snap.dryingMode.autoDryingSwitch = data.autoDryingSwitch
             }
+        },
+        // LEH-B381S (Sprout) nightlight: {brightness, colorTemperature, nightLightSwitch}
+        "setLightStatus": { Map snap, Map data ->
+            snap.nightLight = snap.nightLight ?: [:]
+            if (data?.containsKey("nightLightSwitch")) snap.nightLight.nightLightSwitch = data.nightLightSwitch
+            if (data?.containsKey("brightness"))       snap.nightLight.brightness       = data.brightness
+            if (data?.containsKey("colorTemperature")) snap.nightLight.colorTemperature = data.colorTemperature
         },
         // LUH-A603S-WUS warm mist (uses 'setLevel', not 'setVirtualLevel')
         "setLevel": { Map snap, Map data ->
@@ -678,7 +714,8 @@ metadata {
                 "LUH-A602S-WUS",
                 "LUH-A603S-WUS",
                 "LUH-M101S-WUS",
-                "LUH-O451S-WUS"
+                "LUH-O451S-WUS",
+                "LUH-O451S-WEU"
             ]],
             [name: "Child label", type: "STRING"]
         ]
@@ -1149,6 +1186,16 @@ private Map canonicalDefaultState(String fixtureName) {
                 copy.warm_level = 2
                 copy.remove("night_light_brightness")
             }
+            // LUH-O451S-WEU override: EU/RGB variant. Same v1 humidifier body as WUS, plus the
+            // rgbNightLight sub-object the WEU-only parser reads (action/brightness/RGB/colorMode).
+            // Seeded ON so a spawned child populates nightlightSwitch/brightness/hue/saturation.
+            // Fresh literal map each call (not part of the immutable seed) — mutators may write in place.
+            if (fixtureName == "LUH-O451S-WEU") {
+                copy.warm_enabled = true
+                copy.warm_level = 2
+                copy.remove("night_light_brightness")
+                copy.rgbNightLight = [action: "on", brightness: 80, red: 255, green: 0, blue: 0, colorMode: "color"]
+            }
             // LUH-A602S-WUS override: warm mist populated; no night_light_brightness; no humidity_high
             if (fixtureName == "LUH-A602S-WUS") {
                 copy.warm_enabled = true
@@ -1176,7 +1223,9 @@ private Map canonicalDefaultState(String fixtureName) {
                 copy.targetHumidity = 55
                 copy.hepaFilterLifePercent = 78
                 copy.temperature = 720
-                copy.nightLight = [nightLightSwitch: 0, brightness: 0, colorTemperature: 3500]
+                // Nightlight seeded ON so a spawned child populates nightlightOn/brightness/colorTemp.
+                // Fresh literal map each call (not part of the immutable seed) — mutators may write in place.
+                copy.nightLight = [nightLightSwitch: 1, brightness: 80, colorTemperature: 3000]
                 copy.remove("dryingMode")    // Sprout Humidifier dryingMode is absent in canonical (optional)
                 copy.remove("temperature")   // re-add from override
                 copy.temperature = 720
