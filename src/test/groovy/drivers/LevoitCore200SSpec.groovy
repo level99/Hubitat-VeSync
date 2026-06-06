@@ -310,6 +310,25 @@ class LevoitCore200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // No-arg update() refresh path (wired to the `command "update"` declaration
+    // added for Rule Machine / dashboard parity with Core 300S/400S/600S).
+    // -------------------------------------------------------------------------
+
+    def "no-arg update() dispatches a getPurifierStatus refresh (command 'update' path)"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = support.TestParent.successResponse([enabled: true, level: 1, mode: "manual", filter_life: 80])
+
+        when: "the no-arg refresh command path runs"
+        driver.update()
+
+        then: "a getPurifierStatus bypass request was sent"
+        noExceptionThrown()
+        def req = testParent.allRequests.find { it.method == "getPurifierStatus" }
+        req != null
+    }
+
+    // -------------------------------------------------------------------------
     // SwitchLevel 2-arg overload
     // -------------------------------------------------------------------------
 

@@ -74,7 +74,7 @@ metadata {
         name: "Levoit Core200S Air Purifier",
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
-        description: "Supports controlling the Levoit 200S / 300S air purifiers",
+        description: "Supports controlling the Levoit 200S air purifier",
         version: "2.8",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
@@ -102,6 +102,7 @@ metadata {
             command "cancelTimer"
             command "resetFilter"
             command "toggle"
+            command "update"
             command "captureDiagnostics"
         }
 

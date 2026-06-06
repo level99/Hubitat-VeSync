@@ -128,7 +128,7 @@ The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing
 | switch | on, off | Power state |
 | speed | off, low, medium, high | Fan speed |
 
-Commands: `setDisplay`, `setSpeed`, `setMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`.
+Commands: `setDisplay`, `setSpeed`, `setMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`, `update` (refresh).
 
 Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
 
@@ -154,7 +154,7 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 | switch | on, off | Power |
 | speed | off, sleep, low, medium, high | Fan speed |
 
-Commands: `setDisplay`, `setSpeed`, `setMode`, `setAutoMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`.
+Commands: `setDisplay`, `setSpeed`, `setMode`, `setAutoMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`, `update` (refresh).
 
 Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
 
@@ -202,7 +202,7 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 | timerRemain | seconds | Auto-off timer remaining |
 | info | HTML | Tile summary |
 
-Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize`, `setLightDetection`, `setChildLock`, `setDisplay`, `setTimer` (minutes), `cancelTimer`, `resetFilter`, `toggle`.
+Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize`, `setLightDetection`, `setChildLock`, `setDisplay`, `setTimer` (minutes), `cancelTimer`, `resetFilter`, `toggle`, `update` (refresh).
 
 ### Vital 100S (LAP-V102S) *— v2.1 preview*
 
@@ -226,7 +226,7 @@ Same V2 platform as Vital 200S. Differs in one capability: **no light-detection*
 | timerRemain | seconds | Auto-off timer remaining |
 | info | HTML | Tile summary |
 
-Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize`, `setChildLock`, `setDisplay`, `setTimer` (minutes), `cancelTimer`, `resetFilter`, `toggle`.
+Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize`, `setChildLock`, `setDisplay`, `setTimer` (minutes), `cancelTimer`, `resetFilter`, `toggle`, `update` (refresh).
 
 ### Superior 6000S Humidifier (LEH-S601S)
 
@@ -504,7 +504,7 @@ pyvesync class: `VeSyncAirSprout` (inherits `VeSyncAirBaseV2` → `VeSyncAirBypa
 | temperature | °F | Ambient temperature from onboard sensor (if present in response) |
 | info | HTML | Tile summary |
 
-Commands: `setMode` (auto/sleep/turbo/pet — manual mode use `setFanSpeed` instead), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setNightlightMode` (on/off/dim/auto), `toggle`.
+Commands: `setMode` (auto/sleep/turbo/pet — manual mode use `setFanSpeed` instead), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setNightlightMode` (on/off/dim), `toggle`.
 
 ### EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) *— v2.3 preview*
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Core 200S now exposes an `update` (refresh) command, matching the other Core models.** Rule Machine and dashboard tiles can now trigger an on-demand status refresh on the Core 200S the same way they already can on the Core 300S/400S/600S; previously the `update` command was not available on the Core 200S — it wasn't exposed, so it never appeared in the Rule Machine command picker.
+
 ### Fixed
 
 - **Changing the mode of an OFF purifier, humidifier, or fan now turns the device on instead of silently doing nothing.** Asking an off device to switch to (for example) auto or sleep mode previously sent the mode command to a powered-off device — the cloud accepted it but the device stayed physically off, so "I set auto and nothing happened." Mode changes now turn the device on first, matching how speed and mist-level commands already behave. (On the Vital purifier line the behavior was slightly different before — the command was skipped entirely while the device was off, so nothing was sent at all.) An invalid mode value is still rejected without waking an off device. Affects every device family — Core purifiers (`setAutoMode`), Vital, EverestAir, and Sprout Air purifiers, all V2 humidifiers (Superior 6000S, OasisMist 1000S, Sprout, LV600S Hub Connect), and the Tower and Pedestal fans.
