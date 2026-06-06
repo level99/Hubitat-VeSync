@@ -579,10 +579,10 @@ Covers LPF-R432S-AEU, LPF-R432S-AUS, and LPF-R432S-AUK (UK market variant, v2.3)
 | mode | normal, turbo, eco, sleep | Current mode |
 | horizontalOscillation | on, off | Horizontal oscillation toggle |
 | verticalOscillation | on, off | Vertical oscillation toggle |
-| oscillationLeft | 0-100 | Horizontal left bound |
-| oscillationRight | 0-100 | Horizontal right bound |
-| oscillationTop | 0-100 | Vertical top bound |
-| oscillationBottom | 0-100 | Vertical bottom bound |
+| oscillationLeft | 0-90 | Horizontal left bound |
+| oscillationRight | 0-90 | Horizontal right bound |
+| oscillationTop | 0-120 | Vertical top bound |
+| oscillationBottom | 0-120 | Vertical bottom bound |
 | oscillationYaw | number | Current head yaw position (read-only) |
 | oscillationPitch | number | Current head pitch position (read-only) |
 | mute | on, off | Mute state |

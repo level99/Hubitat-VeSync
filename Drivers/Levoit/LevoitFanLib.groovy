@@ -337,6 +337,18 @@ def doSetDisplayScreenSwitch(onOff) {
     }
 }
 
+// Informational note for the 5 oscillation/range setters (Tower + Pedestal): when the
+// fan is off, the cloud accepts an oscillation/range write but the device silently
+// discards it (oscillation geometry only persists while running, live-verified). The
+// command is still SENT (BP29 "send & let the cloud be the authority" — no skip/pre-check);
+// this INFO just keeps a rule author from being confused when the setting doesn't appear
+// to take until the fan is powered on. Gated by descriptionTextEnable via logInfo.
+private void noteOscillationOffState() {
+    if (device.currentValue("switch") != "on") {
+        logInfo "Fan is off — oscillation setting will apply when the fan is powered on"
+    }
+}
+
 // ---- Shared applyStatus body blocks ----
 // Tower Fan and Pedestal Fan share the head (power/speed/mode) and the
 // mute/display/temperature/sleepPreference/errorCode blocks verbatim. Only the

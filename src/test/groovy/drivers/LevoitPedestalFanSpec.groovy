@@ -747,14 +747,14 @@ class LevoitPedestalFanSpec extends HubitatSpec {
 
     def "setHorizontalRange emits horizontalOscillation='on' and range attribute events"() {
         when:
-        driver.setHorizontalRange(5, 95)
+        driver.setHorizontalRange(5, 90)
 
         then: "horizontalOscillation turns on"
         lastEventValue("horizontalOscillation") == "on"
 
         and: "range bounds are emitted as attributes"
         lastEventValue("oscillationLeft")  == 5
-        lastEventValue("oscillationRight") == 95
+        lastEventValue("oscillationRight") == 90
     }
 
     def "setVerticalRange emits verticalOscillation='on' and range attribute events"() {
@@ -1411,9 +1411,9 @@ class LevoitPedestalFanSpec extends HubitatSpec {
     // Regression guards — out-of-range input clamping
     // -------------------------------------------------------------------------
 
-    def "setHorizontalRange(-10, 200) clamps to (0, 100) — out-of-range inputs rejected gracefully"() {
-        // Pre-fix: (level as Integer) accepted -10 and 200 directly — pyvesync range is 0-100.
-        // Post-fix: Math.max(0, Math.min(100, val)) clamps each bound.
+    def "setHorizontalRange(-10, 200) clamps to (0, 90) — out-of-range inputs rejected gracefully"() {
+        // Device angular range is 0-90 horizontal (live-verified on LPF-R432S-AUS).
+        // safeIntArg(val, 0, 0, 90) clamps each bound.
         when:
         driver.setHorizontalRange(-10, 200)
 
@@ -1421,11 +1421,12 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
         req != null
         req.data.left  == 0    // -10 clamped to 0
-        req.data.right == 100  // 200 clamped to 100
+        req.data.right == 90   // 200 clamped to 90 (horizontal max)
         noExceptionThrown()
     }
 
-    def "setVerticalRange(-10, 200) clamps to (0, 100) — out-of-range inputs rejected gracefully"() {
+    def "setVerticalRange(-10, 200) clamps to (0, 120) — out-of-range inputs rejected gracefully"() {
+        // Device angular range is 0-120 vertical (live-verified on LPF-R432S-AUS).
         when:
         driver.setVerticalRange(-10, 200)
 
@@ -1433,7 +1434,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
         req != null
         req.data.top    == 0    // -10 clamped to 0
-        req.data.bottom == 100  // 200 clamped to 100
+        req.data.bottom == 120  // 200 clamped to 120 (vertical max)
         noExceptionThrown()
     }
 
@@ -1446,6 +1447,139 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         req != null
         req.data.left  == 10
         req.data.right == 80
+    }
+
+    // -------------------------------------------------------------------------
+    // #249 regression guards — device angular maxima H 0-90 / V 0-120.
+    // Load-bearing: each FAILs if the clamp reverts to the old 0-100 bound.
+    // -------------------------------------------------------------------------
+
+    def "setVerticalRange(75, 120) preserves 120 — NOT truncated to 100 (#249)"() {
+        when:
+        driver.setVerticalRange(75, 120)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
+        req != null
+        req.data.top    == 75
+        req.data.bottom == 120   // would be 100 if clamp reverted to old 0-100 bound
+        lastEventValue("oscillationBottom") == 120
+    }
+
+    def "setVerticalRange(75, 130) clamps to vertical max 120 (#249)"() {
+        when:
+        driver.setVerticalRange(75, 130)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
+        req != null
+        req.data.bottom == 120   // 130 clamped to vertical max
+    }
+
+    def "setHorizontalRange(0, 100) clamps old-max 100 to new horizontal max 90 (#249)"() {
+        // Discriminating: 100 is unclamped under the old 0-100 bound (RED on revert),
+        // clamped to 90 under the corrected 0-90 bound. 90 inclusivity is covered by the
+        // (0,110)→90 spec below.
+        when:
+        driver.setHorizontalRange(0, 100)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
+        req != null
+        req.data.left  == 0
+        req.data.right == 90
+    }
+
+    def "setHorizontalRange(0, 110) clamps to horizontal max 90 (#249)"() {
+        when:
+        driver.setHorizontalRange(0, 110)
+
+        then:
+        def req = testParent.allRequests.find { it.method == "setOscillationStatus" }
+        req != null
+        req.data.right == 90   // 110 clamped to horizontal max
+    }
+
+    // -------------------------------------------------------------------------
+    // #127 BP24 NO-ON regression guards — the 4 Pedestal oscillation/range setters
+    // must NOT auto-power-on the device when called from off (NO-ON classification:
+    // oscillation is a preference, cloud accepts-but-doesn't-persist while off).
+    // Each goes RED if someone later adds ensureSwitchOn() to the setter.
+    // Also assert the off-state INFO fires (informational; command is still sent).
+    // -------------------------------------------------------------------------
+
+    def "setHorizontalRange from off does NOT auto-power-on (BP24 NO-ON) and notes off-state (#127)"() {
+        given: "device is off"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when:
+        driver.setHorizontalRange(10, 80)
+
+        then: "no on() — no setSwitch powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "the oscillation command was still sent (send & let the cloud decide)"
+        testParent.allRequests.find { it.method == "setOscillationStatus" } != null
+
+        and: "the off-state INFO note fired"
+        testLog.infos.any { it.contains("will apply when the fan is powered on") }
+    }
+
+    def "setVerticalRange from off does NOT auto-power-on (BP24 NO-ON) and notes off-state (#127)"() {
+        given: "device is off"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when:
+        driver.setVerticalRange(20, 90)
+
+        then: "no on() — no setSwitch powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "the oscillation command was still sent"
+        testParent.allRequests.find { it.method == "setOscillationStatus" } != null
+
+        and: "the off-state INFO note fired"
+        testLog.infos.any { it.contains("will apply when the fan is powered on") }
+    }
+
+    def "setHorizontalOscillation('on') from off does NOT auto-power-on (BP24 NO-ON) and notes off-state (#127)"() {
+        given: "device is off; horizontalOscillation currently off so C3 gate does not suppress the call"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "off"])
+        testDevice.events.add([name: "horizontalOscillation", value: "off"])
+
+        when:
+        driver.setHorizontalOscillation("on")
+
+        then: "no on() — no setSwitch powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "the oscillation command was still sent"
+        testParent.allRequests.find { it.method == "setOscillationStatus" } != null
+
+        and: "the off-state INFO note fired"
+        testLog.infos.any { it.contains("will apply when the fan is powered on") }
+    }
+
+    def "setVerticalOscillation('on') from off does NOT auto-power-on (BP24 NO-ON) and notes off-state (#127)"() {
+        given: "device is off; verticalOscillation currently off so C3 gate does not suppress the call"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "off"])
+        testDevice.events.add([name: "verticalOscillation", value: "off"])
+
+        when:
+        driver.setVerticalOscillation("on")
+
+        then: "no on() — no setSwitch powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "the oscillation command was still sent"
+        testParent.allRequests.find { it.method == "setOscillationStatus" } != null
+
+        and: "the off-state INFO note fired"
+        testLog.infos.any { it.contains("will apply when the fan is powered on") }
     }
 
     // -------------------------------------------------------------------------
@@ -1611,7 +1745,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
 
     def "BP26: setHorizontalRange('5.7', '5.7') does not throw and makes setOscillationStatus API call with truncated value (5)"() {
         // safeIntArg("5.7") → BigDecimal("5.7").intValue() = 5 (truncation, not rounding).
-        // Math.max(0, Math.min(100, 5)) = 5 (within valid range, no clamping applied).
+        // 5 is within the horizontal range 0-90, so no clamping is applied.
         // An API call IS made with left=5, right=5.
         when:
         driver.setHorizontalRange("5.7", "5.7")
@@ -1653,7 +1787,7 @@ class LevoitPedestalFanSpec extends HubitatSpec {
 
     def "BP26: setVerticalRange('5.7', '5.7') does not throw and makes setOscillationStatus API call with truncated value (5)"() {
         // safeIntArg("5.7") → BigDecimal("5.7").intValue() = 5 (truncation, not rounding).
-        // Math.max(0, Math.min(100, 5)) = 5 (within valid range, no clamping applied).
+        // 5 is within the vertical range 0-120, so no clamping is applied.
         // An API call IS made with top=5, bottom=5.
         when:
         driver.setVerticalRange("5.7", "5.7")

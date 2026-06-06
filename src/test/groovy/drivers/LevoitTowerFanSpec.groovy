@@ -1168,6 +1168,29 @@ class LevoitTowerFanSpec extends HubitatSpec {
         req.data.oscillationSwitch == 1
     }
 
+    // #127 BP24 NO-ON regression guard — setOscillation must NOT auto-power-on when
+    // called from off (oscillation is a preference; cloud accepts-but-doesn't-persist
+    // while off). Goes RED if someone later adds ensureSwitchOn(). Also asserts the
+    // off-state INFO fires (informational; command is still sent).
+    def "setOscillation('on') from off does NOT auto-power-on (BP24 NO-ON) and notes off-state (#127)"() {
+        given: "device is off; oscillation currently off so C3 gate does not suppress the call"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "off"])
+        testDevice.events.add([name: "oscillation", value: "off"])
+
+        when:
+        driver.setOscillation("on")
+
+        then: "no on() — no setSwitch powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "the oscillation command was still sent (send & let the cloud decide)"
+        testParent.allRequests.find { it.method == "setOscillationSwitch" } != null
+
+        and: "the off-state INFO note fired"
+        testLog.infos.any { it.contains("will apply when the fan is powered on") }
+    }
+
     // ---- C3 idempotency gate: setMute (via doSetMuteSwitch in LevoitFanLib) ----
     // Both-ways: remove the C3 gate in doSetMuteSwitch → these specs FAIL; restore → PASS.
 

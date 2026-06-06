@@ -159,10 +159,10 @@ metadata {
         attribute "horizontalOscillation",  "string"    // on | off
         attribute "verticalOscillation",    "string"    // on | off
         // Oscillation range bounds (current configured range)
-        attribute "oscillationLeft",        "number"    // horizontal left bound (0-100)
-        attribute "oscillationRight",       "number"    // horizontal right bound (0-100)
-        attribute "oscillationTop",         "number"    // vertical top bound (0-100)
-        attribute "oscillationBottom",      "number"    // vertical bottom bound (0-100)
+        attribute "oscillationLeft",        "number"    // horizontal left bound (0-90)
+        attribute "oscillationRight",       "number"    // horizontal right bound (0-90)
+        attribute "oscillationTop",         "number"    // vertical top bound (0-120)
+        attribute "oscillationBottom",      "number"    // vertical bottom bound (0-120)
         // Oscillation coordinate (current head position, read-only)
         attribute "oscillationYaw",         "number"    // current yaw position
         attribute "oscillationPitch",       "number"    // current pitch position
@@ -203,14 +203,15 @@ metadata {
         command "setVerticalOscillation",   [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
 
         // Oscillation range setters -- turn that axis ON with explicit bounds.
-        // Range values 0-100 (device units). State is always set to 1 (on) in range payloads.
+        // Range values are device angular degrees (horizontal 0-90, vertical 0-120;
+        // live-verified on LPF-R432S-AUS). State is always set to 1 (on) in range payloads.
         command "setHorizontalRange", [
-            [name:"Left*",  type:"NUMBER", description:"Left bound (0-100)"],
-            [name:"Right*", type:"NUMBER", description:"Right bound (0-100)"]
+            [name:"Left*",  type:"NUMBER", description:"Left bound (0-90)"],
+            [name:"Right*", type:"NUMBER", description:"Right bound (0-90)"]
         ]
         command "setVerticalRange", [
-            [name:"Top*",    type:"NUMBER", description:"Top bound (0-100)"],
-            [name:"Bottom*", type:"NUMBER", description:"Bottom bound (0-100)"]
+            [name:"Top*",    type:"NUMBER", description:"Top bound (0-120)"],
+            [name:"Bottom*", type:"NUMBER", description:"Bottom bound (0-120)"]
         ]
 
         command "setMute",    [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
@@ -357,6 +358,8 @@ def setHorizontalOscillation(onOff){
     if (!(s in ["on","off"])) { logError "setHorizontalOscillation: invalid value '${s}'"; recordError("setHorizontalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("horizontalOscillation") == s) return
+    // BP24 NO-ON note: still send the command; just inform if the fan is off (setting applies on power-on).
+    noteOscillationOffState()
     Integer v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setOscillationStatus",
         [horizontalOscillationState: v, actType: "default"],
@@ -379,6 +382,8 @@ def setVerticalOscillation(onOff){
     if (!(s in ["on","off"])) { logError "setVerticalOscillation: invalid value '${s}'"; recordError("setVerticalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("verticalOscillation") == s) return
+    // BP24 NO-ON note: still send the command; just inform if the fan is off (setting applies on power-on).
+    noteOscillationOffState()
     Integer v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setOscillationStatus",
         [verticalOscillationState: v, actType: "default"],
@@ -391,7 +396,7 @@ def setVerticalOscillation(onOff){
     }
 }
 
-// Set horizontal oscillation range (0-100 device units) and turn horizontal oscillation ON.
+// Set horizontal oscillation range (0-90 angular degrees) and turn horizontal oscillation ON.
 // Range payloads always include state=1 (oscillation must be on to set a range).
 //
 // BP18 normalization: explicit null-guard on left/right args, replacing the previous
@@ -401,9 +406,11 @@ def setHorizontalRange(left, right){
     logDebug "setHorizontalRange(left=${left}, right=${right})"
     if (!requireNotNull(left, "setHorizontalRange left")) return
     if (!requireNotNull(right, "setHorizontalRange right")) return
-    // Clamp to device valid range 0-100 (per pyvesync LPF-R423S.yaml fixture values and driver convention).
-    Integer l = safeIntArg(left, 0, 0, 100)
-    Integer r = safeIntArg(right, 0, 0, 100)
+    // BP24 NO-ON note: still send the command; just inform if the fan is off (setting applies on power-on).
+    noteOscillationOffState()
+    // Clamp to device valid range 0-90 (horizontal angular max, live-verified on LPF-R432S-AUS).
+    Integer l = safeIntArg(left, 0, 0, 90)
+    Integer r = safeIntArg(right, 0, 0, 90)
     def resp = hubBypass("setOscillationStatus",
         [horizontalOscillationState: 1, actType: "default", left: l, right: r],
         "setOscillationStatus(H_range=${l}..${r})")
@@ -417,7 +424,7 @@ def setHorizontalRange(left, right){
     }
 }
 
-// Set vertical oscillation range (0-100 device units) and turn vertical oscillation ON.
+// Set vertical oscillation range (0-120 angular degrees) and turn vertical oscillation ON.
 //
 // BP18 normalization: explicit null-guard on top/bottom args, replacing the previous
 // silent-zeroing coercions.
@@ -426,9 +433,11 @@ def setVerticalRange(top, bottom){
     logDebug "setVerticalRange(top=${top}, bottom=${bottom})"
     if (!requireNotNull(top, "setVerticalRange top")) return
     if (!requireNotNull(bottom, "setVerticalRange bottom")) return
-    // Clamp to device valid range 0-100 (per pyvesync LPF-R423S.yaml fixture values and driver convention).
-    Integer t = safeIntArg(top, 0, 0, 100)
-    Integer b = safeIntArg(bottom, 0, 0, 100)
+    // BP24 NO-ON note: still send the command; just inform if the fan is off (setting applies on power-on).
+    noteOscillationOffState()
+    // Clamp to device valid range 0-120 (vertical angular max, live-verified on LPF-R432S-AUS).
+    Integer t = safeIntArg(top, 0, 0, 120)
+    Integer b = safeIntArg(bottom, 0, 0, 120)
     def resp = hubBypass("setOscillationStatus",
         [verticalOscillationState: 1, actType: "default", top: t, bottom: b],
         "setOscillationStatus(V_range=${t}..${b})")
