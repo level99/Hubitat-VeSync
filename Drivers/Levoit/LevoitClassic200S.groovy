@@ -157,6 +157,8 @@ Map powerPayload(boolean on){ [enabled: on, id: 0] }
 //     as a defensive read-path normalization (no known firmware variant issue for Classic 200S,
 //     but defensive normalization is free and prevents user confusion if firmware changes).
 // Payload: {mode: <value>} -- same as Classic 300S, NOT {workMode: <value>} (V2-class devices)
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (ensureSwitchOn below,
+//   after validation). Matches speed/level setters; pyvesync set_mode has no power gate.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return

@@ -127,6 +127,10 @@ private boolean supportsAutoMode() { true }
 // mapIntegerStringToSpeed helpers (Bucket B1, #142 Phase 2c).
 private Map getSpeedBands() { [1:"low", 2:"medium", 3:"high"] }
 
+// Auto-preference modes for Core 300S. MUST match the setAutoMode command-constraint enum above.
+// Consumed by the lib's setAutoMode to reject invalid input before waking an off device (BP24).
+private List getAutoModes() { ["default", "quiet", "efficient"] }
+
 // logDebug, logError, logWarn, logInfo, logDebugOff, ensureDebugWatchdog, ensureSwitchOn
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 // installed, uninstalled, initialize, updated, on, off, toggle, setDisplay, handlePower,

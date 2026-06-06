@@ -1035,4 +1035,46 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         and: "no setVirtualLevel mist command was sent"
         testParent.allRequests.every { it.method != "setVirtualLevel" }
     }
+
+    // -------------------------------------------------------------------------
+    // BP24 SHOULD-ON: setMode from off-state turns the device on (v2.9).
+    // NON-VACUITY: deleting the ensureSwitchOn() line in setMode makes the on()
+    // assertion go RED (no setSwitch powerSwitch=1 fires; expected revert -> RED).
+    // -------------------------------------------------------------------------
+
+    def "BP24: setMode('auto') from off-state turns the device on before the mode command"() {
+        given: "device is off, turningOn flag clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        testParent.allRequests.clear()
+
+        when: "setMode('auto') is called on an off device"
+        driver.setMode("auto")
+
+        then: "on() fired — setSwitch with powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+
+        and: "the mode command (setHumidityMode) was sent with wire workMode='autoPro'"
+        def modeReq = testParent.allRequests.find { it.method == "setHumidityMode" }
+        modeReq != null
+        modeReq.data.workMode == "autoPro"
+    }
+
+    def "BP24: invalid mode on an off device does NOT auto-power it on (validate-before-on)"() {
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        testParent.allRequests.clear()
+
+        when: "an invalid mode is sent"
+        driver.setMode("turbo")
+
+        then: "no on() fired (validation rejected before ensureSwitchOn)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "no mode command was sent"
+        testParent.allRequests.find { it.method == "setHumidityMode" } == null
+    }
 }

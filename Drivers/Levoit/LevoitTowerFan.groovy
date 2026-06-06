@@ -215,6 +215,8 @@ def setSpeed(spd){
 //   If contradicted in the future: a community report showing "advancedSleep" is rejected
 //     and "sleep" is the correct literal would mean removing the reverse-mapping and
 //     sending "sleep" directly. No such report yet — current behavior follows pyvesync.
+// BP24: SHOULD-ON — asking an off fan to change mode auto-turns it on (matches speed/level
+//   setters). ensureSwitchOn() runs AFTER validation so invalid input cannot wake an off device.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -224,6 +226,7 @@ def setMode(mode){
         recordError("setMode: invalid mode '${m}'", [method:"setTowerFanMode"])
         return
     }
+    ensureSwitchOn()
     // Map user-facing "sleep" to API "advancedSleep" (HA finding #d + pyvesync device_map.py)
     String apiMode = (m == "sleep") ? "advancedSleep" : m
     def resp = hubBypass("setTowerFanMode", [workMode: apiMode], "setTowerFanMode(${apiMode})")
@@ -277,6 +280,7 @@ def setOscillation(onOff){
 // BP18 normalization: explicit requireNotNull guards on seconds and action args,
 // replacing the previous implicit ?: coercions. Matches the codebase convention
 // used by all other fan/humidifier command methods.
+// BP24: NO-ON — schedules a future power action; powering on now is not implied.
 def setTimer(seconds, action="off"){
     if (!requireNotNull(seconds, "setTimer")) return
     int secs = safeIntArg(seconds, 0)

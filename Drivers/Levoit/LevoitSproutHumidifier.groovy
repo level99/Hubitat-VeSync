@@ -169,11 +169,15 @@ Map powerPayload(boolean on){ [powerSwitch: on ? 1 : 0, switchIdx: 0] }
 // CRITICAL: mist_modes[auto] = 'autoPro' (NOT 'auto' — contrast OasisMist 1000S 'auto',
 // contrast LV600S Hub Connect 'humidity'). Canonical from pyvesync device_map.py.
 // In reverse: workMode='autoPro' from API response maps back to user-facing 'auto'.
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (matches speed/level
+//   setters; pyvesync set_mode has no power gate and sets device ON on success). ensureSwitchOn()
+//   runs AFTER validation so invalid input cannot wake an off device.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
+    ensureSwitchOn()
     // Wire-value mapping: auto -> 'autoPro' (device_map.py mist_modes for Sprout)
     String wire = (m == "auto") ? "autoPro" : m
     def resp = hubBypass("setHumidityMode", [workMode: wire], "setHumidityMode(${wire})")

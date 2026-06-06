@@ -300,6 +300,8 @@ def setSpeed(spd){
 //   If contradicted in the future (eco vs auto): a community report showing "auto" is
 //     accepted on the Pedestal Fan would mean adding "auto" as an alias or replacing
 //     "eco" with "auto". No such report yet — current behavior follows pyvesync.
+// BP24: SHOULD-ON — asking an off fan to change mode auto-turns it on (matches speed/level
+//   setters). ensureSwitchOn() runs AFTER validation so invalid input cannot wake an off device.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -309,6 +311,7 @@ def setMode(mode){
         recordError("setMode: invalid mode '${m}'", [method:"setFanMode"])
         return
     }
+    ensureSwitchOn()
     // Map user-facing "sleep" to API "advancedSleep" (pyvesync device_map.py + HA finding #d)
     String apiMode = (m == "sleep") ? "advancedSleep" : m
     def resp = hubBypass("setFanMode", [workMode: apiMode], "setFanMode(${apiMode})")
@@ -392,6 +395,7 @@ def setVerticalOscillation(onOff){
 //
 // BP18 normalization: explicit null-guard on left/right args, replacing the previous
 // silent-zeroing (left as Integer) ?: 0 coercions. Null args now reject with logWarn.
+// BP24: NO-ON — configures the oscillation range preference; powering the fan on is not implied.
 def setHorizontalRange(left, right){
     logDebug "setHorizontalRange(left=${left}, right=${right})"
     if (!requireNotNull(left, "setHorizontalRange left")) return
@@ -416,6 +420,7 @@ def setHorizontalRange(left, right){
 //
 // BP18 normalization: explicit null-guard on top/bottom args, replacing the previous
 // silent-zeroing coercions.
+// BP24: NO-ON — configures the oscillation range preference; powering the fan on is not implied.
 def setVerticalRange(top, bottom){
     logDebug "setVerticalRange(top=${top}, bottom=${bottom})"
     if (!requireNotNull(top, "setVerticalRange top")) return

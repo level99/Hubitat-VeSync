@@ -1677,4 +1677,44 @@ class LevoitPedestalFanSpec extends HubitatSpec {
         and: "a setLevel API call was made"
         !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
     }
+
+    // -------------------------------------------------------------------------
+    // BP24 SHOULD-ON: setMode from off-state turns the fan on (v2.9).
+    // NON-VACUITY: deleting the ensureSwitchOn() line in setMode makes the on()
+    // assertion go RED (no setSwitch powerSwitch=1 fires; expected revert -> RED).
+    // -------------------------------------------------------------------------
+
+    def "BP24: setMode('normal') from off-state turns the fan on before the mode command"() {
+        given: "fan is off, turningOn flag clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        testParent.allRequests.clear()
+
+        when: "setMode('normal') is called on an off fan"
+        driver.setMode("normal")
+
+        then: "on() fired — setSwitch with powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+
+        and: "the mode command (setFanMode) was sent"
+        testParent.allRequests.find { it.method == "setFanMode" } != null
+    }
+
+    def "BP24: invalid mode on an off fan does NOT auto-power it on (validate-before-on)"() {
+        given: "fan is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        testParent.allRequests.clear()
+
+        when: "an invalid mode is sent"
+        driver.setMode("auto")
+
+        then: "no on() fired (validation rejected before ensureSwitchOn)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "no mode command was sent"
+        testParent.allRequests.find { it.method == "setFanMode" } == null
+    }
 }

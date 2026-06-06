@@ -220,6 +220,12 @@ def toggle(){
 // TURBO: handled identically to auto/sleep — setPurifierMode {workMode:"turbo"}.
 // No separate turbo toggle method exists in pyvesync (confirmed by source search).
 // This is the canonical convention for turbo-as-mode going forward in this codebase.
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (matches speed/level
+//   setters; pyvesync VeSyncAirBaseV2.set_mode has no power gate and sets device ON on success).
+//   ensureSwitchOn() runs AFTER validation so invalid input cannot wake an off device. The outer
+//   ensureSwitchOn() here is the load-bearing auto-on guard for BOTH paths (manual and mode); the
+//   manual path's later setFanSpeed call also calls ensureSwitchOn, but by then the device is
+//   already on so that inner call is a no-op — it is not what powers the device on.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -229,6 +235,7 @@ def setMode(mode){
         recordError("Invalid mode: ${m}", [method:"setPurifierMode"])
         return
     }
+    ensureSwitchOn()
     if (m == "manual") {
         // Manual established by setting fan speed (same as pyvesync VeSyncAirBaseV2.set_mode(MANUAL))
         setFanSpeed(state.lastFanSpeed ?: 1)

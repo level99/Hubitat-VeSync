@@ -342,6 +342,53 @@ class LevoitEverestAirSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP24 SHOULD-ON: setMode from off-state turns the device on (v2.9).
+    // NON-VACUITY: deleting the ensureSwitchOn() line in setMode makes the
+    // on() assertion go RED for the non-manual path. (The manual path's auto-on
+    // comes from setFanSpeed's own ensureSwitchOn, so this guards the auto path.)
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "BP24: setMode('#mode') from off-state turns the device on (EverestAir)"() {
+        given: "device is off, turningOn flag clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        state.lastFanSpeed = 1
+        testParent.allRequests.clear()
+
+        when: "setMode('#mode') is called on an off device"
+        driver.setMode(mode)
+
+        then: "on() fired — setSwitch with powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+
+        and: "the expected command was sent (#apiMethod)"
+        testParent.allRequests.find { it.method == apiMethod } != null
+
+        where:
+        mode     | apiMethod
+        "auto"   | "setPurifierMode"
+        "sleep"  | "setPurifierMode"
+        "turbo"  | "setPurifierMode"
+        "manual" | "setLevel"
+    }
+
+    def "BP24: invalid mode on an off device does NOT auto-power it on (validate-before-on)"() {
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        testParent.allRequests.clear()
+
+        when: "an invalid mode is sent"
+        driver.setMode("pet")
+
+        then: "no on() fired (validation rejected before ensureSwitchOn)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+    }
+
+    // -------------------------------------------------------------------------
     // Fan speed: setLevel {levelIdx:0, manualSpeedLevel:N, levelType:'wind'}
     // Range 1-3; sets mode=manual
     // -------------------------------------------------------------------------

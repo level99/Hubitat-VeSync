@@ -357,22 +357,32 @@ def setMode(mode) {
     }
     ensureSwitchOn()                                                             // BP24-B auto-on (after rejection checks)
 
-    handleMode(m)
-    state.mode = m
-    handleEvent("mode", m)
-    logInfo "Mode: ${m}"
+    // Only commit state + emit events when the cloud accepted the mode change. Previously
+    // state.mode + the mode/speed events were set unconditionally, creating a state-vs-reality
+    // mismatch when handleMode failed (e.g. transient API error) — the device stayed in its prior
+    // mode but the driver reported the new one. On failure, leave state untouched; the next poll
+    // owns reconciliation. (Same fix class as CoreAQ setAutoMode.)
+    boolean ok = handleMode(m)
+    if (ok) {
+        state.mode = m
+        handleEvent("mode", m)
+        logInfo "Mode: ${m}"
 
-    switch(m)
-    {
-        case "manual":
-            handleEvent("speed", state.speed)
-            break;
-        case "auto":
-            handleEvent("speed", "auto")
-            break;
-        case "sleep":
-            handleEvent("speed", "on")
-            break;
+        switch(m)
+        {
+            case "manual":
+                handleEvent("speed", state.speed)
+                break;
+            case "auto":
+                handleEvent("speed", "auto")
+                break;
+            case "sleep":
+                handleEvent("speed", "on")
+                break;
+        }
+    } else {
+        logError "Mode write failed: ${m}"
+        recordError("Mode write failed: ${m}", [method:"setMode"])
     }
 }
 

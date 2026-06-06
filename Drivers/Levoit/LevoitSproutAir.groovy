@@ -194,11 +194,18 @@ def toggle(){
 // Sending setPurifierMode {workMode:'manual'} returns inner code -1 on this class.
 // Per pyvesync VeSyncAirBaseV2.set_mode(): when mode==MANUAL, delegates to set_fan_speed(1).
 // This driver mirrors that: setMode("manual") calls setFanSpeed(1) instead.
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (matches speed/level
+//   setters; pyvesync VeSyncAirBaseV2.set_mode has no power gate and sets device ON on success).
+//   ensureSwitchOn() runs AFTER validation so invalid input cannot wake an off device. The outer
+//   ensureSwitchOn() here is the load-bearing auto-on guard for BOTH paths (manual and mode); the
+//   manual path's later setFanSpeed call also calls ensureSwitchOn, but by then the device is
+//   already on so that inner call is a no-op — it is not what powers the device on.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setPurifierMode"]); return }
+    ensureSwitchOn()
     if (m == "manual") {
         // Manual established by setting fan speed (same as pyvesync VeSyncAirBaseV2.set_mode(MANUAL))
         setFanSpeed(state.lastFanSpeed ?: 1)

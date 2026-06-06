@@ -231,6 +231,8 @@ Map powerPayload(boolean on){ [enabled: on, id: 0] }
 //   Source: https://github.com/webdjoe/pyvesync/issues/295 (issue #295, universal US rejection);
 //     https://github.com/webdjoe/pyvesync/issues/500 (issue #500, WUSR nightlight/behavior query).
 // payload: {mode: <value>} -- NOT {workMode: <value>} (Superior 6000S style)
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (ensureSwitchOn below,
+//   after validation). Matches speed/level setters; pyvesync set_mode has no power gate.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return

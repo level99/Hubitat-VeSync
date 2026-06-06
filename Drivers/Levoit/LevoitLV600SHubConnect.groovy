@@ -170,6 +170,9 @@ Map powerPayload(boolean on){ [powerSwitch: on ? 1 : 0, switchIdx: 0] }
 //   Read path: "humidity" from device normalized to user-facing "auto".
 //   Payload field: {workMode: <value>} -- NOT {mode: <value>} (VeSyncHumid200300S class).
 //   Source: pyvesync LUH-A603S-WUS.yaml set_auto_mode: {workMode: 'humidity'}
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (matches speed/level
+//   setters; pyvesync VeSyncAirBaseV2/humidifier set_mode has no power gate and sets device ON
+//   on success). ensureSwitchOn() runs AFTER validation so invalid input cannot wake an off device.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -179,6 +182,7 @@ def setMode(mode){
         recordError("Invalid mode: ${m}", [method:"setHumidityMode"])
         return
     }
+    ensureSwitchOn()
     // Map user-facing "auto" to wire value "humidity" (VeSyncLV600S class convention)
     // This is the INVERSE of A602S where "humidity" is a firmware-variant fallback.
     // For A603S, "humidity" IS the canonical auto-mode wire value per device_map.py.

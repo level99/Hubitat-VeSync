@@ -245,6 +245,126 @@ class LevoitCore400SSpec extends HubitatSpec {
         testLog.errors.isEmpty()
     }
 
+    // -------------------------------------------------------------------------
+    // BP24 SHOULD-ON: setAutoMode from off-state turns the device on (v2.9).
+    // NON-VACUITY: deleting the ensureSwitchOn() line in setAutoMode makes the
+    // on() assertion go RED (no setSwitch enabled=true fires).
+    // -------------------------------------------------------------------------
+
+    def "BP24: setAutoMode('default') from off-state turns the device on before the mode command"() {
+        given: "device is off and turningOn flag clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        testParent.allRequests.clear()
+
+        when: "setAutoMode('default') is called on an off device"
+        driver.setAutoMode("default")
+
+        then: "on() fired — setSwitch with enabled=true was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == true } != null
+
+        and: "the auto-mode command (setPurifierMode) was sent"
+        testParent.allRequests.find { it.method == "setPurifierMode" } != null
+    }
+
+    // -------------------------------------------------------------------------
+    // v2.9: setAutoMode no longer commits state.mode unconditionally — only on a
+    // successful handleMode() call. NON-VACUITY: reverting to the old unconditional
+    // `state.mode = "auto"` makes the "mode stays manual on failure" assertion go RED.
+    // -------------------------------------------------------------------------
+
+    def "setAutoMode does NOT set state.mode='auto' when the mode command fails (state-vs-reality)"() {
+        given: "device is on (so ensureSwitchOn is a no-op and does not consume a queued response)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.remove("turningOn")
+        state.mode = "manual"
+        testParent.allRequests.clear()
+        // First call (handleAutoMode -> setAutoPreference) succeeds; second call
+        // (handleMode -> setPurifierMode) fails with HTTP 500.
+        testParent.requestResponses = [
+            support.TestParent.successResponse([:]),
+            support.TestParent.httpErrorResponse(500)
+        ]
+
+        when: "setAutoMode('default') is called and the mode write fails"
+        driver.setAutoMode("default")
+
+        then: "state.mode was NOT flipped to 'auto' — it reflects reality (still manual)"
+        state.mode != "auto"
+
+        and: "an error was logged for the failed auto-mode write"
+        testLog.errors.any { it.toLowerCase().contains("auto mode write failed") } ||
+            testLog.errors.any { it.contains("500") }
+    }
+
+    def "setAutoMode DOES set state.mode='auto' when the mode command succeeds"() {
+        given: "device is on; both API calls succeed (default OK responses)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.remove("turningOn")
+        state.mode = "manual"
+        testParent.allRequests.clear()
+
+        when: "setAutoMode('default') is called"
+        driver.setAutoMode("default")
+
+        then: "state.mode committed to 'auto' on success"
+        state.mode == "auto"
+
+        and: "mode event emitted as 'auto'"
+        lastEventValue("mode") == "auto"
+    }
+
+    // -------------------------------------------------------------------------
+    // v2.9: CorePurifierLib.setMode no longer commits state.mode unconditionally —
+    // only on a successful handleMode() call (same fix class as setAutoMode above).
+    // NON-VACUITY: reverting to the old unconditional `state.mode = m` makes the
+    // "mode stays as-is on failure" assertion go RED (expected revert -> RED).
+    // -------------------------------------------------------------------------
+
+    def "setMode does NOT commit state.mode when the mode command fails (state-vs-reality)"() {
+        given: "device is on (ensureSwitchOn is a no-op), prior mode is sleep"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.remove("turningOn")
+        state.mode = "sleep"
+        testParent.allRequests.clear()
+        // handleMode -> setPurifierMode fails with HTTP 500 (the only request when already on).
+        testParent.requestResponses = [
+            support.TestParent.httpErrorResponse(500)
+        ]
+
+        when: "setMode('auto') is called and the mode write fails"
+        driver.setMode("auto")
+
+        then: "state.mode was NOT flipped to 'auto' — it reflects reality (still sleep)"
+        state.mode == "sleep"
+
+        and: "an error was logged for the failed mode write"
+        testLog.errors.any { it.toLowerCase().contains("mode write failed") } ||
+            testLog.errors.any { it.contains("500") }
+    }
+
+    def "setMode DOES commit state.mode when the mode command succeeds"() {
+        given: "device is on; the API call succeeds (default OK responses)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.remove("turningOn")
+        state.mode = "sleep"
+        testParent.allRequests.clear()
+
+        when: "setMode('auto') is called"
+        driver.setMode("auto")
+
+        then: "state.mode committed to 'auto' on success"
+        state.mode == "auto"
+
+        and: "mode event emitted as 'auto'"
+        lastEventValue("mode") == "auto"
+    }
+
     def "AQI calculation produces a value between 0 and 500"() {
         given:
         settings.descriptionTextEnable = false

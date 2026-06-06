@@ -174,6 +174,8 @@ Map powerPayload(boolean on){ [enabled: on, id: 0] }
 //   Refutation: community user with LUH-D301S-WEU reports auto broken even after "humidity"
 //     fallback --> both variants tried; log both inner codes; escalate to pyvesync issue.
 // Payload: {mode: <value>} -- NOT {workMode: <value>} (Superior 6000S difference)
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (ensureSwitchOn below,
+//   after validation). Matches speed/level setters; pyvesync set_mode has no power gate.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return

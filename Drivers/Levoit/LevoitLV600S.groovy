@@ -158,6 +158,8 @@ Map powerPayload(boolean on){ [enabled: on, id: 0] }
 //     --> both canonical and alternate have been tried; log the error with both inner codes;
 //     user likely has a third firmware variant not yet mapped.
 // Classic 300S / OasisMist 450S payload: {mode: <value>} -- NOT {workMode: <value>}
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (ensureSwitchOn below,
+//   after validation). Matches speed/level setters; pyvesync set_mode has no power gate.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
