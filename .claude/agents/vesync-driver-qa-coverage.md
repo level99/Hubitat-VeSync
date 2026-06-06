@@ -52,7 +52,7 @@ For every new public command, attribute, or behavior change in the diff:
 
 2. **CHANGELOG `[Unreleased]` bullet.** If the diff is `feat:` or `fix:` and adds user-visible behavior, `CHANGELOG.md`'s `[Unreleased]` section should have a bullet. Missing = **WARN** (CLAUDE.md "Per-commit CHANGELOG discipline" — the prevention layer; cut-release scanner catches it later as a backstop).
 
-3. **BP catalog entry.** If the diff introduces a new bug-pattern class (the dev added a new failure mode not in the BP1-23+BP24 catalog), the catalog needs a new entry in `CLAUDE.md` AND in the `vesync-driver-qa` definition. Missing entry on a new pattern class = **WARN**.
+3. **BP catalog entry.** If the diff introduces a new bug-pattern class (the dev added a new failure mode not in the BP1-23+BP24 catalog), the catalog needs a new entry in `docs/BUG-PATTERNS.md` (the single source of truth). Missing entry on a new pattern class = **WARN**.
 
 4. **`Fix scope:` annotation.** If the diff adds a new BP catalog entry, it should declare `Fix scope: per-instance` (single method) or `Fix scope: class-wide` (every entry point to the semantic class). Missing = **WARN**.
 

@@ -110,7 +110,7 @@ If the same 5+ line pattern appears in 3+ drivers (not via lib), flag as a v2.6+
 If the diff sets X on family-A but explicitly does NOT set X on family-B sibling, there should be a clear reason. Check:
 - Code comment near the change
 - Commit message body
-- `CLAUDE.md` BP catalog entry referencing the asymmetry
+- `docs/BUG-PATTERNS.md` BP catalog entry referencing the asymmetry
 - pyvesync source confirming the families behave differently for X
 
 If no rationale is documented, **WARN**.

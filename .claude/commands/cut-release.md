@@ -239,7 +239,7 @@ Run `[ -f CONTRIBUTING.md ] && echo "present" || echo "absent"` to check.
   |---|---|---|
   | `## Codebase orientation` (repo tree) | new/renamed driver files | glob `Drivers/Levoit/*.groovy` and compare to the tree's listed files |
   | `## Adding a new device driver` (closest-existing-driver-as-template hints) | new device families | scan for hardcoded references to existing driver classes; flag if a v2.X+ family (e.g. fans added in v2.1) isn't represented |
-  | `## Conventions enforced by lint/tests` (rule IDs + BP refs) | new lint rules / new bug patterns | glob `tests/lint_rules/*.py` for rule IDs and cross-check against the listed rules. Cross-check BP catalog references against `CLAUDE.md` "Bug-pattern catalog" entries |
+  | `## Conventions enforced by lint/tests` (rule IDs + BP refs) | new lint rules / new bug patterns | glob `tests/lint_rules/*.py` for rule IDs and cross-check against the listed rules. Cross-check BP catalog references against `docs/BUG-PATTERNS.md` entries |
   | `### What's still gappy in shipped previews` | preview drivers losing/gaining gaps | grep `Drivers/Levoit/*.groovy` for `[PREVIEW vX.Y]` in `definition(description: ...)` and cross-check against the listed gaps |
 
   Surface drift as **proposed edits** in the approval round (unified diff or proposed-section snippet). **Do not apply automatically** — content drift in a contributor-facing doc deserves a human eyeball.

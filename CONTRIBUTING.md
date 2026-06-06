@@ -234,7 +234,7 @@ Bug Pattern #9: Hubitat associates devices to drivers by `(namespace, name)`. Re
 
 The fork has accumulated a 13-entry bug-pattern catalog from the v2.0 → v2.1 cycle. Most bugs you'll encounter map to one of these. Read the catalog before coding; the fix is often "apply the documented pattern."
 
-The catalog itself lives in the project `CLAUDE.md` (root) and is referenced numerically (`Bug Pattern #1` etc.) throughout the codebase. Each entry has: symptom, root cause, canonical fix, and where the regression spec / lint rule lives.
+The catalog itself lives in **`docs/BUG-PATTERNS.md`** (the single source of truth) and is referenced numerically (`Bug Pattern #1` etc.) throughout the codebase. Each entry has: symptom, root cause, fix scope, canonical fix, lint rule, and where the regression spec lives.
 
 ### Workflow
 
@@ -248,7 +248,7 @@ The catalog itself lives in the project `CLAUDE.md` (root) and is referenced num
 
 - **Lint finds something the spec missed** — e.g., a `version:` lockstep drift, a frozen-driver-name mismatch, a manifest entry without a corresponding driver file. Read the rule's title — it tells you which file to fix and how. Lint rules live at `tests/lint_rules/`.
 - **The bug is in the parent driver's poll/route logic** — fix it once in `Drivers/Levoit/VeSyncIntegration.groovy` and add a spec to `VeSyncIntegrationSpec.groovy`. Parent fixes are higher-leverage than child fixes (one fix benefits all device families).
-- **The bug is a new bug pattern** — propose a new numbered entry for the catalog in your PR description. The maintainer will fold it into `CLAUDE.md` on merge if accepted.
+- **The bug is a new bug pattern** — propose a new numbered entry for the catalog in your PR description. The maintainer will fold it into `docs/BUG-PATTERNS.md` on merge if accepted.
 
 ### What not to do
 
