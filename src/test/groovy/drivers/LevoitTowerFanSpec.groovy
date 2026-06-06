@@ -953,20 +953,46 @@ class LevoitTowerFanSpec extends HubitatSpec {
         testLog.errors.isEmpty()
     }
 
-    def "BP23: on() sets and clears state.turningOn to prevent re-entrance from setLevel"() {
-        // on() must set state.turningOn before the API call so that any internal path that
-        // calls setLevel() during turn-on (e.g. speed restoration) doesn't loop back into on().
-        given: "device is off"
+    def "BP23: on() sets state.turningOn TRUE during the API call and clears it after"() {
+        // on() must set state.turningOn = true BEFORE the setSwitch API call so that any
+        // internal path that re-enters on() during turn-on (e.g. a speed/level command) hits
+        // the `if (state.turningOn) return` re-entrance guard instead of looping back.
+        //
+        // NON-VACUITY: the request-time snapshot below goes RED if LevoitFanLib.on() omits
+        // `state.turningOn = true`. A spec that asserts only the post-condition (cleared after
+        // on() returns) would PASS even with that line deleted — that vacuity is what this
+        // closes. The callback in hubBypass fires synchronously inside on()'s try block while
+        // turningOn is still true, so snapshotting state.turningOn at request time observes the
+        // flag mid-flight.
+        given: "device is off, turningOn clear, and a request-time snapshot hook installed"
         testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        def turningOnAtRequestTime = null
+        // Capture state.turningOn at the moment the setSwitch(power=1) request is recorded.
+        // `state` is the same live Map the driver mutates (HubitatSpec injects getState), so
+        // reading it here reflects the value at the instant on() issues the API call.
+        def realSend = testParent.&sendBypassRequest
+        testParent.metaClass.sendBypassRequest = { dev, Map payload, Closure cb ->
+            if (payload.method == "setSwitch" && payload.data?.powerSwitch == 1) {
+                turningOnAtRequestTime = state.turningOn
+            }
+            realSend(dev, payload, cb)
+        }
 
         when: "on() completes"
         driver.on()
 
-        then: "state.turningOn was cleared after on() returned (try/finally guarantee)"
+        then: "state.turningOn was TRUE when the setSwitch API call fired (re-entrance guard armed)"
+        turningOnAtRequestTime == true
+
+        and: "state.turningOn was cleared after on() returned (try/finally guarantee)"
         !state.containsKey("turningOn") || state.turningOn == null
 
         and: "switch event was emitted as on"
         lastEventValue("switch") == "on"
+
+        cleanup:
+        testParent.metaClass = null
     }
 
     // -------------------------------------------------------------------------

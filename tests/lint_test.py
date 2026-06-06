@@ -6328,6 +6328,150 @@ class TestRule32DelegationFollowing:
             f"All API-calling delegates guarded must not flag RULE32, got: {findings}"
         )
 
+    # Bad (2-hop transitive gap): setSpeed → setSpeedLevel (no direct API, no
+    # guard) → handleSpeed (unguarded API).  The unguarded API call is TWO hops
+    # from setSpeed.  First-hop-only resolution reached setSpeedLevel, found no
+    # direct API call, and stopped — never reaching handleSpeed.  Transitive
+    # following walks setSpeed → setSpeedLevel → handleSpeed and flags the
+    # unguarded leaf.  (All three names are in _DELEGATE_CALL_RE's vocabulary so
+    # the chain is actually followed.)
+    BAD_TWO_HOP_UNGUARDED = textwrap.dedent("""\
+        def setSpeed(spd) {
+            setSpeedLevel(spd)
+        }
+
+        def setSpeedLevel(spd) {
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Good (2-hop transitive, guard on the path at the middle hop): setSpeed →
+    # setSpeedLevel (ensureSwitchOn, no direct API) → handleSpeed (unguarded
+    # API).  Because setSpeedLevel powers the device on before delegating,
+    # handleSpeed's API call is protected.  The guard on the intermediate hop
+    # must prune handleSpeed's subtree.
+    GOOD_TWO_HOP_GUARD_ON_PATH = textwrap.dedent("""\
+        def setSpeed(spd) {
+            setSpeedLevel(spd)
+        }
+
+        def setSpeedLevel(spd) {
+            ensureSwitchOn()
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Good (2-hop transitive, guard on the leaf): setSpeed → setSpeedLevel (no
+    # guard, no direct API) → handleSpeed (ensureSwitchOn + API).  The leaf
+    # guards itself.
+    GOOD_TWO_HOP_GUARD_ON_LEAF = textwrap.dedent("""\
+        def setSpeed(spd) {
+            setSpeedLevel(spd)
+        }
+
+        def setSpeedLevel(spd) {
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            ensureSwitchOn()
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Bad (delegation cycle + unguarded leaf): exercises the visited-set's
+    # cycle-safety.  setSpeed → setSpeedLevel → handleSpeed → handleLoop →
+    # setSpeedLevel (cycle back) and handleSpeed also makes an unguarded API
+    # call.  Without the visited-set this would loop forever; with it, the
+    # traversal terminates and still flags the unguarded API call in handleSpeed.
+    BAD_CYCLE_UNGUARDED = textwrap.dedent("""\
+        def setSpeed(spd) {
+            setSpeedLevel(spd)
+        }
+
+        def setSpeedLevel(spd) {
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            handleLoop(spd)
+            hubBypass("setLevel", [level: spd])
+        }
+
+        def handleLoop(spd) {
+            setSpeedLevel(spd)
+        }
+    """)
+
+    def test_two_hop_unguarded_flags(self):
+        """
+        Must-catch (closed-mechanism transitive fix): SHOULD-ON method whose
+        unguarded API call is reached only via a 2-hop chain
+        (setSpeed → helperA no-direct-API/guard-clean → helperB unguarded API)
+        must flag RULE32 BP24-B.
+
+        Non-vacuity: reverting the traversal back to first-hop-only resolution
+        makes the rule resolve helperA, find no direct API call, stop without
+        recursing into helperB, and return [] for this fixture — failing this
+        assertion.  Only transitive following reaches the unguarded leaf.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.BAD_TWO_HOP_UNGUARDED)
+        assert any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            "Expected RULE32 for SHOULD-ON method whose 2-hop-deep delegate makes "
+            f"an unguarded API call, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE32_auto_on_guard_missing'), (
+            f"RULE32 two-hop finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_two_hop_guard_on_path_passes(self):
+        """
+        Must-not-catch: a 2-hop chain where the intermediate hop (helperA)
+        carries ensureSwitchOn() before delegating to helperB.  The guard on the
+        path powers the device on first, so helperB's API call is protected — no
+        finding even though following the chain reaches the API-calling leaf.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.GOOD_TWO_HOP_GUARD_ON_PATH)
+        assert not any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            f"Guard on the intermediate delegation hop must protect the leaf, got: {findings}"
+        )
+
+    def test_two_hop_guard_on_leaf_passes(self):
+        """
+        Must-not-catch: a 2-hop chain where the API-calling leaf (helperB) guards
+        itself with ensureSwitchOn().  No finding.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.GOOD_TWO_HOP_GUARD_ON_LEAF)
+        assert not any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            f"API-calling leaf guarding itself must not flag RULE32, got: {findings}"
+        )
+
+    def test_delegation_cycle_terminates_and_flags(self):
+        """
+        Cycle-safety: a delegation cycle (setSpeed → helperA → helperB → handleA
+        → helperA) with an unguarded API call in helperB must terminate (the
+        visited-set breaks the cycle) and still flag the unguarded call.  A
+        non-terminating traversal would hang the test run.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.BAD_CYCLE_UNGUARDED)
+        assert any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            "Expected RULE32 for SHOULD-ON method reaching an unguarded API call "
+            f"through a delegation cycle (and traversal must terminate), got: {findings}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # RULE39 -- CHANGELOG user-facing TMI lint
