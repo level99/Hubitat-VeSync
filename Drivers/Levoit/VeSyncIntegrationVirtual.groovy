@@ -994,13 +994,26 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
     //
     // Use a map instead of Expando (Hubitat sandbox restriction).
     // Maps support the same property access syntax as our closure expects.
+    //
+    // [DEV TOOL] Opt-in inner-code injection (BP29 device-off regression harness):
+    // when state.injectInnerCode is set, the inner result.code is overridden so a test
+    // (or a live diagnostic) can drive the child's failure branch — e.g. 11005000
+    // (BYPASS_DEVICE_IS_OFF) to reproduce VeSync's device-off rejection. Default (unset)
+    // leaves the happy-path success envelope untouched. The injection is one-shot: it is
+    // cleared after use so a single forced failure does not bleed into the async status
+    // refresh or subsequent calls.
+    Integer innerCode = 0
+    if (state.injectInnerCode != null) {
+        innerCode = state.injectInnerCode as Integer
+        state.injectInnerCode = null
+    }
     def vr = [
         status: 200,
         data: [
             code: 0,
-            msg: "request success",
+            msg: (innerCode == 0) ? "request success" : "injected failure",
             result: [
-                code: 0,
+                code: innerCode,
                 result: [:],
                 traceId: "virtual-trace"
             ],

@@ -240,8 +240,8 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: canon)
         logInfo "Display: ${canon}"
     } else {
-        logError "Display write failed"
-        recordError("Display write failed", [method:"setIndicatorLightSwitch"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Display write failed", resp, [method:"setIndicatorLightSwitch"])
     }
 }
 

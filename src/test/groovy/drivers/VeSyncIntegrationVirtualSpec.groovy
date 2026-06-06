@@ -274,6 +274,52 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
         result == true
     }
 
+    // BP29: device-off injection harness. state.injectInnerCode lets a test (or a live
+    // diagnostic) force VeSync's BYPASS_DEVICE_IS_OFF (11005000) inner result code so the
+    // child's failure branch can be reproduced through the real sendBypassRequest flow.
+    //
+    // NON-VACUITY: asserts the closure receives data.result.code == 11005000 (the injected
+    // value) AND that the injection is one-shot (cleared after use, next call is success
+    // again). Reverting the injection block in VeSyncIntegrationVirtual.sendBypassRequest
+    // makes the inner code stay 0, so both the "== 11005000" and the "injection consumed"
+    // assertions go RED. (Orchestrator owns the both-ways proof.)
+    def "sendBypassRequest with state.injectInnerCode forces a BYPASS_DEVICE_IS_OFF envelope, one-shot (BP29 harness)"() {
+        given: "child bound to a humidifier fixture, device-off injection armed"
+        state.realParentDetected = false
+        driver.spawnFromFixture("Classic300S", "HumidA")
+        String dni = "VirtualVeSync-Classic300S-HumidA"
+        testLog.reset()
+        def child = childRegistry[dni]
+        settings.debugOutput = true
+        state.injectInnerCode = 11005000
+
+        Integer capturedFirst = null
+        Integer capturedSecond = null
+
+        when: "first write: the injected device-off code is delivered to the closure"
+        driver.sendBypassRequest(child, [
+            method: "setVirtualLevel",
+            source: "APP",
+            data  : [id: 0, level: 5, type: "mist"]
+        ], { resp -> capturedFirst = resp?.data?.result?.code as Integer })
+
+        then: "the child received VeSync's device-off inner code"
+        capturedFirst == 11005000
+
+        and: "the injection was consumed (one-shot): state cleared"
+        state.injectInnerCode == null
+
+        when: "second write with no fresh injection: back to success envelope"
+        driver.sendBypassRequest(child, [
+            method: "setVirtualLevel",
+            source: "APP",
+            data  : [id: 0, level: 5, type: "mist"]
+        ], { resp -> capturedSecond = resp?.data?.result?.code as Integer })
+
+        then: "default happy-path inner code 0 — injection did not bleed forward"
+        capturedSecond == 0
+    }
+
     def "sendBypassRequest with matching setLevel keys logs DEBUG (not WARN/ERROR)"() {
         given:
         state.realParentDetected = false

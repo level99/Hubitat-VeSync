@@ -307,7 +307,8 @@ def doSetMuteSwitch(onOff) {
         device.sendEvent(name:"mute", value: s)
         logInfo "Mute: ${s}"
     } else {
-        logError "Mute write failed"; recordError("Mute write failed", [method:"setMuteSwitch"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Mute write failed", resp, [method:"setMuteSwitch"])
     }
 }
 
@@ -325,7 +326,7 @@ def doSetDisplayScreenSwitch(onOff) {
         device.sendEvent(name:"displayOn", value: s)
         logInfo "Display: ${s}"
     } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
+        reportWriteFailure("Display write failed", resp, [method:"setDisplay"])
     }
 }
 

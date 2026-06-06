@@ -25,6 +25,19 @@ library(
     documentationLink: "https://github.com/level99/Hubitat-VeSync/blob/main/CONTRIBUTING.md"
 )
 
+// BP29: VeSync rejects a bypassV2 write with this inner result code when the target
+// device is powered OFF (fleet-wide cloud behavior on V2 devices — affects setDisplay,
+// setMistLevel, setTargetHumidity, setChildLock, etc.). This is an EXPECTED condition,
+// not a fault. A write-failure branch that routes through reportWriteFailure() inspects
+// the returned envelope at call time: device-off => one clear WARN (no ERROR, no
+// diagnostics ring-buffer record); any other failure => the existing logError + recordError.
+// Cross-ref pyvesync src/pyvesync/utils/errors.py: 11005000 = "BYPASS_DEVICE_IS_OFF".
+// Note: pyvesync flags 11005000 critical_error=True, but this fork deliberately treats
+// device-off as an expected non-fault (WARN) because a powered-off device is a normal
+// user state, not a hardware error.
+@groovy.transform.Field
+static final Integer BYPASS_DEVICE_IS_OFF = 11005000
+
 def logInfo(msg)   { if (settings?.descriptionTextEnable) log.info  msg }
 def logDebug(msg)  { if (settings?.debugOutput)           log.debug msg }
 def logError(msg)  { log.error msg }
@@ -319,9 +332,45 @@ private boolean httpOk(resp) {
     if (st in [200,201,204]) {
         def inner = resp?.data?.result?.code
         if (inner == null || inner == 0) return true
+        // BP29: device-off (inner 11005000) is an EXPECTED rejection, not a fault. httpOk()
+        // simply returns false; the caller's failure branch decides how to report it.
+        // Branches routed through reportWriteFailure() emit one WARN (no ERROR/record) for
+        // device-off — the classification is stateless (re-inspects the same resp), so it
+        // cannot leak into a later unrelated error. (DEBUG note kept for trace fidelity.)
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
     logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
     return false
+}
+
+// BP29: stateless device-off predicate — inspects THIS envelope's inner result code.
+// No persisted state, so it cannot misclassify a later call. Used by reportWriteFailure().
+private boolean isDeviceOffResp(resp) {
+    return (resp?.data?.result?.code == BYPASS_DEVICE_IS_OFF)
+}
+
+// BP29: stateless write-failure reporter. Call from a write-failure branch (after
+// httpOk(resp) returned false) instead of a bare `logError(...) + recordError(...)`:
+//
+//   def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay")
+//   if (httpOk(resp)) { ...success... }
+//   else reportWriteFailure("Display write failed", resp, [method:"setDisplay"])
+//
+// Leak-free by construction: the device-off vs genuine-fault decision is made from the
+// `resp` passed in at call time, NOT from any cross-call sentinel. A device-off rejection
+// on one command can never suppress a different command's genuine error.
+//   - device-off (11005000)  => ONE WARN, no ERROR, no diagnostics ring-buffer record.
+//     The WARN message is PII-free by construction (numeric code + the static tag only;
+//     no user input, email, token, or device identifier is interpolated). Full child-level
+//     logWarn sanitize routing is a separate, broader change (out of scope here).
+//   - any other inner code / HTTP failure => the prior behavior: logError + recordError.
+// `tag` is the human-readable failure message; `ctx` is the recordError context map.
+def reportWriteFailure(String tag, resp, Map ctx = [:]) {
+    if (isDeviceOffResp(resp)) {
+        logWarn "${tag}: device is off — VeSync rejected the command (BYPASS_DEVICE_IS_OFF, code ${BYPASS_DEVICE_IS_OFF}); not applied"
+        return
+    }
+    logError tag
+    recordError(tag, ctx)
 }

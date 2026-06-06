@@ -260,7 +260,8 @@ def setOscillation(onOff){
         device.sendEvent(name:"oscillation", value: s)
         logInfo "Oscillation: ${s}"
     } else {
-        logError "Oscillation write failed"; recordError("Oscillation write failed", [method:"setOscillationSwitch"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Oscillation write failed", resp, [method:"setOscillationSwitch"])
     }
 }
 
@@ -300,7 +301,7 @@ def setTimer(seconds, action="off"){
         }
         logInfo "Timer set: ${act} in ${secs}s (id=${state.timerId})"
     } else {
-        logError "Timer set failed"; recordError("Timer set failed", [method:"setTimer"])
+        reportWriteFailure("Timer set failed", resp, [method:"setTimer"])
     }
 }
 
@@ -315,7 +316,7 @@ def cancelTimer(){
         state.remove("timerId")
         logInfo "Timer cancelled"
     } else {
-        logError "Timer cancel failed"; recordError("Timer cancel failed", [method:"clearTimer"])
+        reportWriteFailure("Timer cancel failed", resp, [method:"clearTimer"])
     }
 }
 

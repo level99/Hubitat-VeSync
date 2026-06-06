@@ -264,7 +264,8 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: canon)
         logInfo "Display: ${canon}"
     } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Display write failed", resp, [method:"setDisplay"])
     }
 }
 
@@ -285,7 +286,7 @@ def setChildLock(onOff){
         device.sendEvent(name:"childLock", value: canon)
         logInfo "Child lock: ${canon}"
     } else {
-        logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
+        reportWriteFailure("Child lock write failed", resp, [method:"setChildLock"])
     }
 }
 
@@ -310,7 +311,7 @@ def setNightlightMode(nlMode){
         device.sendEvent(name:"nightlightOn", value: m)   // stores "on", "off", or "dim"
         logInfo "Nightlight: ${m}"
     } else {
-        logError "Nightlight write failed: ${m}"; recordError("Nightlight write failed: ${m}", [method:"setNightLight"])
+        reportWriteFailure("Nightlight write failed: ${m}", resp, [method:"setNightLight"])
     }
 }
 

@@ -365,7 +365,8 @@ def setHorizontalOscillation(onOff){
         device.sendEvent(name:"horizontalOscillation", value: s)
         logInfo "Horizontal oscillation: ${s}"
     } else {
-        logError "Horizontal oscillation write failed"; recordError("Horizontal oscillation write failed", [method:"setOscillationStatus"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Horizontal oscillation write failed", resp, [method:"setOscillationStatus"])
     }
 }
 
@@ -386,7 +387,7 @@ def setVerticalOscillation(onOff){
         device.sendEvent(name:"verticalOscillation", value: s)
         logInfo "Vertical oscillation: ${s}"
     } else {
-        logError "Vertical oscillation write failed"; recordError("Vertical oscillation write failed", [method:"setOscillationStatus"])
+        reportWriteFailure("Vertical oscillation write failed", resp, [method:"setOscillationStatus"])
     }
 }
 
@@ -412,7 +413,7 @@ def setHorizontalRange(left, right){
         device.sendEvent(name:"oscillationRight", value: r)
         logInfo "Horizontal oscillation range: ${l}-${r}"
     } else {
-        logError "Horizontal range write failed"; recordError("Horizontal range write failed", [method:"setOscillationStatus"])
+        reportWriteFailure("Horizontal range write failed", resp, [method:"setOscillationStatus"])
     }
 }
 
@@ -437,7 +438,7 @@ def setVerticalRange(top, bottom){
         device.sendEvent(name:"oscillationBottom", value: b)
         logInfo "Vertical oscillation range: ${t}-${b}"
     } else {
-        logError "Vertical range write failed"; recordError("Vertical range write failed", [method:"setOscillationStatus"])
+        reportWriteFailure("Vertical range write failed", resp, [method:"setOscillationStatus"])
     }
 }
 
@@ -479,8 +480,7 @@ def setChildLock(onOff){
         device.sendEvent(name:"childLock", value: s)
         logInfo "Child lock: ${s}"
     } else {
-        logError "Child lock write failed"
-        recordError("Child lock write failed: ${s}", [method:"setChildLock"])
+        reportWriteFailure("Child lock write failed: ${s}", resp, [method:"setChildLock"])
     }
 }
 
@@ -549,8 +549,7 @@ def setSmartCleaningReminder(onOff){
         device.sendEvent(name:"smartCleaningReminder", value: s)
         logInfo "Smart cleaning reminder: ${s}"
     } else {
-        logError "Smart cleaning reminder write failed"
-        recordError("Smart cleaning reminder failed: ${s}", [method:"setSmartCleaningReminder"])
+        reportWriteFailure("Smart cleaning reminder failed: ${s}", resp, [method:"setSmartCleaningReminder"])
     }
 }
 

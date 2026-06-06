@@ -206,7 +206,8 @@ def doSetDisplayScreenSwitch(onOff) {
         device.sendEvent(name:"displayOn", value: canon)
         logInfo "Display: ${canon}"
     } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Display write failed", resp, [method:"setDisplay"])
     }
     return ok
 }
@@ -226,7 +227,7 @@ def doSetAutoStopSwitch(onOff) {
         device.sendEvent(name:"autoStopEnabled", value: canon)
         logInfo "Auto-stop: ${canon}"
     } else {
-        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"])
+        reportWriteFailure("Auto-stop write failed", resp, [method:"setAutoStopSwitch"])
     }
     return ok
 }
@@ -253,7 +254,7 @@ def doSetTargetHumidity(percent, Integer floor = 30, Integer ceiling = 80) {
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
+        reportWriteFailure("Target humidity write failed: ${p}", resp, [method:"setTargetHumidity"])
     }
     return ok
 }
@@ -278,7 +279,7 @@ def doSetDisplayStateSwitch(onOff) {
         device.sendEvent(name:"displayOn", value: canon)
         logInfo "Display: ${canon}"
     } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
+        reportWriteFailure("Display write failed", resp, [method:"setDisplay"])
     }
     return ok
 }
@@ -300,7 +301,7 @@ def doSetAutoStopEnabled(onOff) {
         device.sendEvent(name:"autoStopEnabled", value: canon)
         logInfo "Auto-stop: ${canon}"
     } else {
-        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
+        reportWriteFailure("Auto-stop write failed", resp, [method:"setAutomaticStop"])
     }
     return ok
 }

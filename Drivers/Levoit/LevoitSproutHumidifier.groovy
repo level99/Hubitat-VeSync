@@ -229,7 +229,8 @@ def setHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Target humidity write failed: ${p}", resp, [method:"setTargetHumidity"])
     }
 }
 
@@ -253,7 +254,8 @@ def setChildLock(onOff){
         device.sendEvent(name:"childLock", value: canon)
         logInfo "Child lock: ${canon}"
     } else {
-        logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Child lock write failed", resp, [method:"setChildLock"])
     }
 }
 
@@ -281,7 +283,7 @@ def setDryingMode(onOff){
         device.sendEvent(name:"dryingEnabled", value: canon)
         logInfo "Drying mode: ${canon}"
     } else {
-        logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"])
+        reportWriteFailure("Drying mode write failed", resp, [method:"setDryingMode"])
     }
 }
 
@@ -323,7 +325,7 @@ def setNightlight(onOff, brightness = null, colorTemp = null){
         device.sendEvent(name:"nightlightColorTemp",  value: ct)
         logInfo "Nightlight: ${onOffStr}, brightness=${br}, colorTemp=${ct}K"
     } else {
-        logError "Nightlight write failed"; recordError("Nightlight write failed", [method:"setLightStatus"])
+        reportWriteFailure("Nightlight write failed", resp, [method:"setLightStatus"])
     }
 }
 

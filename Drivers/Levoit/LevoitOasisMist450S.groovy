@@ -426,7 +426,8 @@ def setNightlightSwitch(value){
         device.sendEvent(name:"nightlightSwitch", value: action)
         logInfo "Nightlight switch: ${action}"
     } else {
-        logError "Nightlight switch write failed: ${action}"; recordError("Nightlight switch write failed: ${action}", [method:"setLightStatus"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Nightlight switch write failed: ${action}", resp, [method:"setLightStatus"])
     }
 }
 
@@ -436,6 +437,7 @@ def setNightlightSwitch(value){
 // Convert hue 0-100 -> 0-360 for internal HSV calculations.
 // BP26: colorMap field coercions use safeIntArg to avoid NumberFormatException/GroovyCastException
 // when RM or dashboard tiles pass decimal strings ("55.5"), blank (""), or non-numeric values.
+// BP24: NO-ON — configures the nightlight preference; powering on the humidifier is not implied.
 def setColor(Map colorMap){
     logDebug "setColor(${colorMap})"
     if (colorMap == null) { logWarn "setColor called with null colorMap (likely blank Rule Machine slot); ignoring"; return }
@@ -472,7 +474,8 @@ def setColor(Map colorMap){
         device.sendEvent(name:"colorMode",   value: "RGB")
         logInfo "Nightlight color: hue=${hue100} sat=${sat100} brightness=${brightness}"
     } else {
-        logError "Nightlight setColor failed"; recordError("Nightlight setColor failed", [method:"setLightStatus"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Nightlight setColor failed", resp, [method:"setLightStatus"])
     }
 }
 

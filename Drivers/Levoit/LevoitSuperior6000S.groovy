@@ -215,8 +215,8 @@ def setTargetHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"
-        recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Target humidity write failed: ${p}", resp, [method:"setTargetHumidity"])
     }
 }
 
@@ -249,7 +249,7 @@ def setChildLock(onOff){
     if (httpOk(resp)) {
         device.sendEvent(name:"childLock", value: canon)
         logInfo "Child lock: ${canon}"
-    } else { logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"]) }
+    } else { reportWriteFailure("Child lock write failed", resp, [method:"setChildLock"]) }
 }
 
 // BP24: NO-ON — configures a device preference; powering on is not implied.
@@ -264,7 +264,7 @@ def setDryingMode(onOff){
     Integer v = (canon == "on") ? 1 : 0
     def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${canon})")
     if (httpOk(resp)) logInfo "Drying mode auto-switch set: ${canon}"
-    else { logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"]) }
+    else { reportWriteFailure("Drying mode write failed", resp, [method:"setDryingMode"]) }
 }
 
 // refresh, update (0/1/2-arg): provided by #include level99.LevoitHumidifier

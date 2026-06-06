@@ -294,7 +294,8 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: canon)
         logInfo "Display: ${canon}"
     } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Display write failed", resp, [method:"setDisplay"])
     }
 }
 
@@ -317,7 +318,7 @@ def setChildLock(onOff){
         device.sendEvent(name:"childLock", value: canon)
         logInfo "Child lock: ${canon}"
     } else {
-        logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
+        reportWriteFailure("Child lock write failed", resp, [method:"setChildLock"])
     }
 }
 
@@ -343,7 +344,7 @@ def setLightDetection(onOff){
         device.sendEvent(name:"lightDetection", value: canon)
         logInfo "Light detection: ${canon}"
     } else {
-        logError "Light detection write failed"; recordError("Light detection write failed", [method:"setLightDetection"])
+        reportWriteFailure("Light detection write failed", resp, [method:"setLightDetection"])
     }
 }
 
@@ -356,7 +357,8 @@ def resetFilter(){
         device.sendEvent(name:"filterLife", value: 100)
         logInfo "Filter reset to 100%"
     } else {
-        logError "Filter reset failed"; recordError("Filter reset failed", [method:"resetFilter"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Filter reset failed", resp, [method:"resetFilter"])
     }
 }
 
@@ -398,7 +400,7 @@ def setTimer(seconds, action="off"){
         }
         logInfo "Timer set: power ${act} in ${secs}s (id=${state.timerId})"
     } else {
-        logError "Timer set failed"; recordError("Timer set failed", [method:"addTimerV2"])
+        reportWriteFailure("Timer set failed", resp, [method:"addTimerV2"])
     }
 }
 
@@ -413,7 +415,7 @@ def cancelTimer(){
         state.remove("timerId")
         logInfo "Timer cancelled"
     } else {
-        logError "Timer cancel failed"; recordError("Timer cancel failed", [method:"delTimerV2"])
+        reportWriteFailure("Timer cancel failed", resp, [method:"delTimerV2"])
     }
 }
 

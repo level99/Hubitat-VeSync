@@ -210,7 +210,8 @@ def setNightLight(level){
         device.sendEvent(name:"nightLightBrightness", value: brightness)
         logInfo "Night light: ${lvlStr}"
     } else {
-        logError "Night light write failed: ${lvlStr}"; recordError("Night light write failed: ${lvlStr}", [method:"setNightLightBrightness"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Night light write failed: ${lvlStr}", resp, [method:"setNightLightBrightness"])
     }
 }
 

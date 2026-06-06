@@ -576,4 +576,170 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         driver.canonOnOff(1) == "on"
         driver.canonOnOff(0) == "off"
     }
+
+    // -------------------------------------------------------------------------
+    // BP29 — BYPASS_DEVICE_IS_OFF (inner code 11005000) handling via the STATELESS
+    // reportWriteFailure() helper. (No persisted sentinel — see CLAUDE.md BP29.)
+    //
+    // VeSync rejects a bypassV2 write with inner result code 11005000 when the
+    // target device is powered OFF. This is an EXPECTED condition (e.g. a scheduled
+    // rule firing setDisplay on an off humidifier), not a fault. The caller's
+    // write-failure branch routes through reportWriteFailure(tag, resp, ctx):
+    //   - device-off (11005000) => ONE WARN naming the cause, no ERROR, no record.
+    //   - any other failure      => the prior logError(tag) + recordError(tag, ctx).
+    // The device-off-vs-fault decision is made from the `resp` passed in at call
+    // time, so it CANNOT leak across calls (the prior design used a disk-persisted
+    // state.lastWriteDeviceOff sentinel that leaked into later unrelated errors;
+    // that sentinel is GONE — these specs assert the leak is impossible).
+    //
+    // NON-VACUITY: each test asserts a discriminating signal that only holds under
+    // the BP29 logic. The leak-regression spec is the load-bearing one: it drives a
+    // device-off rejection, THEN a separate error with NO intervening httpOk, and
+    // asserts the second (genuine) error IS logged AND recorded. Under any persisted
+    // suppression flag that survives across commands, that assertion goes RED.
+    // Reverting reportWriteFailure's isDeviceOffResp() branch to always logError +
+    // recordError makes the "device-off => one WARN / no ERROR / no record" specs go
+    // RED. (Orchestrator owns the both-ways proof.)
+    // -------------------------------------------------------------------------
+
+    // Build a TestHttpResponse-shaped map carrying an arbitrary inner result code.
+    private Map respWithInnerCode(Object innerCode) {
+        return [
+            status: 200,
+            data: [
+                code: 0,
+                result: [code: innerCode, result: [:], traceId: "t"],
+                traceId: "t"
+            ]
+        ]
+    }
+
+    def "reportWriteFailure: device-off (11005000) logs exactly one WARN, no ERROR, no ring-buffer record (BP29)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+
+        when: "the caller's write-failure branch reports a device-off envelope"
+        driver.reportWriteFailure("Display write failed", respWithInnerCode(11005000), [method: "setDisplay"])
+
+        then: "exactly one WARN, naming BYPASS_DEVICE_IS_OFF + the tag + that it was not applied"
+        testLog.warns.count { it.contains("BYPASS_DEVICE_IS_OFF") } == 1
+        testLog.warns.any { it.contains("Display write failed") && it.contains("device is off") && it.contains("not applied") }
+
+        and: "no generic ERROR for an expected condition"
+        !testLog.errors.any { it.contains("Display write failed") }
+
+        and: "nothing appended to the error ring-buffer for this device"
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).isEmpty()
+    }
+
+    def "reportWriteFailure: a genuine inner-error (-1) logs ERROR + records, no device-off WARN (BP29 negative)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+
+        when:
+        driver.reportWriteFailure("Display write failed", respWithInnerCode(-1), [method: "setDisplay"])
+
+        then: "NOT classified as device-off"
+        !testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+
+        and: "the genuine failure IS logged and recorded"
+        testLog.errors.any { it.contains("Display write failed") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).size() == 1
+    }
+
+    def "reportWriteFailure: a null/transport-failure resp is treated as a genuine fault (BP29 boundary)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+
+        when: "no inner code available (e.g. HTTP 500 / null resp)"
+        driver.reportWriteFailure("Display write failed", [status: 500, data: null], [method: "setDisplay"])
+
+        then: "not device-off — real fault logged + recorded"
+        !testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        testLog.errors.any { it.contains("Display write failed") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).size() == 1
+    }
+
+    def "isDeviceOffResp: true only for inner 11005000; false for 0, -1, null, transport failure (BP29 predicate)"() {
+        expect:
+        driver.isDeviceOffResp(respWithInnerCode(11005000))
+        !driver.isDeviceOffResp(respWithInnerCode(0))
+        !driver.isDeviceOffResp(respWithInnerCode(-1))
+        !driver.isDeviceOffResp(respWithInnerCode(null))
+        !driver.isDeviceOffResp([status: 500, data: null])
+        !driver.isDeviceOffResp(null)
+    }
+
+    def "httpOk: device-off (11005000) returns false but does NOT itself log WARN/ERROR or record (BP29 — reporting is the caller's job)"() {
+        given:
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        state.remove("errorHistory")
+
+        when:
+        boolean ok = driver.httpOk(respWithInnerCode(11005000))
+
+        then: "treated as failure"
+        ok == false
+
+        and: "httpOk no longer owns the device-off WARN (reportWriteFailure does)"
+        !testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+
+        and: "no ring-buffer record from httpOk for a device-off inner code"
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).isEmpty()
+    }
+
+    def "httpOk: HTTP-status failure (non-2xx) logs ERROR + records (unchanged by BP29)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+
+        when:
+        boolean ok = driver.httpOk([status: 500, data: null])
+
+        then:
+        ok == false
+        testLog.errors.any { it.contains("HTTP 500") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).size() == 1
+    }
+
+    // LOAD-BEARING leak-regression spec (the exact QA-flagged BLOCKING):
+    // A device-off rejection on one command must NOT suppress a later, unrelated
+    // genuine error that hits logError/recordError with NO intervening httpOk.
+    // Under the prior persisted-sentinel design this assertion went RED (the flag
+    // set by the device-off command stayed TRUE and swallowed the next error).
+    // The stateless reportWriteFailure makes cross-call suppression impossible.
+    def "BP29 leak regression: device-off on one command does NOT suppress a later unrelated error (no persisted state)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+
+        when: "command A: a NO-ON preference setter on an off device gets device-off"
+        driver.reportWriteFailure("Display write failed", respWithInnerCode(11005000), [method: "setDisplay"])
+
+        then: "A was handled quietly — one WARN, no ERROR, no record"
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Display write failed") }
+        ((state.errorHistory ?: [:]) as Map)["test-device-001"] in [null, []]
+
+        when: "command B (LATER, separate): a validation-error branch logs+records directly, NO httpOk between"
+        driver.logError("Unknown mode: badvalue")
+        driver.recordError("Unknown mode: badvalue", [site: "setMode"])
+
+        then: "the genuine error IS logged (not suppressed by any leaked device-off state)"
+        testLog.errors.any { it.contains("Unknown mode: badvalue") }
+
+        and: "and IS recorded into the diagnostics ring-buffer"
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).any { it.msg.contains("Unknown mode: badvalue") }
+    }
 }

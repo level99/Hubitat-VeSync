@@ -214,7 +214,8 @@ def setHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Target humidity write failed: ${p}", resp, [method:"setTargetHumidity"])
     }
 }
 
@@ -271,7 +272,8 @@ def setNightlight(onOff, brightness = null){
             device.sendEvent(name:"nightlightOn", value: onOffStr)
             logInfo "Nightlight: ${onOffStr}"
         } else {
-            logError "Nightlight toggle failed"; recordError("Nightlight toggle failed", [method:"setNightLightStatus"])
+            // BP29: device-off => one WARN (expected); any other failure => logError + record.
+            reportWriteFailure("Nightlight toggle failed", resp, [method:"setNightLightStatus"])
         }
     } else {
         // Brightness control -- use setLightStatus (pyvesync set_nightlight_brightness path)
@@ -285,7 +287,7 @@ def setNightlight(onOff, brightness = null){
             device.sendEvent(name:"nightlightBrightness", value: br)
             logInfo "Nightlight: ${onOffStr}, brightness=${br}"
         } else {
-            logError "Nightlight brightness write failed"; recordError("Nightlight brightness write failed", [method:"setLightStatus"])
+            reportWriteFailure("Nightlight brightness write failed", resp, [method:"setLightStatus"])
         }
     }
 }
