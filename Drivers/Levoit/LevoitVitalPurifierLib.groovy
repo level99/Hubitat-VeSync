@@ -97,8 +97,7 @@ def on() {
             // Now attempt speed/mode configuration (these may fail but device is already on)
             runInMillis(500, "configureOnState")
         } else {
-            logError "Failed to turn on device"
-            recordError("Failed to turn on device", [method:"on"])
+            reportWriteError("Failed to turn on device", [method:"on"])
         }
     } finally {
         state.remove('turningOn')
@@ -154,8 +153,7 @@ def off() {
             // CRITICAL: Update switch state IMMEDIATELY
             device.sendEvent(name:"switch", value:"off")
         } else {
-            logError "Failed to turn off device"
-            recordError("Failed to turn off device", [method:"off"])
+            reportWriteError("Failed to turn off device", [method:"off"])
         }
     } finally {
         state.remove('turningOff')
@@ -262,7 +260,7 @@ def setSpeed(spd) {
 def setSpeedLevel(level) {
     logDebug "setSpeedLevel(${level})"
     def ok = writeSpeedPreferred(level)
-    if (!ok) { logError "Speed write failed for level ${level}"; recordError("Speed write failed for level ${level}", [method:"setSpeedLevel"]) }
+    if (!ok) { reportWriteError("Speed write failed for level ${level}", [method:"setSpeedLevel"]) }
     return ok
 }
 
@@ -312,8 +310,7 @@ def setMode(mode) {
         else device.sendEvent(name: "speed", value: "auto")
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed for ${m}"
-        recordError("Mode write failed for ${m}", [method:"setMode"])
+        reportWriteError("Mode write failed for ${m}", [method:"setMode"])
     }
     return ok
 }

@@ -340,7 +340,30 @@ private boolean httpOk(resp) {
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
+    // BP22 child-side dedup: during a known network outage, parent.sendBypassRequest never
+    // invokes the callback (breaker-return or httpPost throws), so resp stays the [status:-1]
+    // transport-failure sentinel and this branch would log one ERROR + record per child per
+    // retrigger for the whole outage. The parent already surfaces the outage (first-fire WARN
+    // + hourly re-surface), so downgrade to a single DEBUG and skip the record. When NOT in a
+    // known outage this is a genuine HTTP failure → unchanged ERROR + record.
+    if (networkOutageKnown()) {
+        logDebug "HTTP ${st} suppressed during known network outage (BP22)"
+        return false
+    }
     logError "HTTP ${st}"; recordError("HTTP ${st}", [method:"httpOk"])
+    return false
+}
+
+// BP22 child-side dedup gate: true when the parent reports a known network outage
+// (state.networkUnreachableSince set). Parent-null-safe by construction — in standalone
+// or unit-test contexts where parent is null or lacks the method, returns false so the
+// caller behaves EXACTLY as before this gate existed (full ERROR + recordError path).
+private boolean networkOutageKnown() {
+    try {
+        if (parent?.respondsTo("isNetworkUnreachable")) {
+            return parent.isNetworkUnreachable() ? true : false
+        }
+    } catch (ignored) {}
     return false
 }
 
@@ -367,8 +390,35 @@ private boolean isDeviceOffResp(resp) {
 //   - any other inner code / HTTP failure => the prior behavior: logError + recordError.
 // `tag` is the human-readable failure message; `ctx` is the recordError context map.
 def reportWriteFailure(String tag, resp, Map ctx = [:]) {
+    // device-off is checked FIRST: a device-off rejection (inner 11005000) only arrives on a
+    // SUCCESSFUL round-trip, which cannot occur during a transport outage — so the order is
+    // safe either way, but keeping it first guarantees a genuine device-off WARN is never
+    // masked by the outage downgrade when NOT actually in an outage.
     if (isDeviceOffResp(resp)) {
         logWarn "${tag}: device is off — VeSync rejected the command (BYPASS_DEVICE_IS_OFF, code ${BYPASS_DEVICE_IS_OFF}); not applied"
+        return
+    }
+    // BP22 child-side dedup: during a known network outage the resp is a transport-failure
+    // sentinel (status -1 / 500, no inner 11005000). Downgrade to a single DEBUG and skip the
+    // record — the parent already surfaces the outage. Outside an outage → genuine fault path.
+    if (networkOutageKnown()) {
+        logDebug "${tag} (suppressed during known network outage, BP22)"
+        return
+    }
+    logError tag
+    recordError(tag, ctx)
+}
+
+// BP22 child-side dedup: network-aware reporter for the per-driver bare write-fail branches
+// that do NOT have a `resp` in scope to route through reportWriteFailure() (e.g. on()/off()'s
+// "Failed to turn on/off device" and setSpeedLevel/setMode "write failed" branches, where the
+// write went through handlePower()/httpOk() and only a boolean ok flag survives). Centralizing
+// these through one helper makes the whole write-fail-error class network-aware in one place.
+//   - known outage  => single DEBUG, no ERROR, no record (parent already surfaced the outage)
+//   - otherwise     => the prior behavior: logError(tag) + recordError(tag, ctx)
+def reportWriteError(String tag, Map ctx = [:]) {
+    if (networkOutageKnown()) {
+        logDebug "${tag} (suppressed during known network outage, BP22)"
         return
     }
     logError tag

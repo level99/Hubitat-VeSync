@@ -224,7 +224,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setPurifierMode"])
+        reportWriteError("Mode write failed: ${m}", [method:"setPurifierMode"])
     }
 }
 
@@ -248,7 +248,7 @@ def setFanSpeed(speed){
         device.sendEvent(name:"mode",     value: "manual")
         logInfo "Fan speed: ${spd}, mode: manual"
     } else {
-        logError "Fan speed write failed: ${spd}"; recordError("Fan speed write failed: ${spd}", [method:"setLevel"])
+        reportWriteError("Fan speed write failed: ${spd}", [method:"setLevel"])
     }
 }
 

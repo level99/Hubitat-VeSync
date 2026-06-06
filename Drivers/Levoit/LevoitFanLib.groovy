@@ -242,7 +242,7 @@ private boolean sendLevel(Integer level) {
         logInfo "Speed: L${level} (${enumVal})"
         return true
     } else {
-        logError "Speed write failed for level ${level}"; recordError("Speed write failed for level ${level}", [method:"setLevel"])
+        reportWriteError("Speed write failed for level ${level}", [method:"setLevel"])
         return false
     }
 }

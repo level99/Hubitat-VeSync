@@ -235,7 +235,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setTowerFanMode"])
+        reportWriteError("Mode write failed: ${m}", [method:"setTowerFanMode"])
     }
 }
 

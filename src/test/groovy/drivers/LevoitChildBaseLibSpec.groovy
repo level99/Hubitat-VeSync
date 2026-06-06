@@ -742,4 +742,152 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         def hist = (state.errorHistory ?: [:]) as Map
         (hist["test-device-001"] ?: []).any { it.msg.contains("Unknown mode: badvalue") }
     }
+
+    // -------------------------------------------------------------------------
+    // BP22 — child-side network-outage dedup. During a known network outage
+    // (parent.isNetworkUnreachable() == true) the parent never invokes the child's
+    // sendBypassRequest callback, so a write returns the [status:-1] transport sentinel
+    // and the child's write-fail branches would log one ERROR + recordError per command
+    // per retrigger for the whole outage. The parent already surfaces the outage once
+    // (BP22 first-fire WARN + hourly re-surface), so the child DOWNGRADES its write-fail
+    // ERROR+record to a single DEBUG while the outage is known. Outside an outage the
+    // genuine-failure path (ERROR + record) is preserved unchanged.
+    //
+    // The downgrade is centralized in three shared LevoitChildBase points:
+    //   httpOk()           — the non-2xx transport-failure branch
+    //   reportWriteFailure — the resp-bearing write-fail helper (BP29)
+    //   reportWriteError   — the no-resp write-fail helper (per-driver bare branches)
+    //
+    // NON-VACUITY / both-ways: each test pairs outage-true (DEBUG, no ERROR/record) with
+    // outage-false (ERROR + record). Reverting the networkOutageKnown() downgrade in any of
+    // the three points makes the corresponding outage-true assertion go RED (it would log an
+    // ERROR + record instead of staying quiet). (Orchestrator owns the revert/mutation proof.)
+    // -------------------------------------------------------------------------
+
+    def "httpOk: transport failure during a known outage logs DEBUG only — no ERROR, no record (BP22)"() {
+        given:
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = true
+
+        when: "the [status:-1] transport sentinel (parent never invoked the callback) reaches httpOk during an outage"
+        boolean ok = driver.httpOk([status: -1, data: null])
+
+        then: "still a failure"
+        ok == false
+
+        and: "downgraded: a DEBUG naming the outage, NOT an ERROR"
+        testLog.debugs.any { it.contains("network outage") && it.contains("BP22") }
+        !testLog.errors.any { it.contains("HTTP -1") }
+
+        and: "nothing recorded into the diagnostics ring-buffer"
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).isEmpty()
+    }
+
+    def "httpOk: transport failure with NO outage still logs ERROR + records (BP22 negative / both-ways)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = false
+
+        when:
+        boolean ok = driver.httpOk([status: -1, data: null])
+
+        then: "genuine HTTP failure path preserved"
+        ok == false
+        testLog.errors.any { it.contains("HTTP -1") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).size() == 1
+    }
+
+    def "reportWriteFailure: transport failure during a known outage logs DEBUG only — no ERROR, no record (BP22)"() {
+        given:
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = true
+
+        when:
+        driver.reportWriteFailure("Mode write failed: auto", [status: -1, data: null], [method: "setMode"])
+
+        then: "downgraded to DEBUG; no ERROR, no record"
+        testLog.debugs.any { it.contains("network outage") && it.contains("BP22") }
+        !testLog.errors.any { it.contains("Mode write failed") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).isEmpty()
+    }
+
+    def "reportWriteFailure: transport failure with NO outage still logs ERROR + records (BP22 negative / both-ways)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = false
+
+        when:
+        driver.reportWriteFailure("Mode write failed: auto", [status: -1, data: null], [method: "setMode"])
+
+        then:
+        testLog.errors.any { it.contains("Mode write failed") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).size() == 1
+    }
+
+    def "reportWriteFailure: device-off is checked BEFORE the outage downgrade (device-off WARN never masked) (BP22 ordering)"() {
+        given: "a (hypothetical) device-off envelope while an outage flag is also set"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = true
+
+        when: "the resp carries the device-off inner code (cannot really co-occur with a transport outage, but assert ordering)"
+        driver.reportWriteFailure("Display write failed", respWithInnerCode(11005000), [method: "setDisplay"])
+
+        then: "the device-off WARN fires (device-off branch is first), not the outage DEBUG"
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Display write failed") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).isEmpty()
+    }
+
+    def "reportWriteError: write-fail during a known outage logs DEBUG only — no ERROR, no record (BP22)"() {
+        given:
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = true
+
+        when: "a no-resp bare write-fail branch reports via the unified helper during an outage"
+        driver.reportWriteError("Failed to turn on device", [method: "on"])
+
+        then: "downgraded to DEBUG; no ERROR, no record"
+        testLog.debugs.any { it.contains("network outage") && it.contains("BP22") }
+        !testLog.errors.any { it.contains("Failed to turn on device") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).isEmpty()
+    }
+
+    def "reportWriteError: write-fail with NO outage logs ERROR + records (BP22 negative / both-ways)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = false
+
+        when:
+        driver.reportWriteError("Failed to turn on device", [method: "on"])
+
+        then: "genuine fault path preserved"
+        testLog.errors.any { it.contains("Failed to turn on device") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).size() == 1
+    }
+
+    def "networkOutageKnown is parent-null-safe and false by default (no outage)"() {
+        given: "default TestParent reports no outage"
+        testParent.networkUnreachable = false
+
+        expect: "the gate returns false, so callers behave exactly as pre-BP22"
+        driver.networkOutageKnown() == false
+    }
 }

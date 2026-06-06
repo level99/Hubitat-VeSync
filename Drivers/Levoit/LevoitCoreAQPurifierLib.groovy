@@ -193,8 +193,7 @@ def setAutoMode(mode, roomSize) {
         state.room_size = sz;
         handleEvent("auto_mode", m)
     } else {
-        logError "Auto preference write failed: ${m}"
-        recordError("Auto preference write failed: ${m}", [method:"setAutoMode"])
+        reportWriteError("Auto preference write failed: ${m}", [method:"setAutoMode"])
     }
 
     boolean modeOk = handleMode("auto");
@@ -203,8 +202,7 @@ def setAutoMode(mode, roomSize) {
         handleEvent("mode", "auto")
         handleEvent("speed",  "auto")
     } else {
-        logError "Auto mode write failed: ${m}"
-        recordError("Auto mode write failed: ${m}", [method:"setAutoMode"])
+        reportWriteError("Auto mode write failed: ${m}", [method:"setAutoMode"])
     }
 }
 

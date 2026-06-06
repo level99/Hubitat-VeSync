@@ -381,8 +381,7 @@ def setMode(mode) {
                 break;
         }
     } else {
-        logError "Mode write failed: ${m}"
-        recordError("Mode write failed: ${m}", [method:"setMode"])
+        reportWriteError("Mode write failed: ${m}", [method:"setMode"])
     }
 }
 

@@ -36,6 +36,14 @@ class TestParent {
     // Pre-programmed response. Reset after each call.
     Map cannedResponse = null
 
+    // BP22: child drivers query parent.isNetworkUnreachable() to downgrade their own
+    // per-command write-fail ERROR+recordError to a single DEBUG during a known outage.
+    // Default false (no outage); specs flip it to true to exercise the downgrade path.
+    // Reset to false by reset() to avoid cross-test bleed.
+    boolean networkUnreachable = false
+
+    Boolean isNetworkUnreachable() { return networkUnreachable }
+
     /**
      * Sequential response queue. When non-empty, each sendBypassRequest call
      * pops the first element and uses it as the response. Once exhausted, falls
@@ -150,6 +158,7 @@ class TestParent {
         allRequests.clear()
         cannedResponse = null
         requestResponses = []
+        networkUnreachable = false
     }
 
     // Parent is also called for child lookup during Core 200S night-light path.
