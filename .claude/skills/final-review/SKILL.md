@@ -134,7 +134,7 @@ External-reviewer (`codex` column) rationale: `maybe` for pure-docs (externals a
 Both families review against a tree on disk; both can share one `REVIEW_CWD`:
 
 - **Codex** runs `-s read-only` (no writes) via `-C $REVIEW_CWD`, and runs `git diff` itself in its sandbox.
-- **OpenCode pack members** run `--dir .` (file access scoped to the cwd; **the `--dir .` policy auto-rejects `/tmp/*`**). A member that tries the natural `git diff > /tmp/x` pattern gets auto-rejected and gives up mid-review. So **pre-stage the diff into the workdir** and point the prompt at it.
+- **OpenCode pack members** run `--dir .` (file access scoped to the cwd; **the `--dir .` policy auto-rejects `/tmp/*`**). A member that tries the natural `git diff > /tmp/x` pattern gets auto-rejected and gives up mid-review. The workaround has **TWO required parts** — staging alone is NOT sufficient: (1) **pre-stage the diff into the workdir**, AND (2) in the prompt, **positively direct** the model to read the staged file **and explicitly forbid** `git diff` + scratch-writes (the named `DO NOT run git diff yourself` / `DO NOT write any scratch files` lines in the Step-4c prompt). A negative-only `/tmp` warning is insufficient — some models (observed: a 1M-context paid Flash) still reach for `git diff > /tmp/x` despite it and abandon the review.
 
 **Pick `REVIEW_CWD`** (Mode A/B, shared by both families):
 - *Mode A* — audit SHA == current HEAD and tree clean (`git status --porcelain -- '*.groovy' '*.md' 'tests/**'` empty): `REVIEW_CWD=<repo-root>`, no worktree.
@@ -236,7 +236,7 @@ Read these files in the working tree to load the fork's specific conventions, ar
 
 # Your task — FULL independent review
 
-Review the entire change. **Read the pre-staged diff at `.review_diff_<short-sha>.txt` (workdir-relative), or run `git diff <BASE_SHA>..<HEAD_SHA>` yourself if your sandbox allows it.** The changed files are: `<explicit changed-file list>`. Read whatever additional files you need for context. Exclude generated/vendored paths and the dependency dir. (Do NOT try to read or write `/tmp` — file access is scoped to the working directory.)
+Review the entire change. **The full git diff for this review is ALREADY pre-staged at `.review_diff_<short-sha>.txt` (workdir-relative) — read THAT file directly with your file-read tool.** If your file access is sandboxed to the working directory (OpenCode pack members): **DO NOT run `git diff` yourself** — it has already been computed for you — and **DO NOT write any scratch files** (no `/tmp`, no `cp`/`mv`/`tee`/helper-script bypass); you have read-only access for this task. (Reaching for `/tmp` gets auto-rejected and aborts your review mid-stream — a negative-only "don't use /tmp" warning is not enough, hence the positive direction here.) *(Codex only: you may instead run `git diff <BASE_SHA>..<HEAD_SHA>` in your read-only sandbox if you prefer.)* The changed files are: `<explicit changed-file list>`. Read whatever additional files you need for context. Exclude generated/vendored paths and the dependency dir.
 
 WHAT THIS CHANGE IS: `<2-3 lines: what the diff does, what must stay true>`.
 
