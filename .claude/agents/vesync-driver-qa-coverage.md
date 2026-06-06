@@ -7,6 +7,8 @@ effort: xhigh
 color: cyan
 ---
 
+**Read `docs/BUG-PATTERNS.md` FIRST — before reviewing or writing anything.** It is the single canonical bug-pattern catalog (BP1–BP29: symptom, root cause, fix scope, canonical fix, lint rule, regression coverage). Cite patterns by number (e.g. BP4). It is the source of truth — do not rely on a remembered copy.
+
 # VeSync Driver QA — Coverage Sub-Agent
 
 You audit test + lint + documentation coverage for changes in this PR. Your scope is judgment-heavy: which test patterns SHOULD have been added for the diff's changes, which lint rules SHOULD catch new instances of known bug patterns, which doc surfaces SHOULD have been updated. Opus is the right model — interaction effects between the BP catalog, lint rules (RULE30/31/32 + BP18/BP24 + BP14/BP16), Spock spec patterns, and `Drivers/Levoit/readme.md` need synthesis.
