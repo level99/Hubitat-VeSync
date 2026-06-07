@@ -163,13 +163,13 @@ Reconcile `levoitManifest.json`'s `bundles[]` array (if present) against the act
 
 7. **Bundle entry has source backing:** if `bundles[]` references a bundle whose corresponding library files no longer exist in source, surface as BLOCKING in the same shape as Artifact C.5's drivers-removal warning. Removing a library that drivers `#include` would orphan every install (Bug Pattern #9 family). Do NOT auto-remove.
 
-8. **Built-ZIP integrity (post-build, before `gh release create`):** after running `uv run --python 3.12 tools/build-bundle.py` (in the "Next steps for you" sequence at step 4), the produced ZIP MUST contain:
+8. **Built-ZIP integrity (post-build, before `gh release create`):** after running `uv run --python 3.12 tools/build-bundle.py` (in the "Next steps for you" sequence at step 6), the produced ZIP MUST contain:
    - One file per entry in `LIBS` (named per the `dest` field — typically `<namespace>.<libName>.groovy`)
    - An `install.txt` AND `update.txt` whose `library X` lines exactly match the `dest` filenames in the ZIP
    
    Verify by `unzip -p bundles/levoit_libraries.zip install.txt | grep "^library "` and cross-checking against `unzip -l bundles/levoit_libraries.zip | grep ".groovy"`. If counts or names don't match, the build script silently produced an incomplete bundle. BLOCKING — fix the build script before continuing to `gh release create`.
 
-9. **Post-`gh release create` asset content verification (in step 6 of the "Next steps for you" sequence):** after the asset URL is verified to serve (HTTP 302), download the actual ZIP and re-verify it contains every expected library:
+9. **Post-`gh release create` asset content verification (in step 8 of the "Next steps for you" sequence):** after the asset URL is verified to serve (HTTP 302), download the actual ZIP and re-verify it contains every expected library:
    ```bash
    curl -L -o /tmp/v<version>_levoit_libraries.zip \
      https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/levoit_libraries.zip
@@ -507,8 +507,22 @@ Next steps for you:
   1. Review with: git diff
   2. Commit (preview-before-publish: ask for a message draft)
   3. Push the release branch to origin: git push -u origin <branch>
-  4. Build the HPM bundle ZIP from current source (only if levoitManifest.json
-     has a bundles[] array — otherwise skip to step 7):
+  4. Open PR <branch> -> main via `gh pr create` (preview-before-publish: ask
+     for a body draft). Opening the PR here creates the permanent review record
+     and auto-fires Gemini Code Assist (configured via .gemini/config.yaml). PR
+     path is REQUIRED — every release goes through PR review even for one-line
+     hotfixes. Do NOT propose direct/fast-forward merge as an alternative; the
+     maintainer's branch-protection admin-bypass exists for genuine emergency
+     hotfixes (production-broken-now scenarios), not for cut-release flow.
+     Bypass is the maintainer's call to invoke at the time of the actual
+     emergency, not a cut-release option to surface.
+  5. Iterate on PR review. Gemini + maintainer feedback must be addressed (or
+     explicitly waived with rationale) before merge. Any review-driven fixes
+     commit to <branch> — so the release tag cut in step 7 captures the final
+     reviewed HEAD, not a pre-review commit. (Cutting the release before review
+     settles risks a stale tag and a `gh release delete` + re-cut.)
+  6. ONCE REVIEW IS CLEAN — build the HPM bundle ZIP from current source (only
+     if levoitManifest.json has a bundles[] array — otherwise skip to step 9):
        uv run --python 3.12 tools/build-bundle.py
      Verify output at bundles/levoit_libraries.zip (gitignored, never committed).
 
@@ -519,18 +533,19 @@ Next steps for you:
      PLUS install.txt + update.txt. Every `library X` line in install.txt MUST
      match a corresponding .groovy file inside the ZIP. If counts/names mismatch,
      the build script silently produced an incomplete bundle — STOP, fix the
-     build script, rebuild before continuing to step 5.
-  5. Create the GitHub Release WITH the bundle asset attached. This creates the
-     tag, publishes the release, and uploads the asset URL the manifest references:
+     build script, rebuild before continuing to step 7.
+  7. Create the GitHub Release WITH the bundle asset attached. This creates the
+     tag (pointing at the reviewed <branch> HEAD), publishes the release, and
+     uploads the asset URL the manifest references:
        gh release create v<version> \
          --target release/v<version> \
          --title "v<version> — <release subject>" \
          --notes-file <release notes file> \
          ./bundles/levoit_libraries.zip
-  6. Verify the asset URL serves AND content is complete BEFORE merging to main:
+  8. Verify the asset URL serves AND content is complete BEFORE merging to main:
        curl -I https://github.com/level99/Hubitat-VeSync/releases/download/v<version>/levoit_libraries.zip
      Expect HTTP 302 (redirect chain to GitHub's S3 storage). If 404, the asset
-     upload failed — re-check step 5 and re-verify before proceeding.
+     upload failed — re-check step 7 and re-verify before proceeding.
 
      POST-UPLOAD CONTENT VERIFICATION (BLOCKING per Artifact C.6 step 9):
        curl -L -o /tmp/v<version>_levoit_libraries.zip \
@@ -539,19 +554,12 @@ Next steps for you:
      Confirm visually that every *Lib.groovy referenced by any driver `#include`
      is present in the ZIP. If any lib is missing, the asset upload was
      incomplete — delete the release with `gh release delete v<version>` and
-     retry step 5. Do NOT proceed to step 7 with an incomplete asset live.
-  7. Open PR <branch> -> main via `gh pr create` (preview-before-publish: ask
-     for a body draft). PR path is REQUIRED — every release goes through PR
-     review even for one-line hotfixes. Do NOT propose direct/fast-forward
-     merge as an alternative; the maintainer's branch-protection admin-bypass
-     exists for genuine emergency hotfixes (production-broken-now scenarios),
-     not for cut-release flow. Bypass is the maintainer's call to invoke at
-     the time of the actual emergency, not a cut-release option to surface.
-  8. Iterate on PR review. Gemini Code Assist auto-fires on PR open
-     (configured via .gemini/config.yaml); maintainer reviews + addresses
-     Gemini feedback. Both must be addressed (or explicitly waived with
-     rationale) before merge.
-  9. Squash-merge to main once review is clean.
+     retry step 7. Do NOT proceed to step 9 with an incomplete asset live.
+  9. ⚠️ MERGE GATE — squash-merge <branch> to main ONLY after step 7's release
+     asset is live and step 8 verified it serves (302). This is the one hard
+     ordering invariant: the asset URL must exist before main carries the
+     manifest that references it. (For a bundle-less patch release per the note
+     below, the gate is vacuous — merge once review is clean.)
  10. Hubitat community-thread announce — copy-paste the Artifact J draft from
      the Step 5 proposal output (no edits needed; format matches v2.4 / v2.3 /
      v2.2.1 conventions). Post on:
@@ -565,14 +573,19 @@ references it. HPM users clicking Update fetch the manifest from `main` and
 immediately try to fetch the bundle from the URL it specifies. If the merge
 happens before `gh release create`, there is a window where the manifest is
 published but the asset URL returns 404 — Update fails and users are stuck.
-Steps 4-6 close that window: build the artifact, publish the release+tag with
-the asset attached, verify the URL, THEN merge.
+The invariant is therefore: release asset live BEFORE the squash-merge (step 9)
+— NOT before the PR opens. Opening the PR early (step 4) is outside the
+constraint and is preferred: it creates the review record + fires Gemini, and
+cutting the release only after review settles (step 7) means the tag captures
+the final reviewed HEAD instead of a pre-review commit (which would otherwise
+force a `gh release delete` + re-cut). The step-9 MERGE GATE is what actually
+closes the 404 window.
 
 For releases that do NOT change any library source AND do NOT need a bundle URL
 bump (rare — typically only patch releases that fix a single driver and don't
-touch a *Lib.groovy file), skip steps 4-6 entirely and renumber 7 onward.
-Re-using a prior release's bundle is fine; the manifest's bundle URL just
-points at the prior tag's asset.
+touch a *Lib.groovy file), skip steps 6-8 entirely and merge (step 9) once
+review is clean. Re-using a prior release's bundle is fine; the manifest's
+bundle URL just points at the prior tag's asset.
 ```
 
 Stop. The user owns commit/push/PR/tag/release under preview-before-publish.
@@ -581,8 +594,9 @@ Stop. The user owns commit/push/PR/tag/release under preview-before-publish.
 
 - This procedure does NOT push to remote, does NOT open a PR, does NOT tag, does NOT update GitHub releases. Those happen across the steps above:
   * Push branch is POST-CUT (step 3).
-  * Build bundle ZIP + `gh release create` (which creates the tag and uploads the asset) + URL verification are POST-CUT, PRE-MERGE (steps 4-6) — required ordering so the asset URL is live before HPM users fetch the manifest from main.
-  * Open PR + iterate review + squash-merge are POST-RELEASE-PUBLISH (steps 7-9).
+  * Open PR is POST-PUSH (step 4) — this is what creates the review record + fires Gemini. Opening the PR does NOT touch main, so it is outside the asset-before-merge constraint; it goes first so review-driven fixes land before the tag is cut.
+  * Build bundle ZIP + `gh release create` (which creates the tag and uploads the asset) + URL verification happen AFTER review settles, PRE-MERGE (steps 6-8) — so the tag captures the reviewed HEAD and the asset is live before merge.
+  * Squash-merge to main is the gated final step (step 9) — only after the asset URL serves (302). This is the one hard ordering invariant; everything else is pace-flexible.
   * `gh release create` targets the release branch HEAD (e.g. `--target release/v<version>`); the resulting tag points at that commit. After squash-merge to main, the same commit lives on main's history (fast-forward or squash-merge equivalent), so the tag remains valid for HPM URL resolution.
 - If the user runs this with uncommitted in-progress work other than `TODO.md`, stop and ask — they may have intended to commit first.
 - The `TODO.md` file is intentionally gitignored / not part of releases. Do not surface it in the release diff.
