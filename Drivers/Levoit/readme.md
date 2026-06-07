@@ -567,7 +567,7 @@ Commands: `setMode`, `setSpeed` (1-12), `setOscillation`, `setMute`, `setDisplay
 
 ### Pedestal Fan (LPF-R432S)
 
-2-axis oscillation (horizontal + vertical, controlled separately). Mode `sleep` maps to `advancedSleep` like Tower Fan; mode `eco` is the Pedestal Fan's auto-equivalent (Tower Fan has `auto`; do not confuse). `childLock` became writable in v2.4 (live-hardware verified). Timer is omitted (no community-confirmed payload).
+2-axis oscillation (horizontal + vertical, controlled separately). Mode `sleep` maps to `advancedSleep` like Tower Fan; mode `eco` is the Pedestal Fan's auto-equivalent (Tower Fan has `auto`; do not confuse). `childLock` became writable in v2.4 (live-hardware verified). Timer write commands are omitted (no community-confirmed write payload); the `timerRemain` attribute is now populated from status polls.
 
 Covers LPF-R432S-AEU, LPF-R432S-AUS, and LPF-R432S-AUK (UK market variant, v2.3). (pyvesync's fixture filename is a typo — `LPF-R423S.yaml` — but real device codes are `LPF-R432S`.)
 
@@ -596,6 +596,7 @@ Covers LPF-R432S-AEU, LPF-R432S-AUS, and LPF-R432S-AUK (UK market variant, v2.3)
 | highTemperature | °F | User-set high-temperature alert threshold *(v2.4)* |
 | highTemperatureReminder | on, off | High-temperature reminder enabled *(v2.4)* |
 | smartCleaningReminder | on, off | Smart-cleaning reminder enabled *(v2.4)* |
+| timerRemain | seconds | Auto-off timer remaining (0 if no timer) |
 | info | HTML | Tile summary |
 
 Commands: `setMode`, `setSpeed` (1-12), `setHorizontalOscillation`, `setVerticalOscillation`, `setHorizontalRange` (left + right), `setVerticalRange` (top + bottom), `setMute`, `setDisplay`, `setChildLock` *(v2.4)*, `setSmartCleaningReminder` *(v2.4)*, `toggle`. (No timer commands — no community-confirmed payload.)

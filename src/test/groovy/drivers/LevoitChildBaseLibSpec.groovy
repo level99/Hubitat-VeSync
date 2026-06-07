@@ -733,7 +733,7 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
 
         when: "command B (LATER, separate): a validation-error branch logs+records directly, NO httpOk between"
         driver.logError("Unknown mode: badvalue")
-        driver.recordError("Unknown mode: badvalue", [site: "setMode"])
+        driver.recordError("Unknown mode: badvalue", [method: "setMode"])
 
         then: "the genuine error IS logged (not suppressed by any leaked device-off state)"
         testLog.errors.any { it.contains("Unknown mode: badvalue") }

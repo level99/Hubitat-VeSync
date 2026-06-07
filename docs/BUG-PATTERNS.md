@@ -493,7 +493,7 @@ No clean single-token trigger isolated for case 2. The trigger is a parser/token
 
 **Canonical fix (and shipping convention):** keep file-scope content in library files between the MIT header and the `library(` declaration to **ZERO commentary** if possible. Don't add doc headers, NOTE blocks, or expanded section dividers to library files. If documentation is needed, put it in:
 - `CONTRIBUTING.md` (for contributor-facing rationale)
-- `CLAUDE.md` BP catalog entry (for AI-agent-facing rationale)
+- This catalog entry (`docs/BUG-PATTERNS.md`, for the canonical rationale)
 - The dev agent spec (for behavioral guidance during driver/library work)
 
 NEVER inside the library source itself. Section dividers between functions inside library files: single `// ----` line, not multi-line `// header / // detail / // ---` blocks. Do NOT paraphrase the BP20 trigger pattern in `//` comments either — the literal text triggers the parser when matched. javadoc `/* */` blocks INSIDE method bodies (above each function) are NOT affected — bug is file-scope-only.
@@ -737,8 +737,8 @@ def on() {
 
 **Command-method classification (from Round 1.5 audit):**
 - **MUST-ON** — SwitchLevel `setLevel(N>0)` (already covered by BP23). The capability spec mandates auto-on.
-- **SHOULD-ON** — `cycleSpeed`, `setSpeed(numeric)`, `setMistLevel`, `setWarmMistLevel`, `setMode` (where API rejects-when-off), `setFanSpeed`. Auto-on matches user intent for ≥95% of automation invocations.
-- **SKIP-OK** — Vital line `setMode`, possibly EverestAir/SproutAir `setMode`. The V2 API rejects mode changes while off; `on()` internally configures the mode, so an external auto-on race-conditions against `on()`'s own mode init. Returns false silently when off; user follows up with explicit `on()`.
+- **SHOULD-ON** — `cycleSpeed`, `setSpeed(numeric)`, `setMistLevel`, `setWarmMistLevel`, `setMode` (including Vital/EverestAir/SproutAir line `setMode` — reclassified SHOULD-ON in v2.9), `setFanSpeed`. Auto-on matches user intent for ≥95% of automation invocations.
+- **SKIP-OK** — (none currently). Reserved for edge cases that fit neither classification.
 - **NO-ON** — `setChildLock`, `setDisplay`, `setTimer`, `cancelTimer`, `resetFilter`, `setHumidity` (target threshold), `setAutoMode`/`setAutoPreference` (preference config), `setSmartCleaningReminder`, `setMute`, `setOscillation`, `setDryingMode`. These configure settings that take effect on next power-on; silently powering on would be surprising to the user.
 
 **Detection:**
@@ -748,7 +748,7 @@ def on() {
 
 **Mechanical enforcement (Layer 5):**
 - Lint RULE-NEXT-A: flag any `state.switch` read in a conditional anywhere in `Drivers/Levoit/*.groovy`. Effectively bans the dead-branch pattern.
-- Lint RULE-NEXT-B: flag SHOULD-ON-classified method bodies that lack the canonical guard or `ensureSwitchOn()` call. Configurable exception list for SKIP-OK methods (Vital line `setMode` etc.) via `lint_config.yaml`.
+- Lint RULE-NEXT-B: flag SHOULD-ON-classified method bodies that lack the canonical guard or `ensureSwitchOn()` call. Configurable exception list for SKIP-OK methods via `lint_config.yaml` (currently empty — all prior SKIP-OK setMode sites reclassified SHOULD-ON in v2.9).
 - Spock spec template: every SHOULD-ON command method ships with a from-off-state regression test asserting the device is on after the command. Required for new drivers; backfilled for existing drivers in the BP24 fix sweep.
 
 **Reasoning for cataloging this separately from BP23:** the v2.4.1 BP23 fix's scope was scoped to the reported entry point (Room Lighting `setLevel` symptom). The broader semantic class — *"any configure-from-off command should auto-on"* — wasn't named, so subsequent reviews didn't apply the same fix to other entry points. Naming BP24 with `Fix scope: class-wide` ensures future fixes apply across the surface, not just the trigger.
@@ -761,11 +761,11 @@ def on() {
 | Tower Fan, Pedestal Fan | `cycleSpeed` + `setSpeed(numeric)` + `setMode` | BP24-B |
 | Classic 200S/300S, Dual 200S, LV600S, LV600S Hub Connect, OasisMist 450S/1000S, Sprout Humidifier | `setMistLevel`, `setMode` (and `setWarmMistLevel` on LV600S/Hub Connect/OasisMist 450S) | BP24-B |
 | Superior 6000S | `setMistLevel` (partial), `setMode` (no-guard) | BP24-C / BP24-B |
-| EverestAir, SproutAir | `setFanSpeed`, `setMode` | BP24-B (mode classification gated on live-capture) |
+| EverestAir, SproutAir | `setFanSpeed`, `setMode` | BP24-B |
 
-Vital 100S/200S `cycleSpeed` already has the correct guard (community-fork-era code, written after the concept was understood). Vital `setMode` is intentionally SKIP-OK.
+Vital 100S/200S `cycleSpeed` already has the correct guard (community-fork-era code, written after the concept was understood). Vital `setMode` was SKIP-OK through v2.8, reclassified SHOULD-ON in v2.9: pyvesync `VeSyncAirBaseV2.set_mode` has no power gate, so the prior per-driver skip-when-off was a driver deviation, not an API constraint. It now calls `ensureSwitchOn()` after validation.
 
-**Tier-1 in-Phase-2 fix:** Core line `cycleSpeed` (BP24-A, 4 drivers) + Fan `cycleSpeed`/`setSpeed`/`setMode` (BP24-B, 2 drivers) — same drivers as Phase 2 Core extraction OR adjacent enough to bundle. **Tier-2 separate sweep:** humidifier line. **Tier-3 deferred:** EverestAir/SproutAir `setMode` pending live-capture of API behavior while off.
+**Tier-1 in-Phase-2 fix:** Core line `cycleSpeed` (BP24-A, 4 drivers) + Fan `cycleSpeed`/`setSpeed`/`setMode` (BP24-B, 2 drivers) — same drivers as Phase 2 Core extraction OR adjacent enough to bundle. **Tier-2 separate sweep:** humidifier line. **Tier-3 (completed v2.9):** Vital/EverestAir/SproutAir `setMode` reclassified SHOULD-ON — pyvesync confirms no power gate on `set_mode`; all now call `ensureSwitchOn()` after validation.
 
 **BP24 classification taxonomy** — every on/off setter is classified at the source site with a one-line comment:
 - `// BP24: SHOULD-ON — SwitchLevel/FanControl convention; turn device on if currently off.` — command-type setters where powering on IS implied (speed/level commands). These MUST call `ensureSwitchOn()` before the API call.

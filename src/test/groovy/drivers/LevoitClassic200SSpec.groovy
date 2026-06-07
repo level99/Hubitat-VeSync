@@ -674,6 +674,32 @@ class LevoitClassic200SSpec extends HubitatSpec {
         onReq != null
     }
 
+    def "setMode invalid value on off-state device does NOT auto-on (validate-before-ensureSwitchOn)"() {
+        // setMode("turbo") is invalid → rejected BEFORE ensureSwitchOn() fires.
+        // NON-VACUITY: inverting the validate/auto-on order would send setSwitch(enabled:true)
+        // before the invalid-mode rejection, making the first assertion go RED.
+        given: "device is off, turningOn flag not set"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        def offData = [enabled: false, humidity: 40, mist_virtual_level: 0, mist_level: 0,
+                       mode: "manual", water_lacks: false,
+                       indicator_light_switch: false, automatic_stop_reach_target: false,
+                       night_light_brightness: 0,
+                       configuration: [auto_target_humidity: 50, automatic_stop: false]]
+        driver.applyStatus(v2StatusEnvelope(offData))
+        testParent.allRequests.clear()
+
+        when: "setMode called with an invalid value while device is off"
+        driver.setMode("turbo")
+
+        then: "NO setSwitch request was sent — device must not auto-on for an invalid mode"
+        testParent.allRequests.every { it.method != "setSwitch" }
+
+        and: "no mode command was sent and an error was logged"
+        testParent.allRequests.every { it.method != "setHumidityMode" }
+        testLog.errors.any { it.contains("Invalid mode") || it.contains("turbo") }
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #25: C3 gate case-sensitivity — uppercase "ON"/"OFF" input
     // -------------------------------------------------------------------------

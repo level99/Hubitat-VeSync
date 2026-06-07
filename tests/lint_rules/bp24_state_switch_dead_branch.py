@@ -140,7 +140,7 @@ def check_rule31_state_switch_dead_branch(
                 "canonical BP24 auto-on guard: "
                 "``if (!state.turningOn && device.currentValue('switch') != 'on') on()`` — "
                 "placed at the top of the method body, after parameter validation, before the "
-                "API call. See Bug Pattern #24-A in .claude/agents/vesync-driver-qa.md for "
+                "API call. See Bug Pattern #24-A in docs/BUG-PATTERNS.md for "
                 "the canonical fix and classification taxonomy."
             ),
         ))

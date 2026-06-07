@@ -2,9 +2,10 @@
 # Source: https://github.com/webdjoe/pyvesync
 # Tag: 3.4.2 (commit 01196b9 — 2026-04-16)
 # Original path: src/tests/api/vesynchumidifier/LUH-O451S-WUS.yaml
-# Note: pyvesync has no separate LUH-O451S-WEU fixture upstream; the WEU (EU 4.5L) shares the
-#   WUS v1-humidifier command shapes. The RGB-nightlight setLightStatus op (LUH-O451S-WEU only,
-#   per pyvesync PR #502) is a driver-side addition supplied via tools/virtual_parent_extensions.json.
+# Note: upstream pyvesync (dev) now ships a separate LUH-O451S-WEU fixture; its payload shapes
+#   are identical to the WUS (the WEU/EU 4.5L shares the WUS v1-humidifier command shapes). The
+#   RGB-nightlight setLightStatus op (LUH-O451S-WEU only, per pyvesync PR #502) is a driver-side
+#   addition supplied via tools/virtual_parent_extensions.json.
 
 set_auto_mode:
   json_object:

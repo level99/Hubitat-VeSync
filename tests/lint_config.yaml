@@ -176,29 +176,12 @@ pii_token_allowlist:
 # classification — this list only suppresses the RULE32 FAIL finding; it does
 # not change whether a guard is required.
 
-bp24_auto_on_exemptions:
-  # Vital 100S / 200S setMode: SKIP-OK — V2 API (VeSyncAirPurifierHA) rejects
-  # mode changes while the device is off.  on() internally calls setMode as
-  # part of its configureOnState() sequence; an external auto-on from setMode
-  # would race against that sequence.  The Vital drivers already have the
-  # !state.turningOn guard implemented correctly; RULE32 would not fire on them
-  # anyway (guard is present), but documenting SKIP-OK classification here for
-  # clarity when future drivers are added.
-  - file: "Drivers/Levoit/LevoitVital100S.groovy"
-    method: "setMode"
-    rationale: >
-      SKIP-OK: V2 API rejects mode changes on off-state Vital 100S. on()
-      internally configures workMode; external auto-on from setMode races
-      against on()'s own mode init. Vital 100S setMode already has the
-      !state.turningOn guard and returns early if switch is off. Consistent
-      with pyvesync VeSyncAirPurifierHA class behavior.
-  - file: "Drivers/Levoit/LevoitVital200S.groovy"
-    method: "setMode"
-    rationale: >
-      SKIP-OK: Same as Vital 100S. V2 API rejects mode changes on off-state
-      Vital 200S. on() configures workMode internally; external auto-on races.
-      Already has !state.turningOn guard. Consistent with pyvesync
-      VeSyncAirPurifierHA class behavior.
+# All prior Vital 100S/200S setMode SKIP-OK entries were removed in the v2.9
+# BP24 SHOULD-ON mode-setter sweep: pyvesync VeSyncAirBaseV2.set_mode has no
+# power gate, so the per-driver skip-when-off was a driver deviation, not an API
+# constraint. setMode now lives in the shared lib as SHOULD-ON with an
+# ensureSwitchOn() guard; the per-driver-file exemptions are stale no-ops.
+bp24_auto_on_exemptions: []
 
 
 # ---------------------------------------------------------------------------

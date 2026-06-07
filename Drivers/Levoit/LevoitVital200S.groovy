@@ -32,7 +32,7 @@
  *                      setChildLock/setAutoPreference/setPetMode/setRoomSize.
  *                      State-change gate on setChildLock/setDisplay (C3).
  *                      Fixed setLevel log message: was "mist level", now "fan level" (C2).
- *                      recordError tags normalized to [site:].
+ *                      recordError tags normalized to [method:].
  *    2026-04-29: v2.4  Added captureDiagnostics command + diagnostics attribute via
  *                      LevoitDiagnostics library. Added recordError() ring-buffer calls at
  *                      all logError sites.

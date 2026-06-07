@@ -679,6 +679,28 @@ class LevoitVital100SSpec extends HubitatSpec {
         testLog.warns.any { it.contains("setSpeed") }
     }
 
+    def "BP24: invalid setMode('badvalue') from off-state does NOT auto-on (validate-before-on, Vital)"() {
+        // Shared LevoitVitalPurifierLib.setMode validates the mode BEFORE ensureSwitchOn().
+        // NON-VACUITY: if the validate/auto-on order were inverted (ensureSwitchOn before the
+        // enum check), an invalid mode from Rule Machine would wake an off device — making the
+        // first assertion go RED (a setSwitch powerSwitch=1 would fire).
+        given: "device is off, turningOn flag clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove('turningOn')
+        testParent.allRequests.clear()
+
+        when: "setMode is called with an invalid mode value on an off device"
+        driver.setMode("badvalue")
+
+        then: "no on() fired — no setSwitch powerSwitch=1 was sent (validation rejected before auto-on)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "no mode command was sent"
+        testParent.allRequests.find { it.method == "setPurifierMode" } == null
+        testParent.allRequests.find { it.method == "setLevel" } == null
+    }
+
     // -------------------------------------------------------------------------
     // C3: state-change gate — setChildLock and setDisplay
     // -------------------------------------------------------------------------

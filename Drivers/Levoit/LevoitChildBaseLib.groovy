@@ -25,18 +25,8 @@ library(
     documentationLink: "https://github.com/level99/Hubitat-VeSync/blob/main/CONTRIBUTING.md"
 )
 
-// BP29: VeSync rejects a bypassV2 write with this inner result code when the target
-// device is powered OFF (fleet-wide cloud behavior on V2 devices — affects setDisplay,
-// setMistLevel, setTargetHumidity, setChildLock, etc.). This is an EXPECTED condition,
-// not a fault. A write-failure branch that routes through reportWriteFailure() inspects
-// the returned envelope at call time: device-off => one clear WARN (no ERROR, no
-// diagnostics ring-buffer record); any other failure => the existing logError + recordError.
-// Cross-ref pyvesync src/pyvesync/utils/errors.py: 11005000 = "BYPASS_DEVICE_IS_OFF".
-// Note: pyvesync flags 11005000 critical_error=True, but this fork deliberately treats
-// device-off as an expected non-fault (WARN) because a powered-off device is a normal
-// user state, not a hardware error.
 @groovy.transform.Field
-static final Integer BYPASS_DEVICE_IS_OFF = 11005000
+static final Integer BYPASS_DEVICE_IS_OFF = 11005000  // pyvesync utils/errors.py: device powered OFF (expected, not a fault)
 
 def logInfo(msg)   { if (settings?.descriptionTextEnable) log.info  msg }
 def logDebug(msg)  { if (settings?.debugOutput)           log.debug msg }
@@ -395,6 +385,10 @@ def reportWriteFailure(String tag, resp, Map ctx = [:]) {
     // safe either way, but keeping it first guarantees a genuine device-off WARN is never
     // masked by the outage downgrade when NOT actually in an outage.
     if (isDeviceOffResp(resp)) {
+        // BP29: device-off (inner 11005000) is an EXPECTED condition on V2 devices, not a
+        // hardware fault — a powered-off device is a normal user state. So WARN once and skip
+        // the diagnostics ring-buffer record. (pyvesync flags 11005000 critical_error=True;
+        // this fork deliberately diverges. Full detail in docs/BUG-PATTERNS.md BP29.)
         logWarn "${tag}: device is off — VeSync rejected the command (BYPASS_DEVICE_IS_OFF, code ${BYPASS_DEVICE_IS_OFF}); not applied"
         return
     }

@@ -1079,6 +1079,28 @@ class LevoitVital200SSpec extends HubitatSpec {
         "manual" | "setLevel"
     }
 
+    def "BP24: invalid setMode('badvalue') from off-state does NOT auto-on (validate-before-on, Vital)"() {
+        // NON-VACUITY: setMode validates the mode BEFORE calling ensureSwitchOn(). If the
+        // validate/auto-on order were inverted (ensureSwitchOn before the enum check), an
+        // invalid mode from Rule Machine would wake an off device — making the first
+        // assertion go RED (a setSwitch powerSwitch=1 would fire).
+        given: "device is off, turningOn flag clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove('turningOn')
+        testParent.allRequests.clear()
+
+        when: "setMode is called with an invalid mode value on an off device"
+        driver.setMode("badvalue")
+
+        then: "no on() fired — no setSwitch powerSwitch=1 was sent (validation rejected before auto-on)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "no mode command was sent"
+        testParent.allRequests.find { it.method == "setPurifierMode" } == null
+        testParent.allRequests.find { it.method == "setLevel" } == null
+    }
+
     // -------------------------------------------------------------------------
     // BP25: setMode is case-insensitive (uppercase must not silently no-op)
     // -------------------------------------------------------------------------

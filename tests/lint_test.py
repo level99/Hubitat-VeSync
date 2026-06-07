@@ -7647,6 +7647,16 @@ class TestRule42MalformedCapability:
         }
     """)
 
+    # MUST-CATCH: single-quoted form — Groovy accepts both quote styles, so the
+    # rule must catch `capability 'Switch Level'` exactly as the double-quoted form.
+    BAD_SINGLE_QUOTE = textwrap.dedent("""\
+        metadata {
+            definition(name: "Some Driver") {
+                capability 'Switch Level'
+            }
+        }
+    """)
+
     # MUST-NOT-CATCH: the canonical one-word form.
     GOOD_SWITCH_LEVEL = textwrap.dedent("""\
         metadata {
@@ -7654,6 +7664,15 @@ class TestRule42MalformedCapability:
                 capability "Switch"
                 capability "SwitchLevel"
                 capability "FanControl"
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: single-quoted one-word capability (valid Groovy, no space).
+    GOOD_SINGLE_QUOTE = textwrap.dedent("""\
+        metadata {
+            definition(name: "Some Driver") {
+                capability 'SwitchLevel'
             }
         }
     """)
@@ -7688,11 +7707,27 @@ class TestRule42MalformedCapability:
             f'Expected RULE42 for `capability "Fan Control"`, got: {findings}'
         )
 
+    def test_single_quoted_typo_fails(self):
+        """Both quote styles flag: `capability 'Switch Level'` must flag like the double-quoted form."""
+        from lint_rules.malformed_capability import check_rule42_malformed_capability
+        findings = run_rule(check_rule42_malformed_capability, self.BAD_SINGLE_QUOTE)
+        assert any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
+            f"Expected RULE42 for `capability 'Switch Level'` (single-quote), got: {findings}"
+        )
+
     def test_canonical_one_word_passes(self):
         from lint_rules.malformed_capability import check_rule42_malformed_capability
         findings = run_rule(check_rule42_malformed_capability, self.GOOD_SWITCH_LEVEL)
         assert not any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
             f"Canonical one-word capability names must not flag RULE42, got: {findings}"
+        )
+
+    def test_single_quoted_one_word_passes(self):
+        """Single-quoted one-word capability must NOT flag (valid Groovy, no space)."""
+        from lint_rules.malformed_capability import check_rule42_malformed_capability
+        findings = run_rule(check_rule42_malformed_capability, self.GOOD_SINGLE_QUOTE)
+        assert not any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
+            f"Single-quoted one-word capability must not flag RULE42, got: {findings}"
         )
 
     def test_non_capability_string_with_space_passes(self):

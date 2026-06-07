@@ -15,7 +15,8 @@ space character." There is no legitimate Hubitat capability name with a space.
 
 Scope:
   - Applies to .groovy files (drivers and libraries).
-  - Matches `capability "<text with a space>"`.
+  - Matches `capability "<text with a space>"` and the single-quoted
+    `capability '<text with a space>'` (Groovy accepts both quote styles).
 
 Severity: FAIL (BLOCKING). A misregistered capability is a silent feature loss.
 
@@ -30,8 +31,10 @@ from lint_rules._helpers import make_finding_for_path
 
 
 # Match a capability declaration whose quoted argument contains a space.
-# capability   "Switch Level"   ->  group(1) == "Switch Level"
-MALFORMED_CAP_RE = re.compile(r'\bcapability\s+"([^"]*\s[^"]*)"')
+# Handles BOTH quote styles via a backreference on the opening quote:
+#   capability "Switch Level"  ->  group(2) == "Switch Level"
+#   capability 'Switch Level'  ->  group(2) == "Switch Level"
+MALFORMED_CAP_RE = re.compile(r'''\bcapability\s+(["'])([^"']*\s[^"']*)\1''')
 
 
 def check_rule42_malformed_capability(path, raw_lines, cleaned_lines, raw_text, config, rel_base):
@@ -48,7 +51,7 @@ def check_rule42_malformed_capability(path, raw_lines, cleaned_lines, raw_text, 
     for i, line in enumerate(cleaned_lines, 1):
         m = MALFORMED_CAP_RE.search(line)
         if m:
-            bad = m.group(1)
+            bad = m.group(2)
             collapsed = bad.replace(" ", "")
             findings.append(make_finding_for_path(
                 severity="FAIL",

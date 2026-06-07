@@ -209,6 +209,6 @@ Any future similar "endpoint deprecated via version-gate" event (BP27 recurrence
   - `src/pyvesync/auth.py` — auth flow source
   - `src/pyvesync/const.py` — `APP_VERSION`, `APP_ID`, `PHONE_BRAND`, etc.
   - `src/pyvesync/models/vesync_models.py` — `RequestGetTokenModel`, `RequestLoginTokenModel`
-- Bug Pattern catalog: see `~/.claude/CLAUDE.md` BP27 (VeSync API endpoint deprecated via appVersion gate)
+- Bug Pattern catalog: see `docs/BUG-PATTERNS.md` BP27 (VeSync API endpoint deprecated via appVersion gate)
 - v2.7 commits: `d8df06d` (OAuth migration), `058ac2f` (HttpClient workaround), `0487244` (verboseDebug logging), `1bcc978` (regression guards)
-- BP catalog entries in the QA agent definition: see `.claude/agents/vesync-driver-qa.md` BP13 (token-expiry re-auth wiring)
+- Related: `docs/BUG-PATTERNS.md` BP13 (token-expiry re-auth wiring)

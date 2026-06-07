@@ -466,7 +466,7 @@ def check_rule32_auto_on_guard_missing(
                     "provided by LevoitChildBaseLib and handles both the currentValue check "
                     "and the !state.turningOn re-entrance flag. Alternatively use the inline "
                     "form: ``if (!state.turningOn && device.currentValue('switch') != 'on') on()`` — "
-                    "See Bug Pattern #24 in .claude/agents/vesync-driver-qa.md for the canonical "
+                    "See Bug Pattern #24 in docs/BUG-PATTERNS.md for the canonical "
                     "fix shape and the SHOULD-ON / SKIP-OK / NO-ON classification taxonomy. "
                     "If this method is intentionally SKIP-OK or NO-ON, add an exemption entry "
                     "to the ``bp24_auto_on_exemptions`` list in tests/lint_config.yaml with a "
