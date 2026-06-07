@@ -683,7 +683,7 @@ metadata {
         importUrl: "https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/VeSyncIntegrationVirtual.groovy",
         documentationLink: "https://github.com/level99/Hubitat-VeSync/blob/main/CONTRIBUTING.md",
         singleThreaded: true,
-        version: "2.8"
+        version: "2.9"
     ) {
         capability "Refresh"
 

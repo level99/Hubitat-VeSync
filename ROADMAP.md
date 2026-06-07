@@ -6,7 +6,7 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 ---
 
-## v2.9 — next release candidates
+## v2.10 — next release candidates
 
 Items locked to the next release because they're internally actionable (no external blockers).
 
