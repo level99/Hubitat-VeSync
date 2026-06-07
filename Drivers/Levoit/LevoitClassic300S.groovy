@@ -54,7 +54,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Classic 300S (LUH-A601S) humidifier — mist 1-9, target humidity, auto/sleep/manual modes, night-light (off/dim/bright), auto-stop, display; canonical pyvesync payloads",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -104,6 +104,8 @@ metadata {
 Map powerPayload(boolean on){ [enabled: on, id: 0] }
 
 // ---------- Mode ----------
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (ensureSwitchOn below,
+//   after validation). Matches speed/level setters; pyvesync set_mode has no power gate.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -118,7 +120,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
+        reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
 
@@ -151,7 +153,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: clamped)
         logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
+        reportWriteError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -208,7 +210,8 @@ def setNightLight(level){
         device.sendEvent(name:"nightLightBrightness", value: brightness)
         logInfo "Night light: ${lvlStr}"
     } else {
-        logError "Night light write failed: ${lvlStr}"; recordError("Night light write failed: ${lvlStr}", [method:"setNightLightBrightness"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Night light write failed: ${lvlStr}", resp, [method:"setNightLightBrightness"])
     }
 }
 

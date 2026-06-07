@@ -97,7 +97,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit LV600S Hub Connect (LUH-A603S-WUS) — DIFFERENT from LevoitLV600S.groovy (A602S). Uses VeSyncLV600S class payloads: powerSwitch/switchIdx, workMode:'humidity' for auto mode, levelIdx/virtualLevel/levelType. Mist 1-9, warm mist 0-3, target humidity top-level camelCase. No setAutoStop command (passive read only). No night-light.",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -170,6 +170,9 @@ Map powerPayload(boolean on){ [powerSwitch: on ? 1 : 0, switchIdx: 0] }
 //   Read path: "humidity" from device normalized to user-facing "auto".
 //   Payload field: {workMode: <value>} -- NOT {mode: <value>} (VeSyncHumid200300S class).
 //   Source: pyvesync LUH-A603S-WUS.yaml set_auto_mode: {workMode: 'humidity'}
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (matches speed/level
+//   setters; pyvesync VeSyncAirBaseV2/humidifier set_mode has no power gate and sets device ON
+//   on success). ensureSwitchOn() runs AFTER validation so invalid input cannot wake an off device.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -179,6 +182,7 @@ def setMode(mode){
         recordError("Invalid mode: ${m}", [method:"setHumidityMode"])
         return
     }
+    ensureSwitchOn()
     // Map user-facing "auto" to wire value "humidity" (VeSyncLV600S class convention)
     // This is the INVERSE of A602S where "humidity" is a firmware-variant fallback.
     // For A603S, "humidity" IS the canonical auto-mode wire value per device_map.py.
@@ -189,7 +193,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m} (wire: ${wireMode})"; recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
+        reportWriteError("Mode write failed: ${m} (wire: ${wireMode})", [method:"setHumidityMode"])
     }
 }
 
@@ -214,7 +218,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: clamped)
         logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
+        reportWriteError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -247,7 +251,7 @@ def setWarmMistLevel(level){
         device.sendEvent(name:"warmMistEnabled", value: warmOnStr)
         logInfo "Warm mist: level=${lvl}, enabled=${warmOnStr}"
     } else {
-        logError "Warm mist level write failed: ${lvl}"; recordError("Warm mist level write failed: ${lvl}", [method:"setLevel"])
+        reportWriteError("Warm mist level write failed: ${lvl}", [method:"setLevel"])
     }
 }
 
@@ -269,7 +273,8 @@ def setHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Target humidity write failed: ${p}", resp, [method:"setTargetHumidity"])
     }
 }
 

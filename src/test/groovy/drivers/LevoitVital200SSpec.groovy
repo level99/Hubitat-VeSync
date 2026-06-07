@@ -1043,4 +1043,87 @@ class LevoitVital200SSpec extends HubitatSpec {
         and: "no API call"
         testParent.allRequests.find { it.method == "setAutoPreference" } == null
     }
+
+    // -------------------------------------------------------------------------
+    // BP24: setMode SHOULD-ON — mode change from off-state turns the device on
+    // (v2.9: Vital line previously skipped-when-off; pyvesync VeSyncAirBaseV2.set_mode
+    //  has no power gate, so the skip was a deviation. Now auto-on like speed setters.)
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "BP24: setMode('#mode') from off-state turns the device on and sends the mode command (Vital)"() {
+        // NON-VACUITY: pre-fix setMode short-circuited (`return false`) when the device was off,
+        // so NO setSwitch powerSwitch=1 was sent. Reverting to the skip-when-off body makes the
+        // first assertion go RED (no on() call fires).
+        given: "device is off, turningOn flag clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove('turningOn')
+        state.speed = "low"
+        testParent.allRequests.clear()
+
+        when: "setMode('#mode') is called on an off device"
+        driver.setMode(mode)
+
+        then: "on() fired — setSwitch with powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+
+        and: "the mode command was sent (#apiMethod)"
+        testParent.allRequests.find { it.method == apiMethod } != null
+
+        where:
+        mode     | apiMethod
+        "auto"   | "setPurifierMode"
+        "sleep"  | "setPurifierMode"
+        "pet"    | "setPurifierMode"
+        "manual" | "setLevel"
+    }
+
+    def "BP24: invalid setMode('badvalue') from off-state does NOT auto-on (validate-before-on, Vital)"() {
+        // NON-VACUITY: setMode validates the mode BEFORE calling ensureSwitchOn(). If the
+        // validate/auto-on order were inverted (ensureSwitchOn before the enum check), an
+        // invalid mode from Rule Machine would wake an off device — making the first
+        // assertion go RED (a setSwitch powerSwitch=1 would fire).
+        given: "device is off, turningOn flag clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove('turningOn')
+        testParent.allRequests.clear()
+
+        when: "setMode is called with an invalid mode value on an off device"
+        driver.setMode("badvalue")
+
+        then: "no on() fired — no setSwitch powerSwitch=1 was sent (validation rejected before auto-on)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "no mode command was sent"
+        testParent.allRequests.find { it.method == "setPurifierMode" } == null
+        testParent.allRequests.find { it.method == "setLevel" } == null
+    }
+
+    // -------------------------------------------------------------------------
+    // BP25: setMode is case-insensitive (uppercase must not silently no-op)
+    // -------------------------------------------------------------------------
+
+    def "BP25: setMode('AUTO') is normalized and sends setPurifierMode workMode='auto' (Vital)"() {
+        // NON-VACUITY: pre-fix `mode in ["auto","sleep","pet"]` compared raw "AUTO" → no match →
+        // fell through to the unknown-mode error and sent nothing. Removing the toLowerCase()
+        // normalization makes the setPurifierMode assertion go RED.
+        given: "device is on so on() noise is isolated out"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.remove('turningOn')
+        testParent.allRequests.clear()
+
+        when: "setMode('AUTO') is called (uppercase)"
+        driver.setMode("AUTO")
+
+        then: "setPurifierMode sent with normalized workMode='auto'"
+        def req = testParent.allRequests.find { it.method == "setPurifierMode" }
+        req != null
+        req.data.workMode == "auto"
+
+        and: "no unknown-mode error was logged"
+        !testLog.errors.any { it.toLowerCase().contains("unknown mode") }
+    }
 }

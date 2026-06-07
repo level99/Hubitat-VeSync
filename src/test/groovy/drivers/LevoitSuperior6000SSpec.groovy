@@ -504,6 +504,68 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP24 SHOULD-ON regression guard: setMode from off-state triggers auto-on (v2.9).
+    // NON-VACUITY: deleting the ensureSwitchOn() line in setMode makes the on()
+    // assertion go RED (no setSwitch powerSwitch=1 fires).
+    // -------------------------------------------------------------------------
+
+    def "setMode('auto') from off-state triggers on() via ensureSwitchOn() (BP24 SHOULD-ON)"() {
+        given: "device is off, turningOn flag not set"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        def offData = [
+            powerSwitch: 0, humidity: 45, targetHumidity: 55,
+            mistLevel: 0, virtualLevel: 3, workMode: "manual",
+            waterLacksState: 0, waterTankLifted: 0,
+            autoStopSwitch: 0, autoStopState: 0,
+            screenState: 0, screenSwitch: 0,
+            filterLifePercent: 80, childLockSwitch: 0,
+            temperature: 700, timerRemain: 0,
+            dryingMode: [dryingState: 0, autoDryingSwitch: 0, dryingLevel: 1, dryingRemain: 0],
+            waterPump: [cleanStatus: 0, remainTime: 0, totalTime: 3600]
+        ]
+        driver.applyStatus(humidifierStatusEnvelope(offData))
+        testParent.allRequests.clear()
+
+        when: "setMode('auto') called while device is off"
+        driver.setMode("auto")
+
+        then: "setSwitch(powerSwitch:1) was sent (auto-on via ensureSwitchOn)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+
+        and: "the mode command was sent with workMode='autoPro' (Superior 6000S auto wire value)"
+        def modeReq = testParent.allRequests.find { it.method == "setHumidityMode" }
+        modeReq != null
+        modeReq.data.workMode == "autoPro"
+    }
+
+    def "setMode('Auto') invalid case still works after lowercase-normalize; invalid mode does NOT auto-on (BP24 validate-before-on)"() {
+        given: "device is off, turningOn flag not set"
+        settings.descriptionTextEnable = false
+        state.remove("turningOn")
+        def offData = [
+            powerSwitch: 0, humidity: 45, targetHumidity: 55,
+            mistLevel: 0, virtualLevel: 3, workMode: "manual",
+            waterLacksState: 0, waterTankLifted: 0, autoStopSwitch: 0, autoStopState: 0,
+            screenState: 0, screenSwitch: 0, filterLifePercent: 80, childLockSwitch: 0,
+            temperature: 700, timerRemain: 0,
+            dryingMode: [dryingState: 0, autoDryingSwitch: 0, dryingLevel: 1, dryingRemain: 0],
+            waterPump: [cleanStatus: 0, remainTime: 0, totalTime: 3600]
+        ]
+        driver.applyStatus(humidifierStatusEnvelope(offData))
+        testParent.allRequests.clear()
+
+        when: "an invalid mode is sent on an off device"
+        driver.setMode("bogus")
+
+        then: "validation rejected it BEFORE ensureSwitchOn — no on() fired"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "no mode command was sent"
+        testParent.allRequests.find { it.method == "setHumidityMode" } == null
+    }
+
+    // -------------------------------------------------------------------------
     // CONCERN 4 regression guard: setLevel(0) → off() (SwitchLevel capability convention)
     // Without the fix: pct=0 → levelFromPercent(0) → 1 → setMistLevel(1) → ensureSwitchOn()
     // turns device ON. With the fix: setLevel(0) calls off() and returns.

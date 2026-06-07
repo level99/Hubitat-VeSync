@@ -93,7 +93,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Sprout Air Purifier (LAP-B851S-WUS/-WEU/-AEUR/-AUS/-WNA, LAP-BAY-MAX01S) — fan 1-3, auto/sleep/manual modes, AQ sensors (AQLevel/PM2.5/PM1/PM10/AQI/VOC/CO2), child lock, display, nightlight (on/off/dim). pyvesync VeSyncAirSprout class (VeSyncAirBaseV2). V2-style payloads. No timer.",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -170,15 +170,22 @@ def on(){
         if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
         else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
     } finally {
-        state.turningOn = false
+        state.remove('turningOn')
     }
 }
 
 def off(){
     logDebug "off()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
-    if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
-    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+    // Defensive symmetry with on()'s guard; no active re-entrance vector into off() today.
+    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
+    state.turningOff = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
+        if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
+        else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+    } finally {
+        state.remove('turningOff')
+    }
 }
 
 def toggle(){
@@ -194,11 +201,18 @@ def toggle(){
 // Sending setPurifierMode {workMode:'manual'} returns inner code -1 on this class.
 // Per pyvesync VeSyncAirBaseV2.set_mode(): when mode==MANUAL, delegates to set_fan_speed(1).
 // This driver mirrors that: setMode("manual") calls setFanSpeed(1) instead.
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (matches speed/level
+//   setters; pyvesync VeSyncAirBaseV2.set_mode has no power gate and sets device ON on success).
+//   ensureSwitchOn() runs AFTER validation so invalid input cannot wake an off device. The outer
+//   ensureSwitchOn() here is the load-bearing auto-on guard for BOTH paths (manual and mode); the
+//   manual path's later setFanSpeed call also calls ensureSwitchOn, but by then the device is
+//   already on so that inner call is a no-op — it is not what powers the device on.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setPurifierMode"]); return }
+    ensureSwitchOn()
     if (m == "manual") {
         // Manual established by setting fan speed (same as pyvesync VeSyncAirBaseV2.set_mode(MANUAL))
         setFanSpeed(state.lastFanSpeed ?: 1)
@@ -210,7 +224,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setPurifierMode"])
+        reportWriteError("Mode write failed: ${m}", [method:"setPurifierMode"])
     }
 }
 
@@ -234,7 +248,7 @@ def setFanSpeed(speed){
         device.sendEvent(name:"mode",     value: "manual")
         logInfo "Fan speed: ${spd}, mode: manual"
     } else {
-        logError "Fan speed write failed: ${spd}"; recordError("Fan speed write failed: ${spd}", [method:"setLevel"])
+        reportWriteError("Fan speed write failed: ${spd}", [method:"setLevel"])
     }
 }
 
@@ -257,7 +271,8 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: canon)
         logInfo "Display: ${canon}"
     } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Display write failed", resp, [method:"setDisplay"])
     }
 }
 
@@ -278,7 +293,7 @@ def setChildLock(onOff){
         device.sendEvent(name:"childLock", value: canon)
         logInfo "Child lock: ${canon}"
     } else {
-        logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
+        reportWriteFailure("Child lock write failed", resp, [method:"setChildLock"])
     }
 }
 
@@ -303,7 +318,7 @@ def setNightlightMode(nlMode){
         device.sendEvent(name:"nightlightOn", value: m)   // stores "on", "off", or "dim"
         logInfo "Nightlight: ${m}"
     } else {
-        logError "Nightlight write failed: ${m}"; recordError("Nightlight write failed: ${m}", [method:"setNightLight"])
+        reportWriteFailure("Nightlight write failed: ${m}", resp, [method:"setNightLight"])
     }
 }
 

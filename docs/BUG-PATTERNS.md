@@ -1,0 +1,921 @@
+# Bug-Pattern Catalog (BP1–BP29)
+
+This file is the **single source of truth** for the fork's bug-pattern catalog — the numbered set of recurring defect shapes accumulated from the v2.0 community-fork debugging and every release cycle since. Each pattern documents a real bug that was found and fixed, its symptom, root cause, canonical fix (with verbatim code where load-bearing), fix scope, lint-rule enforcement, and regression coverage.
+
+Reference patterns by `BP#N` (e.g. `BP1`, `BP24`) in lint findings, Spock spec names, commit messages, and agent reviews. When the developer or QA recognizes one of these patterns in a diff, name it explicitly — *"Bug Pattern #1 — missing 2-arg signature"* / *"BP24 scope check"* — so the other agent recognizes the name and applies the canonical fix.
+
+This document is the canonical home for the catalog. `CLAUDE.md`, `CONTRIBUTING.md`, and the `vesync-driver-qa*` agent definitions point HERE rather than duplicating the entries. When a new pattern emerges or an existing one is refined, update this file — do not re-fork the catalog into another document.
+
+---
+
+## Test-layer coverage matrix
+
+Use this when reviewing a diff in the absence of one or more verification layers (e.g. preview driver without hardware → no Real-hardware row). A bug pattern only caught by Real-hardware needs explicit caveat in your APPROVE: *"Approve subject to A1 verification when hardware is acquired."*
+
+| BP | Static lint | Spock harness | Virtual parent (A2) | Real hardware (A1) |
+|---|:-:|:-:|:-:|:-:|
+| 1 — Missing 2-arg update | ✓ | ✓ | ✓ | ✓ |
+| 2 — Hardcoded getPurifierStatus | — | ✓ | ✓ | ✓ |
+| 3 — Envelope peel | — | ✓ | ✓ | ✓ |
+| 4 — V201S setLevel field-name | — | ✓ (PyvesyncCoverageSpec) | ✓ (FIXTURE_OPS) | ✓ |
+| 5 — V201S manual-mode wrong method | — | ✓ (PyvesyncCoverageSpec) | ✓ (FIXTURE_OPS) | ✓ |
+| 6 — Speed reports while off | — | ✓ | ✓ | ✓ |
+| 7 — Info HTML async race | — | — (mock is sync) | ✓ | ✓ |
+| 8 — Drying state mapped as boolean | — | ✓ | ✓ | ✓ |
+| 9 — Driver name change | ✓ (RULE19) | — | ✓ | ✓ |
+| 10 — SmartThings icon URL | ✓ | — | — | — |
+| 11 — Wrong documentationLink | ✓ | — | — | — |
+| 12 — Pref-seed missing | ✓ | ✓ | ✓ | ✓ |
+| 13 — Token-expiry silent failure | — | — | — | ✓ |
+| 14 — Hub-reboot drops runIn cron | ✓ | ✓ | ✓ (schedule fires on hub) | ✓ |
+| 15 — Driver uses app-only API | ✓ (RULE23) | ✓ (fail-fast mock) | ✓ | ✓ |
+| 16 — debugOutput stuck after reboot | ✓ (RULE25) | ✓ | ✓ | ✓ |
+| 17 — Stale state.deviceList configModule | — | ✓ | — (no real polling) | ✓ |
+| 18 — NPE on (null as String).toLowerCase() | ✓ (RULE27) | ✓ | ✓ | ✓ |
+
+Read: a `✓` means the layer would catch the regression. `—` means the layer cannot detect it (either by design — e.g. lint can't catch runtime async races — or by missing test coverage). The two BPs caught only by Real-hardware (BP13, and partially BP17) are the cases where a preview driver's A2 verification is insufficient and the maintainer's hardware sweep before cut is load-bearing.
+
+---
+
+## BP1 — Missing 2-arg `update(status, nightLight)` signature on a child
+
+**Symptom:** Every parent poll throws `MissingMethodException: No signature of method: <child_class>.update() applicable for argument types: (LazyMap, null)`. Status attributes never populate; the only data shown is whatever was set before the breakage. Community users report "device discovered but data retrieval fails."
+
+**Root cause:** Parent's `updateDevices()` calls `child.update(status, nightLight)` with two args (the second is for Core 200S nightlight; null for everyone else). Children that only declare `update()` and `update(status)` don't match.
+
+**Fix:** Always declare all three signatures. The 2-arg version delegates to `applyStatus(status)`, ignoring the nightLight arg.
+
+**Exception: `LevoitCore200S Light.groovy`** intentionally declares only `def update(status)` (1-arg). The parent invokes the night-light child explicitly via `nightLight.update(status)` in `LevoitCore200S.groovy`'s own `update()` method, NOT through the generic 2-arg poll callback path. Adding a 2-arg signature would be misleading and would mask the intentional design. The lint config exempts this file from BP1 per `tests/lint_config.yaml`. Do not flag BP1 against this file.
+
+**ALL child drivers must declare:**
+```groovy
+def update()                       // self-fetch path (refresh)
+def update(status)                 // 1-arg parent callback
+def update(status, nightLight)     // 2-arg parent callback ← REQUIRED
+```
+
+The 2-arg signature is the failure point for many community-reported "device discovered but data retrieval fails" issues. Without it, every parent poll throws `MissingMethodException` silently. **Flag any child driver missing the 2-arg signature as BLOCKING.**
+
+---
+
+## BP2 — Hardcoded `getPurifierStatus` for all device types in parent
+
+**Symptom:** Humidifier devices show empty data. API returns `code: -1`, repeated traceId across many error responses. Manual `refresh()` on the child works (because child uses correct method) but auto-poll fails.
+
+**Root cause:** Parent's `updateDevices()` had a hardcoded `def command = ["method": "getPurifierStatus", ...]` outside the device loop, reused for every child.
+
+**Fix:** Build the command inside the loop, branching by device type:
+```groovy
+String typeName = dev.typeName ?: dev.name ?: ""
+String method = typeName.contains("Humidifier") ? "getHumidifierStatus" : "getPurifierStatus"
+```
+
+(Correctness-check companion: Parent's `updateDevices()` should branch by `dev.typeName?.contains("Humidifier")`. Method names match the device family — `getPurifierStatus` for purifiers, `getHumidifierStatus` for humidifiers.)
+
+---
+
+## BP3 — Response envelope peel missing or wrong depth
+
+**Symptom:** `r.keySet()` shows `[code, result, traceId]` instead of device fields like `powerSwitch, humidity, mistLevel`. All `r.X` reads return null. Driver appears to run successfully but no events fire.
+
+**Root cause:** V2-line bypassV2 responses are sometimes double-wrapped: `{code, result: {code, result: {actual data}, traceId}, traceId}`. The child's `applyStatus` does `r = status.result` once, getting the inner envelope, not the device data.
+
+**Fix:** Defensive while-loop peel up to 4 layers:
+```groovy
+while (r instanceof Map && r.containsKey('code') && r.containsKey('result') && r.result instanceof Map && peelGuard < 4) {
+    r = r.result; peelGuard++
+}
+```
+
+This handles single-wrap (purifiers) AND double-wrap (humidifiers) without per-driver branching.
+
+---
+
+## BP4 — V201S `setLevel` payload field-name mismatch
+
+**Symptom:** `setSpeed("medium")` returns HTTP 200 but innerCode -1. Speed never changes on the device.
+
+**Root cause:** Driver was using `switchIdx`/`type` instead of canonical pyvesync `levelIdx`/`levelType`. Plus older Homebridge-derived code used `setLevel` with various non-canonical payloads in a brute-force matrix.
+
+**Fix:** Single canonical payload per pyvesync `LAP-V201S.yaml`:
+```groovy
+hubBypass("setLevel", [levelIdx: 0, levelType: "wind", manualSpeedLevel: level], "setLevel")
+```
+
+Payload field-name gotchas (cross-reference against `src/tests/api/vesyncpurifier/<MODEL>.yaml` or `vesynchumidifier/<MODEL>.yaml`):
+- V201S `setLevel`: `levelIdx` (not `switchIdx`), `levelType` (not `type`), `manualSpeedLevel`.
+- Superior 6000S `setVirtualLevel`: `levelIdx`, `virtualLevel`, `levelType:"mist"`.
+- V201S `setPurifierMode`: `workMode` field (not `mode`). Note: V201S manual-mode is set via `setLevel`, NOT setPurifierMode.
+- Superior 6000S `setHumidityMode`: `workMode` field; auto mode is `"autoPro"` (not `"auto"`).
+- Core line drivers use OLDER naming: `mode` not `workMode`, `level`/`id` not `manualSpeedLevel`/`levelIdx`. Don't conflate.
+- `setSwitch` includes `switchIdx: 0` (canonical for V2 line). Some older code omits this.
+
+---
+
+## BP5 — V201S manual-mode set via wrong method
+
+**Symptom:** `setMode("manual")` returns HTTP 200 but innerCode -1. Mode never changes from auto/sleep to manual.
+
+**Root cause:** Driver called `setPurifierMode` with `workMode: "manual"`. Per pyvesync's V201S class: manual mode is established by **sending a speed via setLevel**, not by setPurifierMode. The setPurifierMode method is only valid for auto/sleep/pet on this model.
+
+**Fix:** Branch in `setMode`:
+```groovy
+if (mode == "manual") {
+    // V201S quirk: manual is set by sending a speed
+    setSpeedLevel(mapSpeedToInteger(state.speed ?: "low"))
+} else {
+    // auto/sleep/pet via setPurifierMode
+    hubBypass("setPurifierMode", [workMode: mode], "setPurifierMode")
+}
+```
+
+---
+
+## BP6 — Speed reports last setting while switch is "off"
+
+**Symptom:** Device is off, but the `speed` attribute still shows the last manual setting (e.g. "high"). Visible contradiction in dashboard tiles.
+
+**Root cause:** Driver's `applyStatus` always emits speed from `r.fanSpeedLevel` or `r.manualSpeedLevel`. When device is off, `fanSpeedLevel: 255` (special "off" code) — but driver fell through to `manualSpeedLevel` which retains the last user setting.
+
+**Fix:** Gate speed emission on power state:
+```groovy
+if (!powerOn) {
+    device.sendEvent(name: "speed", value: "off")
+} else {
+    // normal speed-from-fanSpeedLevel logic
+}
+```
+
+Reverse-mappings for user-facing values: V201S returns `fanSpeedLevel: 255` for "off" — driver should report `speed: "off"` only when `powerSwitch == 0`, not based on fanSpeedLevel alone.
+
+---
+
+## BP7 — Info HTML race with `device.currentValue`
+
+**Symptom:** The `info` attribute (HTML for dashboard tiles) shows `Air Quality: null` even though the `airQuality` attribute is correctly set to `"good"`.
+
+**Root cause:** `applyStatus` did:
+```groovy
+device.sendEvent(name: "airQuality", value: aq)
+def html = "<br>Air Quality: ${device.currentValue('airQuality')}"  // race: returns OLD value
+```
+
+The sendEvent dispatch is async; the immediately-following `currentValue` read returns the prior value.
+
+**Fix:** Build the HTML using the local variable, not currentValue:
+```groovy
+String aq = computeAQ(r.AQLevel)
+device.sendEvent(name: "airQuality", value: aq)
+def html = "<br>Air Quality: ${aq}"  // local var, no race
+```
+
+---
+
+## BP8 — Drying state mapped as boolean
+
+**Symptom:** Superior 6000S `dryingMode` attribute shows `"idle"` when wick is actually finishing a drying cycle.
+
+**Root cause:** Driver mapped `dryingMode.dryingState == 1 ? "active" : "idle"` — treating it as boolean. Actual enum is `0=off, 1=active, 2=complete`.
+
+**Fix:**
+```groovy
+String dryingStr
+switch (dState) {
+    case 1: dryingStr = "active"; break
+    case 2: dryingStr = "complete"; break
+    default: dryingStr = (dAuto == 1) ? "idle" : "off"
+}
+```
+
+Reverse-mapping companion: Superior 6000S returns `workMode: "autoPro"` but the user-facing attribute should be `"auto"`.
+
+---
+
+## BP9 — Driver name change breaks device association on existing installs
+
+**Symptom:** After a driver update, the user's existing devices show "type" as unknown or with the old (now-missing) driver name. Devices stop working until manually re-typed.
+
+**Root cause:** Hubitat associates devices with drivers by the metadata `name` field. Changing `name` orphans existing devices.
+
+**Fix:** Keep legacy `name` for drivers used by existing-deployed devices. For NEW driver files (e.g. when adding a model that's not currently installed anywhere), use a clean accurate name.
+
+(Enforced by RULE19 lint.)
+
+---
+
+## BP10 — SmartThings icon URL leftovers in metadata
+
+**Symptom:** Cosmetic — `iconUrl: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png"` and similar in metadata. These are from the SmartThings era and don't render in Hubitat.
+
+**Fix:** Remove `iconUrl`, `iconX2Url`, `iconX3Url`, and `category: "My Apps"` from metadata. They're no-ops in Hubitat and add noise.
+
+---
+
+## BP11 — `documentationLink` pointing to unrelated project
+
+**Symptom:** Driver's documentation link in Hubitat UI points to `dcmeglio/hubitat-bond` or another unrelated repo.
+
+**Fix:** Update to fork's repo: `https://github.com/level99/Hubitat-VeSync` or sub-page.
+
+---
+
+## BP12 — Type-change leaves new pref defaults uncommitted (silent INFO suppression)
+
+**Symptom:** Driver has been Type-changed or HPM-updated. Device attributes ARE populating correctly (parser works). Zero INFO log entries even on state-change events that should fire `logInfo`. `settings?.descriptionTextEnable` returns null when probed.
+
+**Why it happens:** When a Hubitat user changes a device's Type (or HPM-updates a driver to a new version that adds new pref names), the new driver's `defaultValue` declarations are NOT auto-applied to settings — they only commit when the user clicks **Save Preferences**. Until that click, `settings?.<newPref>` returns `null` (falsy). For drivers with conditional logging (`if (settings?.descriptionTextEnable) log.info msg`), this silently suppresses INFO output for migrating users — bad UX because the driver appears non-functional.
+
+**Fix:** One-time, idempotent self-healing seed at the top of the canonical "first method to run on parent poll":
+
+```groovy
+// One-time pref seed: heal descriptionTextEnable=true default for users migrated from older Type without Save (forward-compat)
+if (!state.prefsSeeded) {
+    if (settings?.descriptionTextEnable == null) {
+        device.updateSetting("descriptionTextEnable", [type:"bool", value:true])
+    }
+    state.prefsSeeded = true
+}
+```
+
+Insertion point varies by driver shape — see CLAUDE.md "Logging conventions" pref-seed insertion-point table.
+
+Critical properties:
+- The `null` guard preserves user choice — if user has explicitly set `descriptionTextEnable = false`, the seed leaves it.
+- The `state.prefsSeeded` flag bounds writes to exactly ONE per device lifecycle.
+- Heals on first poll without requiring user Save action.
+- Settings commit by next applyStatus call (Hubitat caches settings between method invocations); state-change INFO logs start firing on the second poll if not the first.
+
+**Live-verified 2026-04-25:** all 9 fork driver files instrumented; all 3 migrated devices on maintainer hub healed automatically on first poll cycle after deploy.
+
+---
+
+## BP13 — Token-expiry silent failure (no re-auth on HTTP 401 or auth-class inner codes)
+
+**Symptom:** Devices silently stop updating after weeks/months. No clear error in logs other than possibly a `code:-11001000` or HTTP 401 entry. Recovery requires manual user intervention (Save Preferences on parent → re-init → re-login). Install-and-forget users most exposed because VeSync token TTL is weeks-to-months.
+
+**Why it happens:** VeSync's typical token-expiry signal is HTTP 200 with an inner `code: -11001000` (TOKEN_EXPIRED) or `-11201000` (PASSWORD_ERROR / INVALID_CREDENTIALS) — NOT HTTP 401. Pre-fix `checkHttpResponse` only inspected HTTP status: HTTP 200 + inner -11001000 → returns true → `resp.data.result` is null → `dev.update(null, ...)` → silent no-op. Even HTTP 401 just logged an error without retry. `login()` was only called from `initialize()`, never proactively.
+
+**Fix:** Wrap the response handler in `sendBypassRequest` with an auth-aware closure that:
+- Detects auth failure via `isAuthFailure(resp)` predicate (HTTP 401 OR inner code in `{-11001000, -11201000, -11001, -11201}`; the 8-digit codes are pyvesync canonical, the 4-digit are defensive variants for older firmware)
+- Calls `login()` to refresh the token
+- Refreshes `params.body.token` + `params.headers.tk` with the new token
+- Retries the original `httpPost` ONCE, passing through to the existing tracing/caller closure chain
+- Uses `state.reAuthInProgress` flag (set before login, cleared in `finally`) to prevent infinite loops
+
+```groovy
+private boolean isAuthFailure(resp) {
+    try {
+        Integer http = resp?.status as Integer
+        if (http == 401) return true
+        def outerCode = resp?.data?.code as Integer
+        def innerCode = resp?.data?.result?.code as Integer
+        return outerCode in [-11001000, -11201000, -11001, -11201] ||
+               innerCode in [-11001000, -11201000, -11001, -11201]
+    } catch (ignored) {
+        return false  // malformed response = not an auth failure
+    }
+}
+```
+
+Critical:
+- `login()` MUST NOT be `private` — Groovy `private` compiles to INVOKESPECIAL bytecode, bypassing MetaObject Protocol; tests can't mock it. Keep it package-default visibility.
+- `login()` itself must NOT call `sendBypassRequest` (would create infinite recursion). It uses `httpPost` directly via `retryableHttp`.
+- Codes `-11003000` (REQUEST_HIGH / RATE_LIMIT) and `-11202000` (ACCOUNT_NOT_EXIST) are NOT auth failures — re-auth on either is wasteful. Verified against pyvesync `src/pyvesync/utils/errors.py`.
+- New log calls go through `logInfo` / `logError` (sanitize-wrapped). NO direct `log.X` calls.
+
+**Live-verified 2026-04-25:** Implementation tested against 8 Spock specs covering HTTP 401, both inner codes, negative control (-1 doesn't trigger), login-fail graceful degrade, finally semantics with login() throwing, and refreshed-token-in-retry assertion. All passing.
+
+---
+
+## BP14 — Hub-reboot drops runIn-based poll cycle
+
+`runIn()` is in-memory only; use `schedule()` cron for periodic work (persists across reboots).
+
+**Symptom:** child devices show stale values for hours/days after a hub reboot. Heartbeat stuck at `not synced`. `getHubJobs` confirms zero `updateDevices` entries in scheduledJobs after reboot. Often misattributed to token expiry — but re-auth (BP13) is fine; the cron chain itself is gone.
+
+**Root cause:** the pre-v2.2 poll cycle used recursive `runIn()` — each `updateDevices()` call scheduled the next. When the hub reboots between two consecutive calls, the chain breaks permanently. `runIn()` jobs are not persisted across reboots; `schedule()` cron jobs are.
+
+**Fix (v2.2 / v2.2+):**
+```groovy
+private setupPollSchedule() {
+    Integer interval = Math.max(1, (settings?.refreshInterval ?: 30) as Integer)
+    unschedule("updateDevices")
+    String cron
+    if (interval < 60) {
+        cron = "0/${interval} * * * * ?"
+    } else {
+        Integer minutes = (int)(interval / 60)
+        if (interval % 60 != 0) {
+            logWarn "VeSync Integration: refreshInterval ${interval}s is not a multiple of 60. " +
+                    "Cron will fire every ${minutes} minute(s) (~${minutes * 60}s) instead. " +
+                    "Set interval to 60, 120, or 300 for exact timing."
+        }
+        cron = "0 */${minutes} * * * ?"
+    }
+    schedule(cron, "updateDevices")
+    state.scheduleVersion = "2.2"
+}
+private ensurePollWatchdog() {
+    if (state.scheduleVersion != "2.2") {
+        logInfo "BP14 migration: switching from runIn-based to schedule()-based poll cycle"
+        setupPollSchedule()
+    }
+}
+```
+
+**Cron-syntax gotcha (PR #4, Gemini review — BLOCKING if wrong):** Quartz cron's seconds field has range 0-59. `"0/N * * * * ?"` is only valid for `N < 60`. For `N >= 60` (e.g. the README-recommended 60s, 120s, 300s), Hubitat's Quartz scheduler silently rejects the expression and the poll cycle never arms. The fix branches by threshold:
+- `interval < 60` → `"0/${interval} * * * * ?"` (seconds-resolution)
+- `interval >= 60` → `"0 */${interval/60} * * * ?"` (minutes-resolution)
+
+Non-multiples of 60 (e.g. 90s) floor-divide to the next lower minute and emit a `logWarn` (sanitize-routed, same as `logError`). Recommended values (30, 60, 120, 300) all divide evenly — no warn for those. **Flag any diff that reverts to the bare `"0/${interval} * * * * ?"` form without a < 60 guard — it is BLOCKING for the majority of deployed users who follow the README.**
+
+`ensurePollWatchdog()` is called at the top of `updateDevices()` (after BP12 pref-seed) AND at the top of `sendBypassRequest()` (before HTTP). `state.scheduleVersion != "2.2"` guard makes it idempotent. The `runIn((int)settings.refreshInterval, "updateDevices")` call inside `updateDevices()` must be removed — that was the broken chain.
+
+**Critical: do NOT add `subscribe(location, ...)` as a belt-and-braces layer.** `subscribe()` is app-only API (Bug Pattern #15) — it crashes in driver context with `MissingMethodException` at every poll tick. `schedule()` alone is sufficient; the platform persists `schedule()` cron jobs across reboots.
+
+**Live-verified 2026-04-27:** round-4 deploy on maintainer hub passed Phase 1-4 including reboot recovery; `schedule()`-based cron auto-resumed post-reboot with no user action. Maintainer hub uses refreshInterval=30 (< 60, seconds-resolution path) — the >= 60 minutes-resolution path was not live-tested by the maintainer; it was caught by Gemini Code Assist review of PR #4.
+
+---
+
+## BP15 — Driver code uses app-only API (`subscribe`/`unsubscribe` to location events)
+
+Drivers cannot subscribe to location events; use `schedule()` for periodic work, parent→child calls for cross-device. The HubitatSpec mock must fail-fast (not no-op).
+
+**Symptom:** `MissingMethodException: No signature of method: subscribe() is applicable for argument types: (Location, String, String)` at runtime, crashing repeatedly. Unit tests pass silently if the mock is a no-op rather than fail-fast.
+
+**Root cause:** `subscribe(location, "eventName", handler)` and `unsubscribe()` for location events are only wired into the Hubitat *app sandbox*. They are NOT available in the *driver sandbox*. The driver sandbox simply doesn't expose these methods; calling them produces `MissingMethodException`.
+
+**Fix:** remove any `subscribe()`/`unsubscribe()` calls from driver code entirely. Use `schedule()` for periodic work. The `HubitatSpec` base mock should throw `MissingMethodException` for `subscribe` and `unsubscribe` (fail-fast), not no-op — so the unit test harness catches this mistake before production.
+
+**Flag this pattern** whenever you see `subscribe(location, ...)` or `unsubscribe()` in a driver diff. It is always BLOCKING.
+
+(Enforced by RULE23 lint.)
+
+---
+
+## BP16 — `debugOutput` stuck `true` indefinitely after hub reboot
+
+`runIn(1800, "logDebugOff")` in `updated()` is in-memory only and evaporates across reboots; `settings.debugOutput` persists. Same architectural shape as BP14.
+
+**Symptom:** Debug log spam running indefinitely after a hub reboot — roughly 2.75 lines/sec from `sendBypassRequest` / API-trace calls. Parent device `1064` observed generating weeks of continuous debug spam, caught manually. User may report "my logs are flooded."
+
+**Root cause:** Same class as BP14. `runIn(1800, "logDebugOff")` in `updated()` is in-memory only; it evaporates across hub reboots. `settings.debugOutput` persists across reboots (Hubitat settings are disk-backed). `updated()` does NOT auto-fire on hub-reboot recovery (platform fact, same constraint as BP14). Result: `debugOutput=true` forever with no further user action, until the user manually opens Preferences and saves.
+
+**Fix:**
+
+In `updated()` of every driver (parent + all 16 children):
+```groovy
+// Existing runIn stays (happy path — no reboot):
+if (settings?.debugOutput) {
+    runIn(1800, "logDebugOff")
+    state.debugEnabledAt = now()   // NEW: record timestamp for watchdog
+} else {
+    state.remove("debugEnabledAt")  // NEW: clear on disable
+}
+```
+
+New `ensureDebugWatchdog()` method in every driver (identical 10-line body):
+```groovy
+private void ensureDebugWatchdog() {
+    if (settings?.debugOutput && state.debugEnabledAt) {
+        Long elapsed = now() - (state.debugEnabledAt as Long)
+        if (elapsed > 30 * 60 * 1000) {
+            logInfo "BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"
+            device.updateSetting("debugOutput", [type:"bool", value:false])
+            state.remove("debugEnabledAt")
+        }
+    }
+}
+```
+
+Call sites:
+- **Parent (`VeSyncIntegration.groovy`):** top of `updateDevices()`, alongside `ensurePollWatchdog()` (after pref-seed, before `driverReloading` guard).
+- **Each child:** top of `update(status, nightLight)` (the 2-arg required signature).
+- **`LevoitCore200S Light.groovy` exception:** top of `update(status)` (1-arg only; this child has no 2-arg signature per the BP1 exception for this driver).
+- **`Notification Tile.groovy`:** top of `deviceNotification(notification)` (event-driven, no `update()` method). Uses `logsOff()` not `logDebugOff()`; `ensureDebugWatchdog()` body mirrors the same disable + clear logic.
+
+**Critical properties:**
+- The existing `runIn(1800, "logDebugOff")` pattern STAYS. BP16 is additive — both layers coexist. `runIn` handles the happy path (no reboot within 30 min); the watchdog handles the broken-by-reboot path.
+- `state.debugEnabledAt` is set fresh on every Save Preferences when debug is enabled — gives the user a fresh 30-min window each time.
+- `state.debugEnabledAt` is cleared by `state.clear()` in `forceReinitialize()` (parent) — auto-handles. No explicit workaround needed.
+- The watchdog is idempotent: O(1) overhead once debug is off (`settings?.debugOutput` is false → first condition fails → return immediately).
+- INFO log format: `"BP16 watchdog: 30 min elapsed since debug enable; auto-disabling now (post-reboot self-heal)"` — explicit BP16 token, matches BP14's migration log style. Visible in Live Logs without debug enabled.
+
+**Live-verified on maintainer hub 2026-05-04:** debug enabled via Save Preferences on Sup6000S device 1072 at 02:41:46 UTC (`updated()` fires `state.debugEnabledAt = now()`). Hub rebooted at 02:42 UTC (~90 sec downtime). First post-reboot poll at 02:44:11 UTC fired `update()` → `applyStatus()` → `ensureDebugWatchdog()` → `applyStatus raw r ...` DEBUG entry — debug logging continued (elapsed ~3 min, well under the 30-min threshold). Confirms three load-bearing claims: (1) `settings.debugOutput` persists across reboot, (2) `state.debugEnabledAt` persists across reboot (Hubitat state-variable contract), (3) `ensureDebugWatchdog` is wired at applyStatus entry and reads state correctly. The 30-min elapsed → auto-disable trigger remains Spock-unit-test covered (`LevoitChildBaseLibSpec`); the in-test window is too short to exercise it directly. **Operational footnote**: discovered that Hubitat's MCP `update_device` preference-change API does NOT fire `updated()` lifecycle hook — only the device-page Save Preferences UI button does. Test scenarios that depend on `state.debugEnabledAt` being seeded require the UI click; programmatic preference toggles via MCP write the preference value but skip the lifecycle hook.
+
+**Flag this pattern** whenever a driver diff adds a `runIn(1800, "logDebugOff")` without the accompanying `state.debugEnabledAt = now()` state-tracking. It is BLOCKING — the fix is incomplete without the timestamp.
+
+(Enforced by RULE25 lint.)
+
+---
+
+## BP17 — Stale `state.deviceList` configModule causes silent empty-result polls
+
+`state.deviceList` is a map of `{DNI → configModule}` built during `getDevices()` (Resync). When VeSync pushes a firmware update to a device, or the device is re-paired in the VeSync mobile app, the device's `configModule` value can change server-side. The cached value in `state.deviceList` becomes stale. Every subsequent `bypassV2` request uses the stale `configModule`; the VeSync cloud returns an empty result (`resp.data.result == null`), and `updateDevices()` logs `ERROR: No status returned from getPurifierStatus:` once per poll cycle until the user manually triggers Resync.
+
+**Same shape as BP14:** bug accumulates over time, self-heals on Save Preferences (because `updated()` → `initialize()` → `getDevices()` rebuilds `state.deviceList` with fresh configModules). Fix pattern is also the same — auto-detect + auto-heal.
+
+**Compound symptom:** if the child device also lost its `deviceType` data value (e.g. a re-add scenario, or the child predates the v2.2 plumbing and never self-seeded), `deviceMethodFor()` maps `rawCode = ""` → `dtype = "GENERIC"` → falls through to the default `getPurifierStatus` branch even for humidifiers. Wrong method + stale configModule both contribute to the empty result.
+
+**Fix A — typeName fallback in `deviceMethodFor()`:** make the dtype switch exhaustive for KNOWN dtypes (every purifier dtype gets an explicit `case`, not just the implicit default). For GENERIC or unmapped dtypes, fall through to typeName substring matching: `"Tower Fan"` → `getTowerFanStatus`, `"Pedestal Fan"` → `getFanStatus`, `"Humidifier"` → `getHumidifierStatus`, default → `getPurifierStatus`. This catches misconfigured children whose `deviceType` data value is missing or no longer in the switch.
+
+**Fix B — `state.consecutiveEmpty` watchdog:** in the `sendBypassRequest` callback, increment `state.consecutiveEmpty[dni]` on null result and remove the entry on success. New `ensurePollHealth()` private method runs at the top of `updateDevices()` (immediately after `ensureDebugWatchdog()`); when any DNI reaches the threshold (5 consecutive empty results, ~5 min at 60s interval), log INFO naming the affected DNIs, reset counters, and trigger `getDevices()` async via `runIn(2, "getDevices")` to refresh state.deviceList (and force a fresh login if needed).
+
+**Live-evidence:** surfaced 2026-04-28 during v2.3 cut-release pre-flight production-log audit on the maintainer's hub. v2.3 parent (commit `9f3cf2f`, deployed at 12:17 MDT) generated `ERROR: No status returned from getPurifierStatus:` at 1/min for at least 6 hours; resolved immediately on `update_device` triggering `updated()`. Pre-v2.3 substring-name routing happened to be more forgiving because Hubitat refreshes `dev.typeName` automatically when a driver is updated, while `state.deviceList` only refreshes on Resync. The v2.2.1 → v2.3 transition exposed the underlying fragility.
+
+**Flag this pattern** whenever a driver or parent change touches the `status == null` error branch in `updateDevices()` without the counter-increment + per-DNI clear, OR adds a new dtype mapping in `deviceMethodFor()` without an explicit case (the implicit default routes everything to `getPurifierStatus`, hiding new-driver mistakes). It is BLOCKING — the self-heal mechanism is incomplete without the tracking, and the routing is fragile without the typeName fallback.
+
+---
+
+## BP18 — NullPointerException on `(arg as String).toLowerCase()` for null command parameter
+
+`set*` command methods (`setMode`, `setSpeed`, `setNightLight`, etc.) commonly normalize their incoming argument via `String m = (arg as String).toLowerCase()` at the top of the method body. In Groovy, `(null as String)` returns `null`; `null.toLowerCase()` throws `NullPointerException`. Hubitat's driver sandbox catches and discards driver exceptions silently from the sandbox's perspective, but the user gets a confusing stack trace in the device's log instead of an actionable warning, and the misconfigured automation continues to misfire.
+
+**Caller sources of null arg:**
+- Rule Machine "Run Custom Action" with empty parameter slot
+- Apps invoking the command without the required arg
+- Maker API external commands with missing parameter
+
+All common in real installs; not an edge case.
+
+**Symptom:** ERROR log of the form `java.lang.NullPointerException: Cannot invoke method toLowerCase() on null object on line N (method setMode)` whenever a misconfigured automation fires. The driver swallows the call (no API send), but the user gets a stack trace not a hint, and the misconfigured automation continues to misfire.
+
+**Canonical fix:** insert at the top of each affected `set*` method, immediately before the `(arg as String).toLowerCase()` line:
+
+```groovy
+if (mode == null) {
+    logWarn "setMode called with null mode (likely empty Rule Machine action parameter); ignoring"
+    return
+}
+```
+
+Substitute actual arg name (`mode`, `spd`, `level`, `nlMode`) and method name (`setMode`, `setSpeed`, `setNightLight`, `setNightlightMode`). The WARN level reflects "user input bad, not driver bug" and points the user at the likely Rule Machine source. Do NOT silently swallow null without a log — silent swallowing hides misconfigured automations from the user.
+
+If the driver lacks a `logWarn` helper, add `private logWarn(msg) { log.warn msg }` alongside the existing `logInfo`/`logDebug`/`logError` trio.
+
+**Live-evidence:** surfaced 2026-04-28 during v2.3 cut-release pre-flight production-log audit. A Superior 6000S deployment logged the NPE pattern at `LevoitSuperior6000S.groovy:134`. Fork-wide audit found 17 vulnerable sites across 13 drivers (`setMode` in 13 drivers; `setSpeed` in PedestalFan + TowerFan; `setNightLight` in Classic300S; `setNightlightMode` in SproutAir); all fixed in the same fold-in commit.
+
+**Flag this pattern** whenever a new driver adds a `set*` command method without a null-guard at entry, OR uses `(arg as String).toLowerCase()` / `(arg as Integer)` style normalization without first guarding. It is BLOCKING — null is a routine real-world value via Rule Machine misconfiguration, not an edge case.
+
+(Enforced by RULE27 lint.)
+
+---
+
+## BP19 — Self-heal logic refreshes intermediate state but not the load-bearing data value
+
+A common pattern: a watchdog detects symptom (e.g. empty polls), schedules a recovery action (e.g. Resync), but the recovery action operates on intermediate state (e.g. `state.deviceList`) without propagating the refreshed value to the load-bearing call site (e.g. `equipment.getDataValue("configModule")` used in `sendBypassRequest`). The watchdog appears to fire correctly; logs show "scheduling Resync"; but the actual API call still uses the stale value. Self-heal looks fixed but isn't.
+
+**Symptom:** ERROR fires every poll cycle, watchdog message appears periodically (e.g. `[BP17 poll-health] N device(s) returned ≥5 consecutive empty results`), but errors don't stop. ERROR pattern persists indefinitely.
+
+**Canonical fix:** ensure recovery code path updates BOTH the intermediate state AND the load-bearing call-site source (typically a child device data value). For VeSyncIntegration's getDevices() existing-child branches: refresh `configModule`, `cid`, and `uuid` data values, not just `deviceType`.
+
+**Live-evidence:** surfaced 2026-04-30 via static review triggered by community bug report — Core 200S user on v2.3 reported "No status returned from getPurifierStatus" every hour after upgrading. Self-heal logged but didn't fix; root cause was getDevices() existing-child else-branch never refreshing configModule data value. The v2.3 BP17 fix correctly added the consecutiveEmpty counter + ensurePollHealth watchdog + Resync trigger; the gap was the Resync's existing-child update path. Fix folded into v2.4 (21 else-branches updated, 63 lines added).
+
+**Flag this pattern** whenever a watchdog/self-heal mechanism is added: review every line of the recovery action and confirm each load-bearing call-site source (every `getDataValue` / state read used in subsequent API calls) is updated by the recovery, not just the intermediate state. Resync-style recovery is most prone — there are typically 20+ device-type branches and any missed one creates partial-recovery bugs. It is BLOCKING — silent self-heal failure is worse than no self-heal because users don't know to take manual action.
+
+---
+
+## BP20 — Library file file-scope commentary triggers Hubitat parser "Internal error" (platform bug)
+
+Hubitat's library parser silently rejects library source containing certain content shapes between the optional MIT header and the `library(...)` declaration. `POST /library/saveOrUpdateJson` returns `{"success":false,"message":"Internal error"}` with no further detail in the JSON response or hub Logs. HPM hits the same endpoint, so end users see install failure with the same generic toast. **Confirmed reproduces on hub firmware 2.4.4.156 AND 2.5.0.126** (FW upgrade did not fix); platform-side bug, not FW-specific.
+
+The trigger is **fuzzier than originally cataloged**. Two manifestations confirmed:
+
+1. **Original (2026-04-30 morning):** `/* */` multi-line block comments at file scope, after the optional MIT header, before `library(`. Strip the block, replace with one-line comment, or convert to `//` line comments → saves.
+2. **Update (2026-04-30 afternoon, during v2.4 UX refactor):** even `//` line-comment content can trigger when:
+   - The comments contain literal text `/* */` or `library(` as documentation (paraphrasing the workaround in a NOTE block triggered the parser when added to a previously-saving file)
+   - File-scope commentary is dense (e.g. 20+ line `//` doc-headers preceding `library(`)
+   - Multi-line section-divider commentary between functions accumulates beyond a fuzzy threshold
+
+No clean single-token trigger isolated for case 2. The trigger is a parser/tokenizer interaction with content shape — not a clean syntactic rule.
+
+**Symptom:** library not present on hub after import; "Internal error" toast on Save. No log line. No compile trace. HPM-installed packages partially deploy (drivers fine, library missing) and downstream `#include` resolution fails at driver compile time with `MissingMethodException` for any library-provided helper (e.g. `recordError`).
+
+**Canonical fix (and shipping convention):** keep file-scope content in library files between the MIT header and the `library(` declaration to **ZERO commentary** if possible. Don't add doc headers, NOTE blocks, or expanded section dividers to library files. If documentation is needed, put it in:
+- `CONTRIBUTING.md` (for contributor-facing rationale)
+- This catalog entry (`docs/BUG-PATTERNS.md`, for the canonical rationale)
+- The dev agent spec (for behavioral guidance during driver/library work)
+
+NEVER inside the library source itself. Section dividers between functions inside library files: single `// ----` line, not multi-line `// header / // detail / // ---` blocks. Do NOT paraphrase the BP20 trigger pattern in `//` comments either — the literal text triggers the parser when matched. javadoc `/* */` blocks INSIDE method bodies (above each function) are NOT affected — bug is file-scope-only.
+
+**Lint enforcement:** RULE29 (`tests/lint_rules/library_no_top_block_comment.py`) FAILs on any library file containing a `/* */` block comment after the first one (the optional MIT header) and before `library(`. Catches the original (case 1) trigger pattern. Does NOT catch case 2 manifestations (fuzzy `//` content) — those are caught by the runtime smoke test.
+
+**Runtime smoke test (deterministic catch):** `vesync-driver-operations` agent, on any library-file deploy, must POST the source to `/library/saveOrUpdateJson` and verify `success:true` in the response BEFORE reporting deployment success. If save fails, ops returns FAIL with the JSON body. This catches ANY trigger pattern at deploy time regardless of what slipped past lint or convention.
+
+**BP20 vs. JSON-encoding-bug discrimination (do NOT confuse):** the endpoint produces TWO distinct `success:false` messages with opposite root causes:
+
+| `message:` value | Root cause | Action |
+|---|---|---|
+| `"Internal error"` | BP20 — content trigger in source file. Library NOT saved. | Edit source (trim file-scope commentary). |
+| `"Malformed library definition"` | JSON encoding bug in the curl/HTTP request body — raw UTF-8 bytes vs. `json.dumps()`-escaped body. NOT a content issue. | Fix the request recipe; **do NOT edit source**. |
+
+Live-evidence (2026-05-03, v2.5 Round 3): ops agent attempted a save with raw curl `-d "<json with em-dash>"` body construction, got `"Malformed library definition"`, misdiagnosed as "BP20-class em-dash content trigger" and escalated for source edit. Baseline-check (em-dashes already exist throughout `LevoitChildBaseLib.groovy` and `LevoitDiagnosticsLib.groovy`, both currently saved successfully on test+prod hubs) refuted the content hypothesis. Re-save via `uv run --python 3.12 --with requests` + `json.dumps()` (which auto-escapes UTF-8 to `\uXXXX`) succeeded with source unchanged. Em-dashes are not BP20 triggers; the issue was raw UTF-8 in the JSON request body. **Diagnostic discipline:** before flagging any character or content-shape as a BP20 trigger, verify the same shape doesn't exist in already-saved libraries on the hub.
+
+**Live-evidence:** surfaced 2026-04-30 during v2.4 Phase 5 release prep — `LevoitDiagnosticsLib.groovy` (~425 lines / ~17.5 KB) consistently failed Save with "Internal error". ~30 in-browser variant tests (CodeMirror.setValue + Save + response capture) isolated the original `/* */` trigger. Workaround applied: convert doc block to `//` line comments. Then during the UX refactor a NOTE block of `// line comments` explaining the workaround was added — that ALSO triggered the bug despite being all-`//`. Removing the NOTE block restored save. Subsequent bisection of the dev-refactored 22 KB version showed the 4 modified function bodies save in any combination, but adding back the dev's expanded section comments tipped it back into failure. The shipped v2.4 library has ZERO file-scope commentary between the MIT header and `library(`; all explanation lives in CONTRIBUTING.md, this BP entry, and the dev/QA agent specs.
+
+**Flag this pattern** when reviewing any library file diff. Specifically flag:
+- Any addition of file-scope content between MIT header and `library(` (any `/* */` block, multi-line `//` block, NOTE block, or section divider that's more than one line of `// ----`)
+- Any text that paraphrases the BP20 workaround inside a comment (e.g. "uses // because /* */ is broken") — the literal text patterns themselves can trigger
+- Any expansion of section-divider commentary inside the library file
+
+It is BLOCKING — broken library save = HPM install failure for all users = unshippable. The runtime ops smoke-test is the final defense; lint + this BP review is the front-line catch.
+
+---
+
+## BP21 — BP17 self-heal loops on chronically-offline devices
+
+**Root cause:** `ensurePollHealth()` triggers `getDevices()` configModule refresh when 5 consecutive empty polls occur (BP17 fix). The Resync succeeds (VeSync cloud knows the device even if it's offline), but if the device is genuinely offline (unplugged / off WiFi / off VeSync cloud), the next 5 polls also return empty → BP17 fires again → infinite ~5min self-heal cycle. Live-confirmed observation on device 1070 (DNI `vsaq63affce48109fb60322ea72bb2b1`), last activity ~8h before the bug was filed.
+
+Additionally: the prior code emitted `logError "No status returned from ${method}"` on every empty poll, generating one ERROR per device per poll cycle indefinitely — log noise that makes logs unreadable for offline devices.
+
+**Fix design:**
+
+State additions (all use whole-map-reassignment discipline; bracket-notation writes do NOT persist in Hubitat's JSON-backed state proxy):
+
+- `state.selfHealAttempts[dni]` — Integer counter, incremented each time `ensurePollHealth()` fires for this DNI. Cleared on recovery.
+- `state.deviceOfflineSince[dni]` — Long (millis) timestamp when device was marked offline. Absent when online.
+- `state.lastOfflineWarnAt[dni]` — Long (millis) of last hourly WARN. Absent until first WARN.
+
+`ensurePollHealth()` changes:
+- Iterates per-DNI (not a single `anyExceeded` aggregate). Per-DNI iteration is required because each device needs its own attempt counter.
+- If `state.deviceOfflineSince` already contains the DNI → skip all self-heal logic (device already marked offline; the configModule refresh won't help a genuinely-offline device).
+- Otherwise: increment `state.selfHealAttempts[dni]`, reset `consecutiveEmpty[dni]`, then:
+  - If attempts ≤ 3 → fire `runIn(2, "getDevices")` (same as original BP17; count 1 at INFO, counts 2-3 at DEBUG)
+  - If attempts > 3 → call `markChildOffline(dni)` (no further Resync)
+
+`markChildOffline(dni)` / `markChildOnline(dni)` helpers:
+- `markChildOffline`: sets `state.deviceOfflineSince[dni]`, calls `child.sendEvent(name:"online", value:"false")`. Null-guards on child lookup.
+- `markChildOnline`: clears all three state maps for this DNI, calls `child.sendEvent(name:"online", value:"true")`, logs INFO recovery with duration. Called from the success branch of `updateDevices()` when a previously-offline DNI returns a non-null result.
+
+Log refactor (tiered, replacing per-poll ERROR):
+- Counts 1-4, not offline: DEBUG `"N consecutive empty"` — silent in normal operation
+- Count == 5 (first self-heal, attempt 1): INFO `"may be offline, attempting self-heal"`
+- Attempts 2-3: DEBUG `"self-heal attempt N"`
+- After 3rd failure: INFO `"marked offline, suppressing further noise"`
+- Hourly while offline: WARN via `emitOfflineWarnsIfDue()` (called at top of `updateDevices()`)
+- Sub-hourly while offline: DEBUG `"still empty (offline since H:MM)"`
+- First recovery: INFO `"back online after Nh Mm"`
+
+`emitOfflineWarnsIfDue()`: iterates `state.deviceOfflineSince`; emits WARN + updates `state.lastOfflineWarnAt[dni]` when `now() - lastWarnAt >= 3600000`. Called at the top of `updateDevices()` alongside the existing watchdog calls.
+
+`formatOfflineDuration(sinceMillis)`: returns human-readable strings (`"8 minutes"`, `"2 hours"`, `"1d 4h"`).
+
+Per-child `online` attribute: declared in metadata for all child drivers except `LevoitCore200S Light`, `LevoitGeneric`, `Notification Tile`, `VeSyncIntegrationVirtual`. No setter command needed (parent-only writable). Parent writes it via `sendEvent` directly on the child device handle.
+
+**Check for this pattern** when reviewing:
+- Any modification to `ensurePollHealth()` — verify it cannot loop again on offline devices (must check `state.deviceOfflineSince.containsKey(dni)` before scheduling Resync)
+- Any change to the empty-result branch in `updateDevices()` — verify `logError` is NOT called unconditionally (it was the source of per-poll ERROR spam)
+- Any new child driver — verify it declares `attribute "online", "string"` (RULE28 will flag missing `#include`/`command "captureDiagnostics"`; analogous check for `online` attribute is manual)
+- Recovery path — verify `markChildOnline(dni)` is called in the `status != null` branch when `state.deviceOfflineSince.containsKey(dni)`
+
+**Refutation evidence:** the fix was live-confirmed to stop the loop on device 1070 (DNI `vsaq63affce48109fb60322ea72bb2b1`). The `online:"false"` attribute was visible on the child device's page within one poll cycle after the parent's `updated()` ran.
+
+---
+
+## BP22 — HTTP-error log spam during network outages
+
+Distinct from BP21 (which addresses the empty-API-result path); this is the network-layer error path (`UnknownHostException`, `SocketTimeoutException`, `ConnectException`, `NoRouteToHostException`, plus Apache HttpClient wrappers).
+
+**Root cause:** `sendBypassRequest()` caught all exceptions in a generic `catch (Exception e)` block and called `logError "sendBypassRequest: ${e.toString()}"` unconditionally. During a network outage (hub lost internet, DNS failure, VeSync API down), every poll cycle for every child device threw a network-layer exception — typically `java.net.UnknownHostException` or `java.net.SocketTimeoutException`. With 6 child devices at 30s interval, that's 6 ERROR lines per minute for the duration of the outage. Live-confirmed during maintainer's internet outage: 6 errors per minute for the outage duration, plus `SocketTimeoutException` at the leading edge during the connection drop.
+
+Distinct from BP21 (which addresses the API empty-result path — the request completed but VeSync returned no data). BP22 is at the HTTP network layer — the request never reached VeSync.
+
+**Fix design:**
+
+State additions (parent-level — network outages affect all children identically; no per-DNI maps needed):
+
+- `state.networkUnreachableSince` — Long timestamp (millis) when the first network error of the current outage was logged. Null when network is healthy.
+- `state.lastNetworkWarnHourBucket` — Long epoch-hour bucket (`now()/3600000`) of the last hourly WARN re-surface. Null when no outage in progress. (v2.9: replaced the prior `lastNetworkWarnAt` millis-timestamp + `now()-lastWarnAt >= 1h` delta, which re-fired in ~1-min bursts when concurrent poll cycles read it stale before the first write flushed; same-hour re-reads now compare to the same bucket and can't re-fire.)
+- `state.lastNetworkProbeBucket` — Long 5-min bucket (`now()/300000`) of the last recovery probe (v2.9: replaced `lastNetworkProbeAt` millis for the same stale-read reason).
+
+`sendBypassRequest()` catch changes:
+
+- `catch (IllegalStateException e)` — unchanged (connection-pool-shutdown path already existed; not a transient network error).
+- `catch (Exception e)` — new branch: calls `isNetworkException(e)` to classify.
+  - Network-class exceptions (see `isNetworkException` below): first error of outage → `logWarn` + set `networkUnreachableSince = now()` and seed `lastNetworkWarnHourBucket`/`lastNetworkProbeBucket` to the current bucket; subsequent errors → `logDebug "BP22: still unreachable"`.
+  - Non-network exceptions → original `logError` + `recordError` path unchanged.
+- Success path (after `httpPost(params, effectiveClosure)` returns without throwing): if `state.networkUnreachableSince != null` → emit `logInfo "BP22: VeSync API reachable again after ${durStr}"` + clear all three state fields (networkUnreachableSince, lastNetworkWarnHourBucket, lastNetworkProbeBucket). Uses `formatOfflineDuration(sinceMillis)` (BP21 helper, reused).
+
+`isNetworkException(Exception e)` helper: walks the full cause chain (bounded to depth 10 to avoid infinite loops on cyclic causes) and checks each `Throwable.class.name` against the 8-class list. Cause-chain walk is required because live testing showed Apache HttpClient wraps the real network exception inside a generic wrapper — a flat top-level check misses these. String-based class name comparison avoids classpath import issues in the Hubitat Groovy sandbox. Covers 8 exception classes in two tiers:
+
+JDK layer (4 classes):
+- `java.net.UnknownHostException` — DNS failure
+- `java.net.SocketTimeoutException` — connect or read timeout
+- `java.net.ConnectException` — connection refused / unreachable
+- `java.net.NoRouteToHostException` — ICMP network-unreachable
+
+Apache HttpClient layer (4 classes — Hubitat's actual HTTP stack wraps JDK exceptions in these; live-observed during firewall block):
+- `org.apache.http.conn.ConnectTimeoutException` — connect timeout (firewall silent drop / SYN timeout)
+- `org.apache.http.conn.ConnectionPoolTimeoutException` — connection-pool exhaustion (cascading effect)
+- `org.apache.http.NoHttpResponseException` — server stopped responding after accepting connection
+- `org.apache.http.conn.HttpHostConnectException` — connection refused or ICMP unreachable at HttpClient layer
+
+When reviewing: if a new network-class exception surfaces in a live-log report that is not in this list, it should be added to `isNetworkException()` — not handled inline at the call site.
+
+Dual circuit-breaker (BP22 stall prevention): the per-call breaker in `sendBypassRequest()` is not sufficient on its own. Children are polled in a for-loop; all 6 dispatch `httpPost()` near-simultaneously. The first child to fail (~20s later) sets `networkUnreachableSince`, but the other 5 are already mid-`httpPost` and won't re-check. Result: first outage cycle still stalls ~120s. AND state may not propagate to in-flight closures in Hubitat's JSON-backed proxy.
+
+Two-layer fix:
+
+1. **Top-level circuit-breaker in `updateDevices()`** — added BEFORE the `driverReloading` guard, AFTER `emitNetworkWarnIfDue()`. When `state.networkUnreachableSince != null` and the current 5-min probe bucket still equals `state.lastNetworkProbeBucket`, returns `false` immediately without iterating any children. When the bucket has ADVANCED, sets `state.lastNetworkProbeBucket = now()/300000`, sets `state.networkProbeInFlight = true`, logs DEBUG "probing updateDevices cycle", and falls through to run the full cycle as a recovery probe. The remaining body (stale-CID cleanup, children for-loop, heartbeat) is wrapped in a `try {}` block; a `finally {}` clears `state.networkProbeInFlight` unconditionally at cycle end.
+
+2. **Per-call circuit-breaker in `sendBypassRequest()`** — still present; guards command-triggered `httpPost()` calls that arrive outside the polling path (e.g. user presses button while network is down). Condition is now `state.networkUnreachableSince != null && !state.networkProbeInFlight` — the `!networkProbeInFlight` guard bypasses the check when the top-level breaker has signalled "this IS the recovery probe", preventing a deadlock where the top-level advances `lastNetworkProbeBucket` to the current bucket and then each child's per-call check sees the same bucket and skips.
+
+State additions: `state.networkProbeInFlight` (Boolean) — set to `true` only during a top-level recovery probe cycle; `null`/`false` at all other times. Must be cleared in `finally` so it cannot persist across cycles.
+
+`emitNetworkWarnIfDue()` helper (parallel to BP21's `emitOfflineWarnsIfDue()`):
+- Returns immediately if `state.networkUnreachableSince == null`.
+- Defense-in-depth null-guard: if `state.lastNetworkWarnHourBucket` is null (state migrated from pre-bucket install), seeds it to the current epoch-hour bucket (`now()/3600000`) and returns without emitting — same lesson from BP21 transition-cycle bug.
+- Otherwise: emits `logWarn` with elapsed duration if the current epoch-hour bucket differs from `state.lastNetworkWarnHourBucket`; updates `state.lastNetworkWarnHourBucket = current bucket`. (v2.9: the bucket comparison replaced the prior `now() - lastNetworkWarnAt >= 3600000L` elapsed-delta, which re-fired in ~1-min bursts when concurrent poll cycles read the timestamp stale before the first write flushed.)
+- Called at top of `updateDevices()` after `emitOfflineWarnsIfDue()`.
+- Uses `logWarn` (routes through `sanitize()`) — network unreachability is always user-actionable; `logWarn` is unconditional and `sanitize()` keeps the parent's credential-redaction policy intact.
+
+Log tiering summary:
+
+| Condition | Level | Message |
+|---|---|---|
+| First network error of outage | WARN (once) | `BP22: VeSync API unreachable — ${exClass}: ${msg}. Suppressing…` |
+| Subsequent errors during outage | DEBUG | `BP22: still unreachable (${exClass})` |
+| Hourly re-surface while down | WARN (hourly) | `BP22: VeSync API still unreachable for ${durStr}. Check hub network…` |
+| First successful response after outage | INFO (once) | `BP22: VeSync API reachable again after ${durStr} unreachable.` |
+
+**Check for this pattern** when reviewing:
+- Any modification to `sendBypassRequest()` catch blocks — verify the `isNetworkException` guard is not removed or bypassed; verify non-network exceptions still call `logError` (not silently swallowed).
+- Any new exception class that should be covered by BP22 — should be added to `isNetworkException()` (not hardcoded inline).
+- `isNetworkException()` — must walk the cause chain (while loop on `t.cause`), not just check `e.class.name` at top level. A flat check misses wrapped exceptions (live-confirmed regression).
+- Top-level circuit-breaker in `updateDevices()` — must appear AFTER `emitNetworkWarnIfDue()`, BEFORE the `driverReloading` guard. If missing, all children stall in the first outage cycle despite the per-call breaker.
+- Per-call circuit-breaker in `sendBypassRequest()` — must appear BEFORE the `try { httpPost(...) }` block AND must check `!state.networkProbeInFlight`. If the flag check is missing, recovery probes from top-level are deadlocked.
+- `networkProbeInFlight` set before iterating children in the top-level probe path, cleared in `finally` (not just on success). If not in `finally`, a failing probe cycle leaves the flag set permanently, bypassing the per-call breaker forever.
+- `state.lastNetworkProbeBucket` cleared in the recovery path — if omitted, the first successful probe will clear `networkUnreachableSince` but leave a stale probe bucket that delays the next outage's first probe.
+- `emitNetworkWarnIfDue()` call site in `updateDevices()` — must come AFTER `emitOfflineWarnsIfDue()`, before the top-level circuit-breaker block.
+- Recovery detection — must be on the success path (after `httpPost` returns normally), NOT inside the closure (the closure doesn't know about network-layer exceptions; it only sees successful HTTP responses).
+- State null-coercion: `state.networkUnreachableSince as long` (not `as Long`) when used in arithmetic — Groovy coerces null `as long` to 0L; `as Long` returns null and NPEs in arithmetic. The actual implementation uses the null check before arithmetic, so this is a secondary concern, but flag it if seen without the null check.
+
+**v2.9 — child-side error-log dedup during outages.** The parent-side WARN-once/DEBUG-during/INFO-recover tiering above suppresses the parent's own poll-path spam, but each child's command-triggered write-failure branch (`logError + recordError`) still fired per-failure during an outage. The fix routes child write-failures through `LevoitChildBase.reportWriteError(String tag, Map ctx = [:])`, which first checks `networkOutageKnown()` — a parent-null-safe helper (`parent?.respondsTo("isNetworkUnreachable")` + try/catch → false) that calls the parent's public `isNetworkUnreachable()` (returns `state.networkUnreachableSince != null`). During a known outage the child downgrades to a single `logDebug "<tag> (suppressed during known network outage, BP22)"` and skips `recordError`; otherwise it falls through to the prior `logError(tag) + recordError(tag, ctx)`. `httpOk()` and `reportWriteFailure()` (BP29 device-off) gained the same outage downgrade — device-off is checked BEFORE the outage downgrade so a device-off rejection still WARNs (not DEBUG-suppressed) even mid-outage. When reviewing: a child write-failure branch that calls raw `logError + recordError` instead of `reportWriteError` is a regression of this dedup (exception: validation-error branches with no network/`resp` context stay on plain `logError`).
+
+**Refutation evidence:** live-verified stop of ERROR spam during internet outage on maintainer's hub. Before: 6 ERRORs/min. After: one WARN at outage start, DEBUG-only during, INFO on recovery. Per-call circuit-breaker added after live observation of 122,187ms poll cycles during firewall block. Top-level circuit-breaker added after live observation that per-call breaker was insufficient for the parallel-poll case — 35+ minutes of 120s+ poll cycles post first-WARN.
+
+---
+
+## BP23 — setLevel(N>0) on off-state device fails to turn the device on
+
+This bug class is the same shape as BP1 (every-driver-needs-identical-boilerplate) and is a strong candidate for class-library extraction (Core line / Vital line / Fan line shared libraries) — see ROADMAP.md.
+
+**Fix scope:** per-instance — `setLevel(val)` method only, on each SwitchLevel-capable driver. Does NOT cover other configure-style commands (those are BP24's class-wide scope).
+
+**Symptom:** `setLevel(50)` on a powered-off device sets the cloud-side speed/level but the device stays physically off. SwitchLevel capability convention requires `setLevel(N>0)` to auto-turn-on. Affects Room Lighting "Activate" with Dimmer activation type, dashboard slider tiles set from off-state, Rule Machine "Set Level" actions.
+
+**Detection:** grep `setLevel(val)` (or analogous 1-arg) bodies for `currentValue("switch")` or `ensureSwitchOn()`. Missing → broken.
+
+**Canonical fix form:**
+```groovy
+def setLevel(val) {
+    Integer pct = Math.max(0, Math.min(100, (val as Integer) ?: 0))
+    if (pct == 0) { off(); return }
+    if (!state.turningOn && device.currentValue("switch") != "on") on()
+    // ... rest of setLevel ...
+}
+```
+
+`on()` MUST set `state.turningOn = true` (preferably via try/finally) so the guard above doesn't recurse when `on()` itself triggers downstream commands.
+
+**Shipped:** v2.4.1 (2026-05-02) on 8 drivers: Core 200S/300S/400S/600S, Vital 100S/200S, Tower Fan, Pedestal Fan. Superior 6000S unaffected (already had guard via `setMistLevel`).
+
+**Historical scope-incompleteness lesson:** BP23's v2.4.1 fix patched only `setLevel(val)`. The same auto-on-from-off bug shape existed on `cycleSpeed` (6 of 8 drivers), `setMistLevel` (8 of 9 humidifiers), `setMode` (most drivers), `setFanSpeed` (EverestAir/SproutAir), etc. — but those weren't in BP23's catalog scope, so they didn't get the fix. Round 1.5 of v2.5 audit (2026-05-03) renamed the broader concern as BP24 with `Fix scope: class-wide`. BP23 stays per-instance for historical accuracy; new auto-on work happens under BP24.
+
+---
+
+## BP24 — auto-on-from-off compliance for configure-style commands
+
+**Fix scope:** class-wide — every `setX` / `cycleX` / configure-style command method that semantically "make the device do Y" should auto-on if off. Across ALL affected drivers in scope, not just one.
+
+**Why this exists separately from BP23:** BP23 patched `setLevel(val)` only. v2.5's Round 1.5 audit found 33 broken call sites across 18 drivers in three sub-shapes (BP24-A dead-`state.switch` branch, BP24-B no-guard, BP24-C partial-guard-missing-turningOn). BP24 names the broader class so future fixes are scope-aware.
+
+**Sub-shape A — Dead `state.switch` guard** (Core 200S/300S/400S/600S `cycleSpeed`):
+```groovy
+// BROKEN — state.switch is never written; branch permanently dead
+if (state.switch == "off") { on() }
+```
+
+**Sub-shape B — No guard at all** (most humidifier `setMistLevel`/`setMode`, Tower/Pedestal Fan `cycleSpeed`/`setSpeed`(numeric)/`setMode`, EverestAir/SproutAir `setFanSpeed`/`setMode`):
+```groovy
+// BROKEN — no switch-state check before the API call
+def setMistLevel(level) {
+    Integer lvl = Math.max(1, Math.min(9, (level as Integer) ?: 1))
+    def resp = hubBypass("setVirtualLevel", [...], "setMistLevel")
+    // ...
+}
+```
+
+**Sub-shape C — Partial guard (missing re-entrance flag)** (Superior 6000S `setMistLevel`):
+```groovy
+// PARTIAL — missing !state.turningOn check; on() may also lack the flag write
+if (device.currentValue("switch") != "on") on()
+```
+
+**Canonical guard form (all sub-shapes converge here):**
+```groovy
+if (!state.turningOn && device.currentValue("switch") != "on") on()
+```
+
+OR (after Phase 1 lib extraction lands the helper):
+```groovy
+ensureSwitchOn()  // from #include level99.LevoitChildBase
+```
+
+**`on()` companion change required when re-entrance is possible:**
+```groovy
+def on() {
+    if (state.turningOn) return  // re-entrance guard
+    state.turningOn = true
+    try {
+        // ... existing on() body, including any internal setSpeed/setMode calls ...
+    } finally {
+        state.remove("turningOn")
+    }
+}
+```
+
+**Command-method classification (from Round 1.5 audit):**
+- **MUST-ON** — SwitchLevel `setLevel(N>0)` (already covered by BP23). The capability spec mandates auto-on.
+- **SHOULD-ON** — `cycleSpeed`, `setSpeed(numeric)`, `setMistLevel`, `setWarmMistLevel`, `setMode` (including Vital/EverestAir/SproutAir line `setMode` — reclassified SHOULD-ON in v2.9), `setFanSpeed`. Auto-on matches user intent for ≥95% of automation invocations.
+- **SKIP-OK** — (none currently). Reserved for edge cases that fit neither classification.
+- **NO-ON** — `setChildLock`, `setDisplay`, `setTimer`, `cancelTimer`, `resetFilter`, `setHumidity` (target threshold), `setAutoMode`/`setAutoPreference` (preference config), `setSmartCleaningReminder`, `setMute`, `setOscillation`, `setDryingMode`. These configure settings that take effect on next power-on; silently powering on would be surprising to the user.
+
+**Detection:**
+- Grep `state\.switch\s*[=!]=` anywhere in driver code → BP24-A indicator (`state.switch` is never written; any read is a dead branch)
+- Grep methods named `cycleSpeed|setFanSpeed|setSpeed|setMistLevel|setWarmMistLevel|setMode` whose bodies contain `hubBypass(...)` or `sendLevel(...)` but NOT `currentValue("switch")` AND NOT `ensureSwitchOn()` → BP24-B indicator
+- Grep `currentValue("switch") != "on") on()` without preceding `!state.turningOn &&` → BP24-C indicator
+
+**Mechanical enforcement (Layer 5):**
+- Lint RULE-NEXT-A: flag any `state.switch` read in a conditional anywhere in `Drivers/Levoit/*.groovy`. Effectively bans the dead-branch pattern.
+- Lint RULE-NEXT-B: flag SHOULD-ON-classified method bodies that lack the canonical guard or `ensureSwitchOn()` call. Configurable exception list for SKIP-OK methods via `lint_config.yaml` (currently empty — all prior SKIP-OK setMode sites reclassified SHOULD-ON in v2.9).
+- Spock spec template: every SHOULD-ON command method ships with a from-off-state regression test asserting the device is on after the command. Required for new drivers; backfilled for existing drivers in the BP24 fix sweep.
+
+**Reasoning for cataloging this separately from BP23:** the v2.4.1 BP23 fix's scope was scoped to the reported entry point (Room Lighting `setLevel` symptom). The broader semantic class — *"any configure-from-off command should auto-on"* — wasn't named, so subsequent reviews didn't apply the same fix to other entry points. Naming BP24 with `Fix scope: class-wide` ensures future fixes apply across the surface, not just the trigger.
+
+**Affected scope (Round 1.5 audit, 2026-05-03):**
+
+| Drivers | Method | Sub-shape |
+|---|---|---|
+| Core 200S/300S/400S/600S | `cycleSpeed` | BP24-A |
+| Tower Fan, Pedestal Fan | `cycleSpeed` + `setSpeed(numeric)` + `setMode` | BP24-B |
+| Classic 200S/300S, Dual 200S, LV600S, LV600S Hub Connect, OasisMist 450S/1000S, Sprout Humidifier | `setMistLevel`, `setMode` (and `setWarmMistLevel` on LV600S/Hub Connect/OasisMist 450S) | BP24-B |
+| Superior 6000S | `setMistLevel` (partial), `setMode` (no-guard) | BP24-C / BP24-B |
+| EverestAir, SproutAir | `setFanSpeed`, `setMode` | BP24-B |
+
+Vital 100S/200S `cycleSpeed` already has the correct guard (community-fork-era code, written after the concept was understood). Vital `setMode` was SKIP-OK through v2.8, reclassified SHOULD-ON in v2.9: pyvesync `VeSyncAirBaseV2.set_mode` has no power gate, so the prior per-driver skip-when-off was a driver deviation, not an API constraint. It now calls `ensureSwitchOn()` after validation.
+
+**Tier-1 in-Phase-2 fix:** Core line `cycleSpeed` (BP24-A, 4 drivers) + Fan `cycleSpeed`/`setSpeed`/`setMode` (BP24-B, 2 drivers) — same drivers as Phase 2 Core extraction OR adjacent enough to bundle. **Tier-2 separate sweep:** humidifier line. **Tier-3 (completed v2.9):** Vital/EverestAir/SproutAir `setMode` reclassified SHOULD-ON — pyvesync confirms no power gate on `set_mode`; all now call `ensureSwitchOn()` after validation.
+
+**BP24 classification taxonomy** — every on/off setter is classified at the source site with a one-line comment:
+- `// BP24: SHOULD-ON — SwitchLevel/FanControl convention; turn device on if currently off.` — command-type setters where powering on IS implied (speed/level commands). These MUST call `ensureSwitchOn()` before the API call.
+- `// BP24: NO-ON — configures a device preference; powering on is not implied.` — preference-type setters where powering on is NOT implied (display, child lock, auto-stop, drying mode, nightlight, oscillation, etc.). These MUST NOT call `ensureSwitchOn()`.
+- `// BP24: SKIP-OK — non-MUST command; auto-on behavior is device-specific and caller-controlled.` — reserved for edge cases that don't fit either classification.
+
+A site lacking any BP24 comment is flagged by `tests/check_bp24_classification.py` (exits nonzero on any NO-ON site missing the comment). The comment is the classification marker that lets a future maintainer distinguish deliberate-NO-ON from an accidental missing `ensureSwitchOn()` call.
+
+---
+
+## BP25 — C3 gate case-sensitivity — uppercase on/off input bypasses gate and inverts payload
+
+**Fix scope:** class-wide — every on/off setter that (1) performs a `== "on"` or `== "off"` comparison and (2) does not already have a `toLowerCase()` normalization before both the C3 gate and the payload coercion.
+
+**Root cause:** VeSync attribute values are stored and compared as lowercase (`"on"` / `"off"`). Rule Machine passes string command arguments as-typed by the user; dashboard tiles may pass `"ON"` / `"OFF"` from capability string normalization. When input arrives in any case other than lowercase, two bugs fire simultaneously: (a) C3 idempotency gate evaluates `"on" == "ON"` as `false` — bypass fires and a redundant cloud call is made even when state matches; (b) payload coercion evaluates `"ON" == "on"` as `false` — the OPPOSITE command value is sent (e.g., `childLockSwitch:0` when user requested lock, `enabled:false` when user requested enable). Both sub-bugs compound on every uppercase invocation; the device silently receives the wrong command.
+
+**Detection (RULE33a):** grep for `onOff == "on"` or `value == "on"` or `(onOff == "off")` patterns in setter methods. Each match that does not have a preceding `String v = (... as String).toLowerCase()` on the raw parameter is a RULE33a site. `LevoitHumidifierLib.groovy` `doSetDisplayScreenSwitch` / `doSetAutoStopSwitch` are the canonical reference; audit any driver or lib that diverges from the truthy-canon ternary pattern.
+
+**Detection (RULE33b):** grep for `set\w+` AND `doSet\w+` methods that call `toLowerCase()` but whose `sendEvent(name:"attr", value: X)` has `X` assigned via `.toLowerCase()` without a `? "on" : "off"` ternary assignment. These emit raw-normalized values that store `"true"` / `"1"` / `"yes"` as-is in the attribute. RULE33b in `tests/lint_rules/bp25_case_sensitivity.py` flags these automatically; exempts methods with a strict enum-rejection gate (`in ["on","off"]`); covers doSet* shared helpers so blessed-reference regressions are detectable.
+
+**Canonical fix pattern** (from `LevoitHumidifierLib.groovy`'s `doSetDisplayScreenSwitch`):
+```groovy
+def setSomething(onOff) {
+    if (!requireNotNull(onOff, "setSomething")) return
+    String val   = (onOff as String).trim().toLowerCase()              // normalize FIRST
+    String canon = (val in ["on","true","1","yes"]) ? "on" : "off"    // truthy-coerce to canonical
+    if (device.currentValue("attr") == canon) return                   // C3 gate uses canon
+    Integer v = (canon == "on") ? 1 : 0                               // payload uses canon
+    ...
+    device.sendEvent(name:"attr", value: canon)                        // event emits canon
+}
+```
+
+**Why canon, not val:** emitting `val` directly stores truthy inputs (`"true"`, `"1"`, `"yes"`) as-is in the attribute. Consumers that read `device.currentValue("attr")` and compare against `"on"` would fail. The `canon` derivation normalizes ALL truthy forms to `"on"` before storage. RULE33b (`tests/lint_rules/bp25_case_sensitivity.py`) enforces this on both `set*` AND `doSet*` shared-helper definitions; methods of either form that normalize with `toLowerCase()` but emit the raw-normalized variable in `sendEvent` (without a `? "on" : "off"` assignment) are flagged as FAIL. The doSet* coverage is required so regressions in the blessed reference implementation itself (LevoitHumidifierLib `doSetDisplayScreenSwitch` / `doSetAutoStopSwitch`) are caught. LevoitFanLib's strict-enum `doSet*` helpers are correctly exempted via `_STRICT_GATE_RE`.
+
+**Var-name note:** the `val`/`canon`/`v` trio in the canonical pattern (`val` = normalize, `canon` = canonical, `v` = payload Integer) matches `doSetDisplayScreenSwitch`'s variable names, where an explicitly-named Integer payload var is needed for `[screenSwitch: v]`. Per-driver inline implementations that coerce the payload inline (e.g., `Integer v = (canon == "on") ? 1 : 0`) may legitimately use `v` as the normalize String without naming conflict. RULE33b validates emit correctness, not variable names — a per-driver method that normalizes to `v`, derives `canon`, and emits `canon` is correct even though `v` is the normalize var.
+
+**Two behavioral exceptions:**
+- `LevoitFanLib` (`doSetMuteSwitch`, `doSetDisplayScreenSwitch`) and fan-line per-driver setters use a strict enum-rejection gate (`if (!(s in ["on","off"])) return`) that rejects truthy variants outright. After the gate, `s` is bounded to "on"/"off" so emitting `s` is canonical. RULE33b skips these via `_STRICT_GATE_RE` exemption.
+- Multi-state enum setters (`setNightLight` on Classic 300S — three states "off"/"dim"/"bright") are not boolean on/off setters; BP25 does not apply.
+
+**Known sites in v2.5 (all fixed in same diff as catalog entry):**
+| Driver / Library | Method | Sub-bug |
+|---|---|---|
+| `LevoitVitalPurifierLib.groovy` | `setChildLock` | C3 bypass + payload inversion |
+| `LevoitVitalPurifierLib.groovy` | `setDisplay` | C3 bypass + payload inversion |
+| `LevoitCorePurifierLib.groovy` | `setChildLock` | C3 bypass + payload inversion |
+| `LevoitCorePurifierLib.groovy` | `setDisplay` (via `handleDisplayOn`) | C3 bypass + payload inversion |
+| `LevoitClassic200S.groovy` | `setAutoStop` | C3 bypass + payload inversion |
+| `LevoitClassic300S.groovy` | `setAutoStop` | C3 bypass + payload inversion |
+| `LevoitDual200S.groovy` | `setAutoStop` | C3 bypass + payload inversion |
+| `LevoitEverestAir.groovy` | `setDisplay` | payload inversion (no C3 gate) + missing requireNotNull |
+| `LevoitEverestAir.groovy` | `setChildLock` | payload inversion (no C3 gate) + missing requireNotNull |
+| `LevoitEverestAir.groovy` | `setLightDetection` | payload inversion (no C3 gate) + missing requireNotNull |
+
+**Out of scope (already correct):** `LevoitHumidifierLib` `doSetDisplayScreenSwitch` + `doSetAutoStopSwitch` already use the canonical truthy-coercion pattern; fan-line setters use a strict enum-rejection gate (truthy variants rejected at the gate; RULE33b skips via `_STRICT_GATE_RE`).
+
+**Regression guard:** Spock spec for each site must include: (a) `"ON"` (uppercase) test case confirming the API call is made when state differs and the emitted event value is `"on"`; (b) truthy-input test cases (`"true"`, `"1"`) confirming the API payload is `1` and the emitted event value is `"on"` (not `"true"` or `"1"`); (c) C3 suppression test confirming no API call when the attribute already matches the canonical derived value.
+
+**Lint enforcement:** RULE33a (original) flags raw parameter comparison without prior `toLowerCase()`. RULE33b flags methods that normalize with `toLowerCase()` but emit the raw-normalized variable in `sendEvent` without a truthy-canon ternary assignment. Both run on every `tests/lint.py --strict` pass.
+
+**Shipped:** v2.5.x (2026-05-14) across 10 sites in 5 files. Truthy-coercion re-bless (RULE33b + canon ternary) shipped v2.6.
+
+---
+
+## BP26 — unsafe integer coercion on command parameters — `as Integer` throws before `?:` fallback
+
+**API-response-field coercions** in `applyStatus`/`update` are intentionally out of scope — the VeSync API contract guarantees numeric types for device-status fields, so only user-controlled command parameters are untrusted inputs; RULE37's `set*`/`doSet*`/`cycle*`-only method predicate enforces this boundary.
+
+**Fix scope:** class-wide — every command method that coerces a user-supplied numeric parameter via `(x as Integer)`, `(x as int)`, or `.toInteger()` anywhere in the command-parameter handling path.
+
+**Root cause:** In Groovy 2.5.23 (Hubitat sandbox), `(x as Integer)` and `.toInteger()` throw `NumberFormatException` / `GroovyCastException` when `x` is a non-numeric string (`""`, `"abc"`, `"5.7"`, `"true"`). The `?:` Elvis operator catches `null` but NOT thrown exceptions — so `(x as Integer) ?: 0` does NOT produce `0` on `"abc"` input; it propagates the exception. The Hubitat sandbox silently swallows it, leaving the command a no-op with no log entry and no user feedback. Sources of non-numeric args in practice: Rule Machine parameter slot left blank (passes `""` — note: NOT `null`), dashboard numeric tile sends decimal strings (`"5.7"`), hub variable binding passes `"true"` or `"1"`.
+
+**Detection:** grep for `\((\w+) as Integer\)` or `\.toInteger\(\)` in command method parameter paths (i.e., within `def set\w+` / `def cycle\w+` method bodies, before the arg is validated). Filter out sites where the arg is already typed Integer/Number from the Groovy signature (only `Object` / untyped params can receive non-numeric values from Rule Machine).
+
+**Canonical fix:** replace every command-param coercion site with `safeIntArg(x, fallback)` from `LevoitChildBaseLib`:
+```groovy
+// BEFORE (throws on "abc" / "" / "5.7" before ?: can rescue)
+Integer lvl = (level as Integer) ?: 0
+
+// AFTER (never throws; fallback is explicitly stated)
+Integer lvl = safeIntArg(level, 0)
+```
+Fallback semantics: use `0` where 0 maps to an off/reject downstream guard (e.g., `setMistLevel(0) → off()`); use `1` where 1 is a min-floor (e.g., `setFanSpeed` default to lowest speed, not off).
+
+**Known sites (all fixed in v2.6 sweep):** `setLevel` / `setMistLevel` / `setWarmMistLevel` / `setTargetHumidity` / `setHumidity` / `setFanSpeed` / `setTimer` / `setHorizontalRange` / `setVerticalRange` across Core 200S/300S/400S/600S, LevoitCorePurifierLib, LevoitVitalPurifierLib, LevoitFanLib, Superior 6000S, Classic 200S/300S, Dual 200S, LV600S, LV600S HubConnect, OasisMist 450S/1000S, Sprout Humidifier, EverestAir, Sprout Air, Pedestal Fan (~20 sites, 14 files).
+
+**Regression guard:** Spock spec must cover: `setX("abc")`, `setX("")`, `setX("5.7")`, `setX(true)` — each asserts `noExceptionThrown()` AND no API call was made (bad arg rejected cleanly by downstream guard). Required for the 5 representative drivers listed in ITEM 11 of the v2.6 sweep; backfill for others on next per-driver touch.
+
+**Lint enforcement:** RULE37 (`tests/lint_rules/bp26_unsafe_int_coercion.py`) flags bare `as Integer` / `as int` / `.toInteger()` in command-param coercion paths of `set*` / `doSet*` / `cycle*` methods. Two passes:
+
+- **Pass 1 (scalar params):** scalar typed params (`Integer level`, `Number n`) are safe — the Hubitat sandbox enforces the declared type at dispatch, so non-numeric inputs never reach the body. Scalar UNtyped params are unsafe. `doSet*` shared-helper definitions are in scope (they receive the same user-supplied input the public `set*` delegates through unchanged).
+- **Pass 2 (Map-field coercions):** `set*(Map mapParam)` / `set*(colorMap)` (untyped Map-looking param) — Map field values are always `String` at runtime. Canonical case: `setColor(Map colorMap)` on OasisMist 450S. **Partially-guarded methods are still flagged:** `safeIntArg` on one Map field does NOT exempt the whole method — any unguarded field in the same body is still flagged.
+
+**Shipped:** v2.6 (2026-05-14) — ~20 sites across 14 driver/lib files.
+
+---
+
+## BP27 — VeSync API endpoint deprecated via appVersion gate
+
+VeSync periodically tightens its server-side appVersion validation on legacy endpoints. The legacy `/cloud/v1/user/login` (method "login") was hit by this in early 2026 — fresh installs got `code: -11012022 msg: "app version is too low"` despite valid credentials. The symptom user-side is "Login failed - check credentials and retry" even with known-good credentials. The fix shape: align the parent driver's auth flow + `APP_VERSION` + endpoint URLs with pyvesync's current release (3.4.1+). pyvesync moves first when VeSync tightens; this fork follows. `Fix scope: per-instance` — each endpoint deprecation is its own surgery (the v2.7 release migrated `login()` to pyvesync 3.4.1's two-stage OAuth flow; future gate-tightenings on `getDevices`, `bypassV2`, or other endpoints would each need their own migration). Detection: look for inner code `-11012022` or similar version-range codes in error responses; cross-reference pyvesync's `src/pyvesync/const.py` `APP_VERSION` against this driver's `@Field static final String APP_VERSION` constant — drift of more than one minor version is a leading indicator. There is no automatic lint rule yet; the first recurrence of this pattern will trigger adding one (per the coverage-sub-agent calibration: a missing lint rule for a new pattern is WARN-not-FAIL on the first occurrence).
+
+---
+
+## BP28 — non-numeric level/mist value silently turns the device OFF
+
+**Fix scope:** class-wide — every level/mist `set*` method that routes a `safeIntArg(<userParam>, 0)` result into a numeric-threshold branch (`<= 0` / `== 0` / `< <int-literal>`) whose body calls an **off-form** — either a bare `off()` OR a `set*("off")` sub-feature call (e.g. `setNightLight("off")`).
+
+**Root cause:** `safeIntArg(raw, 0)` substitutes its fallback (`0`) on NON-numeric input (BP26's whole point — it must never throw). But when the coerced result then feeds an off-form via a threshold branch, a typo coerces to `0` and turns the device (or a sub-feature) **OFF** — indistinguishable from an explicit `0`. Two off-form shapes seen in this codebase:
+- **Direct power-off:** `Integer lvl = safeIntArg(level, 0); if (lvl <= 0) { off(); return }` — `setMistLevel("hgih")` → device off.
+- **Sub-feature off (Core 200S Light):** `Integer pct = safeIntArg(level, 0, 0, 100); if (pct < 10) { setNightLight("off") }` — `setLevel("brght")` → night-light silently off. Note the off-form is `set*("off")`, not bare `off()`, and the threshold is `< N`, not `<= 0` — the original RULE40 was blind to both, fixed in the v2.8 broadening.
+
+The user expects a typo to be ignored, not to power the device (or its sub-feature) off. (null/empty are already handled upstream by `requireNotNull` / the parser; this is specifically a PRESENT-but-non-numeric value reaching the threshold→off-form branch.)
+
+**Contract:**
+- explicit `0` / low (`"0"`) → off-form (SwitchLevel/MistLevel convention — preserved)
+- non-numeric garbage (`"hgih"`, `"brght"`, `"abc"`) → ignore with a one-line WARN, device stays as-is
+- null / empty → already handled by `requireNotNull` / `parseLevelOrNull` returning null
+
+**Canonical fix:** use `parseLevelOrNull(raw)` from `LevoitChildBaseLib` — the SwitchLevel/MistLevel-aware variant of `safeIntArg` that returns the parsed Integer for genuinely-numeric input (including `"0"` and `"5.7"`→5) and **null** for non-numeric/unparseable/null/empty input:
+```groovy
+// BEFORE (typo -> 0 -> off(), data-loss-equivalent)
+Integer lvl = safeIntArg(level, 0)
+if (lvl <= 0) { off(); return }
+
+// AFTER (typo -> ignored with WARN; explicit 0 still -> off())
+Integer lvl = parseLevelOrNull(level)
+if (lvl == null) { logWarn "setMistLevel: ignoring non-numeric value '${level}'"; return }
+if (lvl <= 0) { off(); return }
+```
+For the `setLevel` 4-arg-clamp form, `parseLevelOrNull(val)` replaces `safeIntArg(val, 0, 0, 100)`; re-apply the `Math.max(0, Math.min(100, pct))` clamp after the null-guard.
+
+**Known sites (all fixed in v2.8):** `setMistLevel` on Superior 6000S, OasisMist 450S/1000S, Sprout Humidifier, LV600S, LV600S HubConnect, Classic 200S/300S, Dual 200S; `setLevel` on LevoitCorePurifierLib, LevoitFanLib, LevoitVitalPurifierLib, Superior 6000S; `setLevel` (set*("off") sub-feature off-form via `< 10` threshold) on Core 200S Light. (14 sites, 13 files.)
+
+**Out of scope (deliberately keep `safeIntArg`):** sites where the fallback-0 is a valid clamp floor (`setHumidity`, brightness), means "no timer" (`setTimer` 0 → cancel), or where 0 is a valid setting (`setWarmMistLevel` 0 = warm-off, not device-off). These have no off-form-on-fallback-0-from-garbage ambiguity.
+
+**Regression guard:** Spock spec per affected driver/lib must assert BOTH: (a) `setMistLevel("garbage")` / `setLevel("garbage")` → no off-form (`off()` or `set*("off")`) / no cloud command (device stays), AND (b) `setMistLevel(0)` / `setLevel(0)` → the off-form still fires. The (b) leg guards against an over-correction that breaks the explicit-0/low contract.
+
+**Lint enforcement:** RULE40 (`tests/lint_rules/bp28_level_off_ambiguity.py`) flags a `set*` body ONLY when all four conditions hold (the conjunction prevents false positives on benign numeric branches): (i) a local is assigned from `safeIntArg(<firstParam>, 0 ...)` (fallback-0, any overload); (ii) that local feeds a numeric-threshold branch (`<= 0` / `== 0` / `< <int-literal>`); (iii) the branch body calls an off-form — `off()` OR `set*("off")`; (iv) no `parseLevelOrNull` guard is present. Presence of `parseLevelOrNull` exempts; threshold branches whose operand is a computed/clamped internal (not `safeIntArg(<param>,0)`) are not flagged; a `safeIntArg`-fed `< N` branch whose body does NOT call an off-form is not flagged. Must-catch fixtures cover `<=0`/`==0`→`off()`, `safeIntArg(_,0,0,100)`→`off()`, and `< 10`→`setNightLight("off")`; must-not-catch fixtures cover the parseLevelOrNull-guarded forms, a `safeIntArg`-fed no-off()-branch, a non-param-fed off(), and a `safeIntArg`-fed `< N` with no off-form. All in `tests/lint_test.py::TestRule40BP28LevelOffAmbiguity`.
+
+**Shipped:** v2.8.
+
+---
+
+## BP29 — BYPASS_DEVICE_IS_OFF error spam
+
+VeSync rejects a bypassV2 write with inner result code `11005000` (= `BYPASS_DEVICE_IS_OFF`, per pyvesync `src/pyvesync/utils/errors.py`) when the target device is powered OFF. Fleet-wide V2-device behavior — affects `setDisplay`, `setMistLevel`, `setTargetHumidity`, `setChildLock`, etc. Before the fix, every such rejection fell through `httpOk()`'s `inner != 0` branch and the caller's `else` branch logged a generic `logError "X write failed"` + `recordError(...)` into the diagnostics ERROR ring-buffer — daily ERROR spam for an EXPECTED condition (e.g. a scheduled rule firing `setDisplay` on an off humidifier). Philosophy (locked): "send the command, let the cloud be the authority" — purely reactive handling of the returned code, NOT a per-command pre-check/pre-skip. Note: pyvesync flags `11005000` `critical_error=True`, but this fork deliberately treats device-off as an EXPECTED non-fault (WARN) because a powered-off device is a normal user state, not a hardware error. `Fix scope: class-wide` — every V2-device (`httpOk`-path) write-failure branch on a preference/scheduling setter that does NOT auto-power-on (BP24 NO-ON). **Stateless design (no cross-call state).** The first cut used a disk-persisted `state.lastWriteDeviceOff` sentinel (set by `httpOk` on device-off, consulted by `logError`/`recordError`); QA found it leaked — a device-off rejection on a NO-ON setter that never re-enters `httpOk` left the flag TRUE persisted indefinitely, so a LATER unrelated validation error (e.g. `setMode("badvalue")`) or poll-callback `recordError` got wrongly suppressed. The sentinel is removed entirely. Replacement is leak-free by construction: a stateless helper in `LevoitChildBase` — `reportWriteFailure(String tag, resp, Map ctx=[:])` — inspects the `resp` passed in **at call time** via `isDeviceOffResp(resp)` (`resp?.data?.result?.code == BYPASS_DEVICE_IS_OFF`): device-off ⇒ ONE WARN (no ERROR, no `recordError`); any other failure ⇒ the prior `logError(tag) + recordError(tag, ctx)`. Because the decision is made from the per-call envelope only, a device-off rejection on one command can never suppress a different command's genuine error. `httpOk()` no longer logs/sets anything for device-off — it just returns false (DEBUG trace kept); `logError`/`recordError` are back to their plain definitions. The named constant `BYPASS_DEVICE_IS_OFF = 11005000` (`@groovy.transform.Field static final`) is unchanged. Migrated callers (NO-ON write-failure branches, ~32 sites across 14 files): LevoitHumidifierLib (`doSetDisplayScreenSwitch`, `doSetAutoStopSwitch`, `doSetTargetHumidity`, `doSetDisplayStateSwitch`, `doSetAutoStopEnabled`); LevoitFanLib (`doSetMuteSwitch`, `doSetDisplayScreenSwitch`); LevoitClassic200S (`setDisplay`); LevoitClassic300S (`setNightLight`); LevoitEverestAir (`setDisplay`, `setChildLock`, `setLightDetection`, `resetFilter`, `setTimer`, `cancelTimer`); LevoitLV600SHubConnect (`setHumidity`); LevoitOasisMist1000S (`setHumidity`, `setNightlight` toggle + brightness); LevoitOasisMist450S (`setNightlightSwitch`, `setColor`); LevoitPedestalFan (`setHorizontalOscillation`, `setVerticalOscillation`, `setHorizontalRange`, `setVerticalRange`, `setChildLock`, `setSmartCleaningReminder`); LevoitSproutAir (`setDisplay`, `setChildLock`, `setNightlightMode`); LevoitSproutHumidifier (`setChildLock`, `setDryingMode`, `setNightlight`, `setHumidity`); LevoitSuperior6000S (`setTargetHumidity`, `setChildLock`, `setDryingMode`); LevoitTowerFan (`setOscillation`, `setTimer`, `cancelTimer`). Out of scope (NOT migrated, by design): validation-error branches (no `resp`/no `httpOk` — e.g. invalid-mode/invalid-value rejects) stay on plain `logError + recordError`; SHOULD-ON setters (`setLevel`/`setSpeed`/`setMode`/`setMistLevel`) call `ensureSwitchOn()` first so device-off is not their expected failure and a write-fail there IS a genuine fault worth recording; Vital line NO-ON setters (`LevoitVitalPurifierLib.setChildLock`/`setDisplay`, `LevoitVital200S.setLightDetection`) have NO error branch at all (silently no-op on failure) so never spammed; Core line is unaffected (`checkHttpResponse()` inspects HTTP status only, never the inner code, so a Core write returning HTTP 200 + inner 11005000 already returns true). Scope is `11005000` ONLY (the Tier-29 Sup6000S sleep-mode pre-check is a separate inner-`-1` shape, NOT folded in). The WARN message is PII-free by construction (numeric code + the static `tag` only; no user input, email, token, or device id interpolated); full child-`logWarn` sanitize routing is a separate broader change, out of scope here. Regression coverage: `LevoitChildBaseLibSpec` BP29 block — the leak-regression spec (device-off on one call, then a separate validation-error call hits `logError`+`recordError` with NO intervening `httpOk` ⇒ asserts the genuine error IS logged AND recorded, proving no cross-call suppression), plus device-off ⇒ one WARN / no ERROR / no ring-buffer record, genuine `-1` and HTTP-500 negatives still flow, and `reportWriteFailure` device-off-vs-genuine routing; `VeSyncIntegrationVirtualSpec` BP29 harness (opt-in `state.injectInnerCode` one-shot envelope injection for live A2 device-off verification). Companion (already shipped pre-fix): `setMistLevel(>0)` on all 9 humidifier drivers already calls `ensureSwitchOn()` (BP24 SHOULD-ON), so an intent-to-mist command powers the device on first and never hits 11005000.
+
+---
+
+## Note on numbering
+
+BP1 through BP29 are all present and consecutive; there is no BP30. The numbering matches the lint-rule filenames (`bp24_*`, `bp25_case_sensitivity.py`, `bp26_unsafe_int_coercion.py`, `bp28_level_off_ambiguity.py`, etc.) and the Spock spec names, which are the authoritative source: BP24 = auto-on-from-off, BP25 = C3 gate case-sensitivity, BP26 = unsafe integer coercion (`safeIntArg`).

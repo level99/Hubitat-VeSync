@@ -576,4 +576,384 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         driver.canonOnOff(1) == "on"
         driver.canonOnOff(0) == "off"
     }
+
+    // -------------------------------------------------------------------------
+    // BP29 — BYPASS_DEVICE_IS_OFF (inner code 11005000) handling via the STATELESS
+    // reportWriteFailure() helper. (No persisted sentinel — see CLAUDE.md BP29.)
+    //
+    // VeSync rejects a bypassV2 write with inner result code 11005000 when the
+    // target device is powered OFF. This is an EXPECTED condition (e.g. a scheduled
+    // rule firing setDisplay on an off humidifier), not a fault. The caller's
+    // write-failure branch routes through reportWriteFailure(tag, resp, ctx):
+    //   - device-off (11005000) => ONE WARN naming the cause, no ERROR, no record.
+    //   - any other failure      => the prior logError(tag) + recordError(tag, ctx).
+    // The device-off-vs-fault decision is made from the `resp` passed in at call
+    // time, so it CANNOT leak across calls (the prior design used a disk-persisted
+    // state.lastWriteDeviceOff sentinel that leaked into later unrelated errors;
+    // that sentinel is GONE — these specs assert the leak is impossible).
+    //
+    // NON-VACUITY: each test asserts a discriminating signal that only holds under
+    // the BP29 logic. The leak-regression spec is the load-bearing one: it drives a
+    // device-off rejection, THEN a separate error with NO intervening httpOk, and
+    // asserts the second (genuine) error IS logged AND recorded. Under any persisted
+    // suppression flag that survives across commands, that assertion goes RED.
+    // Reverting reportWriteFailure's isDeviceOffResp() branch to always logError +
+    // recordError makes the "device-off => one WARN / no ERROR / no record" specs go
+    // RED. (Orchestrator owns the both-ways proof.)
+    // -------------------------------------------------------------------------
+
+    // Build a TestHttpResponse-shaped map carrying an arbitrary inner result code.
+    private Map respWithInnerCode(Object innerCode) {
+        return [
+            status: 200,
+            data: [
+                code: 0,
+                result: [code: innerCode, result: [:], traceId: "t"],
+                traceId: "t"
+            ]
+        ]
+    }
+
+    def "reportWriteFailure: device-off (11005000) logs exactly one WARN, no ERROR, no ring-buffer record (BP29)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+
+        when: "the caller's write-failure branch reports a device-off envelope"
+        driver.reportWriteFailure("Display write failed", respWithInnerCode(11005000), [method: "setDisplay"])
+
+        then: "exactly one WARN, naming BYPASS_DEVICE_IS_OFF + the tag + that it was not applied"
+        testLog.warns.count { it.contains("BYPASS_DEVICE_IS_OFF") } == 1
+        testLog.warns.any { it.contains("Display write failed") && it.contains("device is off") && it.contains("not applied") }
+
+        and: "no generic ERROR for an expected condition"
+        !testLog.errors.any { it.contains("Display write failed") }
+
+        and: "nothing appended to the error ring-buffer for this device"
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).isEmpty()
+    }
+
+    def "reportWriteFailure: a genuine inner-error (-1) logs ERROR + records, no device-off WARN (BP29 negative)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+
+        when:
+        driver.reportWriteFailure("Display write failed", respWithInnerCode(-1), [method: "setDisplay"])
+
+        then: "NOT classified as device-off"
+        !testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+
+        and: "the genuine failure IS logged and recorded"
+        testLog.errors.any { it.contains("Display write failed") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).size() == 1
+    }
+
+    def "reportWriteFailure: a null/transport-failure resp is treated as a genuine fault (BP29 boundary)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+
+        when: "no inner code available (e.g. HTTP 500 / null resp)"
+        driver.reportWriteFailure("Display write failed", [status: 500, data: null], [method: "setDisplay"])
+
+        then: "not device-off — real fault logged + recorded"
+        !testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        testLog.errors.any { it.contains("Display write failed") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).size() == 1
+    }
+
+    def "isDeviceOffResp: true only for inner 11005000; false for 0, -1, null, transport failure (BP29 predicate)"() {
+        expect:
+        driver.isDeviceOffResp(respWithInnerCode(11005000))
+        !driver.isDeviceOffResp(respWithInnerCode(0))
+        !driver.isDeviceOffResp(respWithInnerCode(-1))
+        !driver.isDeviceOffResp(respWithInnerCode(null))
+        !driver.isDeviceOffResp([status: 500, data: null])
+        !driver.isDeviceOffResp(null)
+    }
+
+    // BP29 crash-repro (load-bearing both-ways guard). On a non-JSON error response
+    // (CDN/gateway HTTP 502/504 with a raw HTML body), hubBypass returns
+    // [status:5xx, data:"<html>...</html>"] — resp.data is a NON-NULL String. The
+    // pre-fix predicate did `resp?.data?.result?.code`: ?. guards null but NOT
+    // wrong-type, so .result is a property access on a String and throws
+    // groovy.lang.MissingPropertyException, crashing the driver from the write-fail
+    // branch. The instanceof-Map guards make this return false instead.
+    //
+    // DISCRIMINATION: against the OLD code this spec FAILS — the property access on a
+    // String throws MissingPropertyException, so the `notThrown` block goes RED. Against
+    // the fixed code resp.data is not a Map, the chained guard short-circuits, and the
+    // predicate returns false. (Orchestrator owns the both-ways proof.)
+    def "isDeviceOffResp: non-JSON String body (HTTP 502/504 HTML) does NOT throw and returns false (BP29 crash-repro)"() {
+        when: "a gateway error whose inner resp.data is a raw HTML String, not a Map"
+        boolean result = driver.isDeviceOffResp([status: 502, data: "<html><body>502 Bad Gateway</body></html>"])
+
+        then: "no MissingPropertyException — the property access on a String is never attempted"
+        notThrown(Exception)
+
+        and: "a non-Map body is not a device-off envelope"
+        result == false
+    }
+
+    def "isDeviceOffResp: still returns true for the genuine device-off Map shape (BP29 fix did not break detection)"() {
+        expect: "the canonical device-off envelope [status:200, data:[result:[code:11005000]]]"
+        driver.isDeviceOffResp([status: 200, data: [result: [code: 11005000]]])
+    }
+
+    def "isDeviceOffResp: returns false for a normal-success Map and for null (BP29 fix regression net)"() {
+        expect:
+        !driver.isDeviceOffResp([status: 200, data: [result: [code: 0]]])
+        !driver.isDeviceOffResp(null)
+    }
+
+    // BP29 crash-repro for the hubBypass() callback's inner-code peel (sibling site).
+    // The callback runs UNCONDITIONALLY on every hubBypass call (the logDebug trace
+    // always fires since callers pass a tag) and is NOT wrapped in try/catch — so a
+    // non-JSON 502/504 HTML body (resp.data is a non-null String) made the pre-fix
+    // `resp?.data?.result?.code` throw MissingPropertyException INSIDE the async
+    // callback, before reportWriteFailure/isDeviceOffResp could ever run.
+    //
+    // The harness CAN deliver a String-bodied response with no changes: TestParent
+    // drives the callback with cannedResponse, and TestHttpResponse.getData() returns
+    // backing.data untyped — so a String `data` surfaces verbatim to resp.data.
+    //
+    // DISCRIMINATION: against the OLD callback line this spec FAILS — the property
+    // access on the String throws inside the callback, so the `notThrown` block goes
+    // RED. Against the type-guarded line the `instanceof Map` check is false, inner is
+    // null, the logDebug trace prints "inner null", and no exception is thrown.
+    // (Orchestrator owns the both-ways proof.)
+    def "hubBypass: non-JSON String body (HTTP 502/504 HTML) does NOT throw in the callback (BP29 sibling crash-repro)"() {
+        given: "debug on so the always-fired trace line evaluates `inner`"
+        settings.debugOutput = true
+        testParent.cannedResponse = [status: 502, data: "<html><body>502 Bad Gateway</body></html>"]
+
+        when: "a write whose response carries a raw HTML String body reaches the hubBypass callback"
+        def resp = driver.hubBypass("setDisplay", [screenSwitch: 1], "setDisplay")
+
+        then: "the callback's inner-code peel did not throw on the String body"
+        notThrown(Exception)
+
+        and: "the transport result still surfaces the status and the raw String data unchanged"
+        resp.status == 502
+        resp.data == "<html><body>502 Bad Gateway</body></html>"
+    }
+
+    def "httpOk: device-off (11005000) returns false but does NOT itself log WARN/ERROR or record (BP29 — reporting is the caller's job)"() {
+        given:
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        state.remove("errorHistory")
+
+        when:
+        boolean ok = driver.httpOk(respWithInnerCode(11005000))
+
+        then: "treated as failure"
+        ok == false
+
+        and: "httpOk no longer owns the device-off WARN (reportWriteFailure does)"
+        !testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+
+        and: "no ring-buffer record from httpOk for a device-off inner code"
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).isEmpty()
+    }
+
+    def "httpOk: HTTP-status failure (non-2xx) logs ERROR + records (unchanged by BP29)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+
+        when:
+        boolean ok = driver.httpOk([status: 500, data: null])
+
+        then:
+        ok == false
+        testLog.errors.any { it.contains("HTTP 500") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).size() == 1
+    }
+
+    // LOAD-BEARING leak-regression spec (the exact QA-flagged BLOCKING):
+    // A device-off rejection on one command must NOT suppress a later, unrelated
+    // genuine error that hits logError/recordError with NO intervening httpOk.
+    // Under the prior persisted-sentinel design this assertion went RED (the flag
+    // set by the device-off command stayed TRUE and swallowed the next error).
+    // The stateless reportWriteFailure makes cross-call suppression impossible.
+    def "BP29 leak regression: device-off on one command does NOT suppress a later unrelated error (no persisted state)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+
+        when: "command A: a NO-ON preference setter on an off device gets device-off"
+        driver.reportWriteFailure("Display write failed", respWithInnerCode(11005000), [method: "setDisplay"])
+
+        then: "A was handled quietly — one WARN, no ERROR, no record"
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Display write failed") }
+        ((state.errorHistory ?: [:]) as Map)["test-device-001"] in [null, []]
+
+        when: "command B (LATER, separate): a validation-error branch logs+records directly, NO httpOk between"
+        driver.logError("Unknown mode: badvalue")
+        driver.recordError("Unknown mode: badvalue", [method: "setMode"])
+
+        then: "the genuine error IS logged (not suppressed by any leaked device-off state)"
+        testLog.errors.any { it.contains("Unknown mode: badvalue") }
+
+        and: "and IS recorded into the diagnostics ring-buffer"
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).any { it.msg.contains("Unknown mode: badvalue") }
+    }
+
+    // -------------------------------------------------------------------------
+    // BP22 — child-side network-outage dedup. During a known network outage
+    // (parent.isNetworkUnreachable() == true) the parent never invokes the child's
+    // sendBypassRequest callback, so a write returns the [status:-1] transport sentinel
+    // and the child's write-fail branches would log one ERROR + recordError per command
+    // per retrigger for the whole outage. The parent already surfaces the outage once
+    // (BP22 first-fire WARN + hourly re-surface), so the child DOWNGRADES its write-fail
+    // ERROR+record to a single DEBUG while the outage is known. Outside an outage the
+    // genuine-failure path (ERROR + record) is preserved unchanged.
+    //
+    // The downgrade is centralized in three shared LevoitChildBase points:
+    //   httpOk()           — the non-2xx transport-failure branch
+    //   reportWriteFailure — the resp-bearing write-fail helper (BP29)
+    //   reportWriteError   — the no-resp write-fail helper (per-driver bare branches)
+    //
+    // NON-VACUITY / both-ways: each test pairs outage-true (DEBUG, no ERROR/record) with
+    // outage-false (ERROR + record). Reverting the networkOutageKnown() downgrade in any of
+    // the three points makes the corresponding outage-true assertion go RED (it would log an
+    // ERROR + record instead of staying quiet). (Orchestrator owns the revert/mutation proof.)
+    // -------------------------------------------------------------------------
+
+    def "httpOk: transport failure during a known outage logs DEBUG only — no ERROR, no record (BP22)"() {
+        given:
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = true
+
+        when: "the [status:-1] transport sentinel (parent never invoked the callback) reaches httpOk during an outage"
+        boolean ok = driver.httpOk([status: -1, data: null])
+
+        then: "still a failure"
+        ok == false
+
+        and: "downgraded: a DEBUG naming the outage, NOT an ERROR"
+        testLog.debugs.any { it.contains("network outage") && it.contains("BP22") }
+        !testLog.errors.any { it.contains("HTTP -1") }
+
+        and: "nothing recorded into the diagnostics ring-buffer"
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).isEmpty()
+    }
+
+    def "httpOk: transport failure with NO outage still logs ERROR + records (BP22 negative / both-ways)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = false
+
+        when:
+        boolean ok = driver.httpOk([status: -1, data: null])
+
+        then: "genuine HTTP failure path preserved"
+        ok == false
+        testLog.errors.any { it.contains("HTTP -1") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).size() == 1
+    }
+
+    def "reportWriteFailure: transport failure during a known outage logs DEBUG only — no ERROR, no record (BP22)"() {
+        given:
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = true
+
+        when:
+        driver.reportWriteFailure("Mode write failed: auto", [status: -1, data: null], [method: "setMode"])
+
+        then: "downgraded to DEBUG; no ERROR, no record"
+        testLog.debugs.any { it.contains("network outage") && it.contains("BP22") }
+        !testLog.errors.any { it.contains("Mode write failed") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).isEmpty()
+    }
+
+    def "reportWriteFailure: transport failure with NO outage still logs ERROR + records (BP22 negative / both-ways)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = false
+
+        when:
+        driver.reportWriteFailure("Mode write failed: auto", [status: -1, data: null], [method: "setMode"])
+
+        then:
+        testLog.errors.any { it.contains("Mode write failed") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).size() == 1
+    }
+
+    def "reportWriteFailure: device-off is checked BEFORE the outage downgrade (device-off WARN never masked) (BP22 ordering)"() {
+        given: "a (hypothetical) device-off envelope while an outage flag is also set"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = true
+
+        when: "the resp carries the device-off inner code (cannot really co-occur with a transport outage, but assert ordering)"
+        driver.reportWriteFailure("Display write failed", respWithInnerCode(11005000), [method: "setDisplay"])
+
+        then: "the device-off WARN fires (device-off branch is first), not the outage DEBUG"
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Display write failed") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).isEmpty()
+    }
+
+    def "reportWriteError: write-fail during a known outage logs DEBUG only — no ERROR, no record (BP22)"() {
+        given:
+        settings.descriptionTextEnable = true
+        settings.debugOutput = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = true
+
+        when: "a no-resp bare write-fail branch reports via the unified helper during an outage"
+        driver.reportWriteError("Failed to turn on device", [method: "on"])
+
+        then: "downgraded to DEBUG; no ERROR, no record"
+        testLog.debugs.any { it.contains("network outage") && it.contains("BP22") }
+        !testLog.errors.any { it.contains("Failed to turn on device") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).isEmpty()
+    }
+
+    def "reportWriteError: write-fail with NO outage logs ERROR + records (BP22 negative / both-ways)"() {
+        given:
+        settings.descriptionTextEnable = true
+        state.remove("errorHistory")
+        testParent.networkUnreachable = false
+
+        when:
+        driver.reportWriteError("Failed to turn on device", [method: "on"])
+
+        then: "genuine fault path preserved"
+        testLog.errors.any { it.contains("Failed to turn on device") }
+        def hist = (state.errorHistory ?: [:]) as Map
+        (hist["test-device-001"] ?: []).size() == 1
+    }
+
+    def "networkOutageKnown is parent-null-safe and false by default (no outage)"() {
+        given: "default TestParent reports no outage"
+        testParent.networkUnreachable = false
+
+        expect: "the gate returns false, so callers behave exactly as pre-BP22"
+        driver.networkOutageKnown() == false
+    }
 }

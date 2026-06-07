@@ -271,7 +271,7 @@ def check_rule27_bp18_null_guard(path, raw_lines, cleaned_lines, raw_text, confi
                     f"and arithmetic comparisons like `if ({arg_name} < N)` both throw "
                     f"NullPointerException when `{arg_name}` is null. Hubitat's driver sandbox "
                     f"discards driver exceptions silently — the user sees nothing: no attribute "
-                    f"change, no log entry, no error. See Bug Pattern #18 in CLAUDE.md."
+                    f"change, no log entry, no error. See Bug Pattern #18 in docs/BUG-PATTERNS.md."
                 ),
                 fix=(
                     f"Add a null-guard at the top of {method_name}(), before the first use of "

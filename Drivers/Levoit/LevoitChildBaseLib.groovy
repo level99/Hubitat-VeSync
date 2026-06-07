@@ -25,6 +25,9 @@ library(
     documentationLink: "https://github.com/level99/Hubitat-VeSync/blob/main/CONTRIBUTING.md"
 )
 
+@groovy.transform.Field
+static final Integer BYPASS_DEVICE_IS_OFF = 11005000  // pyvesync utils/errors.py: device powered OFF (expected, not a fault)
+
 def logInfo(msg)   { if (settings?.descriptionTextEnable) log.info  msg }
 def logDebug(msg)  { if (settings?.debugOutput)           log.debug msg }
 def logError(msg)  { log.error msg }
@@ -306,7 +309,12 @@ private hubBypass(method, Map data=[:], tag=null, cb=null) {
     def rspObj = [status: -1, data: null]
     parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
         rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
+        // Type-guard before peeling: on a non-JSON error response (CDN/gateway HTTP
+        // 502/504 with a raw HTML body) resp.data is a non-null String. The ?. operator
+        // guards null but NOT wrong-type, so a bare resp?.data?.result?.code would do a
+        // property access on a String and throw MissingPropertyException inside this
+        // async callback. inner is null on a non-Map body (no inner code to report).
+        def inner = (resp?.data instanceof Map) ? resp.data.result?.code : null
         if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
         if (cb) cb(resp)
     }
@@ -319,9 +327,108 @@ private boolean httpOk(resp) {
     if (st in [200,201,204]) {
         def inner = resp?.data?.result?.code
         if (inner == null || inner == 0) return true
+        // BP29: device-off (inner 11005000) is an EXPECTED rejection, not a fault. httpOk()
+        // simply returns false; the caller's failure branch decides how to report it.
+        // Branches routed through reportWriteFailure() emit one WARN (no ERROR/record) for
+        // device-off — the classification is stateless (re-inspects the same resp), so it
+        // cannot leak into a later unrelated error. (DEBUG note kept for trace fidelity.)
         logDebug "HTTP 200, innerCode ${inner}"
         return false
     }
-    logError "HTTP ${st}"; recordError("HTTP ${st}", [site:"httpOk"])
+    // BP22 child-side dedup: during a known network outage, parent.sendBypassRequest never
+    // invokes the callback (breaker-return or httpPost throws), so resp stays the [status:-1]
+    // transport-failure sentinel and this branch would log one ERROR + record per child per
+    // retrigger for the whole outage. The parent already surfaces the outage (first-fire WARN
+    // + hourly re-surface), so downgrade to a single DEBUG and skip the record. When NOT in a
+    // known outage this is a genuine HTTP failure → unchanged ERROR + record.
+    if (networkOutageKnown()) {
+        logDebug "HTTP ${st} suppressed during known network outage (BP22)"
+        return false
+    }
+    logError "HTTP ${st}"; recordError("HTTP ${st}", [method:"httpOk"])
     return false
+}
+
+// BP22 child-side dedup gate: true when the parent reports a known network outage
+// (state.networkUnreachableSince set). Parent-null-safe by construction — in standalone
+// or unit-test contexts where parent is null or lacks the method, returns false so the
+// caller behaves EXACTLY as before this gate existed (full ERROR + recordError path).
+private boolean networkOutageKnown() {
+    try {
+        if (parent?.respondsTo("isNetworkUnreachable")) {
+            return parent.isNetworkUnreachable() ? true : false
+        }
+    } catch (ignored) {}
+    return false
+}
+
+// BP29: stateless device-off predicate — inspects THIS envelope's inner result code.
+// No persisted state, so it cannot misclassify a later call. Used by reportWriteFailure().
+//
+// Each level is instanceof-Map-guarded before the property access: on a non-JSON error
+// response (e.g. a CDN/gateway HTTP 502/504 with a raw HTML body) the inner resp.data is a
+// non-null String, so a bare resp?.data?.result would do a property access on a String and
+// throw MissingPropertyException. The ?. operator only guards null, not wrong-type — hence
+// the explicit type guards.
+private boolean isDeviceOffResp(resp) {
+    return (resp instanceof Map &&
+            resp.data instanceof Map &&
+            resp.data.result instanceof Map &&
+            resp.data.result.code == BYPASS_DEVICE_IS_OFF)
+}
+
+// BP29: stateless write-failure reporter. Call from a write-failure branch (after
+// httpOk(resp) returned false) instead of a bare `logError(...) + recordError(...)`:
+//
+//   def resp = hubBypass("setDisplay", [screenSwitch: v], "setDisplay")
+//   if (httpOk(resp)) { ...success... }
+//   else reportWriteFailure("Display write failed", resp, [method:"setDisplay"])
+//
+// Leak-free by construction: the device-off vs genuine-fault decision is made from the
+// `resp` passed in at call time, NOT from any cross-call sentinel. A device-off rejection
+// on one command can never suppress a different command's genuine error.
+//   - device-off (11005000)  => ONE WARN, no ERROR, no diagnostics ring-buffer record.
+//     The WARN message is PII-free by construction (numeric code + the static tag only;
+//     no user input, email, token, or device identifier is interpolated). Full child-level
+//     logWarn sanitize routing is a separate, broader change (out of scope here).
+//   - any other inner code / HTTP failure => the prior behavior: logError + recordError.
+// `tag` is the human-readable failure message; `ctx` is the recordError context map.
+def reportWriteFailure(String tag, resp, Map ctx = [:]) {
+    // device-off is checked FIRST: a device-off rejection (inner 11005000) only arrives on a
+    // SUCCESSFUL round-trip, which cannot occur during a transport outage — so the order is
+    // safe either way, but keeping it first guarantees a genuine device-off WARN is never
+    // masked by the outage downgrade when NOT actually in an outage.
+    if (isDeviceOffResp(resp)) {
+        // BP29: device-off (inner 11005000) is an EXPECTED condition on V2 devices, not a
+        // hardware fault — a powered-off device is a normal user state. So WARN once and skip
+        // the diagnostics ring-buffer record. (pyvesync flags 11005000 critical_error=True;
+        // this fork deliberately diverges. Full detail in docs/BUG-PATTERNS.md BP29.)
+        logWarn "${tag}: device is off — VeSync rejected the command (BYPASS_DEVICE_IS_OFF, code ${BYPASS_DEVICE_IS_OFF}); not applied"
+        return
+    }
+    // BP22 child-side dedup: during a known network outage the resp is a transport-failure
+    // sentinel (status -1 / 500, no inner 11005000). Downgrade to a single DEBUG and skip the
+    // record — the parent already surfaces the outage. Outside an outage → genuine fault path.
+    if (networkOutageKnown()) {
+        logDebug "${tag} (suppressed during known network outage, BP22)"
+        return
+    }
+    logError tag
+    recordError(tag, ctx)
+}
+
+// BP22 child-side dedup: network-aware reporter for the per-driver bare write-fail branches
+// that do NOT have a `resp` in scope to route through reportWriteFailure() (e.g. on()/off()'s
+// "Failed to turn on/off device" and setSpeedLevel/setMode "write failed" branches, where the
+// write went through handlePower()/httpOk() and only a boolean ok flag survives). Centralizing
+// these through one helper makes the whole write-fail-error class network-aware in one place.
+//   - known outage  => single DEBUG, no ERROR, no record (parent already surfaced the outage)
+//   - otherwise     => the prior behavior: logError(tag) + recordError(tag, ctx)
+def reportWriteError(String tag, Map ctx = [:]) {
+    if (networkOutageKnown()) {
+        logDebug "${tag} (suppressed during known network outage, BP22)"
+        return
+    }
+    logError tag
+    recordError(tag, ctx)
 }

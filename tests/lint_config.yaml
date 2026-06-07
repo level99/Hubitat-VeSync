@@ -176,29 +176,12 @@ pii_token_allowlist:
 # classification — this list only suppresses the RULE32 FAIL finding; it does
 # not change whether a guard is required.
 
-bp24_auto_on_exemptions:
-  # Vital 100S / 200S setMode: SKIP-OK — V2 API (VeSyncAirPurifierHA) rejects
-  # mode changes while the device is off.  on() internally calls setMode as
-  # part of its configureOnState() sequence; an external auto-on from setMode
-  # would race against that sequence.  The Vital drivers already have the
-  # !state.turningOn guard implemented correctly; RULE32 would not fire on them
-  # anyway (guard is present), but documenting SKIP-OK classification here for
-  # clarity when future drivers are added.
-  - file: "Drivers/Levoit/LevoitVital100S.groovy"
-    method: "setMode"
-    rationale: >
-      SKIP-OK: V2 API rejects mode changes on off-state Vital 100S. on()
-      internally configures workMode; external auto-on from setMode races
-      against on()'s own mode init. Vital 100S setMode already has the
-      !state.turningOn guard and returns early if switch is off. Consistent
-      with pyvesync VeSyncAirPurifierHA class behavior.
-  - file: "Drivers/Levoit/LevoitVital200S.groovy"
-    method: "setMode"
-    rationale: >
-      SKIP-OK: Same as Vital 100S. V2 API rejects mode changes on off-state
-      Vital 200S. on() configures workMode internally; external auto-on races.
-      Already has !state.turningOn guard. Consistent with pyvesync
-      VeSyncAirPurifierHA class behavior.
+# All prior Vital 100S/200S setMode SKIP-OK entries were removed in the v2.9
+# BP24 SHOULD-ON mode-setter sweep: pyvesync VeSyncAirBaseV2.set_mode has no
+# power gate, so the per-driver skip-when-off was a driver deviation, not an API
+# constraint. setMode now lives in the shared lib as SHOULD-ON with an
+# ensureSwitchOn() guard; the per-driver-file exemptions are stale no-ops.
+bp24_auto_on_exemptions: []
 
 
 # ---------------------------------------------------------------------------
@@ -249,110 +232,10 @@ exemptions:
 
   # ---------------------------------------------------------------------------
   # RULE32 — BP24-B/C auto-on guard missing exemptions
-  # Entries are grouped by tier (Tier-1 = Fan line, Tier-2 = humidifier line,
-  # Tier-3 = EverestAir/SproutAir, pending live-capture of API behavior).
-  # TODO: remove each entry when the corresponding BP24 fix sweep lands.
+  # All prior setMode "pending live-capture / SKIP-OK" exemptions (Tier-1 Fan,
+  # Tier-2 humidifier, Tier-3 EverestAir/SproutAir) were resolved in the v2.9
+  # BP24 SHOULD-ON mode-setter sweep: pyvesync VeSyncAirBaseV2/humidifier set_mode
+  # has no power gate (the V2 API accepts mode changes while off and reports the
+  # device ON on success), so every flagged setMode is now SHOULD-ON with an
+  # ensureSwitchOn() guard. No RULE32 exemptions remain.
   # ---------------------------------------------------------------------------
-
-  # -- Tier-1: Fan line (TowerFan, PedestalFan) — setMode only --
-  # Phase 5 (v2.5): cycleSpeed() BP24-B fixed in LevoitFanLib; setSpeed() BP24-B
-  # fixed in each driver's per-driver setSpeed body (ensureSwitchOn() added).
-  # Only remaining BP24-B violation per fan: setMode (pending live-capture of
-  # V2 fan API off-state behavior — potentially SKIP-OK like Vital line setMode).
-
-  - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitTowerFan.groovy"
-    reason: >
-      SKIP-OK-pending exemption (post-Phase-5 setSpeed fix, v2.5): only remaining
-      BP24-B violation is setMode() (calls hubBypass via setTowerFanMode). setMode
-      classification is pending live-capture of V2 fan API behavior while device is
-      off — potentially SKIP-OK if the V2 fan firmware rejects mode changes while
-      off (same concern as Vital line setMode). Remove this entry when live-capture
-      confirms mode classification and either the fix lands or setMode is promoted
-      to bp24_auto_on_exemptions.
-
-  - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitPedestalFan.groovy"
-    reason: >
-      SKIP-OK-pending exemption (post-Phase-5 setSpeed fix, v2.5): only remaining
-      BP24-B violation is setMode() (calls hubBypass via setFanMode). Same
-      classification concern as TowerFan setMode — pending live-capture of V2 fan
-      API behavior while off. Remove when live-capture resolves the classification.
-
-  # -- Tier-2: Humidifier line — setMistLevel, setWarmMistLevel, setMode --
-  # Fix expected in separate humidifier sweep batch (after Tier-1).
-
-  # LV600S: all three methods (setMode, setMistLevel, setWarmMistLevel) fixed in Phase 4 Round 4.
-  # LV600SHubConnect: setMistLevel + setWarmMistLevel fixed. setMode is SKIP-OK (V2-family --
-  #   same VeSyncLV600S class as Vital line; V2 API rejects mode changes while device is off).
-  - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitLV600SHubConnect.groovy"
-    reason: >
-      SKIP-OK exemption: BP24-B on setMode() only. LV600S Hub Connect uses VeSyncLV600S
-      class (V2-family API: powerSwitch/switchIdx, workMode). V2 API rejects mode changes
-      while device is off (same behaviour as Vital line setMode). setMistLevel and
-      setWarmMistLevel have been fixed with ensureSwitchOn() in Phase 4 Round 4.
-      setMode is intentionally left without auto-on guard pending live-capture confirmation
-      of V2 API off-state mode rejection. Remove this entry when live-capture confirms
-      mode classification (either fixed as SHOULD-ON or promoted to bp24_auto_on_exemptions).
-
-  # OasisMist 450S: all three methods (setMode, setMistLevel, setWarmMistLevel) fixed in Phase 4 Round 4.
-
-  # OasisMist 1000S, Sprout Humidifier, Superior 6000S:
-  # setMistLevel BP24-B exemptions removed — ensureSwitchOn() added in Phase 4 Round 5.
-  # setMode SKIP-OK exemptions added below for each (V2-family; same API off-state behavior).
-
-  - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitOasisMist1000S.groovy"
-    reason: >
-      SKIP-OK exemption: BP24-B on setMode() only. OasisMist 1000S uses VeSyncHumid1000S
-      class (V2-family API: powerSwitch/switchIdx, workMode). V2 API rejects mode changes
-      while device is off (same behaviour as Vital line setMode). setMistLevel has been fixed
-      with ensureSwitchOn() in Phase 4 Round 5. setMode is intentionally left without auto-on
-      guard pending live-capture confirmation of V2 API off-state mode rejection. Remove this
-      entry when live-capture confirms mode classification (either fixed as SHOULD-ON or
-      promoted to bp24_auto_on_exemptions).
-
-  - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitSproutHumidifier.groovy"
-    reason: >
-      SKIP-OK exemption: BP24-B on setMode() only. Sprout Humidifier uses VeSyncSproutHumid
-      class (V2-family API: powerSwitch/switchIdx, workMode:'autoPro' for auto). V2 API rejects
-      mode changes while device is off. setMistLevel has been fixed with ensureSwitchOn() in
-      Phase 4 Round 5. setMode is intentionally left without auto-on guard pending live-capture
-      confirmation. Remove this entry when live-capture confirms mode classification.
-
-  - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitSuperior6000S.groovy"
-    reason: >
-      SKIP-OK exemption: BP24-B on setMode() only. Superior 6000S uses VeSyncSuperior6000S
-      class (V2-family API: powerSwitch/switchIdx, workMode:'autoPro' for auto). V2 API rejects
-      mode changes while device is off. setMistLevel BP24-C partial guard was upgraded to full
-      ensureSwitchOn() in Phase 4 Round 5. setMode is intentionally left without auto-on guard
-      pending live-capture confirmation. Remove this entry when live-capture confirms mode
-      classification (either fixed as SHOULD-ON or promoted to bp24_auto_on_exemptions).
-
-  # -- Tier-3: EverestAir / SproutAir setMode + setFanSpeed --
-  # Deferred: API behavior while device is off is unconfirmed (live-capture
-  # needed before classifying setMode as SHOULD-ON vs SKIP-OK). setFanSpeed
-  # is more clearly SHOULD-ON but bundled with setMode for same-diff coherence.
-
-  - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitEverestAir.groovy"
-    reason: >
-      SKIP-OK-pending exemption: setFanSpeed() is now fixed (ensureSwitchOn() added,
-      v2.5 Tier-3 batch). Only remaining BP24-B site is setMode(), deferred pending
-      live-capture: EverestAir uses V2 API (VeSyncAirBaseV2 class); if the V2 API
-      rejects mode changes while off (same behaviour as Vital line setMode), then
-      setMode is SKIP-OK rather than SHOULD-ON. Remove this entry when Tier-3
-      live-capture confirms the mode classification and either the fix lands or
-      setMode is promoted to bp24_auto_on_exemptions.
-
-  - rule_id: "RULE32_auto_on_guard_missing"
-    file: "Drivers/Levoit/LevoitSproutAir.groovy"
-    reason: >
-      SKIP-OK-pending exemption: setFanSpeed() is now fixed (ensureSwitchOn() added,
-      v2.5 Tier-3 batch). Only remaining BP24-B site is setMode(), deferred pending
-      live-capture (same V2-API concern as EverestAir). Remove this entry when
-      Tier-3 live-capture confirms the mode classification and either the fix lands
-      or setMode is promoted to bp24_auto_on_exemptions.

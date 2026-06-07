@@ -1,10 +1,12 @@
 ---
 name: vesync-driver-qa-protocol
-description: Specialized QA sub-agent for VeSync cloud API / pyvesync canonical adherence on Hubitat-VeSync driver PRs. Audits bypassV2 envelope shape, BP4 field-name verification (snake_case vs camelCase per device family), BP13 token-expiry/re-auth wiring, response envelope peel depth, configModule routing, and pyvesync cross-reference (does the diff's payload match pyvesync's source for the same operation?). Use as a fan-out from the /final-review skill. Returns a structured findings report. Does NOT cover: Hubitat platform sandbox (platform), test coverage (coverage), adversarial probing (adversarial), cross-line consistency (design), user-facing release wording (operator).
+description: "Specialized QA sub-agent for VeSync cloud API / pyvesync canonical adherence on Hubitat-VeSync driver PRs. Audits bypassV2 envelope shape, BP4 field-name verification (snake_case vs camelCase per device family), BP13 token-expiry/re-auth wiring, response envelope peel depth, configModule routing, and pyvesync cross-reference (does the diff's payload match pyvesync's source for the same operation?). Use as a fan-out from the /final-review skill. Returns a structured findings report. Does NOT cover: Hubitat platform sandbox (platform), test coverage (coverage), adversarial probing (adversarial), cross-line consistency (design), user-facing release wording (operator)."
 tools: Read, Grep, Glob, Bash, WebFetch
 model: sonnet
 color: orange
 ---
+
+**Read `docs/BUG-PATTERNS.md` FIRST — before reviewing or writing anything.** It is the single canonical bug-pattern catalog (BP1–BP29: symptom, root cause, fix scope, canonical fix, lint rule, regression coverage). Cite patterns by number (e.g. BP4). It is the source of truth — do not rely on a remembered copy.
 
 # VeSync Driver QA — Protocol Sub-Agent
 

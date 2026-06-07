@@ -202,6 +202,21 @@ class LevoitTowerFanSpec extends HubitatSpec {
         testLog.errors.any { it.contains("turbo") || it.contains("unknown") }
     }
 
+    def "off() re-entrance guard: second call while turningOff=true is a no-op"() {
+        // Regression guard: FanLib off() symmetric re-entrance guard (state.turningOff).
+        // Defensive symmetry with on(); a re-entrant off() must short-circuit.
+        given:
+        settings.descriptionTextEnable = false
+        state.turningOff = true
+
+        when:
+        driver.off()
+
+        then: "no setSwitch API call because re-entrance was blocked"
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
+        noExceptionThrown()
+    }
+
     def "setSpeed('on') calls on() -- Hubitat FanControl capability convention (Theme A)"() {
         // Hubitat FanControl.setSpeed accepts 'on' as a valid enum value meaning 'resume at
         // prior/default speed'. Previously this fell through to the unknown-enum error path.
@@ -540,6 +555,43 @@ class LevoitTowerFanSpec extends HubitatSpec {
 
         and: "error was logged"
         testLog.errors.any { it.contains("invalid") || it.contains("must be") }
+    }
+
+    // -------------------------------------------------------------------------
+    // BP24 SHOULD-ON: setMode from off-state turns the fan on (v2.9).
+    // NON-VACUITY: deleting the ensureSwitchOn() line in setMode makes the on()
+    // assertion go RED (no setSwitch powerSwitch=1 fires).
+    // -------------------------------------------------------------------------
+
+    def "BP24: setMode('auto') from off-state turns the fan on before the mode command"() {
+        given: "fan is off, turningOn flag clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        testParent.allRequests.clear()
+
+        when: "setMode('auto') is called on an off fan"
+        driver.setMode("auto")
+
+        then: "on() fired — setSwitch with powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+
+        and: "the mode command (setTowerFanMode) was sent"
+        testParent.allRequests.find { it.method == "setTowerFanMode" } != null
+    }
+
+    def "BP24: invalid mode on an off fan does NOT auto-power it on (validate-before-on)"() {
+        given: "fan is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        testParent.allRequests.clear()
+
+        when: "an invalid mode is sent"
+        driver.setMode("invalid-mode")
+
+        then: "no on() fired (validation rejected before ensureSwitchOn)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
     }
 
     // -------------------------------------------------------------------------
@@ -901,20 +953,46 @@ class LevoitTowerFanSpec extends HubitatSpec {
         testLog.errors.isEmpty()
     }
 
-    def "BP23: on() sets and clears state.turningOn to prevent re-entrance from setLevel"() {
-        // on() must set state.turningOn before the API call so that any internal path that
-        // calls setLevel() during turn-on (e.g. speed restoration) doesn't loop back into on().
-        given: "device is off"
+    def "BP23: on() sets state.turningOn TRUE during the API call and clears it after"() {
+        // on() must set state.turningOn = true BEFORE the setSwitch API call so that any
+        // internal path that re-enters on() during turn-on (e.g. a speed/level command) hits
+        // the `if (state.turningOn) return` re-entrance guard instead of looping back.
+        //
+        // NON-VACUITY: the request-time snapshot below goes RED if LevoitFanLib.on() omits
+        // `state.turningOn = true`. A spec that asserts only the post-condition (cleared after
+        // on() returns) would PASS even with that line deleted — that vacuity is what this
+        // closes. The callback in hubBypass fires synchronously inside on()'s try block while
+        // turningOn is still true, so snapshotting state.turningOn at request time observes the
+        // flag mid-flight.
+        given: "device is off, turningOn clear, and a request-time snapshot hook installed"
         testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        def turningOnAtRequestTime = null
+        // Capture state.turningOn at the moment the setSwitch(power=1) request is recorded.
+        // `state` is the same live Map the driver mutates (HubitatSpec injects getState), so
+        // reading it here reflects the value at the instant on() issues the API call.
+        def realSend = testParent.&sendBypassRequest
+        testParent.metaClass.sendBypassRequest = { dev, Map payload, Closure cb ->
+            if (payload.method == "setSwitch" && payload.data?.powerSwitch == 1) {
+                turningOnAtRequestTime = state.turningOn
+            }
+            realSend(dev, payload, cb)
+        }
 
         when: "on() completes"
         driver.on()
 
-        then: "state.turningOn was cleared after on() returned (try/finally guarantee)"
+        then: "state.turningOn was TRUE when the setSwitch API call fired (re-entrance guard armed)"
+        turningOnAtRequestTime == true
+
+        and: "state.turningOn was cleared after on() returned (try/finally guarantee)"
         !state.containsKey("turningOn") || state.turningOn == null
 
         and: "switch event was emitted as on"
         lastEventValue("switch") == "on"
+
+        cleanup:
+        testParent.metaClass = null
     }
 
     // -------------------------------------------------------------------------
@@ -1088,6 +1166,29 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "setOscillationSwitch" }
         req != null
         req.data.oscillationSwitch == 1
+    }
+
+    // #127 BP24 NO-ON regression guard — setOscillation must NOT auto-power-on when
+    // called from off (oscillation is a preference; cloud accepts-but-doesn't-persist
+    // while off). Goes RED if someone later adds ensureSwitchOn(). Also asserts the
+    // off-state INFO fires (informational; command is still sent).
+    def "setOscillation('on') from off does NOT auto-power-on (BP24 NO-ON) and notes off-state (#127)"() {
+        given: "device is off; oscillation currently off so C3 gate does not suppress the call"
+        settings.descriptionTextEnable = true
+        testDevice.events.add([name: "switch", value: "off"])
+        testDevice.events.add([name: "oscillation", value: "off"])
+
+        when:
+        driver.setOscillation("on")
+
+        then: "no on() — no setSwitch powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "the oscillation command was still sent (send & let the cloud decide)"
+        testParent.allRequests.find { it.method == "setOscillationSwitch" } != null
+
+        and: "the off-state INFO note fired"
+        testLog.infos.any { it.contains("will apply when the fan is powered on") }
     }
 
     // ---- C3 idempotency gate: setMute (via doSetMuteSwitch in LevoitFanLib) ----

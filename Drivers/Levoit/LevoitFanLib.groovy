@@ -132,13 +132,20 @@ def on() {
 
 def off() {
     logDebug "off()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(power=0)")
-    if (httpOk(resp)) {
-        logInfo "Power off"
-        state.lastSwitchSet = "off"
-        device.sendEvent(name:"switch", value:"off")
-    } else {
-        logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"])
+    // Defensive symmetry with on()'s guard; no active re-entrance vector into off() today.
+    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
+    state.turningOff = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(power=0)")
+        if (httpOk(resp)) {
+            logInfo "Power off"
+            state.lastSwitchSet = "off"
+            device.sendEvent(name:"switch", value:"off")
+        } else {
+            logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"])
+        }
+    } finally {
+        state.remove('turningOff')
     }
 }
 
@@ -235,7 +242,7 @@ private boolean sendLevel(Integer level) {
         logInfo "Speed: L${level} (${enumVal})"
         return true
     } else {
-        logError "Speed write failed for level ${level}"; recordError("Speed write failed for level ${level}", [method:"setLevel"])
+        reportWriteError("Speed write failed for level ${level}", [method:"setLevel"])
         return false
     }
 }
@@ -307,7 +314,8 @@ def doSetMuteSwitch(onOff) {
         device.sendEvent(name:"mute", value: s)
         logInfo "Mute: ${s}"
     } else {
-        logError "Mute write failed"; recordError("Mute write failed", [method:"setMuteSwitch"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Mute write failed", resp, [method:"setMuteSwitch"])
     }
 }
 
@@ -325,7 +333,19 @@ def doSetDisplayScreenSwitch(onOff) {
         device.sendEvent(name:"displayOn", value: s)
         logInfo "Display: ${s}"
     } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
+        reportWriteFailure("Display write failed", resp, [method:"setDisplay"])
+    }
+}
+
+// Informational note for the 5 oscillation/range setters (Tower + Pedestal): when the
+// fan is off, the cloud accepts an oscillation/range write but the device silently
+// discards it (oscillation geometry only persists while running, live-verified). The
+// command is still SENT (BP29 "send & let the cloud be the authority" — no skip/pre-check);
+// this INFO just keeps a rule author from being confused when the setting doesn't appear
+// to take until the fan is powered on. Gated by descriptionTextEnable via logInfo.
+private void noteOscillationOffState() {
+    if (device.currentValue("switch") != "on") {
+        logInfo "Fan is off — oscillation setting will apply when the fan is powered on"
     }
 }
 

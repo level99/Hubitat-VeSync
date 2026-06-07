@@ -63,7 +63,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Levoit Superior 6000S (LEH-S601S) evaporative humidifier — mist 1-9, target humidity, modes, drying mode, auto-stop, water pump cleaning, ambient temp; canonical pyvesync payloads",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -121,11 +121,15 @@ Map powerPayload(boolean on){ [powerSwitch: on ? 1 : 0, switchIdx: 0] }
 // toggle: provided by #include level99.LevoitHumidifier (state.lastSwitchSet preferred pattern)
 
 // ---------- Mode ----------
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (matches speed/level
+//   setters; pyvesync set_mode has no power gate and sets device ON on success). ensureSwitchOn()
+//   runs AFTER validation so invalid input cannot wake an off device.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","manual","sleep"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
+    ensureSwitchOn()
     // autoPro is the canonical API value for "auto" on Superior 6000S
     String apiMode = (m == "auto") ? "autoPro" : m
     def resp = hubBypass("setHumidityMode", [workMode: apiMode], "setHumidityMode(${apiMode})")
@@ -134,8 +138,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"
-        recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
+        reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
 
@@ -166,8 +169,7 @@ def setMistLevel(level){
         device.sendEvent(name:"level", value: percentFromLevel(clamped))
         logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${clamped}"
-        recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
+        reportWriteError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -211,8 +213,8 @@ def setTargetHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"
-        recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Target humidity write failed: ${p}", resp, [method:"setTargetHumidity"])
     }
 }
 
@@ -245,7 +247,7 @@ def setChildLock(onOff){
     if (httpOk(resp)) {
         device.sendEvent(name:"childLock", value: canon)
         logInfo "Child lock: ${canon}"
-    } else { logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"]) }
+    } else { reportWriteFailure("Child lock write failed", resp, [method:"setChildLock"]) }
 }
 
 // BP24: NO-ON — configures a device preference; powering on is not implied.
@@ -260,7 +262,7 @@ def setDryingMode(onOff){
     Integer v = (canon == "on") ? 1 : 0
     def resp = hubBypass("setDryingMode", [autoDryingSwitch: v], "setDryingMode(${canon})")
     if (httpOk(resp)) logInfo "Drying mode auto-switch set: ${canon}"
-    else { logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"]) }
+    else { reportWriteFailure("Drying mode write failed", resp, [method:"setDryingMode"]) }
 }
 
 // refresh, update (0/1/2-arg): provided by #include level99.LevoitHumidifier

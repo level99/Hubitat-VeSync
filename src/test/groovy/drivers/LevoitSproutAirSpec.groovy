@@ -608,6 +608,20 @@ class LevoitSproutAirSpec extends HubitatSpec {
         noExceptionThrown()
     }
 
+    def "off() re-entrance guard: second call while turningOff=true is a no-op"() {
+        // Regression guard: off() symmetric re-entrance guard (state.turningOff).
+        // Defensive symmetry with on(); a re-entrant off() must short-circuit.
+        given:
+        state.turningOff = true
+
+        when:
+        driver.off()
+
+        then: "no setSwitch API call because re-entrance was blocked"
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
+        noExceptionThrown()
+    }
+
     def "setFanSpeed(null) is rejected with logWarn and no API call (BP18 Fix 2)"() {
         // Pre-fix: (null as Integer) -> NPE in sandbox.
         // Post-fix: requireNotNull rejects null before any coercion.
@@ -690,5 +704,46 @@ class LevoitSproutAirSpec extends HubitatSpec {
         setter         | apiMethod      | attr
         "setDisplay"   | "setDisplay"   | "displayOn"
         "setChildLock" | "setChildLock" | "childLock"
+    }
+
+    // -------------------------------------------------------------------------
+    // BP24 SHOULD-ON: setMode from off-state turns the device on (v2.9).
+    // The OUTER ensureSwitchOn() in setMode is the load-bearing guard for BOTH the
+    // mode and manual paths. NON-VACUITY: deleting that ensureSwitchOn() line makes
+    // the on() assertion for the non-manual path go RED (expected revert -> RED).
+    // -------------------------------------------------------------------------
+
+    def "BP24: setMode('auto') from off-state turns the device on before the mode command"() {
+        given: "device is off, turningOn flag clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        testParent.allRequests.clear()
+
+        when: "setMode('auto') is called on an off device"
+        driver.setMode("auto")
+
+        then: "on() fired — setSwitch with powerSwitch=1 was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+
+        and: "the mode command (setPurifierMode) was sent"
+        testParent.allRequests.find { it.method == "setPurifierMode" } != null
+    }
+
+    def "BP24: invalid mode on an off device does NOT auto-power it on (validate-before-on)"() {
+        given: "device is off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        testParent.allRequests.clear()
+
+        when: "an invalid mode is sent"
+        driver.setMode("turbo")
+
+        then: "no on() fired (validation rejected before ensureSwitchOn)"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+
+        and: "no mode command was sent"
+        testParent.allRequests.find { it.method == "setPurifierMode" } == null
     }
 }

@@ -157,7 +157,7 @@ Hubitat library files are deployed via the `/library/saveOrUpdateJson` endpoint,
 
 | `message:` value | Root cause | Fix path |
 |---|---|---|
-| `"Internal error"` | **BP20 platform bug** — library parser rejects certain content shapes (file-scope commentary, dense `//` blocks, paraphrased trigger text). Library NOT saved on hub. | Trim file-scope commentary in source. See BP20 entry in `vesync-driver-qa.md`. Feed back to dev. |
+| `"Internal error"` | **BP20 platform bug** — library parser rejects certain content shapes (file-scope commentary, dense `//` blocks, paraphrased trigger text). Library NOT saved on hub. | Trim file-scope commentary in source. See BP20 entry in `docs/BUG-PATTERNS.md`. Feed back to dev. |
 | `"Malformed library definition"` | **JSON encoding bug** in YOUR request body. The Hubitat JSON parser rejected the request itself before the library parser even ran. NOT a content issue with the source file. | Fix the request construction (use `json.dumps()`), retry. **Do NOT edit the source.** |
 
 These two messages look superficially similar but mean opposite things. Misdiagnosis wastes a round of dev/QA work and may "fix" a non-bug by editing source unnecessarily.

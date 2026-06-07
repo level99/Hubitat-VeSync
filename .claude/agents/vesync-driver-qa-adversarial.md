@@ -1,11 +1,13 @@
 ---
 name: vesync-driver-qa-adversarial
-description: Red-team QA sub-agent for Hubitat-VeSync driver PRs. Tries to break the diff via null/empty/unicode/negative/oversized inputs, race conditions in async callbacks, state transitions that bypass guards, C3 idempotency edge cases, Rule Machine "blank parameter slot" patterns, and the rare-but-painful BP failure shapes (token-mid-call, hub-reboot-mid-poll, configModule-stale-mid-cycle). Use as a fan-out from the /final-review skill. Returns a structured findings report. Does NOT cover: API protocol shape (protocol), platform sandbox quirks (platform), test coverage (coverage), cross-line consistency (design), user-facing release wording (operator).
+description: "Red-team QA sub-agent for Hubitat-VeSync driver PRs. Tries to break the diff via null/empty/unicode/negative/oversized inputs, race conditions in async callbacks, state transitions that bypass guards, C3 idempotency edge cases, Rule Machine \"blank parameter slot\" patterns, and the rare-but-painful BP failure shapes (token-mid-call, hub-reboot-mid-poll, configModule-stale-mid-cycle). Use as a fan-out from the /final-review skill. Returns a structured findings report. Does NOT cover: API protocol shape (protocol), platform sandbox quirks (platform), test coverage (coverage), cross-line consistency (design), user-facing release wording (operator)."
 tools: Read, Grep, Glob, Bash
 model: opus
 effort: max
 color: red
 ---
+
+**Read `docs/BUG-PATTERNS.md` FIRST — before reviewing or writing anything.** It is the single canonical bug-pattern catalog (BP1–BP29: symptom, root cause, fix scope, canonical fix, lint rule, regression coverage). Cite patterns by number (e.g. BP4). It is the source of truth — do not rely on a remembered copy.
 
 # VeSync Driver QA — Adversarial Sub-Agent
 

@@ -95,8 +95,17 @@ SOFTWARE.
 //                  - Recovery: INFO "reachable again after Xh Ym" + all state fields cleared
 //                    on first successful httpPost() completion.
 //                  - Non-network exceptions keep existing logError path.
-//                  - New state: state.networkUnreachableSince (Long), state.lastNetworkWarnAt (Long),
-//                    state.lastNetworkProbeAt (Long), state.networkProbeInFlight (Boolean).
+//                  - New state: state.networkUnreachableSince (Long), state.networkProbeInFlight (Boolean).
+// 2026-06-06: v2.9 BP22 cadence hardening — the hourly WARN and 5-min recovery-probe interval
+//                  now key off EPOCH BUCKET integers (now()/3600000 and now()/300000) instead of
+//                  elapsed-time deltas against stored timestamps. During 120s+ poll cycles,
+//                  concurrent updateDevices() cycles could read a stale timestamp before the first
+//                  write flushed and re-fire the WARN / re-probe several times in a ~1-min burst.
+//                  A bucket integer is identical for every concurrent read in the same window, so a
+//                  stale read can't re-fire. Replaces state.lastNetworkWarnAt / lastNetworkProbeAt
+//                  with state.lastNetworkWarnHourBucket (Long) / state.lastNetworkProbeBucket (Long).
+//                  Also: child drivers now query the new public isNetworkUnreachable() to suppress
+//                  their own per-command write-fail ERROR+recordError spam during a known outage.
 // 2026-05-01: v2.4  Bug Pattern #21 — bounded self-heal backoff for chronically-offline devices.
 //                  - ensurePollHealth() now caps self-heal Resync attempts per device at 3.
 //                    After 3 failed attempts the device is marked offline in state
@@ -364,7 +373,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson (original); Dan Cox (fork: Vital 200S, Superior 6000S, parent fixes); elfege (contributor)",
         description: "Integrates Levoit air purifiers and humidifiers with Hubitat Elevation via VeSync cloud API",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"
@@ -464,7 +473,7 @@ def initialize() {
         getDevices()
     } else {
         logError "Login failed - check credentials and retry"
-        recordError("Login failed - check credentials and retry", [site:"initialize"])
+        recordError("Login failed - check credentials and retry", [method:"initialize"])
     }
 }
 
@@ -820,28 +829,39 @@ private boolean isNetworkException(Exception e) {
  *
  * Parallels emitOfflineWarnsIfDue() (BP21) but operates at the parent level:
  * network outages affect all children identically, so a single parent-level
- * state pair suffices (vs. the per-DNI maps of BP21).
+ * state field suffices (vs. the per-DNI maps of BP21).
  *
- * Defense-in-depth: if state.lastNetworkWarnAt is somehow absent while
- * networkUnreachableSince is set (e.g. state from a pre-BP22 hub install),
- * seeds lastNetworkWarnAt = now() and skips this cycle — same null-guard
- * lesson learned from the BP21 transition-cycle bug.
+ * EPOCH-HOUR BUCKET cadence (not an elapsed-time delta): the WARN fires at most
+ * once per calendar epoch-hour bucket (now()/3600000ms). The prior elapsed-delta
+ * form (now() - lastNetworkWarnAt >= 1h) was vulnerable to a state-write-flush race
+ * during 120s+ poll cycles: concurrent updateDevices() cycles could each read a STALE
+ * lastNetworkWarnAt before the first WARN's write flushed, so several WARNs fired in a
+ * ~1-min burst at the 1h mark. With a bucket, every concurrent cycle in the same hour
+ * computes the SAME bucket integer and compares equal to the already-stored bucket —
+ * a stale read in the same hour simply can't re-fire. Only a genuinely new hour bucket
+ * differs from the stored value and emits.
+ *
+ * Defense-in-depth: if state.lastNetworkWarnHourBucket is absent while
+ * networkUnreachableSince is set (e.g. state migrated from a pre-bucket install),
+ * seeds the current bucket and skips this cycle — same null-guard lesson from the
+ * BP21 transition-cycle bug.
  *
  * Called at the top of updateDevices() after emitOfflineWarnsIfDue().
  */
 private void emitNetworkWarnIfDue() {
     if (state.networkUnreachableSince == null) return
-    long nowMs = now()
-    Long lastWarnAt = state.lastNetworkWarnAt as Long
-    if (lastWarnAt == null) {
-        // Defense-in-depth: seed and skip this cycle.
-        state.lastNetworkWarnAt = nowMs
+    long bucket = (now() / 3600000L) as long
+    Long lastBucket = state.lastNetworkWarnHourBucket as Long
+    if (lastBucket == null) {
+        // Defense-in-depth: seed the current bucket and skip this cycle (the first-fire
+        // WARN was already emitted when the outage was detected).
+        state.lastNetworkWarnHourBucket = bucket
         return
     }
-    if (nowMs - lastWarnAt >= 3600000L) {
+    if (bucket != lastBucket) {
         String durStr = formatOfflineDuration(state.networkUnreachableSince as long)
         logWarn "BP22: VeSync API still unreachable for ${durStr}. Check hub network / DNS / VeSync service status."
-        state.lastNetworkWarnAt = nowMs
+        state.lastNetworkWarnHourBucket = bucket
     }
 }
 
@@ -879,16 +899,16 @@ private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCal
                     continue
                 }
                 logError "${label}: Connection pool shut down after ${maxAttempts} attempts"
-                recordError("${label}: Connection pool shut down after ${maxAttempts} attempts", [site:"retryableHttp"])
+                recordError("${label}: Connection pool shut down after ${maxAttempts} attempts", [method:"retryableHttp"])
             } else {
                 logError "${label}: IllegalStateException - ${e.message}"
-                recordError("${label}: IllegalStateException - ${e.message}", [site:"retryableHttp"])
+                recordError("${label}: IllegalStateException - ${e.message}", [method:"retryableHttp"])
             }
             return false
         }
         catch (Exception e) {
             logError "${label}: ${e.toString()}"
-            recordError("${label}: ${e.toString()}", [site:"retryableHttp"])
+            recordError("${label}: ${e.toString()}", [method:"retryableHttp"])
             if (e.metaClass.respondsTo(e, 'getResponse')) {
                 try {
                     checkHttpResponse(label, e.getResponse())
@@ -1048,7 +1068,7 @@ private Map getAuthorizationCode() {
         if (innerCode == CROSS_REGION_ERROR_CODE) {
             logError "getAuthorizationCode: Account is registered in a different VeSync region. Toggle the deviceRegion preference between US and EU and try again."
             recordError("getAuthorizationCode: cross-region at Stage 1 — toggle deviceRegion preference",
-                        [site:"getAuthorizationCode"])
+                        [method:"getAuthorizationCode"])
             return
         }
 
@@ -1056,7 +1076,7 @@ private Map getAuthorizationCode() {
             def innerMsg = resp.data?.msg
             logError "getAuthorizationCode: VeSync inner code=${innerCode} msg='${innerMsg}'"
             recordError("getAuthorizationCode: inner failure code=${innerCode} msg='${innerMsg}'",
-                        [site:"getAuthorizationCode"])
+                        [method:"getAuthorizationCode"])
             return
         }
         // Inner code == 0 — extract result fields. Defensive against missing fields:
@@ -1073,7 +1093,7 @@ private Map getAuthorizationCode() {
         } else {
             logError "getAuthorizationCode: HTTP 200 + code=0 but missing authorizeCode/accountID — VeSync API shape changed?"
             recordError("getAuthorizationCode: missing result fields (HTTP 200 + code=0)",
-                        [site:"getAuthorizationCode"])
+                        [method:"getAuthorizationCode"])
         }
     }
     return result
@@ -1101,7 +1121,7 @@ private Map getAuthorizationCode() {
 private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String bizToken, String regionChange, int retryDepth) {
     if (retryDepth >= MAX_CROSS_REGION_RETRIES) {
         logError "exchangeAuthCode: cross-region retry depth ${retryDepth} exceeded MAX_CROSS_REGION_RETRIES=${MAX_CROSS_REGION_RETRIES} — giving up"
-        recordError("exchangeAuthCode: cross-region retry depth exceeded", [site:"exchangeAuthCode"])
+        recordError("exchangeAuthCode: cross-region retry depth exceeded", [method:"exchangeAuthCode"])
         return false
     }
 
@@ -1196,7 +1216,7 @@ private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String
             } else {
                 logError "exchangeAuthCode: cross-region (code=${innerCode}) but no bizToken in response — cannot retry"
                 recordError("exchangeAuthCode: cross-region without bizToken (code=${innerCode})",
-                            [site:"exchangeAuthCode"])
+                            [method:"exchangeAuthCode"])
             }
             return
         }
@@ -1205,7 +1225,7 @@ private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String
             def innerMsg = resp.data?.msg
             logError "exchangeAuthCode: VeSync inner code=${innerCode} msg='${innerMsg}'"
             recordError("exchangeAuthCode: inner failure code=${innerCode} msg='${innerMsg}'",
-                        [site:"exchangeAuthCode"])
+                        [method:"exchangeAuthCode"])
             return
         }
 
@@ -1229,7 +1249,7 @@ private Boolean exchangeAuthCode(String authCode, String stage1AccountID, String
         } else {
             logError "exchangeAuthCode: HTTP 200 + code=0 but missing token — VeSync API shape changed?"
             recordError("exchangeAuthCode: missing token in result (HTTP 200 + code=0)",
-                        [site:"exchangeAuthCode"])
+                        [method:"exchangeAuthCode"])
         }
     }
 
@@ -1365,17 +1385,22 @@ def Boolean updateDevices()
     // the per-call breaker doesn't re-block the probe call in each child's sendBypassRequest.
     // Cleared in a try/finally below regardless of cycle success or failure.
     if (state.networkUnreachableSince != null) {
-        long nowMs = now()
-        long lastProbeAt = (state.lastNetworkProbeAt as Long) ?: (state.networkUnreachableSince as Long)
-        long sinceLastProbe = nowMs - lastProbeAt
-        if (sinceLastProbe < 300000L) {
-            logDebug "BP22: skipping updateDevices cycle (network unreachable; next probe in ${(int)((300000L - sinceLastProbe) / 1000)}s)"
+        // EPOCH 5-MIN BUCKET probe interval (not an elapsed-time delta): allow at most one
+        // recovery probe per 5-min epoch bucket (now()/300000ms). Same stale-read race as the
+        // WARN cadence — concurrent cycles reading a stale probe timestamp before the first
+        // probe's write flushed could double-probe in a ~1-min burst. A bucket makes every
+        // concurrent cycle in the same 5-min window compute the same integer, so only a genuinely
+        // new bucket lets a probe through.
+        long probeBucket = (now() / 300000L) as long
+        Long lastProbeBucket = state.lastNetworkProbeBucket as Long
+        if (lastProbeBucket != null && probeBucket == lastProbeBucket) {
+            logDebug "BP22: skipping updateDevices cycle (network unreachable; waiting for next 5-min probe bucket)"
             return false
         }
-        // Probe interval elapsed — let the full cycle run as a recovery probe.
-        state.lastNetworkProbeAt = nowMs
+        // New probe bucket — let the full cycle run as a recovery probe.
+        state.lastNetworkProbeBucket = probeBucket
         state.networkProbeInFlight = true
-        logDebug "BP22: probing updateDevices cycle for network recovery (last probe ${(int)(sinceLastProbe / 1000)}s ago)"
+        logDebug "BP22: probing updateDevices cycle for network recovery (probe bucket ${probeBucket})"
     }
 
     // Stop if driver is reloading.
@@ -1484,7 +1509,7 @@ def Boolean updateDevices()
                             // DEBUG for counts 1-4; ensurePollHealth() fires the INFO at count==5.
                             logDebug "BP21: ${method} returned empty for ${dni} (${newCount} consecutive)"
                         }
-                        recordError("No status returned from ${method}", [site:"updateDevices"], dni)
+                        recordError("No status returned from ${method}", [method:"updateDevices"], dni)
                     } else {
                         // Successful poll — clear the stale-configModule counter for this DNI.
                         // Same whole-map-reassignment discipline: remove on snapshot, then reassign.
@@ -2615,7 +2640,7 @@ private Boolean getDevices() {
                         return
                     } else {
                         logError "Re-auth failed during getDevices -- check VeSync credentials"
-                        recordError("Re-auth failed during getDevices -- check VeSync credentials", [site:"getDevices"])
+                        recordError("Re-auth failed during getDevices -- check VeSync credentials", [method:"getDevices"])
                     }
                 } finally {
                     state.remove('reAuthInProgress')
@@ -2775,7 +2800,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
                     return
                 } else {
                     logError "Re-auth failed -- VeSync credentials may need to be updated in driver settings"
-                    recordError("Re-auth failed -- VeSync credentials may need to be updated in driver settings", [site:"sendBypassRequest"])
+                    recordError("Re-auth failed -- VeSync credentials may need to be updated in driver settings", [method:"sendBypassRequest"])
                 }
             } finally {
                 state.remove('reAuthInProgress')
@@ -2791,20 +2816,21 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
     // already handles the parallel-poll case; this is the fallback for non-poll callers.
     //
     // Skip if state.networkProbeInFlight is true: the top-level breaker in updateDevices()
-    // already determined that this cycle IS the recovery probe and set lastNetworkProbeAt.
-    // Without this bypass, the per-call check would see sinceLastProbe=0 and skip too,
-    // creating a deadlock where neither breaker allows the probe through.
+    // already determined that this cycle IS the recovery probe and advanced the probe bucket.
+    // Without this bypass, the per-call check would see the same just-advanced probe bucket and
+    // skip too, creating a deadlock where neither breaker allows the probe through.
     if (state.networkUnreachableSince != null && !state.networkProbeInFlight) {
-        long nowMs = now()
-        long lastProbeAt = (state.lastNetworkProbeAt as Long) ?: (state.networkUnreachableSince as Long)
-        long sinceLastProbe = nowMs - lastProbeAt
-        if (sinceLastProbe < 300000L) {
-            logDebug "BP22: skipping httpPost (network unreachable; next probe in ${(int)((300000L - sinceLastProbe) / 1000)}s)"
+        // EPOCH 5-MIN BUCKET probe interval (matches the top-level breaker above): one probe
+        // per 5-min epoch bucket, robust to concurrent stale reads.
+        long probeBucket = (now() / 300000L) as long
+        Long lastProbeBucket = state.lastNetworkProbeBucket as Long
+        if (lastProbeBucket != null && probeBucket == lastProbeBucket) {
+            logDebug "BP22: skipping httpPost (network unreachable; waiting for next 5-min probe bucket)"
             return false
         }
-        // 5+ minutes elapsed — let this call through as a probe for recovery.
-        state.lastNetworkProbeAt = nowMs
-        logDebug "BP22: probing httpPost for network recovery (last probe ${(int)(sinceLastProbe / 1000)}s ago)"
+        // New probe bucket — let this call through as a probe for recovery.
+        state.lastNetworkProbeBucket = probeBucket
+        logDebug "BP22: probing httpPost for network recovery (probe bucket ${probeBucket})"
     }
 
     try {
@@ -2814,8 +2840,8 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
             String durStr = formatOfflineDuration(state.networkUnreachableSince as long)
             logInfo "BP22: VeSync API reachable again after ${durStr} unreachable."
             state.networkUnreachableSince = null
-            state.lastNetworkWarnAt = null
-            state.lastNetworkProbeAt = null
+            state.lastNetworkWarnHourBucket = null
+            state.lastNetworkProbeBucket = null
         }
         return true
     }
@@ -2835,14 +2861,16 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
             if (state.networkUnreachableSince == null) {
                 long ts = now()
                 state.networkUnreachableSince = ts
-                state.lastNetworkWarnAt = ts
+                // Seed the current epoch-hour bucket so emitNetworkWarnIfDue() does not re-fire
+                // this same hour — the first-fire WARN is emitted right here.
+                state.lastNetworkWarnHourBucket = (ts / 3600000L) as long
                 logWarn "BP22: VeSync API unreachable — ${e.class.simpleName}: ${e.message}. Suppressing further per-poll errors until recovery; will re-surface hourly while down."
             } else {
                 logDebug "BP22: still unreachable (${e.class.simpleName})"
             }
         } else {
             logError "sendBypassRequest: ${e.toString()}"
-            recordError("sendBypassRequest: ${e.toString()}", [site:"sendBypassRequest"])
+            recordError("sendBypassRequest: ${e.toString()}", [method:"sendBypassRequest"])
         }
         return false
     }
@@ -2906,6 +2934,23 @@ def getAccountToken() {
 
 def getAccountID() {
     return state.accountID
+}
+
+/**
+ * BP22 child-facing query: is the VeSync API currently in a known network outage?
+ *
+ * Returns true while state.networkUnreachableSince is set (i.e. between the first
+ * network-class exception and the recovery that clears it). Child drivers call this
+ * (via parent?.isNetworkUnreachable()) to DOWNGRADE their own per-command write-fail
+ * ERROR + recordError to a single DEBUG line during an outage — the outage itself is
+ * already surfaced once by the parent's BP22 first-fire WARN + hourly re-surface, so
+ * repeating it per-child-per-retrigger is pure noise.
+ *
+ * Public (no leading `private`) so child drivers can invoke it across the
+ * parent/child boundary. Cheap, side-effect-free, safe to call on every write.
+ */
+Boolean isNetworkUnreachable() {
+    return state.networkUnreachableSince != null
 }
 
 /**

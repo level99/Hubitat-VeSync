@@ -84,7 +84,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Classic 200S (literal deviceType 'Classic200S') — mist 1-9, target humidity 30-80%, auto/manual modes only (no sleep), auto-stop, display (via setIndicatorLightSwitch -- different from Classic 300S). No warm mist. Night-light brightness passive read-only. pyvesync VeSyncHumid200S class. CROSS-CHECK: different from Classic 300S (VeSyncHumid200300S).",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -157,6 +157,8 @@ Map powerPayload(boolean on){ [enabled: on, id: 0] }
 //     as a defensive read-path normalization (no known firmware variant issue for Classic 200S,
 //     but defensive normalization is free and prevents user confusion if firmware changes).
 // Payload: {mode: <value>} -- same as Classic 300S, NOT {workMode: <value>} (V2-class devices)
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (ensureSwitchOn below,
+//   after validation). Matches speed/level setters; pyvesync set_mode has no power gate.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -175,8 +177,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"
-        recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
+        reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
 
@@ -202,8 +203,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: clamped)
         logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${clamped}"
-        recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
+        reportWriteError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -238,8 +238,8 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: canon)
         logInfo "Display: ${canon}"
     } else {
-        logError "Display write failed"
-        recordError("Display write failed", [method:"setIndicatorLightSwitch"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Display write failed", resp, [method:"setIndicatorLightSwitch"])
     }
 }
 

@@ -74,8 +74,8 @@ metadata {
         name: "Levoit Core200S Air Purifier",
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
-        description: "Supports controlling the Levoit 200S / 300S air purifiers",
-        version: "2.8",
+        description: "Supports controlling the Levoit 200S air purifier",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -102,6 +102,7 @@ metadata {
             command "cancelTimer"
             command "resetFilter"
             command "toggle"
+            command "update"
             command "captureDiagnostics"
         }
 
@@ -145,7 +146,7 @@ def update() {
                 def status = resp.data.result
                 if (status == null) {
                     logError "No status returned from getPurifierStatus: ${resp.msg}"
-                    recordError("No status returned from getPurifierStatus", [site:"update"])
+                    recordError("No status returned from getPurifierStatus", [method:"update"])
                 } else
                     result = update(status, nightLight)
 			}

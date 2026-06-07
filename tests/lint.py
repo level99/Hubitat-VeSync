@@ -174,6 +174,8 @@ def _collect_per_file_rules():
         process_token_scrub,
         changelog_tmi,
         device_shorthand_leak,
+        malformed_capability,
+        recordError_key_style,
     )
     rules = []
     for module in [
@@ -189,6 +191,8 @@ def _collect_per_file_rules():
         process_token_scrub,
         changelog_tmi,
         device_shorthand_leak,
+        malformed_capability,
+        recordError_key_style,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

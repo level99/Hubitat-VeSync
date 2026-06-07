@@ -97,8 +97,7 @@ def on() {
             // Now attempt speed/mode configuration (these may fail but device is already on)
             runInMillis(500, "configureOnState")
         } else {
-            logError "Failed to turn on device"
-            recordError("Failed to turn on device", [site:"on"])
+            reportWriteError("Failed to turn on device", [method:"on"])
         }
     } finally {
         state.remove('turningOn')
@@ -154,8 +153,7 @@ def off() {
             // CRITICAL: Update switch state IMMEDIATELY
             device.sendEvent(name:"switch", value:"off")
         } else {
-            logError "Failed to turn off device"
-            recordError("Failed to turn off device", [site:"off"])
+            reportWriteError("Failed to turn off device", [method:"off"])
         }
     } finally {
         state.remove('turningOff')
@@ -262,7 +260,7 @@ def setSpeed(spd) {
 def setSpeedLevel(level) {
     logDebug "setSpeedLevel(${level})"
     def ok = writeSpeedPreferred(level)
-    if (!ok) { logError "Speed write failed for level ${level}"; recordError("Speed write failed for level ${level}", [site:"setSpeedLevel"]) }
+    if (!ok) { reportWriteError("Speed write failed for level ${level}", [method:"setSpeedLevel"]) }
     return ok
 }
 
@@ -271,42 +269,48 @@ def setSpeedLevel(level) {
 //   manual: there is no separate "set manual mode" command; manual mode is established by
 //           sending a speed via setLevel (levelIdx/levelType/manualSpeedLevel).
 //   auto/sleep/pet: use setPurifierMode with {workMode: <mode>}.
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on. Earlier this method
+//   skipped-when-off (returned false). pyvesync VeSyncAirBaseV2.set_mode has NO power gate and
+//   sets device_status=ON after a successful mode change — the V2 API accepts mode-while-off.
+//   The prior skip-when-off was therefore a driver-side deviation, not an API constraint, and is
+//   replaced here with ensureSwitchOn() to match the family-wide decision (and speed/level setters).
+//   ensureSwitchOn() runs AFTER validation so invalid input cannot wake an off device.
+// BP25: lowercase-normalize the mode before comparisons so setMode("AUTO") is not silently dropped
+//   by the case-sensitive enum checks (multi-state enum — canonOnOff does not apply here).
 def setMode(mode) {
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return false
+    String m = (mode as String).trim().toLowerCase()
 
-    // Only check power if we're not already turning on
-    if (!state.turningOn && device.currentValue("switch") != "on") {
-        logDebug "Device off, skipping mode change"
+    if (!(m in ["manual", "auto", "sleep", "pet"])) {
+        logError "Unknown mode: ${m}"
+        recordError("Unknown mode: ${m}", [method:"setMode"])
         return false
     }
 
+    ensureSwitchOn()
+
     boolean ok = false
-    if (mode == "manual") {
+    if (m == "manual") {
         // V2-line: manual mode is established by sending a speed via setLevel (no separate mode command)
         int spLevel = mapSpeedToInteger(state.speed ?: "low")
         def resp = hubBypass("setLevel", [levelIdx: 0, levelType: "wind", manualSpeedLevel: spLevel], "setMode->setLevel(${spLevel})")
         ok = httpOk(resp)
-    } else if (mode in ["auto", "sleep", "pet"]) {
-        def resp = hubBypass("setPurifierMode", [workMode: mode as String], "setPurifierMode(${mode})")
-        ok = httpOk(resp)
     } else {
-        logError "Unknown mode: ${mode}"
-        recordError("Unknown mode: ${mode}", [site:"setMode"])
-        return false
+        def resp = hubBypass("setPurifierMode", [workMode: m], "setPurifierMode(${m})")
+        ok = httpOk(resp)
     }
 
     if (ok) {
-        state.mode = mode
-        device.sendEvent(name: "mode", value: (mode == "pet" ? "pet" : mode))
-        device.sendEvent(name: "petMode", value: (mode == "pet" ? "on" : "off"))
-        if (mode == "manual") device.sendEvent(name: "speed", value: state.speed ?: "low")
-        else if (mode == "sleep") device.sendEvent(name: "speed", value: "on")
+        state.mode = m
+        device.sendEvent(name: "mode", value: (m == "pet" ? "pet" : m))
+        device.sendEvent(name: "petMode", value: (m == "pet" ? "on" : "off"))
+        if (m == "manual") device.sendEvent(name: "speed", value: state.speed ?: "low")
+        else if (m == "sleep") device.sendEvent(name: "speed", value: "on")
         else device.sendEvent(name: "speed", value: "auto")
-        logInfo "Mode: ${mode}"
+        logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed for ${mode}"
-        recordError("Mode write failed for ${mode}", [site:"setMode"])
+        reportWriteError("Mode write failed for ${m}", [method:"setMode"])
     }
     return ok
 }
@@ -420,7 +424,7 @@ def update() {
     def resp = hubBypass("getPurifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) { logError "No status returned from getPurifierStatus"; recordError("No status returned from getPurifierStatus", [site:"update"]) }
+        if (!status?.result) { logError "No status returned from getPurifierStatus"; recordError("No status returned from getPurifierStatus", [method:"update"]) }
         else applyStatus(status)
     }
 }

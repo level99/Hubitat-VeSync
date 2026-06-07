@@ -127,7 +127,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.2] Levoit OasisMist 450S/600S US+EU (LUH-O451S-WUS/-WUSR/-WEU, LUH-O601S-WUS/-KUS) — mist 1-9, warm mist 0-3, target humidity 40-80%, auto/sleep/manual modes, auto-stop, display; LUH-O451S-WEU (EU) adds RGB nightlight (ColorControl); canonical pyvesync payloads; RGB based on pyvesync PR #502 (preview)",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -231,6 +231,8 @@ Map powerPayload(boolean on){ [enabled: on, id: 0] }
 //   Source: https://github.com/webdjoe/pyvesync/issues/295 (issue #295, universal US rejection);
 //     https://github.com/webdjoe/pyvesync/issues/500 (issue #500, WUSR nightlight/behavior query).
 // payload: {mode: <value>} -- NOT {workMode: <value>} (Superior 6000S style)
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (ensureSwitchOn below,
+//   after validation). Matches speed/level setters; pyvesync set_mode has no power gate.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -250,7 +252,7 @@ def setMode(mode){
             device.sendEvent(name:"mode", value: m)
             logInfo "Mode: ${m}"
         } else {
-            logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
+            reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
         }
     }
 }
@@ -280,8 +282,7 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
         sendModeRequest(alternate, userMode, true)
     } else {
         // Both variants rejected
-        logError "Mode '${userMode}' rejected by both payload variants ('auto' and 'humidity', inner code: ${innerCode}). Check device connectivity or report via GitHub issue."
-        recordError("Mode '${userMode}' rejected by both payload variants (inner code: ${innerCode})", [method:"setHumidityMode"])
+        reportWriteError("Mode '${userMode}' rejected by both payload variants ('auto' and 'humidity', inner code: ${innerCode}). Check device connectivity or report via GitHub issue.", [method:"setHumidityMode"])
     }
 }
 
@@ -304,7 +305,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: clamped)
         logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
+        reportWriteError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -350,7 +351,7 @@ def setWarmMistLevel(level){
         device.sendEvent(name:"warmMistEnabled", value: warmOnStr)
         logInfo "Warm mist: level=${lvl}, enabled=${warmOnStr}"
     } else {
-        logError "Warm mist level write failed: ${lvl}"; recordError("Warm mist level write failed: ${lvl}", [method:"setVirtualLevel"])
+        reportWriteError("Warm mist level write failed: ${lvl}", [method:"setVirtualLevel"])
     }
 }
 
@@ -424,7 +425,8 @@ def setNightlightSwitch(value){
         device.sendEvent(name:"nightlightSwitch", value: action)
         logInfo "Nightlight switch: ${action}"
     } else {
-        logError "Nightlight switch write failed: ${action}"; recordError("Nightlight switch write failed: ${action}", [method:"setLightStatus"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Nightlight switch write failed: ${action}", resp, [method:"setLightStatus"])
     }
 }
 
@@ -434,6 +436,7 @@ def setNightlightSwitch(value){
 // Convert hue 0-100 -> 0-360 for internal HSV calculations.
 // BP26: colorMap field coercions use safeIntArg to avoid NumberFormatException/GroovyCastException
 // when RM or dashboard tiles pass decimal strings ("55.5"), blank (""), or non-numeric values.
+// BP24: NO-ON — configures the nightlight preference; powering on the humidifier is not implied.
 def setColor(Map colorMap){
     logDebug "setColor(${colorMap})"
     if (colorMap == null) { logWarn "setColor called with null colorMap (likely blank Rule Machine slot); ignoring"; return }
@@ -470,7 +473,8 @@ def setColor(Map colorMap){
         device.sendEvent(name:"colorMode",   value: "RGB")
         logInfo "Nightlight color: hue=${hue100} sat=${sat100} brightness=${brightness}"
     } else {
-        logError "Nightlight setColor failed"; recordError("Nightlight setColor failed", [method:"setLightStatus"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Nightlight setColor failed", resp, [method:"setLightStatus"])
     }
 }
 

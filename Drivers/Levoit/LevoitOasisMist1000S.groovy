@@ -95,7 +95,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit OasisMist 1000S (LUH-M101S-WUS/-WUSR/-WEUR) — mist 1-9, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display; WEUR adds nightlight (runtime-gated). pyvesync VeSyncHumid1000S class; V2-style payloads (powerSwitch/workMode/virtualLevel). No warm mist.",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -155,18 +155,22 @@ Map powerPayload(boolean on){ [powerSwitch: on ? 1 : 0, switchIdx: 0] }
 // VeSyncHumid1000S set_mode: {workMode: mist_modes[mode]}
 // Mist modes: auto->'auto', sleep->'sleep', manual->'manual' (straight mapping, unlike A603S).
 // No firmware-variant issue documented for 1000S (canonical pyvesync fixture uses 'auto').
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (matches speed/level
+//   setters; pyvesync set_mode has no power gate and sets device ON on success). ensureSwitchOn()
+//   runs AFTER validation so invalid input cannot wake an off device.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
+    ensureSwitchOn()
     def resp = hubBypass("setHumidityMode", [workMode: m], "setHumidityMode(${m})")
     if (httpOk(resp)) {
         state.mode = m
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
+        reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
 
@@ -190,7 +194,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: clamped)
         logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"virtualLevel"])
+        reportWriteError("Mist level write failed: ${clamped}", [method:"virtualLevel"])
     }
 }
 
@@ -210,7 +214,8 @@ def setHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Target humidity write failed: ${p}", resp, [method:"setTargetHumidity"])
     }
 }
 
@@ -267,7 +272,8 @@ def setNightlight(onOff, brightness = null){
             device.sendEvent(name:"nightlightOn", value: onOffStr)
             logInfo "Nightlight: ${onOffStr}"
         } else {
-            logError "Nightlight toggle failed"; recordError("Nightlight toggle failed", [method:"setNightLightStatus"])
+            // BP29: device-off => one WARN (expected); any other failure => logError + record.
+            reportWriteFailure("Nightlight toggle failed", resp, [method:"setNightLightStatus"])
         }
     } else {
         // Brightness control -- use setLightStatus (pyvesync set_nightlight_brightness path)
@@ -281,7 +287,7 @@ def setNightlight(onOff, brightness = null){
             device.sendEvent(name:"nightlightBrightness", value: br)
             logInfo "Nightlight: ${onOffStr}, brightness=${br}"
         } else {
-            logError "Nightlight brightness write failed"; recordError("Nightlight brightness write failed", [method:"setLightStatus"])
+            reportWriteFailure("Nightlight brightness write failed", resp, [method:"setLightStatus"])
         }
     }
 }

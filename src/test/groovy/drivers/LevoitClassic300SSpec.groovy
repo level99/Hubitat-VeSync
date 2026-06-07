@@ -302,6 +302,21 @@ class LevoitClassic300SSpec extends HubitatSpec {
         !req.data.containsKey("powerSwitch")
     }
 
+    def "off() re-entrance guard: second call while turningOff=true is a no-op"() {
+        // Regression guard: HumidifierLib off() symmetric re-entrance guard (state.turningOff).
+        // Defensive symmetry with on(); a re-entrant off() must short-circuit.
+        given:
+        settings.descriptionTextEnable = false
+        state.turningOff = true
+
+        when:
+        driver.off()
+
+        then: "no setSwitch API call because re-entrance was blocked"
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
+        noExceptionThrown()
+    }
+
     def "toggle() reads state.lastSwitchSet when populated (NIT 1 — read-after-write race avoidance)"() {
         given: "state.lastSwitchSet is 'on' (would have been set by a prior on() call)"
         settings.descriptionTextEnable = false

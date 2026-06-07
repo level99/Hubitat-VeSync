@@ -59,13 +59,10 @@ library(
 //     in pyvesync VeSyncHumid200S vs VeSyncHumid200300S; bodies are NOT identical).
 //
 // Behavior notes:
-//   - update() (0-arg) recordError tag normalized to [site:"update"] across all 9 drivers
-//     (audit found mixed [site:]/[method:] usage).
-//   - httpOk() recordError tag normalized to [site:"httpOk"] (Sup6000S used [method:]).
-//   - Infrastructure methods (update, httpOk) use [site:] tags; feature helpers
-//     (doSetDisplayScreenSwitch, doSetAutoStopSwitch, doSetTargetHumidity,
-//      doSetDisplayStateSwitch, doSetAutoStopEnabled) use [method:] tags matching the
-//     per-driver convention they replace.
+//   - recordError ctx maps use the fleet-canonical [method:"..."] key throughout
+//     (e.g. update(), httpOk(), and the shared feature helpers
+//      doSetDisplayScreenSwitch, doSetAutoStopSwitch, doSetTargetHumidity,
+//      doSetDisplayStateSwitch, doSetAutoStopEnabled).
 
 // ---- Lifecycle ----
 
@@ -122,16 +119,23 @@ def on(){
         if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
         else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
     } finally {
-        state.turningOn = false
+        state.remove('turningOn')
     }
 }
 
 def off(){
     logDebug "off()"
-    Map payload = powerPayload(false)
-    def resp = hubBypass("setSwitch", payload, "setSwitch(${payload})")
-    if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+    // Defensive symmetry with on()'s guard; no active re-entrance vector into off() today.
+    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
+    state.turningOff = true
+    try {
+        Map payload = powerPayload(false)
+        def resp = hubBypass("setSwitch", payload, "setSwitch(${payload})")
+        if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
+        else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+    } finally {
+        state.remove('turningOff')
+    }
 }
 
 // ---- Toggle ----
@@ -155,7 +159,7 @@ def update() {
     def resp = hubBypass("getHumidifierStatus", [:], "update")
     if (httpOk(resp)) {
         def status = resp?.data
-        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [site:"update"]) }
+        if (!status?.result) { logError "No status returned from getHumidifierStatus"; recordError("No status returned from getHumidifierStatus", [method:"update"]) }
         else applyStatus(status)
     }
 }
@@ -206,7 +210,8 @@ def doSetDisplayScreenSwitch(onOff) {
         device.sendEvent(name:"displayOn", value: canon)
         logInfo "Display: ${canon}"
     } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Display write failed", resp, [method:"setDisplay"])
     }
     return ok
 }
@@ -226,7 +231,7 @@ def doSetAutoStopSwitch(onOff) {
         device.sendEvent(name:"autoStopEnabled", value: canon)
         logInfo "Auto-stop: ${canon}"
     } else {
-        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutoStopSwitch"])
+        reportWriteFailure("Auto-stop write failed", resp, [method:"setAutoStopSwitch"])
     }
     return ok
 }
@@ -253,7 +258,7 @@ def doSetTargetHumidity(percent, Integer floor = 30, Integer ceiling = 80) {
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
+        reportWriteFailure("Target humidity write failed: ${p}", resp, [method:"setTargetHumidity"])
     }
     return ok
 }
@@ -278,7 +283,7 @@ def doSetDisplayStateSwitch(onOff) {
         device.sendEvent(name:"displayOn", value: canon)
         logInfo "Display: ${canon}"
     } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
+        reportWriteFailure("Display write failed", resp, [method:"setDisplay"])
     }
     return ok
 }
@@ -300,7 +305,7 @@ def doSetAutoStopEnabled(onOff) {
         device.sendEvent(name:"autoStopEnabled", value: canon)
         logInfo "Auto-stop: ${canon}"
     } else {
-        logError "Auto-stop write failed"; recordError("Auto-stop write failed", [method:"setAutomaticStop"])
+        reportWriteFailure("Auto-stop write failed", resp, [method:"setAutomaticStop"])
     }
     return ok
 }

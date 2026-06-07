@@ -128,7 +128,7 @@ The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing
 | switch | on, off | Power state |
 | speed | off, low, medium, high | Fan speed |
 
-Commands: `setDisplay`, `setSpeed`, `setMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`.
+Commands: `setDisplay`, `setSpeed`, `setMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`, `update` (refresh).
 
 Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
 
@@ -154,7 +154,7 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 | switch | on, off | Power |
 | speed | off, sleep, low, medium, high | Fan speed |
 
-Commands: `setDisplay`, `setSpeed`, `setMode`, `setAutoMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`.
+Commands: `setDisplay`, `setSpeed`, `setMode`, `setAutoMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`, `update` (refresh).
 
 Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock" for Core line devices. We expose it here as `childLock` for Hubitat cross-driver consistency with the Vital line drivers.
 
@@ -202,7 +202,7 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 | timerRemain | seconds | Auto-off timer remaining |
 | info | HTML | Tile summary |
 
-Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize`, `setLightDetection`, `setChildLock`, `setDisplay`, `setTimer` (minutes), `cancelTimer`, `resetFilter`, `toggle`.
+Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize`, `setLightDetection`, `setChildLock`, `setDisplay`, `setTimer` (minutes), `cancelTimer`, `resetFilter`, `toggle`, `update` (refresh).
 
 ### Vital 100S (LAP-V102S) *— v2.1 preview*
 
@@ -226,7 +226,7 @@ Same V2 platform as Vital 200S. Differs in one capability: **no light-detection*
 | timerRemain | seconds | Auto-off timer remaining |
 | info | HTML | Tile summary |
 
-Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize`, `setChildLock`, `setDisplay`, `setTimer` (minutes), `cancelTimer`, `resetFilter`, `toggle`.
+Commands: `setSpeed`, `setMode`, `setPetMode`, `setAutoPreference`, `setRoomSize`, `setChildLock`, `setDisplay`, `setTimer` (minutes), `cancelTimer`, `resetFilter`, `toggle`, `update` (refresh).
 
 ### Superior 6000S Humidifier (LEH-S601S)
 
@@ -504,7 +504,7 @@ pyvesync class: `VeSyncAirSprout` (inherits `VeSyncAirBaseV2` → `VeSyncAirBypa
 | temperature | °F | Ambient temperature from onboard sensor (if present in response) |
 | info | HTML | Tile summary |
 
-Commands: `setMode` (auto/sleep/turbo/pet — manual mode use `setFanSpeed` instead), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setNightlightMode` (on/off/dim/auto), `toggle`.
+Commands: `setMode` (auto/sleep/turbo/pet — manual mode use `setFanSpeed` instead), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setNightlightMode` (on/off/dim), `toggle`.
 
 ### EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) *— v2.3 preview*
 
@@ -567,7 +567,7 @@ Commands: `setMode`, `setSpeed` (1-12), `setOscillation`, `setMute`, `setDisplay
 
 ### Pedestal Fan (LPF-R432S)
 
-2-axis oscillation (horizontal + vertical, controlled separately). Mode `sleep` maps to `advancedSleep` like Tower Fan; mode `eco` is the Pedestal Fan's auto-equivalent (Tower Fan has `auto`; do not confuse). `childLock` became writable in v2.4 (live-hardware verified). Timer is omitted (no community-confirmed payload).
+2-axis oscillation (horizontal + vertical, controlled separately). Mode `sleep` maps to `advancedSleep` like Tower Fan; mode `eco` is the Pedestal Fan's auto-equivalent (Tower Fan has `auto`; do not confuse). `childLock` became writable in v2.4 (live-hardware verified). Timer write commands are omitted (no community-confirmed write payload); the `timerRemain` attribute is now populated from status polls.
 
 Covers LPF-R432S-AEU, LPF-R432S-AUS, and LPF-R432S-AUK (UK market variant, v2.3). (pyvesync's fixture filename is a typo — `LPF-R423S.yaml` — but real device codes are `LPF-R432S`.)
 
@@ -579,10 +579,10 @@ Covers LPF-R432S-AEU, LPF-R432S-AUS, and LPF-R432S-AUK (UK market variant, v2.3)
 | mode | normal, turbo, eco, sleep | Current mode |
 | horizontalOscillation | on, off | Horizontal oscillation toggle |
 | verticalOscillation | on, off | Vertical oscillation toggle |
-| oscillationLeft | 0-100 | Horizontal left bound |
-| oscillationRight | 0-100 | Horizontal right bound |
-| oscillationTop | 0-100 | Vertical top bound |
-| oscillationBottom | 0-100 | Vertical bottom bound |
+| oscillationLeft | 0-90 | Horizontal left bound |
+| oscillationRight | 0-90 | Horizontal right bound |
+| oscillationTop | 0-120 | Vertical top bound |
+| oscillationBottom | 0-120 | Vertical bottom bound |
 | oscillationYaw | number | Current head yaw position (read-only) |
 | oscillationPitch | number | Current head pitch position (read-only) |
 | mute | on, off | Mute state |
@@ -596,6 +596,7 @@ Covers LPF-R432S-AEU, LPF-R432S-AUS, and LPF-R432S-AUK (UK market variant, v2.3)
 | highTemperature | °F | User-set high-temperature alert threshold *(v2.4)* |
 | highTemperatureReminder | on, off | High-temperature reminder enabled *(v2.4)* |
 | smartCleaningReminder | on, off | Smart-cleaning reminder enabled *(v2.4)* |
+| timerRemain | seconds | Auto-off timer remaining (0 if no timer) |
 | info | HTML | Tile summary |
 
 Commands: `setMode`, `setSpeed` (1-12), `setHorizontalOscillation`, `setVerticalOscillation`, `setHorizontalRange` (left + right), `setVerticalRange` (top + bottom), `setMute`, `setDisplay`, `setChildLock` *(v2.4)*, `setSmartCleaningReminder` *(v2.4)*, `toggle`. (No timer commands — no community-confirmed payload.)

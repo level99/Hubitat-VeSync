@@ -51,12 +51,12 @@ metadata {
         name: "Levoit Core200S Air Purifier Light",
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
-        description: "Supports controlling the Levoit 200S / 300S air purifiers' night light capability",
-        version: "2.8",
+        description: "Supports controlling the Levoit 200S air purifier's night light capability",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
-            capability "Switch Level"
+            capability "SwitchLevel"
 
             command "setNightLight", [[name:"Night Light*", type: "ENUM", description: "Display", constraints: ["on", "off", "dim"] ] ]
 
@@ -215,12 +215,12 @@ def checkHttpResponse(action, resp) {
 		return true
 	else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500)
 	{
-		logError "${action}: ${resp.status} - ${resp.getData()}"; recordError("${action}: HTTP ${resp.status}", [site:"checkHttpResponse"])
+		logError "${action}: ${resp.status} - ${resp.getData()}"; recordError("${action}: HTTP ${resp.status}", [method:"checkHttpResponse"])
 		return false
 	}
 	else
 	{
-		logError "${action}: unexpected HTTP response: ${resp.status}"; recordError("${action}: unexpected HTTP ${resp.status}", [site:"checkHttpResponse"])
+		logError "${action}: unexpected HTTP response: ${resp.status}"; recordError("${action}: unexpected HTTP ${resp.status}", [method:"checkHttpResponse"])
 		return false
 	}
 }

@@ -52,7 +52,7 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
         state.errorHistory = [:]
 
         when:
-        driver.recordError("test error alpha", [site: "testSite"])
+        driver.recordError("test error alpha", [method: "testSite"])
 
         then: "entry is stored under the device DNI key"
         def history = state.errorHistory as Map
@@ -62,7 +62,7 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
         def slot = history["PARENT_00:11:22:33:44:55"] as List
         slot.size() == 1
         slot[0].msg == "test error alpha"
-        (slot[0].ctx as Map).site == "testSite"
+        (slot[0].ctx as Map).method == "testSite"
     }
 
     // -------------------------------------------------------------------------
@@ -77,7 +77,7 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
         state.errorHistory = [:]
 
         when: "recordError is called with the child DNI as overrideDni"
-        driver.recordError("No status returned from getHumidifierStatus", [site: "updateDevices"], childDni)
+        driver.recordError("No status returned from getHumidifierStatus", [method: "updateDevices"], childDni)
 
         then: "entry is stored under childDni, NOT parentDni"
         def history = state.errorHistory as Map
@@ -96,7 +96,7 @@ class LevoitDiagnosticsLibSpec extends HubitatSpec {
         state.errorHistory = [:]
 
         when: "overrideDni is explicitly null"
-        driver.recordError("fallback test", [site: "x"], null)
+        driver.recordError("fallback test", [method: "x"], null)
 
         then: "entry stored under device DNI"
         def history = state.errorHistory as Map

@@ -144,7 +144,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Levoit Pedestal Fan (LPF-R432S-AEU/AUS/AUK) — power, fan speed 1-12, modes (normal/turbo/eco/sleep), 2-axis oscillation with range control, mute, display, child lock, smart cleaning reminder, ambient temperature",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -159,10 +159,10 @@ metadata {
         attribute "horizontalOscillation",  "string"    // on | off
         attribute "verticalOscillation",    "string"    // on | off
         // Oscillation range bounds (current configured range)
-        attribute "oscillationLeft",        "number"    // horizontal left bound (0-100)
-        attribute "oscillationRight",       "number"    // horizontal right bound (0-100)
-        attribute "oscillationTop",         "number"    // vertical top bound (0-100)
-        attribute "oscillationBottom",      "number"    // vertical bottom bound (0-100)
+        attribute "oscillationLeft",        "number"    // horizontal left bound (0-90)
+        attribute "oscillationRight",       "number"    // horizontal right bound (0-90)
+        attribute "oscillationTop",         "number"    // vertical top bound (0-120)
+        attribute "oscillationBottom",      "number"    // vertical bottom bound (0-120)
         // Oscillation coordinate (current head position, read-only)
         attribute "oscillationYaw",         "number"    // current yaw position
         attribute "oscillationPitch",       "number"    // current pitch position
@@ -203,14 +203,15 @@ metadata {
         command "setVerticalOscillation",   [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
 
         // Oscillation range setters -- turn that axis ON with explicit bounds.
-        // Range values 0-100 (device units). State is always set to 1 (on) in range payloads.
+        // Range values are device angular degrees (horizontal 0-90, vertical 0-120;
+        // live-verified on LPF-R432S-AUS). State is always set to 1 (on) in range payloads.
         command "setHorizontalRange", [
-            [name:"Left*",  type:"NUMBER", description:"Left bound (0-100)"],
-            [name:"Right*", type:"NUMBER", description:"Right bound (0-100)"]
+            [name:"Left*",  type:"NUMBER", description:"Left bound (0-90)"],
+            [name:"Right*", type:"NUMBER", description:"Right bound (0-90)"]
         ]
         command "setVerticalRange", [
-            [name:"Top*",    type:"NUMBER", description:"Top bound (0-100)"],
-            [name:"Bottom*", type:"NUMBER", description:"Bottom bound (0-100)"]
+            [name:"Top*",    type:"NUMBER", description:"Top bound (0-120)"],
+            [name:"Bottom*", type:"NUMBER", description:"Bottom bound (0-120)"]
         ]
 
         command "setMute",    [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
@@ -300,6 +301,8 @@ def setSpeed(spd){
 //   If contradicted in the future (eco vs auto): a community report showing "auto" is
 //     accepted on the Pedestal Fan would mean adding "auto" as an alias or replacing
 //     "eco" with "auto". No such report yet — current behavior follows pyvesync.
+// BP24: SHOULD-ON — asking an off fan to change mode auto-turns it on (matches speed/level
+//   setters). ensureSwitchOn() runs AFTER validation so invalid input cannot wake an off device.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -309,6 +312,7 @@ def setMode(mode){
         recordError("setMode: invalid mode '${m}'", [method:"setFanMode"])
         return
     }
+    ensureSwitchOn()
     // Map user-facing "sleep" to API "advancedSleep" (pyvesync device_map.py + HA finding #d)
     String apiMode = (m == "sleep") ? "advancedSleep" : m
     def resp = hubBypass("setFanMode", [workMode: apiMode], "setFanMode(${apiMode})")
@@ -317,7 +321,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setFanMode"])
+        reportWriteError("Mode write failed: ${m}", [method:"setFanMode"])
     }
 }
 
@@ -354,6 +358,8 @@ def setHorizontalOscillation(onOff){
     if (!(s in ["on","off"])) { logError "setHorizontalOscillation: invalid value '${s}'"; recordError("setHorizontalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("horizontalOscillation") == s) return
+    // BP24 NO-ON note: still send the command; just inform if the fan is off (setting applies on power-on).
+    noteOscillationOffState()
     Integer v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setOscillationStatus",
         [horizontalOscillationState: v, actType: "default"],
@@ -362,7 +368,8 @@ def setHorizontalOscillation(onOff){
         device.sendEvent(name:"horizontalOscillation", value: s)
         logInfo "Horizontal oscillation: ${s}"
     } else {
-        logError "Horizontal oscillation write failed"; recordError("Horizontal oscillation write failed", [method:"setOscillationStatus"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Horizontal oscillation write failed", resp, [method:"setOscillationStatus"])
     }
 }
 
@@ -375,6 +382,8 @@ def setVerticalOscillation(onOff){
     if (!(s in ["on","off"])) { logError "setVerticalOscillation: invalid value '${s}'"; recordError("setVerticalOscillation invalid: ${s}", [method:"setOscillationStatus"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("verticalOscillation") == s) return
+    // BP24 NO-ON note: still send the command; just inform if the fan is off (setting applies on power-on).
+    noteOscillationOffState()
     Integer v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setOscillationStatus",
         [verticalOscillationState: v, actType: "default"],
@@ -383,22 +392,25 @@ def setVerticalOscillation(onOff){
         device.sendEvent(name:"verticalOscillation", value: s)
         logInfo "Vertical oscillation: ${s}"
     } else {
-        logError "Vertical oscillation write failed"; recordError("Vertical oscillation write failed", [method:"setOscillationStatus"])
+        reportWriteFailure("Vertical oscillation write failed", resp, [method:"setOscillationStatus"])
     }
 }
 
-// Set horizontal oscillation range (0-100 device units) and turn horizontal oscillation ON.
+// Set horizontal oscillation range (0-90 angular degrees) and turn horizontal oscillation ON.
 // Range payloads always include state=1 (oscillation must be on to set a range).
 //
 // BP18 normalization: explicit null-guard on left/right args, replacing the previous
 // silent-zeroing (left as Integer) ?: 0 coercions. Null args now reject with logWarn.
+// BP24: NO-ON — configures the oscillation range preference; powering the fan on is not implied.
 def setHorizontalRange(left, right){
     logDebug "setHorizontalRange(left=${left}, right=${right})"
     if (!requireNotNull(left, "setHorizontalRange left")) return
     if (!requireNotNull(right, "setHorizontalRange right")) return
-    // Clamp to device valid range 0-100 (per pyvesync LPF-R423S.yaml fixture values and driver convention).
-    Integer l = safeIntArg(left, 0, 0, 100)
-    Integer r = safeIntArg(right, 0, 0, 100)
+    // BP24 NO-ON note: still send the command; just inform if the fan is off (setting applies on power-on).
+    noteOscillationOffState()
+    // Clamp to device valid range 0-90 (horizontal angular max, live-verified on LPF-R432S-AUS).
+    Integer l = safeIntArg(left, 0, 0, 90)
+    Integer r = safeIntArg(right, 0, 0, 90)
     def resp = hubBypass("setOscillationStatus",
         [horizontalOscillationState: 1, actType: "default", left: l, right: r],
         "setOscillationStatus(H_range=${l}..${r})")
@@ -408,21 +420,24 @@ def setHorizontalRange(left, right){
         device.sendEvent(name:"oscillationRight", value: r)
         logInfo "Horizontal oscillation range: ${l}-${r}"
     } else {
-        logError "Horizontal range write failed"; recordError("Horizontal range write failed", [method:"setOscillationStatus"])
+        reportWriteFailure("Horizontal range write failed", resp, [method:"setOscillationStatus"])
     }
 }
 
-// Set vertical oscillation range (0-100 device units) and turn vertical oscillation ON.
+// Set vertical oscillation range (0-120 angular degrees) and turn vertical oscillation ON.
 //
 // BP18 normalization: explicit null-guard on top/bottom args, replacing the previous
 // silent-zeroing coercions.
+// BP24: NO-ON — configures the oscillation range preference; powering the fan on is not implied.
 def setVerticalRange(top, bottom){
     logDebug "setVerticalRange(top=${top}, bottom=${bottom})"
     if (!requireNotNull(top, "setVerticalRange top")) return
     if (!requireNotNull(bottom, "setVerticalRange bottom")) return
-    // Clamp to device valid range 0-100 (per pyvesync LPF-R423S.yaml fixture values and driver convention).
-    Integer t = safeIntArg(top, 0, 0, 100)
-    Integer b = safeIntArg(bottom, 0, 0, 100)
+    // BP24 NO-ON note: still send the command; just inform if the fan is off (setting applies on power-on).
+    noteOscillationOffState()
+    // Clamp to device valid range 0-120 (vertical angular max, live-verified on LPF-R432S-AUS).
+    Integer t = safeIntArg(top, 0, 0, 120)
+    Integer b = safeIntArg(bottom, 0, 0, 120)
     def resp = hubBypass("setOscillationStatus",
         [verticalOscillationState: 1, actType: "default", top: t, bottom: b],
         "setOscillationStatus(V_range=${t}..${b})")
@@ -432,7 +447,7 @@ def setVerticalRange(top, bottom){
         device.sendEvent(name:"oscillationBottom", value: b)
         logInfo "Vertical oscillation range: ${t}-${b}"
     } else {
-        logError "Vertical range write failed"; recordError("Vertical range write failed", [method:"setOscillationStatus"])
+        reportWriteFailure("Vertical range write failed", resp, [method:"setOscillationStatus"])
     }
 }
 
@@ -474,8 +489,7 @@ def setChildLock(onOff){
         device.sendEvent(name:"childLock", value: s)
         logInfo "Child lock: ${s}"
     } else {
-        logError "Child lock write failed"
-        recordError("Child lock write failed: ${s}", [method:"setChildLock"])
+        reportWriteFailure("Child lock write failed: ${s}", resp, [method:"setChildLock"])
     }
 }
 
@@ -489,7 +503,9 @@ def setChildLock(onOff){
 //   (poll fields suggest this: scheduleCount, isTimerSupportPowerOn capability flag).
 //   Resolution path: maintainer captures VeSync app's timer-set request via mitmproxy
 //   to identify the actual API method + payload shape; revisit in a clean v2.5 cycle.
-//   The `timerRemain` read-only attribute stays declared for status visibility.
+//   The `timerRemain` read-only attribute is populated from the getFanStatus poll
+//   response (the device reports remaining seconds even though we cannot SET a timer
+//   via the cloud API yet); see applyStatus emission below.
 
 // CROSS-CHECK [maintainer's hardware capture, device 1132 LPF-R432S-AUK, 2026-05-01]:
 //   The following write-path commands were attempted with educated-guess payloads
@@ -542,8 +558,7 @@ def setSmartCleaningReminder(onOff){
         device.sendEvent(name:"smartCleaningReminder", value: s)
         logInfo "Smart cleaning reminder: ${s}"
     } else {
-        logError "Smart cleaning reminder write failed"
-        recordError("Smart cleaning reminder failed: ${s}", [method:"setSmartCleaningReminder"])
+        reportWriteFailure("Smart cleaning reminder failed: ${s}", resp, [method:"setSmartCleaningReminder"])
     }
 }
 
@@ -670,6 +685,10 @@ def applyStatus(status){
     // ---- Sleep preference (shared LevoitFanLib block) ----
     applyFanSleepPreference(r)
 
+    // ---- Timer remain (mirrors Tower Fan) ----
+    // getFanStatus returns timerRemain (seconds; 0 = no active timer).
+    if (r.timerRemain != null) device.sendEvent(name:"timerRemain", value: r.timerRemain as Integer)
+
     // ---- Error code (shared LevoitFanLib block) ----
     applyFanErrorCode(r)
 
@@ -683,6 +702,9 @@ def applyStatus(status){
     if (r.temperature != null && (r.temperature as Integer) > 0) {
         Float tf = (r.temperature as Integer) / 10.0f
         parts << "Temp: ${tf}°F"
+    }
+    if (r.timerRemain != null && (r.timerRemain as Integer) > 0) {
+        parts << "Timer: ${r.timerRemain as Integer}s"
     }
     device.sendEvent(name:"info", value: parts.join("<br>"))
 }

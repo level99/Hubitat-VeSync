@@ -274,6 +274,52 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
         result == true
     }
 
+    // BP29: device-off injection harness. state.injectInnerCode lets a test (or a live
+    // diagnostic) force VeSync's BYPASS_DEVICE_IS_OFF (11005000) inner result code so the
+    // child's failure branch can be reproduced through the real sendBypassRequest flow.
+    //
+    // NON-VACUITY: asserts the closure receives data.result.code == 11005000 (the injected
+    // value) AND that the injection is one-shot (cleared after use, next call is success
+    // again). Reverting the injection block in VeSyncIntegrationVirtual.sendBypassRequest
+    // makes the inner code stay 0, so both the "== 11005000" and the "injection consumed"
+    // assertions go RED. (Orchestrator owns the both-ways proof.)
+    def "sendBypassRequest with state.injectInnerCode forces a BYPASS_DEVICE_IS_OFF envelope, one-shot (BP29 harness)"() {
+        given: "child bound to a humidifier fixture, device-off injection armed"
+        state.realParentDetected = false
+        driver.spawnFromFixture("Classic300S", "HumidA")
+        String dni = "VirtualVeSync-Classic300S-HumidA"
+        testLog.reset()
+        def child = childRegistry[dni]
+        settings.debugOutput = true
+        state.injectInnerCode = 11005000
+
+        Integer capturedFirst = null
+        Integer capturedSecond = null
+
+        when: "first write: the injected device-off code is delivered to the closure"
+        driver.sendBypassRequest(child, [
+            method: "setVirtualLevel",
+            source: "APP",
+            data  : [id: 0, level: 5, type: "mist"]
+        ], { resp -> capturedFirst = resp?.data?.result?.code as Integer })
+
+        then: "the child received VeSync's device-off inner code"
+        capturedFirst == 11005000
+
+        and: "the injection was consumed (one-shot): state cleared"
+        state.injectInnerCode == null
+
+        when: "second write with no fresh injection: back to success envelope"
+        driver.sendBypassRequest(child, [
+            method: "setVirtualLevel",
+            source: "APP",
+            data  : [id: 0, level: 5, type: "mist"]
+        ], { resp -> capturedSecond = resp?.data?.result?.code as Integer })
+
+        then: "default happy-path inner code 0 — injection did not bleed forward"
+        capturedSecond == 0
+    }
+
     def "sendBypassRequest with matching setLevel keys logs DEBUG (not WARN/ERROR)"() {
         given:
         state.realParentDetected = false
@@ -863,6 +909,129 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
 
         and: "no errors"
         testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 11a: v2_humidifier nightlight — LEH-B381S (Sprout Humidifier) setLightStatus
+    // Exercises the SproutNightlight setLightStatus op (driver-side extension, absent
+    // from pyvesync's upstream LEH-B381S.yaml; reachable via virtual_parent_extensions.json).
+    // Verifies the key-set validates (no mismatch ERROR) and the nightLight sub-object
+    // is present in the canned getHumidifierStatus response so a spawned child can read it.
+    // -------------------------------------------------------------------------
+
+    def "spawnFromFixture LEH-B381S creates Sprout child + setLightStatus updates nightLight sub-object in canonical state"() {
+        given:
+        state.realParentDetected = false
+
+        when: "spawn Sprout Humidifier child"
+        driver.spawnFromFixture("LEH-B381S", "My Sprout")
+
+        then: "child created with correct metadata"
+        def expectedDni = "VirtualVeSync-LEH-B381S-My-Sprout"
+        childRegistry.containsKey(expectedDni)
+        childRegistry[expectedDni].name == "Levoit Sprout Humidifier"
+        childRegistry[expectedDni].getDataValue("deviceType") == "LEH-B381S-WUS"
+
+        and: "v2_humidifier family default state seeded with nightLight ON sub-object"
+        def snap = state.fixtureSnapshots[expectedDni]
+        snap != null
+        snap.powerSwitch == 1
+        snap.nightLight != null
+        snap.nightLight.nightLightSwitch == 1
+        snap.nightLight.brightness == 80
+        snap.nightLight.colorTemperature == 3000
+
+        and: "double-wrapped v2 response carries the nightLight sub-object"
+        def response = driver.synthesizeStatusResponse(expectedDni, "LEH-B381S")
+        response.code == 0
+        response.result?.code == 0
+        response.result?.result?.nightLight?.nightLightSwitch == 1
+        response.result?.result?.nightLight?.brightness == 80
+
+        when: "send setLightStatus turning nightlight off with new brightness/colorTemp"
+        testLog.reset()
+        def child = childRegistry[expectedDni]
+        driver.sendBypassRequest(child, [
+            method: "setLightStatus",
+            source: "APP",
+            data  : [brightness: 50, colorTemperature: 2500, nightLightSwitch: 0]
+        ], { resp -> /* closure */ })
+
+        then: "key-set validates — no mismatch ERROR"
+        testLog.errors.isEmpty()
+
+        and: "canonical snapshot reflects the write"
+        state.fixtureSnapshots[expectedDni]?.nightLight?.nightLightSwitch == 0
+        state.fixtureSnapshots[expectedDni]?.nightLight?.brightness == 50
+        state.fixtureSnapshots[expectedDni]?.nightLight?.colorTemperature == 2500
+
+        and: "double-wrapped response carries the updated nightLight sub-object"
+        def after = driver.synthesizeStatusResponse(expectedDni, "LEH-B381S")
+        after.result.result.nightLight.nightLightSwitch == 0
+        after.result.result.nightLight.brightness == 50
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 11b: v1_humidifier RGB nightlight — LUH-O451S-WEU (OasisMist 450S EU variant)
+    // Exercises the RGB-nightlight setLightStatus op (driver-side extension per pyvesync
+    // PR #502, absent from upstream YAML; reachable via virtual_parent_extensions.json).
+    // The WEU fixture maps to deviceType LUH-O451S-WEU so the driver's runtime RGB gate
+    // engages on a real hub; here we verify the parent-side key-set validation + the
+    // rgbNightLight sub-object in the canned getHumidifierStatus response.
+    // -------------------------------------------------------------------------
+
+    def "spawnFromFixture LUH-O451S-WEU creates 450S child + setLightStatus updates rgbNightLight sub-object in canonical state"() {
+        given:
+        state.realParentDetected = false
+
+        when: "spawn OasisMist 450S WEU child"
+        driver.spawnFromFixture("LUH-O451S-WEU", "My 450S WEU")
+
+        then: "child created with correct metadata + WEU deviceType (passes the driver's RGB gate)"
+        def expectedDni = "VirtualVeSync-LUH-O451S-WEU-My-450S-WEU"
+        childRegistry.containsKey(expectedDni)
+        childRegistry[expectedDni].name == "Levoit OasisMist 450S Humidifier"
+        childRegistry[expectedDni].getDataValue("deviceType") == "LUH-O451S-WEU"
+
+        and: "v1_humidifier family default state seeded with rgbNightLight ON sub-object"
+        def snap = state.fixtureSnapshots[expectedDni]
+        snap != null
+        snap.enabled == true
+        snap.rgbNightLight != null
+        snap.rgbNightLight.action == "on"
+        snap.rgbNightLight.brightness == 80
+        snap.rgbNightLight.red == 255
+
+        and: "single-wrapped v1 response carries the rgbNightLight sub-object"
+        def response = driver.synthesizeStatusResponse(expectedDni, "LUH-O451S-WEU")
+        response.code == 0
+        response.result?.rgbNightLight?.action == "on"
+        response.result?.rgbNightLight?.red == 255
+        // v1 envelope is single-wrapped — no nested result.result
+        !(response.result instanceof Map && response.result.containsKey("result"))
+
+        when: "send setLightStatus setting a green color at brightness 60"
+        testLog.reset()
+        def child = childRegistry[expectedDni]
+        driver.sendBypassRequest(child, [
+            method: "setLightStatus",
+            source: "APP",
+            data  : [action: "on", brightness: 60, red: 0, green: 255, blue: 0,
+                     colorMode: "color", speed: 0, colorSliderLocation: 50]
+        ], { resp -> /* closure */ })
+
+        then: "key-set validates (all 8 keys) — no mismatch ERROR"
+        testLog.errors.isEmpty()
+
+        and: "canonical snapshot reflects the write"
+        state.fixtureSnapshots[expectedDni]?.rgbNightLight?.red == 0
+        state.fixtureSnapshots[expectedDni]?.rgbNightLight?.green == 255
+        state.fixtureSnapshots[expectedDni]?.rgbNightLight?.brightness == 60
+
+        and: "single-wrapped response carries the updated rgbNightLight sub-object"
+        def after = driver.synthesizeStatusResponse(expectedDni, "LUH-O451S-WEU")
+        after.result.rgbNightLight.green == 255
+        after.result.rgbNightLight.brightness == 60
     }
 
     // -------------------------------------------------------------------------

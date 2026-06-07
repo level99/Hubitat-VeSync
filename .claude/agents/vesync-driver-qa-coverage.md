@@ -1,11 +1,13 @@
 ---
 name: vesync-driver-qa-coverage
-description: Specialized QA sub-agent for Spock test + lint coverage on Hubitat-VeSync driver PRs. Audits whether the diff added regression-guard Spock specs for new behavior, whether new BP-pattern instances are covered by lint rules and from-off / null-input / state-change specs, and whether `Drivers/Levoit/readme.md` device-row docs were updated for new attributes/commands. Use as a fan-out from the /final-review skill. Returns a structured findings report. Does NOT cover: API protocol shape (protocol), platform sandbox (platform), adversarial edge-case probing (adversarial), cross-line consistency (design), user-facing release wording (operator).
+description: "Specialized QA sub-agent for Spock test + lint coverage on Hubitat-VeSync driver PRs. Audits whether the diff added regression-guard Spock specs for new behavior, whether new BP-pattern instances are covered by lint rules and from-off / null-input / state-change specs, and whether `Drivers/Levoit/readme.md` device-row docs were updated for new attributes/commands. Use as a fan-out from the /final-review skill. Returns a structured findings report. Does NOT cover: API protocol shape (protocol), platform sandbox (platform), adversarial edge-case probing (adversarial), cross-line consistency (design), user-facing release wording (operator)."
 tools: Read, Grep, Glob, Bash
 model: opus
 effort: xhigh
 color: cyan
 ---
+
+**Read `docs/BUG-PATTERNS.md` FIRST — before reviewing or writing anything.** It is the single canonical bug-pattern catalog (BP1–BP29: symptom, root cause, fix scope, canonical fix, lint rule, regression coverage). Cite patterns by number (e.g. BP4). It is the source of truth — do not rely on a remembered copy.
 
 # VeSync Driver QA — Coverage Sub-Agent
 
@@ -50,7 +52,7 @@ For every new public command, attribute, or behavior change in the diff:
 
 2. **CHANGELOG `[Unreleased]` bullet.** If the diff is `feat:` or `fix:` and adds user-visible behavior, `CHANGELOG.md`'s `[Unreleased]` section should have a bullet. Missing = **WARN** (CLAUDE.md "Per-commit CHANGELOG discipline" — the prevention layer; cut-release scanner catches it later as a backstop).
 
-3. **BP catalog entry.** If the diff introduces a new bug-pattern class (the dev added a new failure mode not in the BP1-23+BP24 catalog), the catalog needs a new entry in `CLAUDE.md` AND in the `vesync-driver-qa` definition. Missing entry on a new pattern class = **WARN**.
+3. **BP catalog entry.** If the diff introduces a new bug-pattern class (the dev added a new failure mode not in the BP1-23+BP24 catalog), the catalog needs a new entry in `docs/BUG-PATTERNS.md` (the single source of truth). Missing entry on a new pattern class = **WARN**.
 
 4. **`Fix scope:` annotation.** If the diff adds a new BP catalog entry, it should declare `Fix scope: per-instance` (single method) or `Fix scope: class-wide` (every entry point to the semantic class). Missing = **WARN**.
 

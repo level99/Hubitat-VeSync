@@ -40,7 +40,7 @@ A Hubitat Elevation driver pack for **Levoit smart home devices** (air purifiers
 
 For per-device attribute and command details: [`Drivers/Levoit/readme.md`](Drivers/Levoit/readme.md).
 
-For upcoming devices beyond v2.7: [`ROADMAP.md`](ROADMAP.md).
+For upcoming devices beyond v2.9: [`ROADMAP.md`](ROADMAP.md).
 
 ## For contributors
 
@@ -61,7 +61,25 @@ Two install paths:
 
 ### Manual install (no HPM)
 
-Paste each driver from `Drivers/Levoit/*.groovy` into Hubitat's **Drivers Code** page. HPM is strongly recommended — it handles updates automatically.
+HPM is strongly recommended — it handles the shared libraries and updates automatically. If you install manually, **order matters**: the drivers `#include` a set of shared libraries at save time, so the libraries must already exist on the hub before you paste any driver. Skip the library step and every driver will fail to save with an *"unresolved … library"* / `MissingMethodException` error.
+
+**Step 1 — install the 7 libraries first.** Hubitat's libraries live on a separate page from drivers: **Developer tools → Libraries Code → New Library**. Paste each file below (raw source at `https://raw.githubusercontent.com/level99/Hubitat-VeSync/main/Drivers/Levoit/<file>`) and Save. All 7 use namespace `level99`; install all of them even if you only own one device — they're small and it avoids guessing which library a given driver needs.
+
+| Library file | `#include` name |
+|---|---|
+| `LevoitChildBaseLib.groovy` | `level99.LevoitChildBase` |
+| `LevoitDiagnosticsLib.groovy` | `level99.LevoitDiagnostics` |
+| `LevoitCorePurifierLib.groovy` | `level99.LevoitCorePurifier` |
+| `LevoitCoreAQPurifierLib.groovy` | `level99.LevoitCoreAQPurifier` |
+| `LevoitVitalPurifierLib.groovy` | `level99.LevoitVitalPurifier` |
+| `LevoitHumidifierLib.groovy` | `level99.LevoitHumidifier` |
+| `LevoitFanLib.groovy` | `level99.LevoitFan` |
+
+**Step 2 — install the drivers.** On **Drivers Code → New Driver**, paste `VeSyncIntegration.groovy` (the parent — required) plus one child driver per device you own, from `Drivers/Levoit/*.groovy`. You don't need the drivers for devices you don't have. Raw source is at the same `…/main/Drivers/Levoit/<file>` path.
+
+**Troubleshooting "unresolved library" / `MissingMethodException` on Save:** a required library wasn't installed, or its name/namespace was edited so it no longer matches the `#include` directive. Re-check Step 1 — the library must exist under namespace `level99` with the exact name from the table above. Library name changes break the `#include` binding silently.
+
+Updating a manual install means re-pasting each changed library and driver by hand — another reason HPM is preferred.
 
 ## After install — first-time setup
 

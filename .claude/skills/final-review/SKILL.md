@@ -1,15 +1,17 @@
 ---
 name: final-review
-description: Final pre-PR multi-agent QA review for Hubitat-VeSync driver fork. Runs the Haiku pre-flight gate, then dispatches up to 6 specialized sub-agents in parallel (coverage, platform, protocol, adversarial, design, operator) PLUS two different-family external reviewers — the OpenAI Codex CLI and the Google Gemini CLI — as second-opinion passes, synthesizes their findings into a unified report. Use BEFORE opening or marking a PR ready-for-review. Distinct from the cheaper pipeline-stage `vesync-driver-qa` agent. Usage: /final-review [PR# OR base..HEAD OR brief context]
+description: Final pre-PR multi-agent QA review for Hubitat-VeSync driver fork. Runs the Haiku pre-flight gate, then dispatches up to 6 specialized sub-agents in parallel (coverage, platform, protocol, adversarial, design, operator) PLUS external different-family second-opinion reviewers — the OpenAI Codex CLI and the OpenCode multi-model pack — synthesizes their findings into a unified report. (Google Gemini CLI is deferred — cost-uncompetitive on its required paid tier; see the agent-pipeline handoff doc.) Use BEFORE opening or marking a PR ready-for-review. Distinct from the cheaper pipeline-stage `vesync-driver-qa` agent. Usage: /final-review [PR# OR base..HEAD OR brief context]
 context: hubitat-vesync-fork
 disable-model-invocation: true
 ---
 
 # VeSync Driver Final Review — Multi-Agent Fan-Out
 
-Run the comprehensive multi-agent QA review before opening or marking a PR ready-for-review. You (main session) are the orchestrator — dispatch pre-flight first, then in a single parallel beat dispatch the 6 specialized Claude sub-agents AND fire two different-family external reviewers (the OpenAI Codex CLI and the Google Gemini CLI) as second-opinion passes, gather all reports, synthesize into a unified report.
+Run the comprehensive multi-agent QA review before opening or marking a PR ready-for-review. You (main session) are the orchestrator — dispatch pre-flight first, then in a single parallel beat dispatch the 6 specialized Claude sub-agents AND fire the external second-opinion reviewers (the OpenAI Codex CLI + the OpenCode multi-model pack) as `Bash` calls, gather all reports, synthesize into a unified report.
 
-The two external reviewers are **not Claude sub-agents** — each is orchestrated via a `Bash` call from this skill in the same parallel dispatch message as the 6 `Agent({...})` calls. Different model family = different blind spots, and the benefit **compounds**: across consecutive ship gates the three families (Claude lenses + Codex + Gemini) each repeatedly catch real BLOCKINGs the *other two* miss — including cross-variant correctness bugs no single-family panel surfaces. Both external reviewers consume the SAME shared prompt file (authored once in Step 4b) and review the FULL change independently — they are not gap-fillers; their highest-value catches are independent findings.
+The external reviewers are **not Claude sub-agents** — each is orchestrated via a `Bash` call from this skill in the same parallel dispatch message as the 6 `Agent({...})` calls. Different model family = different blind spots, and the benefit **compounds**: across consecutive ship gates every family (Claude lenses + Codex + each OpenCode pack member) repeatedly catches real BLOCKINGs the *others* miss — cross-variant correctness bugs, sibling-pattern gaps, stale-doc drift — that no single-family panel surfaces. All external reviewers consume the SAME shared prompt and review the FULL change independently — they are not gap-fillers; their highest-value catches are independent findings.
+
+**OpenCode runs as a multi-model *pack*** (one family, several model siblings dispatched in one beat — see Step 4b). **Gemini is deferred** (its required paid Google AI/Vertex tier is cost-uncompetitive vs the OpenCode pack at ship-gate scale); the Gemini recipe lives in the handoff doc as documented-but-dormant, not wired here.
 
 ## When to use this skill vs the pipeline `vesync-driver-qa` agent
 
@@ -33,9 +35,9 @@ Parse `$ARGUMENTS`:
 
 Confirm the audit scope to the user briefly before dispatching: which branch, which base, what's in the diff.
 
-### Step 1b — External-reviewer auth/install/usage pre-check (Codex + Gemini, independent)
+### Step 1b — External-reviewer auth/install pre-check (Codex + OpenCode pack, independent)
 
-Before dispatching anything else, probe BOTH external CLIs **independently** — each has its own availability flag, and a missing/blocked one never aborts the skill (graceful degrade, per external reviewer). Calibrate each new family independently before trusting it; verify-before-trust is permanent and per-finding for every external family, not a calibration-phase-only step.
+Before dispatching anything else, probe each external family **independently** — each has its own availability flag, and a missing/blocked one never aborts the skill (graceful degrade, per family). Verify-before-trust is permanent and per-finding for every external family, not a calibration-phase-only step.
 
 **Codex (`codex_available`):**
 ```bash
@@ -46,19 +48,22 @@ codex login status 2>&1
 - Exit non-zero / `command not found` → `codex_available = false`. Warn once: *"Codex CLI not on PATH. Proceeding without it. Install: `npm install -g @openai/codex`."*
 - Output indicates the ChatGPT plan's usage window is exhausted / rate-limited (substrings `usage limit`, `rate limit`, `quota`, `429`, `reset at`) → `codex_available = false`. Warn once: *"Codex authenticated but ChatGPT usage window exhausted (resets later). Proceeding without it."* Do NOT burn a probe message to confirm.
 
-**Gemini (`gemini_available`) — gated on BOTH the CLI and `rg`, same graceful-degrade as Codex:**
+**OpenCode pack (`opencode_available`) — family-level gate; if YES, dispatch ALL pack members (Step 4b):**
 ```bash
-gemini --version 2>&1     # CLI present?
-command -v rg             # ripgrep on PATH? Gemini shells out to it for repo search
+opencode --version 2>&1   # CLI present?
+command -v rg             # ripgrep on PATH? agentic repo-search shells out to it (stalls without)
 ```
-- `gemini` prints a version AND `rg` is on PATH → `gemini_available = true`.
-- `gemini` `command not found` / exit non-zero → `gemini_available = false`. Warn once: *"Gemini CLI not on PATH. Proceeding without it. Install: `npm install -g @google/gemini-cli`."*
-- `gemini` present but **`rg` absent** → `gemini_available = false`. Warn once: *"Gemini CLI present but ripgrep (`rg`) is not on PATH — Gemini falls back to a built-in grep that times out (~30s) on large files and stalls the review. Install `rg` (or have Step 4b prepend its dir to PATH). Proceeding without Gemini."*
-- **Assume the PAID Google Gemini API tier is configured.** A FULL PR-sized review re-sends accumulated context across many agentic turns, spiking *input-tokens-per-minute*; the free tier's ~250K input-TPM cap (shared across all the vendor's free models — model-switching does NOT help) walls mid-review. `--version` only gates install presence — it does NOT verify the tier. **Smoke-test trap:** a one-token auth ping passes on the free tier and tells you nothing; only the real multi-turn review exercises the cap, caught by the Step 6 runtime guard. Do NOT burn a probe run to test the tier.
+- `opencode` prints a version AND `rg` is on PATH → `opencode_available = true`.
+- `opencode` `command not found` / exit non-zero → `opencode_available = false`. Warn once: *"OpenCode CLI not on PATH. Proceeding without the pack. Install per opencode.ai."*
+- `opencode` present but **`rg` absent** → `opencode_available = false`. Warn once: *"OpenCode present but ripgrep (`rg`) not on PATH — agentic search stalls on a built-in-grep timeout. Install `rg`. Proceeding without the pack."*
+- **`--version` only gates install presence — it does NOT verify per-provider auth.** OpenCode is a multi-provider *router*; individual pack members can still fail auth at run time (a member's provider key missing). That surfaces per-member in Step 6 (tiny output + `API key not valid`), where you drop just that member and keep the rest. **Smoke-test trap:** a one-token ping proves nothing about whether the real multi-turn review will auth or hit a provider cap. Don't burn a probe run. **Free-seat hard-cap hang:** the 3 FREE pack members (`mimo-v2.5-free`, `big-pickle`, `deepseek-v4-flash-free`) can hit the OpenCode HARD free cap (`FreeUsageLimitError`), which does NOT error cleanly — it swallows the 429 and retries to timeout, so the member *hangs* and returns a banner-only stub. This is already handled by design: the `timeout` wrapper on each dispatch (Step 4b) bounds the hang, and because the pack runs as parallel background calls you synthesize from whatever returned and drop the stub member at Step 6 (tiny output, no findings → "pack: N/6, free-seat-X capped"). No mandatory pre-probe (that would contradict the don't-burn-a-probe rule + add per-run cost). The cheap DEBUG cap-detector (`timeout 15 opencode run --model <free> --log-level DEBUG … "ok" | grep FreeUsageLimitError`) is an OPTIONAL pre-drop if you want to skip a known-capped free seat up front rather than wait out its timeout; it's mandatory only for a free-*only* sweep (`/free-audit` Step 2.5), not here where paid seats + Claude lenses carry the review.
+- **No cherry-picking at dispatch.** If the gate is YES, dispatch every standard pack member (Step 4b). Cost-aware dropping (e.g. near a monthly cap) is an explicit orchestrator decision stated to the user, never a silent partial dispatch.
 
-**Do NOT spend a real `codex exec` / `gemini -p` probe message just to test usage** — on the metered/per-message tiers the message budget is the scarce resource the gate exists to protect. The free `--version` / `login status` checks plus the Step 6 runtime guard (which catches a usage-exhaustion that only surfaces once the real call runs) are sufficient.
+**Do NOT spend a real `codex exec` / `opencode run` probe just to test usage** — the per-message / per-token budget is the scarce resource the gate protects. The free `--version` / `login status` checks plus the Step 6 runtime guards are sufficient.
 
-When an external reviewer's flag is `false`, the rest of the skill behaves as if it did not exist — the Claude fan-out (and the other external reviewer, if available) still runs and produces the unified report; synthesis skips that reviewer's merge logic. If BOTH are false, it's a pure Claude-only fan-out.
+**Gemini: deferred, not probed.** Its required paid Google AI/Vertex tier is cost-uncompetitive vs the OpenCode pack at this scale (handoff doc §5b-ter). Don't probe or dispatch it. The recipe is preserved there as documented-but-dormant if a future re-evaluation is wanted.
+
+When a family's flag is `false`, the rest of the skill behaves as if it did not exist — the Claude fan-out (and the other family, if available) still runs and produces the unified report; synthesis skips that family's merge logic. If both are false, it's a pure Claude-only fan-out.
 
 ### Step 2 — Dispatch pre-flight agent (gate)
 
@@ -102,9 +107,9 @@ The pre-flight agent's report includes a structured dispatch plan:
 | codex | YES | … |
 ```
 
-Dispatch the reviewers marked YES. Brief the user: "Pre-flight PASS. Dispatching N of 6 Claude sub-agents — <list> — in parallel, plus external second-opinion passes: <Codex and/or Gemini, per availability>." If skipping any, the user sees why.
+Dispatch the reviewers marked YES. Brief the user: "Pre-flight PASS. Dispatching N of 6 Claude sub-agents — <list> — in parallel, plus external second-opinion passes: <Codex and/or OpenCode pack, per availability>." If skipping any, the user sees why.
 
-**The `codex` matrix column gates BOTH external reviewers** — Codex and Gemini review the same diff against the same shared prompt, so the per-diff "is an external pass worth it?" decision is shared. When that row is YES, fire *each* external reviewer whose Step-1b availability flag is `true` (`codex_available`, `gemini_available` independently). When it's NO (trivial mechanical diff), fire neither. Pre-flight does not know whether either CLI is installed/authenticated; the skill owns that gate via the two flags.
+**The `codex` matrix column gates BOTH external families** — Codex and the OpenCode pack review the same diff against the same shared prompt, so the per-diff "is an external pass worth it?" decision is shared. When that row is YES, fire Codex (if `codex_available`) AND every OpenCode pack member (if `opencode_available`). When it's NO (trivial mechanical diff), fire neither family. Pre-flight does not know whether either CLI is installed/authenticated; the skill owns that gate via the two flags.
 
 For reference, the matrix the pre-flight agent applies (don't re-compute it; trust pre-flight's classification):
 
@@ -122,30 +127,31 @@ For reference, the matrix the pre-flight agent applies (don't re-compute it; tru
 | CI / workflow change | NO | YES | NO | NO | NO | NO | NO |
 | Cut-release skill / agent def | NO | NO | NO | NO | YES | maybe | YES |
 
-External-reviewer (`codex` column) rationale: `maybe` for pure-docs (externals are strong at doc-vs-code drift), `YES` for new driver / behavior change / new library / cut-release-skill (sibling-pattern incompleteness + stale-narration + cross-variant correctness pay off), `maybe` for spec-only (vacuous-guard axis), `maybe` for lint rule change (over-zealous enforcement axis), `NO` for trivial mechanical changes (version bump / manifest-only / CI). When in doubt, lean YES — Codex is ~one ChatGPT-Plus message and Gemini on the paid API tier is per-token but a huge-input/tiny-output review is pennies, so both are cheap relative to the catch value.
+External-reviewer (`codex` column) rationale: `maybe` for pure-docs (externals are strong at doc-vs-code drift), `YES` for new driver / behavior change / new library / cut-release-skill (sibling-pattern incompleteness + stale-narration + cross-variant correctness pay off), `maybe` for spec-only (vacuous-guard axis), `maybe` for lint rule change (over-zealous enforcement axis), `NO` for trivial mechanical changes (version bump / manifest-only / CI). When in doubt, lean YES — Codex is ~one ChatGPT-Plus message and the OpenCode pack is dollar-per-token against a monthly cap (each member's input is one shared prompt; a huge-input/tiny-output review is cheap), so both are cheap relative to the catch value.
 
-### Step 4a — External-reviewer working tree (skip if both external flags false)
+### Step 4a — External-reviewer working tree + pre-staged diff (skip if both external flags false)
 
-Both externals should run `git diff <base>..HEAD` themselves so they review the *change* (a git-less reviewer handed a file list reviews the whole file and surfaces real-but-out-of-scope findings). Their sandboxes differ, which drives the tree choice:
+Both families review against a tree on disk; both can share one `REVIEW_CWD`:
 
-- **Codex** runs `-s read-only` (no writes) — safe pointed straight at the repo-root.
-- **Gemini** runs `--yolo` (auto-approves shell + writes, so it CAN run `git diff` like Codex). That auto-approve blast radius MUST be contained in a **disposable git worktree** at the audit SHA — never the live tree.
+- **Codex** runs `-s read-only` (no writes) via `-C $REVIEW_CWD`, and runs `git diff` itself in its sandbox.
+- **OpenCode pack members** run `--dir .` (file access scoped to the cwd; **the `--dir .` policy auto-rejects `/tmp/*`**). A member that tries the natural `git diff > /tmp/x` pattern gets auto-rejected and gives up mid-review. The workaround has **TWO required parts** — staging alone is NOT sufficient: (1) **pre-stage the diff into the workdir**, AND (2) in the prompt, **positively direct** the model to read the staged file **and explicitly forbid** `git diff` + scratch-writes (the named `DO NOT run git diff yourself` / `DO NOT write any scratch files` lines in the Step-4c prompt). A negative-only `/tmp` warning is insufficient — some models (observed: a 1M-context paid Flash) still reach for `git diff > /tmp/x` despite it and abandon the review.
 
-**Decision:**
+**Pick `REVIEW_CWD`** (Mode A/B, shared by both families):
+- *Mode A* — audit SHA == current HEAD and tree clean (`git status --porcelain -- '*.groovy' '*.md' 'tests/**'` empty): `REVIEW_CWD=<repo-root>`, no worktree.
+- *Mode B* (cross-PR / historical SHA / dirty tree): `git worktree add ../review_<short-sha> <HEAD-SHA>`; `REVIEW_CWD=<repo-parent>/review_<short-sha>`. Remove it in Step 6.
 
-- **If Gemini will run (`gemini_available` + matrix YES):** create one disposable worktree at the audit SHA and run BOTH externals in it (Codex `-C` it, read-only; Gemini `cd` into it, `--yolo` contained):
-  ```bash
-  git worktree add ../review_<short-sha> <HEAD-SHA>   # REVIEW_CWD=<repo-parent>/review_<short-sha>
-  ```
-- **If only Codex will run:** *Mode A* — when the audit SHA == current HEAD and the tree is clean (`git status --porcelain -- '*.groovy' '*.md' 'tests/**'` is empty), set `REVIEW_CWD=<repo-root>`, no worktree. Else *Mode B* — `git worktree add ../review_<short-sha> <HEAD-SHA>`.
+**Pre-stage the diff** inside `REVIEW_CWD` (workdir-relative path, gitignored) so the OpenCode pack can read it without tripping the `/tmp` auto-reject:
+```bash
+git -C $REVIEW_CWD diff <BASE_SHA>..<HEAD_SHA> > $REVIEW_CWD/.review_diff_<short-sha>.txt
+```
 
-`<short-sha>` = first 8 chars of the audit HEAD SHA. Remove any worktree created here via `git worktree remove ../review_<short-sha>` in Step 6. (Containing `--yolo` in a throwaway worktree is enough for our own repo; add a `--sandbox`-style flag only when reviewing UNTRUSTED code.)
+`<short-sha>` = first 8 chars of the audit HEAD SHA. (Codex doesn't need the pre-staged file — it runs git itself — but staging once for the pack is harmless and keeps one diff source of truth.)
 
 ### Step 4b — Issue the parallel fan-out
 
-**First author the shared prompt file (ONCE).** Both external reviewers consume the SAME prompt — identical input makes the cross-reviewer comparison meaningful and saves authoring two prompts. Build the Step-4c prompt (with `<BASE_SHA>`/`<HEAD_SHA>` and the per-diff HUNT invariants substituted) and `Write` it to a file *outside the repo* so the working tree stays clean: `<repo-parent>/.final_review_prompt_<short-sha>.md`. (Pass it as a FILE both CLIs read — never piped on the command line; a large prompt on argv blows the OS limit with "Argument list too long".)
+**First author the shared prompt file (ONCE).** Codex AND every OpenCode pack member consume the SAME prompt — identical input makes the cross-reviewer comparison meaningful and saves authoring N prompts. Build the Step-4c prompt (with `<BASE_SHA>`/`<HEAD_SHA>`, the explicit changed-file list, and the per-diff HUNT invariants substituted) and `Write` it to `<repo-parent>/.final_review_prompt_<short-sha>.md`. Tell the prompt to read the pre-staged diff at `.review_diff_<short-sha>.txt` (workdir-relative — the OpenCode `--dir .` policy can read that but not `/tmp`); Codex can also just run `git diff` itself.
 
-Then dispatch the YES Claude sub-agents in a SINGLE message with multiple `Agent({...})` calls, AND in the same message fire one background `Bash` call per *available* external reviewer (`codex_available`, `gemini_available`). All run concurrently. Each Claude sub-agent gets the same diff context but its scope is its specialization:
+Then dispatch the YES Claude sub-agents in a SINGLE message with multiple `Agent({...})` calls, AND in the same message fire Codex (if `codex_available`) + one background `Bash` call per OpenCode pack member (if `opencode_available`). All run concurrently. Each Claude sub-agent gets the same diff context but its scope is its specialization:
 
 ```
 Agent({
@@ -171,15 +177,32 @@ Bash({
   run_in_background: true, timeout: 1200000, description: 'Codex CLI second-opinion pass'
 })   // only if codex_available
 
-// External reviewer 2 — Gemini (--yolo = auto-approve shell so it runs git itself, contained
-// by the disposable worktree cwd; needs rg on PATH; grant read of the out-of-repo prompt dir):
-Bash({
-  command: `cd $REVIEW_CWD && PATH="<dir-of-rg>:$PATH" gemini --yolo -m <model> --include-directories <repo-parent> -p "Read <repo-parent>/.final_review_prompt_<short-sha>.md and carry out the review it describes against this repo (the current working directory). Run 'git diff <base>..HEAD' yourself to see the change; read files for sibling context. Output [BLOCKING|WARNING|NIT] file:line + a one-line verdict." > <repo-parent>/.gemini_review_<short-sha>.md 2>&1`,
-  run_in_background: true, timeout: 1200000, description: 'Gemini CLI second-opinion pass'
-})   // only if gemini_available
+// External family 2 — OpenCode PACK: one background Bash call PER MEMBER, all in this beat.
+// Standard 6-pack (3 free seats anchor it + 3 paid Go) ≈ $0.85/run. --dir . scopes file
+// access to the cwd (auto-rejects /tmp), so the prompt points at the pre-staged diff.
+// TWO mandatory guards on every line: (1) `< /dev/null` — without it `opencode run` hangs
+// on stdin under the Claude Code Bash tool on Windows/Git-Bash (bootstraps, then NEVER calls
+// the model, 0 bytes on both streams; verified 2026-06-05). (2) command-level `timeout 2700`
+// (45 min, generous for the paid premium members) — under Git-Bash `opencode run` frequently
+// leaves a WRAPPER PROCESS that never exits AFTER the model wrote its full output, so a
+// backgrounded call's completion notification NEVER fires and a `wait` blocks forever (lived
+// 2026-06-06: a free-audit sweep hung ~9h with all outputs on disk + 3 orphan wrappers). The
+// `run_in_background`/`timeout:` Bash-tool param does NOT save you — a detached wrapper
+// outlives it; the per-call `timeout` in the command is the only ceiling that fires (output
+// already on disk → nothing lost). NOTE: --dangerously-skip-permissions is a Claude Code flag
+// — OpenCode silently drops it (no-op); do NOT add it.
+// PROMPT="$(cat <repo-parent>/.final_review_prompt_<short-sha>.md)"; OUT=<repo-parent>/.opencode_<model>_<short-sha>.md
+Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode/mimo-v2.5-free   --dir . "$PROMPT" < /dev/null > .opencode_mimo_<short-sha>.md     2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — mimo-v2.5-free (FREE, distinct-family lens)' })
+Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode/big-pickle       --dir . "$PROMPT" < /dev/null > .opencode_bigpickle_<short-sha>.md 2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — big-pickle (FREE, concise high-signal)' })
+Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode/deepseek-v4-flash-free --dir . "$PROMPT" < /dev/null > .opencode_dsflashfree_<short-sha>.md 2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — deepseek-v4-flash-free (FREE, same arch as paid Flash @ 200K ctx)' })
+Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode-go/deepseek-v4-flash --dir . "$PROMPT" < /dev/null > .opencode_dsflash_<short-sha>.md 2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — deepseek-v4-flash (PAID ~$0.033, dominant $/finding)' })
+Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode-go/kimi-k2.6       --dir . "$PROMPT" < /dev/null > .opencode_kimi_<short-sha>.md     2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — kimi-k2.6 (PAID ~$0.50, sibling-gap specialist)' })
+Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode-go/deepseek-v4-pro  --dir . "$PROMPT" < /dev/null > .opencode_dspro_<short-sha>.md   2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — deepseek-v4-pro (PAID ~$0.31, premium voice)' })
+// All 6 only if opencode_available; dispatch ALL if the family gate is YES (no cherry-pick).
+// The 3 free seats keep distinct-family signal at $0 even if the paid Go account is rate-capped.
 ```
 
-Each `Bash` uses `run_in_background: true` so it returns immediately; you're notified when each job exits. Outputs go to `<repo-parent>/.{codex,gemini}_review_<short-sha>.md` (siblings of the repo, not inside the worktree) so they survive worktree cleanup. Per-CLI differences (do NOT assume one recipe transfers): **Codex** reads the prompt via stdin redirect (`- < file`), runs git in its read-only sandbox. **Gemini** can't be both read-only AND shell-capable, so it runs `--yolo` (auto-approves shell/writes) **inside the disposable worktree** (Step 4a) — that containment is why the worktree is mandatory whenever Gemini runs; it then runs `git diff` itself and reviews the *change*, not whole files. Gemini needs `rg` on PATH (prepend `<dir-of-rg>` if not already there — without it, it stalls on a built-in-grep timeout). The prompt is *named* via a SHORT `-p` (never piped — argv limit), and `--include-directories`/`-C` grant the out-of-repo prompt dir. The CLI may silently resolve `-m <flash-vN>` to a newer flash variant — harmless; verify in the run log if it matters.
+Each `Bash` uses `run_in_background: true` so it returns immediately; you're notified when each job exits. Outputs go to `<repo-parent>/.{codex,opencode_<model>}_review-ish_<short-sha>.md` (siblings of the repo) so they survive Mode B worktree cleanup. Per-family differences (do NOT assume one recipe transfers): **Codex** reads the prompt via stdin redirect (`- < file`) and runs git in its read-only sandbox. **OpenCode pack members** take the prompt as a positional arg (`"$(cat promptfile)"` — fine, individual prompts are <100K), run `--dir .` scoped to `REVIEW_CWD`, and read the **pre-staged** `.review_diff_<short-sha>.txt` (the `--dir .` policy blocks `/tmp`, so a `git diff > /tmp` pattern self-rejects — §4a pre-stage avoids it). **`< /dev/null` is MANDATORY** — without it `opencode run` hangs on stdin under the Claude Code Bash tool on Windows/Git-Bash (it bootstraps, then never calls the model, 0 bytes on both streams; verified 2026-06-05). **The command-level `timeout 2700` wrapper is equally MANDATORY** — under Git-Bash `opencode run` frequently leaves a wrapper process that never exits after the model already wrote its full output, so a backgrounded call's completion notification never fires and the orchestrator waits forever (lived 2026-06-06: a free-audit sweep hung ~9h, all outputs already on disk); the Bash-tool `timeout:` param does NOT save you (a detached wrapper outlives it), so the per-call `timeout` is the only effective ceiling. Do NOT add `--dangerously-skip-permissions` — that's a Claude Code flag, OpenCode silently drops it (no-op). `opencode run`'s TUI emits ANSI even non-interactively → **strip ANSI before parsing** (Step 6); `--format json` is an alternative for clean machine-parseable output, but is orthogonal to the hang. Pack members are stateless (no resume); cherry-picking members at dispatch is a process bug — dispatch all if the gate is YES.
 
 **Capture each Claude sub-agent's agent ID** from the dispatch result. Store for SendMessage on re-review rounds. The pattern:
 
@@ -189,9 +212,9 @@ agentId: <id> (use SendMessage with to: '<id>' to continue this agent)
 
 Record these in your working memory for this skill invocation. Neither external CLI has a transcript-resume API — re-review rounds re-run each available external reviewer fresh (see Re-review rounds section below).
 
-### Step 4c — Shared external-reviewer prompt (both Codex & Gemini consume it)
+### Step 4c — Shared external-reviewer prompt (Codex + every OpenCode pack member consume it)
 
-This is the SINGLE prompt both external CLIs read (authored to `<repo-parent>/.final_review_prompt_<short-sha>.md` in Step 4b). Substitute `<BASE_SHA>`/`<HEAD_SHA>` with the Step-1 refs, the explicit `<file list>` (Gemini can't compute a diff — list the changed files so it can read them), and a per-diff **HUNT** list of the load-bearing invariants THIS change must preserve.
+This is the SINGLE prompt all external reviewers read (authored to `<repo-parent>/.final_review_prompt_<short-sha>.md` in Step 4b), and it's the SAME template the §5c pipeline-tier parallel external reuses — author it once, don't fork a second prompt. Substitute `<BASE_SHA>`/`<HEAD_SHA>` with the Step-1 refs, the explicit changed-file list, the pre-staged diff path (`.review_diff_<short-sha>.txt`), and a per-diff **HUNT** list of the load-bearing invariants THIS change must preserve.
 
 **Frame it as a FULL independent review — NOT "find what our lenses missed."** This is the load-bearing reframe: the external reviewers' highest-value catches are INDEPENDENT findings (in this project: cross-variant correctness bugs and a missed state-freshness gate — none flagged by the in-house lenses). Priming with the full invariant set AND an open-ended "flag anything beyond this" surfaces those; narrowing to "just the gaps" suppresses the second-opinion value they exist to provide. (This broad-and-doc-loading framing applies to the EXTERNAL reviewers ONLY — the Claude lenses stay durably specialized per their per-lens defs; do not collapse them into freeform prompts.) A *soft* "our in-house lenses already cover X well" hint is fine to cut duplicate noise, but never as a scope boundary.
 
@@ -211,7 +234,7 @@ You are a senior Hubitat Elevation platform engineer reviewing a Hubitat Groovy 
 
 Read these files in the working tree to load the fork's specific conventions, architecture, and bug-pattern catalog into your context. They're the canonical, always-current source of truth — read them at task time, do not rely on training-data knowledge:
 
-1. **`CONTRIBUTING.md`** — full bug-pattern catalog (BP1-BPN), every lint rule's purpose, the 5-driver-family layout, parent-child architecture, HPM packaging via `bundles[]`, every convention this codebase enforces.
+1. **`docs/BUG-PATTERNS.md`** — the canonical bug-pattern catalog (BP1–BP29: symptom, root cause, fix scope, canonical fix, lint rule, regression coverage); read this FIRST. **`CONTRIBUTING.md`** — every lint rule's purpose, the 5-driver-family layout, parent-child architecture, HPM packaging via `bundles[]`, every convention this codebase enforces.
 2. **`CLAUDE.md`** — fork-specific AI-pipeline overlay; contains the architecture summary, family-line cleavage, bug-pattern conventions, and the cross-cutting / fix-scope discipline rules.
 3. **`.claude/agents/vesync-driver-qa-*.md`** (coverage, platform, protocol, adversarial, design, operator + preflight) — the parallel Claude sub-agents reviewing this PR alongside you. Read these so you know what's already well-covered — a SOFT dedup hint to cut duplicate noise, NOT a scope boundary. Review the WHOLE change against the invariant set + your own judgement; your most valuable findings are the independent ones the in-house lenses didn't think to look for.
 4. **`Drivers/Levoit/readme.md`** — per-driver feature/capability/attribute reference (helps you tell whether a doc row is drifted from code).
@@ -219,7 +242,7 @@ Read these files in the working tree to load the fork's specific conventions, ar
 
 # Your task — FULL independent review
 
-Review the entire change. **If you can run git, review `git diff <BASE_SHA>..<HEAD_SHA>`; otherwise read these files directly: `<explicit changed-file list>`.** Read whatever additional files you need for context. Exclude generated/vendored paths and the dependency dir.
+Review the entire change. **The full git diff for this review is ALREADY pre-staged at `.review_diff_<short-sha>.txt` (workdir-relative) — read THAT file directly with your file-read tool.** If your file access is sandboxed to the working directory (OpenCode pack members): **DO NOT run `git diff` yourself** — it has already been computed for you — and **DO NOT write any scratch files** (no `/tmp`, no `cp`/`mv`/`tee`/helper-script bypass); you have read-only access for this task. (Reaching for `/tmp` gets auto-rejected and aborts your review mid-stream — a negative-only "don't use /tmp" warning is not enough, hence the positive direction here.) *(Codex only: you may instead run `git diff <BASE_SHA>..<HEAD_SHA>` in your read-only sandbox if you prefer.)* The changed files are: `<explicit changed-file list>`. Read whatever additional files you need for context. Exclude generated/vendored paths and the dependency dir.
 
 WHAT THIS CHANGE IS: `<2-3 lines: what the diff does, what must stay true>`.
 
@@ -264,25 +287,26 @@ If the PR is large and the user is doing other work, dispatch each sub-agent wit
 
 ### Step 6 — Gather reports + synthesize
 
-When all dispatched Claude sub-agents return AND each dispatched external background job notifies completion, read each available external reviewer's output (`<repo-parent>/.codex_review_<short-sha>.md`, `<repo-parent>/.gemini_review_<short-sha>.md`) into your context. For any external reviewer not dispatched (flag false in Step 1b, or matrix marked the external column NO), skip its merge logic.
+When all dispatched Claude sub-agents return AND each dispatched external background job notifies completion, read each available external output into your context: `<repo-parent>/.codex_review_<short-sha>.md` and each `<repo-parent>/.opencode_<model>_<short-sha>.md`. Skip the merge logic for any family/member not dispatched.
 
-**Pull the verdict out of the noisy logs.** Both logs carry spinner frames, retries, and boilerplate; the findings are at the END:
+**Pull the verdict out of the noisy logs.** All logs carry spinner frames, retries, ANSI, and boilerplate; the findings are at the END:
 ```bash
 # Codex: content follows the final `codex` banner line
 awk '/^codex$/{f=1} f' <repo-parent>/.codex_review_<short-sha>.md | tail -40
-# Gemini: strip spinner/retry/boilerplate, then tail
-grep -vE "^(Loaded|Loading|Attempt [0-9]|Warning:|⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏)" <repo-parent>/.gemini_review_<short-sha>.md | tail -60
+# OpenCode (per member): strip ANSI escapes, then grep the severity/verdict blocks
+sed 's/\x1b\[[0-9;]*[mGKHF]//g' <repo-parent>/.opencode_<model>_<short-sha>.md | grep -E "BLOCKING|WARNING|NIT|Verdict|shippable" | tail -40
 ```
 
-**Tell a brief throttle (wait) apart from a structural rate cap (needs paid tier) — by the reset interval in the error text.** Two different failure modes:
-- **Brief throttle** — "retry after *N **seconds***", auto-recovers (a Gemini run may retry several times over ~40s and complete). Because the fan-out is parallel, a throttled reviewer normally lands within the pack's window. Policy: synthesize when the pack (lenses + tester + other external) finishes; if one external is still retrying, grant a short grace (≈ the slowest reviewer's runtime, capped a couple minutes past the pack), then proceed.
-- **Structural rate cap** — "reset after *N **hours***" / "quota exhausted". A FULL-review re-sends accumulated context across many agentic turns, spiking input-tokens-per-minute; the **free** tier caps exactly that (~250K input-TPM, shared across all the vendor's free models — switching models does NOT help). **Waiting will NOT fix this and neither will a model switch — it needs the paid API tier** (we assume paid is configured; if it isn't, this is the symptom). Don't retry-loop against a structural cap.
+**OpenCode pack per-member failure modes (drop the member, keep the pack).** A pack member can fail independently:
+- **Tiny output (< ~200 bytes) + `API key not valid` in tail** → that provider's key isn't configured in the OpenCode router. The other members still ran. Drop it: note "pack: N/M dispatched, `<model>` skipped — auth".
+- **Output ends mid-stream + `permission requested: external_directory; auto-rejecting`** → the member tried `/tmp` despite the prompt and gave up. The §4a pre-staged diff should prevent this; if it recurs, confirm the prompt names the workdir-relative diff path and re-dispatch just that member.
+- **Per-member cost variance is wide** — within the same nominal tier, one member can spend an order of magnitude more than another on the same prompt. Watch $/run per member, not per family; the cheapest member often matches or beats the priciest on $/real-finding.
 
-**Drop an external reviewer only on a *sustained* outage (or an unconfigured-paid-tier structural cap), and state the drop EXPLICITLY in synthesis, never silently** (a drop is itself availability/cost data). Absent at dispatch → proceed without it; briefly throttled mid-run → wait within the window; structurally capped → note "Gemini: dropped (free-tier structural cap — needs paid API tier)" and synthesize with the rest.
+**Brief throttle (wait) vs structural rate cap (needs paid tier) — by the reset interval in the error text.** "retry after *N **seconds***" auto-recovers → within the parallel window, grant a short grace then proceed. "reset after *N **hours***" / "quota exhausted" is a structural cap → waiting and model-switching won't fix it; it needs the paid tier. Don't retry-loop a structural cap.
 
-**Filter out-of-scope findings from a git-less reviewer.** If a reviewer ran without git (fallback mode — it read whole files, not a diff), it may flag real bugs in *unchanged* code that merely shares a file with the diff. Those are correct-but-out-of-PR-scope; note them separately (or as follow-ups), don't treat them as blocking *this* PR. With both externals on the `--yolo`/git path this shouldn't arise, but verify each external finding is actually in the diff's scope before escalating.
+**Drop an external family/member only on a sustained outage (or structural cap), and state the drop EXPLICITLY in synthesis, never silently** (a drop is itself availability/cost data). Absent at dispatch → proceed without it; briefly throttled → wait within the window; structurally capped or per-member auth-fail → note it (e.g. "Codex: unavailable (usage/rate-limit)" / "pack: 4/5, `<model>` skipped — auth") and synthesize with the rest. The Claude fan-out is the authoritative result; externals are always additive.
 
-**Runtime usage-exhaustion guard (the Step 1b pre-check's safety net), per external reviewer.** Step 1b can't always detect a usage block up front — a plan's window can be fine at pre-check time but exhaust mid-run, surfacing only in the background job's output. Before merging an external reviewer's findings, sanity-check its output file: if it's **missing, empty, or its body is a usage/rate-limit/auth error rather than a findings report** (substrings `usage limit`, `rate limit`, `quota`, `429`, `stream error`, `not logged in`), treat THAT reviewer as unavailable for this run — note e.g. `Codex: unavailable this run (usage/rate-limit)` or `Gemini: dropped (sustained throttle)` in the unified report's **Sub-agents dispatched** line, skip its merge, and proceed with the rest. Do NOT surface the raw error text as a "finding", and do NOT block or retry (a retry burns another message/quota against the same exhausted window). The Claude fan-out is the authoritative result; the external reviewers are always additive.
+**Stale-narration findings get EXTRA verification — open the file and read the line.** Verify-before-trust is permanent and per-finding for every external family. The hallucination risk is *asymmetric*: external models that score well on doc-vs-code-drift catches also confidently fabricate what a README/docstring/TODO "should" say from training-data priors. If an external BLOCKING is "doc line N is stale / says X", `sed -n 'Np' <file>` and read it BEFORE forwarding to dev — a single false claim about file content costs a wasted fix round (dev dutifully "fixes" unbroken text). Code findings hallucinate far less; doc/narration findings far more.
 
 Produce a unified report with this structure:
 
@@ -322,18 +346,18 @@ Produce a unified report with this structure:
 - adversarial: <id>
 - design: <id>
 - operator: <id>
-- codex / gemini: external CLIs — re-run fresh each round (no transcript resume; see Re-review rounds)
+- codex / opencode-pack: external CLIs — re-run fresh each round (no transcript resume; see Re-review rounds)
 ```
 
 **Synthesis rules**:
 
-- **Deduplicate**: if two reviewers flag the same file:line, merge into one finding noting both perspectives. Agreement across families (a Claude lens + Codex + Gemini on the same finding) strengthens severity — note all that flagged it.
+- **Deduplicate**: if two reviewers flag the same file:line, merge into one finding noting both perspectives. Agreement across families (a Claude lens + Codex + one or more OpenCode pack members on the same finding) strengthens severity — note all that flagged it.
 - **Severity merge**: if any reviewer flags BLOCKING, the unified finding is BLOCKING. Use the strongest reasoning.
 - **Cross-cutting findings**: some issues span multiple reviewer scopes (a new SHOULD-ON method with no auto-on guard AND missing from-off Spock spec AND no CHANGELOG bullet). Merge into a single finding with multi-scope attribution.
 - **Preserve reviewer voice**: cite the original reports verbatim in the appendix when clear. Don't paraphrase if it loses precision.
-- **External-only findings**: if an external reviewer caught something no Claude lens flagged, label it `[codex-only]` / `[gemini-only]` in the unified report. This is exactly the second-opinion value the integration exists to capture — surface it prominently, not buried. **Verify each external finding against the actual code before acting on it** (permanent, per-finding, every family — a hallucinated finding caught late costs a wasted fix round).
-- **Disagreement — reviewer-vs-reviewer too, not just external-vs-Claude**: if any two reviewers contradict on the same finding (Claude-vs-external, OR the two externals **split** with each other — they reason independently and will sometimes disagree), present both perspectives in the unified report, adjudicate against the actual code first, and surface the residual to the user. Don't auto-pick a side.
-- **Worktree cleanup**: if Step 4a chose Mode B (temporary worktree), run `git worktree remove ../codex_review_<short-sha>` after the unified report is delivered. Skip in Mode A. The `.codex_review_<short-sha>.md` / `.gemini_review_<short-sha>.md` output files and the `.final_review_prompt_<short-sha>.md` prompt file are left as audit artifacts — clean up manually if no longer needed.
+- **External-only findings**: if an external reviewer caught something no Claude lens flagged, label it `[codex-only]` / `[opencode-<model>-only]` in the unified report. This is exactly the second-opinion value the integration exists to capture — surface it prominently, not buried. **Verify each external finding against the actual code before acting on it** (permanent, per-finding, every family — a hallucinated finding caught late costs a wasted fix round; doc/narration claims especially, per the stale-narration guard above).
+- **Disagreement — reviewer-vs-reviewer too, not just external-vs-Claude**: if any two reviewers contradict on the same finding (Claude-vs-external, OR two externals **split** — including two siblings *inside* the OpenCode pack calling it BLOCKING vs WARN — they reason independently and will sometimes disagree), present both perspectives, adjudicate against the actual code first, and surface the residual to the user. Don't auto-pick a side.
+- **Worktree cleanup**: if Step 4a chose Mode B (temporary worktree), run `git worktree remove ../review_<short-sha>` after the unified report is delivered. Skip in Mode A. The output files (`.codex_review_<short-sha>.md`, each `.opencode_<model>_<short-sha>.md`), the pre-staged `.review_diff_<short-sha>.txt`, and the `.final_review_prompt_<short-sha>.md` prompt file are left as audit artifacts — clean up manually if no longer needed.
 
 ### Verdict rules
 
@@ -361,21 +385,21 @@ When the dev pushes fixes addressing prior findings, the user will re-invoke `/f
    ```
 4. **Sub-agents NOT to re-dispatch**: any whose scope wasn't touched by the fix. Their prior PASS verdicts still hold. Note in the unified report ("Platform: not re-reviewed — scope unchanged, prior PASS holds.").
 5. If `SendMessage` returns `success: false` (agent transcript evicted), fall back to fresh `Agent({...})` with full context.
-6. **Both external CLIs re-run fresh each round.** Neither has a transcript-resume API — every invocation is independent. Re-author the shared prompt file for the updated tree, then re-fire each available external. Decide whether to re-run by what the fix touched:
+6. **All externals re-run fresh each round.** None has a transcript-resume API — every invocation is independent. Re-stage the diff + re-author the shared prompt for the updated tree, then re-fire Codex + each OpenCode pack member. Decide whether to re-run by what the fix touched:
    - If the fix touched `Drivers/Levoit/*.groovy`, `Drivers/Levoit/*Lib.groovy`, `tests/lint_rules/`, `tests/check_*.py`, `levoitManifest.json`, or `tools/build-bundle.py` → re-run the externals (findings may have shifted).
    - If the fix was doc-only (CHANGELOG `[Unreleased]`, README rows, BP-catalog entries) → skip the external re-run; their prior production-code findings still hold. The re-review is Claude-side only.
-   - Re-running spends +1 ChatGPT-Plus message (Codex) and one Gemini paid-API run (pennies) per round.
+   - Re-running spends +1 ChatGPT-Plus message (Codex) and one OpenCode 6-pack run (~$0.85; 3 free seats + 3 paid Go) per round.
 
 ### Cost discipline
 
 | Scenario | Cost estimate |
 |---|---|
-| Full round-1 (all 6 sub-agents + Codex + Gemini) | ~200-300K Claude tokens, ~8-12 min wall, +1 ChatGPT-Plus message, +1 Gemini paid-API run (pennies) |
+| Full round-1 (6 sub-agents + Codex + OpenCode 6-pack) | ~200-300K Claude tokens, ~8-12 min wall, +1 ChatGPT-Plus message, +1 OpenCode 6-pack run (~$0.85 = $0+$0+$0 free seats + $0.033+$0.50+$0.31 paid Go) |
 | Re-review with 1 sub-agent resumed (no externals) | ~40-70K tokens, ~3-5 min |
-| Re-review with 3 sub-agents resumed + externals | ~100-150K tokens, ~5-8 min, +1 ChatGPT-Plus message, +1 Gemini run |
+| Re-review with 3 sub-agents resumed + externals | ~100-150K tokens, ~5-8 min, +1 ChatGPT-Plus message, +1 OpenCode pack run |
 | Trivial doc-only fix re-review (no re-dispatch, no externals) | ~10-20K tokens, ~30s |
 
-Target: 2-3 round convergence for a typical PR. A typical cycle spends ~2-3 ChatGPT-Plus messages across all Codex runs (well inside Plus's weekly headroom) plus matching Gemini paid-API runs (a few pennies total; the *free* tier's input-TPM cap, not dollar cost, is what forces the paid tier — see Step 1b/Step 6).
+Target: 2-3 round convergence for a typical PR. A typical cycle spends ~2-3 ChatGPT-Plus messages across Codex runs (inside Plus's weekly headroom) plus matching OpenCode pack runs (per-token; watch $/run per member, not per family — within-tier variance is wide, §5b-bis).
 
 ## When NOT to use this skill
 
@@ -393,7 +417,7 @@ If you (main session) start doing the audit work directly instead of dispatching
 
 ## Reviewer reference
 
-9 reviewers total: 7 Claude sub-agents (defined in `.claude/agents/`) + 2 different-family external CLIs (OpenAI Codex + Google Gemini). Pre-flight runs first as a gate; the 6 deep-audit Claude agents AND both available externals fan out in parallel per pre-flight's dispatch plan:
+7 Claude sub-agents (defined in `.claude/agents/`) + 2 external families (OpenAI Codex + the OpenCode multi-model pack, the pack itself = N model siblings). Pre-flight runs first as a gate; the 6 deep-audit Claude agents AND every available external fan out in parallel per pre-flight's dispatch plan. (Gemini is deferred — see the header note + handoff doc §5b-ter.)
 
 | Reviewer | Model / Family | Orchestration | Dispatch order | Scope |
 |---|---|---|---|---|
@@ -404,5 +428,6 @@ If you (main session) start doing the audit work directly instead of dispatching
 | `vesync-driver-qa-adversarial` | Claude / Opus | Claude sub-agent | Parallel | Input adversaries (null/empty/unicode/MAX_INT), state adversaries (guard-bypass), concurrency adversaries (async race, re-entrance), environment adversaries (BP14/16/17/19/21/22), Rule Machine adversaries (BP18 blank slots, C3 idempotency, BP23/BP24 from-off) |
 | `vesync-driver-qa-design` | Claude / Sonnet | Claude sub-agent | Parallel | Lib boundary integrity (Phase 1-5 architecture), cross-line consistency (Core/Vital/Classic/V2/Fan family), helper-extraction opportunities, intentional-asymmetry rationale, BP24 SHOULD-ON/NO-ON/SKIP-OK classification |
 | `vesync-driver-qa-operator` | Claude / Sonnet | Claude sub-agent | Parallel | BREAKING flag honesty (what breaks vs what's preserved), TMI filter (no impl-detail in user-facing prose), CHANGELOG `[Unreleased]` per-commit discipline, dashboard/RM impact disclosure, log discipline + PII sanitize routing, `Drivers/Levoit/readme.md` device-row updates, cut-release invariant trips |
-| Codex CLI | OpenAI / GPT family | Skill-orchestrated `Bash` call (NOT a Claude sub-agent) | Parallel | FULL independent second-opinion review (reads the git diff in its read-only sandbox). Highest-value catches are independent findings — cross-variant correctness, doc-vs-code drift, sibling-pattern incompleteness, vacuous guards, stale narration, HPM-bundle integrity. Consumes the shared prompt file (Step 4b/4c). |
-| Gemini CLI | Google / Gemini family | Skill-orchestrated `Bash` call (NOT a Claude sub-agent) | Parallel | FULL independent second-opinion review from a THIRD model family — blind-spot benefit compounds with Codex (each catches BLOCKINGs the other two families miss). Runs `--yolo` inside the disposable worktree so it executes `git diff` itself (contained blast radius); needs `rg` on PATH and the **paid Gemini API tier** (free tier's input-TPM cap walls a large review). Consumes the SAME shared prompt file. |
+| Codex CLI | OpenAI / GPT family | Skill-orchestrated `Bash` call (NOT a Claude sub-agent) | Parallel | FULL independent second-opinion review (runs git in its read-only sandbox). Highest-value catches are independent findings — cross-variant correctness, doc-vs-code drift, sibling-pattern incompleteness, vacuous guards, stale narration, HPM-bundle integrity. Consumes the shared prompt (Step 4b/4c). |
+| OpenCode pack (standard 6) | Multi-provider router → 6 siblings: `opencode/mimo-v2.5-free` (FREE) + `opencode/big-pickle` (FREE) + `opencode/deepseek-v4-flash-free` (FREE) + `opencode-go/deepseek-v4-flash` (PAID ~$0.033) + `opencode-go/kimi-k2.6` (PAID ~$0.50) + `opencode-go/deepseek-v4-pro` (PAID ~$0.31) ≈ **$0.85/run** | Skill-orchestrated `Bash` call PER MEMBER (NOT Claude sub-agents) | Parallel | FULL independent second-opinion review from several distinct model families at once — blind-spot benefit compounds (each catches BLOCKINGs the others miss). Three free seats anchor the pack so a rate-capped session keeps distinct-family signal at $0. Runs `--dir .` scoped to the cwd reading the pre-staged `.review_diff_<short-sha>.txt` with stdin from `/dev/null` (mandatory — else `opencode run` hangs on stdin); the `--dir .` policy blocks `/tmp`; needs `rg` on PATH. Dispatch ALL 6 if the family gate is YES (no cherry-pick); per-member auth-fail/cost varies — drop a member, keep the pack (Step 6). Consumes the SAME shared prompt. |
+| ~~Gemini CLI~~ | Google / Gemini family | — | **DEFERRED** | Not in the active fan-out — its required paid Google AI/Vertex tier is cost-uncompetitive vs the OpenCode pack at ship-gate scale. Recipe preserved (documented-but-dormant) in handoff doc §5b-ter; re-evaluate if pricing/usage changes. |

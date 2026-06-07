@@ -104,7 +104,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Sprout Humidifier (LEH-B381S-WUS/-WEU) — mist 1-2, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display, child lock, drying mode, nightlight (brightness + color temp). pyvesync VeSyncSproutHumid class; V2-style payloads. Auto mode wire value: 'autoPro' (not 'auto' — contrast OasisMist 1000S).",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -169,11 +169,15 @@ Map powerPayload(boolean on){ [powerSwitch: on ? 1 : 0, switchIdx: 0] }
 // CRITICAL: mist_modes[auto] = 'autoPro' (NOT 'auto' — contrast OasisMist 1000S 'auto',
 // contrast LV600S Hub Connect 'humidity'). Canonical from pyvesync device_map.py.
 // In reverse: workMode='autoPro' from API response maps back to user-facing 'auto'.
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (matches speed/level
+//   setters; pyvesync set_mode has no power gate and sets device ON on success). ensureSwitchOn()
+//   runs AFTER validation so invalid input cannot wake an off device.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
+    ensureSwitchOn()
     // Wire-value mapping: auto -> 'autoPro' (device_map.py mist_modes for Sprout)
     String wire = (m == "auto") ? "autoPro" : m
     def resp = hubBypass("setHumidityMode", [workMode: wire], "setHumidityMode(${wire})")
@@ -182,7 +186,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
+        reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
 
@@ -206,7 +210,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: clamped)
         logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
+        reportWriteError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 
@@ -225,7 +229,8 @@ def setHumidity(percent){
         device.sendEvent(name:"targetHumidity", value: p)
         logInfo "Target humidity: ${p}%"
     } else {
-        logError "Target humidity write failed: ${p}"; recordError("Target humidity write failed: ${p}", [method:"setTargetHumidity"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Target humidity write failed: ${p}", resp, [method:"setTargetHumidity"])
     }
 }
 
@@ -249,7 +254,8 @@ def setChildLock(onOff){
         device.sendEvent(name:"childLock", value: canon)
         logInfo "Child lock: ${canon}"
     } else {
-        logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Child lock write failed", resp, [method:"setChildLock"])
     }
 }
 
@@ -277,7 +283,7 @@ def setDryingMode(onOff){
         device.sendEvent(name:"dryingEnabled", value: canon)
         logInfo "Drying mode: ${canon}"
     } else {
-        logError "Drying mode write failed"; recordError("Drying mode write failed", [method:"setDryingMode"])
+        reportWriteFailure("Drying mode write failed", resp, [method:"setDryingMode"])
     }
 }
 
@@ -319,7 +325,7 @@ def setNightlight(onOff, brightness = null, colorTemp = null){
         device.sendEvent(name:"nightlightColorTemp",  value: ct)
         logInfo "Nightlight: ${onOffStr}, brightness=${br}, colorTemp=${ct}K"
     } else {
-        logError "Nightlight write failed"; recordError("Nightlight write failed", [method:"setLightStatus"])
+        reportWriteFailure("Nightlight write failed", resp, [method:"setLightStatus"])
     }
 }
 

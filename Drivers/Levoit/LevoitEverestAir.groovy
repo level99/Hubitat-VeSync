@@ -108,7 +108,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) — fan 1-3, auto/sleep/manual/turbo modes, AQ sensors (AQLevel/PM2.5), light detection, display, child lock, vent angle (passive read). pyvesync VeSyncAirBaseV2 class. V2-style payloads. First driver in codebase with TURBO mode and VENT_ANGLE attribute.",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -193,15 +193,22 @@ def on(){
         if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
         else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
     } finally {
-        state.turningOn = false
+        state.remove('turningOn')
     }
 }
 
 def off(){
     logDebug "off()"
-    def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
-    if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
-    else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+    // Defensive symmetry with on()'s guard; no active re-entrance vector into off() today.
+    if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
+    state.turningOff = true
+    try {
+        def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
+        if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
+        else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+    } finally {
+        state.remove('turningOff')
+    }
 }
 
 def toggle(){
@@ -220,6 +227,12 @@ def toggle(){
 // TURBO: handled identically to auto/sleep — setPurifierMode {workMode:"turbo"}.
 // No separate turbo toggle method exists in pyvesync (confirmed by source search).
 // This is the canonical convention for turbo-as-mode going forward in this codebase.
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (matches speed/level
+//   setters; pyvesync VeSyncAirBaseV2.set_mode has no power gate and sets device ON on success).
+//   ensureSwitchOn() runs AFTER validation so invalid input cannot wake an off device. The outer
+//   ensureSwitchOn() here is the load-bearing auto-on guard for BOTH paths (manual and mode); the
+//   manual path's later setFanSpeed call also calls ensureSwitchOn, but by then the device is
+//   already on so that inner call is a no-op — it is not what powers the device on.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -229,6 +242,7 @@ def setMode(mode){
         recordError("Invalid mode: ${m}", [method:"setPurifierMode"])
         return
     }
+    ensureSwitchOn()
     if (m == "manual") {
         // Manual established by setting fan speed (same as pyvesync VeSyncAirBaseV2.set_mode(MANUAL))
         setFanSpeed(state.lastFanSpeed ?: 1)
@@ -240,7 +254,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setPurifierMode"])
+        reportWriteError("Mode write failed: ${m}", [method:"setPurifierMode"])
     }
 }
 
@@ -264,7 +278,7 @@ def setFanSpeed(speed){
         device.sendEvent(name:"mode",     value: "manual")
         logInfo "Fan speed: ${spd}, mode: manual"
     } else {
-        logError "Fan speed write failed: ${spd}"; recordError("Fan speed write failed: ${spd}", [method:"setLevel"])
+        reportWriteError("Fan speed write failed: ${spd}", [method:"setLevel"])
     }
 }
 
@@ -287,7 +301,8 @@ def setDisplay(onOff){
         device.sendEvent(name:"displayOn", value: canon)
         logInfo "Display: ${canon}"
     } else {
-        logError "Display write failed"; recordError("Display write failed", [method:"setDisplay"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Display write failed", resp, [method:"setDisplay"])
     }
 }
 
@@ -310,7 +325,7 @@ def setChildLock(onOff){
         device.sendEvent(name:"childLock", value: canon)
         logInfo "Child lock: ${canon}"
     } else {
-        logError "Child lock write failed"; recordError("Child lock write failed", [method:"setChildLock"])
+        reportWriteFailure("Child lock write failed", resp, [method:"setChildLock"])
     }
 }
 
@@ -336,7 +351,7 @@ def setLightDetection(onOff){
         device.sendEvent(name:"lightDetection", value: canon)
         logInfo "Light detection: ${canon}"
     } else {
-        logError "Light detection write failed"; recordError("Light detection write failed", [method:"setLightDetection"])
+        reportWriteFailure("Light detection write failed", resp, [method:"setLightDetection"])
     }
 }
 
@@ -349,7 +364,8 @@ def resetFilter(){
         device.sendEvent(name:"filterLife", value: 100)
         logInfo "Filter reset to 100%"
     } else {
-        logError "Filter reset failed"; recordError("Filter reset failed", [method:"resetFilter"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Filter reset failed", resp, [method:"resetFilter"])
     }
 }
 
@@ -391,7 +407,7 @@ def setTimer(seconds, action="off"){
         }
         logInfo "Timer set: power ${act} in ${secs}s (id=${state.timerId})"
     } else {
-        logError "Timer set failed"; recordError("Timer set failed", [method:"addTimerV2"])
+        reportWriteFailure("Timer set failed", resp, [method:"addTimerV2"])
     }
 }
 
@@ -406,7 +422,7 @@ def cancelTimer(){
         state.remove("timerId")
         logInfo "Timer cancelled"
     } else {
-        logError "Timer cancel failed"; recordError("Timer cancel failed", [method:"delTimerV2"])
+        reportWriteFailure("Timer cancel failed", resp, [method:"delTimerV2"])
     }
 }
 

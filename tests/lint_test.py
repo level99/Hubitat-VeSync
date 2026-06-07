@@ -6328,6 +6328,150 @@ class TestRule32DelegationFollowing:
             f"All API-calling delegates guarded must not flag RULE32, got: {findings}"
         )
 
+    # Bad (2-hop transitive gap): setSpeed → setSpeedLevel (no direct API, no
+    # guard) → handleSpeed (unguarded API).  The unguarded API call is TWO hops
+    # from setSpeed.  First-hop-only resolution reached setSpeedLevel, found no
+    # direct API call, and stopped — never reaching handleSpeed.  Transitive
+    # following walks setSpeed → setSpeedLevel → handleSpeed and flags the
+    # unguarded leaf.  (All three names are in _DELEGATE_CALL_RE's vocabulary so
+    # the chain is actually followed.)
+    BAD_TWO_HOP_UNGUARDED = textwrap.dedent("""\
+        def setSpeed(spd) {
+            setSpeedLevel(spd)
+        }
+
+        def setSpeedLevel(spd) {
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Good (2-hop transitive, guard on the path at the middle hop): setSpeed →
+    # setSpeedLevel (ensureSwitchOn, no direct API) → handleSpeed (unguarded
+    # API).  Because setSpeedLevel powers the device on before delegating,
+    # handleSpeed's API call is protected.  The guard on the intermediate hop
+    # must prune handleSpeed's subtree.
+    GOOD_TWO_HOP_GUARD_ON_PATH = textwrap.dedent("""\
+        def setSpeed(spd) {
+            setSpeedLevel(spd)
+        }
+
+        def setSpeedLevel(spd) {
+            ensureSwitchOn()
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Good (2-hop transitive, guard on the leaf): setSpeed → setSpeedLevel (no
+    # guard, no direct API) → handleSpeed (ensureSwitchOn + API).  The leaf
+    # guards itself.
+    GOOD_TWO_HOP_GUARD_ON_LEAF = textwrap.dedent("""\
+        def setSpeed(spd) {
+            setSpeedLevel(spd)
+        }
+
+        def setSpeedLevel(spd) {
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            ensureSwitchOn()
+            hubBypass("setLevel", [level: spd])
+        }
+    """)
+
+    # Bad (delegation cycle + unguarded leaf): exercises the visited-set's
+    # cycle-safety.  setSpeed → setSpeedLevel → handleSpeed → handleLoop →
+    # setSpeedLevel (cycle back) and handleSpeed also makes an unguarded API
+    # call.  Without the visited-set this would loop forever; with it, the
+    # traversal terminates and still flags the unguarded API call in handleSpeed.
+    BAD_CYCLE_UNGUARDED = textwrap.dedent("""\
+        def setSpeed(spd) {
+            setSpeedLevel(spd)
+        }
+
+        def setSpeedLevel(spd) {
+            handleSpeed(spd)
+        }
+
+        def handleSpeed(spd) {
+            handleLoop(spd)
+            hubBypass("setLevel", [level: spd])
+        }
+
+        def handleLoop(spd) {
+            setSpeedLevel(spd)
+        }
+    """)
+
+    def test_two_hop_unguarded_flags(self):
+        """
+        Must-catch (closed-mechanism transitive fix): SHOULD-ON method whose
+        unguarded API call is reached only via a 2-hop chain
+        (setSpeed → helperA no-direct-API/guard-clean → helperB unguarded API)
+        must flag RULE32 BP24-B.
+
+        Non-vacuity: reverting the traversal back to first-hop-only resolution
+        makes the rule resolve helperA, find no direct API call, stop without
+        recursing into helperB, and return [] for this fixture — failing this
+        assertion.  Only transitive following reaches the unguarded leaf.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.BAD_TWO_HOP_UNGUARDED)
+        assert any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            "Expected RULE32 for SHOULD-ON method whose 2-hop-deep delegate makes "
+            f"an unguarded API call, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE32_auto_on_guard_missing'), (
+            f"RULE32 two-hop finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_two_hop_guard_on_path_passes(self):
+        """
+        Must-not-catch: a 2-hop chain where the intermediate hop (helperA)
+        carries ensureSwitchOn() before delegating to helperB.  The guard on the
+        path powers the device on first, so helperB's API call is protected — no
+        finding even though following the chain reaches the API-calling leaf.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.GOOD_TWO_HOP_GUARD_ON_PATH)
+        assert not any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            f"Guard on the intermediate delegation hop must protect the leaf, got: {findings}"
+        )
+
+    def test_two_hop_guard_on_leaf_passes(self):
+        """
+        Must-not-catch: a 2-hop chain where the API-calling leaf (helperB) guards
+        itself with ensureSwitchOn().  No finding.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.GOOD_TWO_HOP_GUARD_ON_LEAF)
+        assert not any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            f"API-calling leaf guarding itself must not flag RULE32, got: {findings}"
+        )
+
+    def test_delegation_cycle_terminates_and_flags(self):
+        """
+        Cycle-safety: a delegation cycle (setSpeed → helperA → helperB → handleA
+        → helperA) with an unguarded API call in helperB must terminate (the
+        visited-set breaks the cycle) and still flag the unguarded call.  A
+        non-terminating traversal would hang the test run.
+        """
+        from lint_rules.bp24_auto_on_guard_missing import check_rule32_auto_on_guard_missing
+        findings = run_rule(check_rule32_auto_on_guard_missing, self.BAD_CYCLE_UNGUARDED)
+        assert any(f['rule_id'] == 'RULE32_auto_on_guard_missing' for f in findings), (
+            "Expected RULE32 for SHOULD-ON method reaching an unguarded API call "
+            f"through a delegation cycle (and traversal must terminate), got: {findings}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # RULE39 -- CHANGELOG user-facing TMI lint
@@ -7466,4 +7610,267 @@ class TestRule41DeviceShorthandLeak:
         findings = self._run_at_path(src, REPO_ROOT / 'readme.md')
         assert not any(f['rule_id'] == 'RULE41_device_shorthand_leak' for f in findings), (
             f"Stray top-level readme.md is out of scope, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE42 — Malformed capability name (embedded space)
+# ---------------------------------------------------------------------------
+
+class TestRule42MalformedCapability:
+    """
+    RULE42: a `capability "..."` declaration MUST NOT contain a space in the
+    capability name. Hubitat capability identifiers are single CamelCase tokens
+    (e.g. "SwitchLevel"); an embedded space (e.g. "Switch Level") is silently
+    ignored by the platform, so the capability fails to register with no error.
+    """
+
+    from lint_rules.malformed_capability import check_rule42_malformed_capability as _rule
+
+    # MUST-CATCH: the reported typo — "Switch Level" (two words).
+    BAD_SWITCH_LEVEL = textwrap.dedent("""\
+        metadata {
+            definition(name: "Levoit Core200S Air Purifier Light") {
+                capability "Switch"
+                capability "Switch Level"
+            }
+        }
+    """)
+
+    # MUST-CATCH: a different multi-word capability typo, to prove the rule is
+    # class-wide (any embedded space), not pinned to the one reported instance.
+    BAD_FAN_CONTROL = textwrap.dedent("""\
+        metadata {
+            definition(name: "Some Fan") {
+                capability "Fan Control"
+            }
+        }
+    """)
+
+    # MUST-CATCH: single-quoted form — Groovy accepts both quote styles, so the
+    # rule must catch `capability 'Switch Level'` exactly as the double-quoted form.
+    BAD_SINGLE_QUOTE = textwrap.dedent("""\
+        metadata {
+            definition(name: "Some Driver") {
+                capability 'Switch Level'
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: the canonical one-word form.
+    GOOD_SWITCH_LEVEL = textwrap.dedent("""\
+        metadata {
+            definition(name: "Levoit Core 200S Air Purifier") {
+                capability "Switch"
+                capability "SwitchLevel"
+                capability "FanControl"
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: single-quoted one-word capability (valid Groovy, no space).
+    GOOD_SINGLE_QUOTE = textwrap.dedent("""\
+        metadata {
+            definition(name: "Some Driver") {
+                capability 'SwitchLevel'
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: a normal string literal with a space that is NOT a
+    # capability declaration (proves the rule is anchored to `capability`).
+    GOOD_OTHER_STRING = textwrap.dedent("""\
+        metadata {
+            definition(name: "Levoit Pedestal Fan", description: "fan speed 1-12") {
+                capability "SwitchLevel"
+                command "setMode", [[name:"Mode*", type:"ENUM"]]
+            }
+        }
+    """)
+
+    def test_switch_level_typo_fails(self):
+        from lint_rules.malformed_capability import check_rule42_malformed_capability
+        findings = run_rule(check_rule42_malformed_capability, self.BAD_SWITCH_LEVEL)
+        assert any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
+            f'Expected RULE42 for `capability "Switch Level"`, got: {findings}'
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE42_malformed_capability'), (
+            f"RULE42 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_fan_control_typo_fails(self):
+        """Class-wide: any embedded-space capability name flags, not just the reported one."""
+        from lint_rules.malformed_capability import check_rule42_malformed_capability
+        findings = run_rule(check_rule42_malformed_capability, self.BAD_FAN_CONTROL)
+        assert any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
+            f'Expected RULE42 for `capability "Fan Control"`, got: {findings}'
+        )
+
+    def test_single_quoted_typo_fails(self):
+        """Both quote styles flag: `capability 'Switch Level'` must flag like the double-quoted form."""
+        from lint_rules.malformed_capability import check_rule42_malformed_capability
+        findings = run_rule(check_rule42_malformed_capability, self.BAD_SINGLE_QUOTE)
+        assert any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
+            f"Expected RULE42 for `capability 'Switch Level'` (single-quote), got: {findings}"
+        )
+
+    def test_canonical_one_word_passes(self):
+        from lint_rules.malformed_capability import check_rule42_malformed_capability
+        findings = run_rule(check_rule42_malformed_capability, self.GOOD_SWITCH_LEVEL)
+        assert not any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
+            f"Canonical one-word capability names must not flag RULE42, got: {findings}"
+        )
+
+    def test_single_quoted_one_word_passes(self):
+        """Single-quoted one-word capability must NOT flag (valid Groovy, no space)."""
+        from lint_rules.malformed_capability import check_rule42_malformed_capability
+        findings = run_rule(check_rule42_malformed_capability, self.GOOD_SINGLE_QUOTE)
+        assert not any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
+            f"Single-quoted one-word capability must not flag RULE42, got: {findings}"
+        )
+
+    def test_non_capability_string_with_space_passes(self):
+        """A space in a non-capability string literal must NOT flag (anchored to `capability`)."""
+        from lint_rules.malformed_capability import check_rule42_malformed_capability
+        findings = run_rule(check_rule42_malformed_capability, self.GOOD_OTHER_STRING)
+        assert not any(f['rule_id'] == 'RULE42_malformed_capability' for f in findings), (
+            f"Non-capability string with a space must not flag RULE42, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE43 — recordError ctx-map key style (site: -> method:)
+# ---------------------------------------------------------------------------
+
+from lint_rules.recordError_key_style import check_rule43_recordError_key_style
+
+
+class TestRule43RecordErrorKeyStyle:
+    """
+    RULE43: recordError ctx maps must use the canonical 'method:' key, never 'site:'.
+
+    Non-vacuity contracts:
+      - must-catch tests FAIL if the rule predicate is disabled or narrowed
+        (the rule returns [] and the `any(...)` assertion fails).
+      - must-not-catch tests FAIL if the rule over-fires on canonical 'method:'
+        content or on a bare 'site:' outside a recordError call.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    @staticmethod
+    def _run(src: str) -> list:
+        """Invoke RULE43 against src as a .groovy file via the shared run_rule helper."""
+        return run_rule(check_rule43_recordError_key_style, src, fname="TestDriver.groovy")
+
+    # -----------------------------------------------------------------------
+    # Must-catch
+    # -----------------------------------------------------------------------
+
+    def test_catches_site_key(self):
+        """A recordError call with a [site:...] ctx map must flag RULE43."""
+        src = textwrap.dedent("""\
+            def setMode(mode) {
+                recordError("Mode write failed", [site:"setMode"])
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Expected RULE43 for [site:...] recordError ctx, got: {findings}"
+        )
+
+    def test_catches_site_key_with_other_keys_preserved(self):
+        """
+        The 'site:' key flags even when other keys (value:) are present —
+        the rename target is the 'site' key only, not the whole map.
+        """
+        src = textwrap.dedent("""\
+            def setMode(mode) {
+                recordError("Mode write failed", [site:"setMode", value:requestedMode])
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Expected RULE43 for [site:..., value:...] recordError ctx, got: {findings}"
+        )
+
+    def test_catches_site_key_with_trailing_dni_arg(self):
+        """A 3-arg recordError(msg, [site:...], dni) still flags on the site key."""
+        src = textwrap.dedent("""\
+            def updateDevices() {
+                recordError("No status returned", [site:"updateDevices"], dni)
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Expected RULE43 for 3-arg recordError with [site:...] ctx, got: {findings}"
+        )
+
+    def test_catches_multiline_site_key(self):
+        """
+        A recordError call whose ctx map wraps onto a continuation line must
+        flag — the parent app's auth-flow calls use this shape.
+
+        Non-vacuity: a single-line-only predicate returns [] here, FAILing this
+        test.  Guards the multi-line awareness of _record_error_spans.
+        """
+        src = textwrap.dedent("""\
+            def getAuthorizationCode() {
+                recordError("getAuthorizationCode: cross-region at Stage 1",
+                            [site:"getAuthorizationCode"])
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Expected RULE43 for multi-line recordError with [site:...] ctx, got: {findings}"
+        )
+
+    def test_catches_multiline_site_key_with_paren_in_message(self):
+        """
+        A recordError call whose message contains parentheses AND whose ctx map
+        wraps onto a continuation line must still flag — paren-balancing must not
+        terminate the span early on a paren inside the message string.
+        """
+        src = textwrap.dedent("""\
+            def exchangeAuthCode() {
+                recordError("exchangeAuthCode: inner failure (code=${innerCode})",
+                            [site:"exchangeAuthCode"])
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Expected RULE43 for multi-line recordError with paren-in-message, got: {findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch
+    # -----------------------------------------------------------------------
+
+    def test_method_key_passes(self):
+        """The canonical 'method:' ctx key must NOT flag RULE43."""
+        src = textwrap.dedent("""\
+            def setMode(mode) {
+                recordError("Mode write failed", [method:"setMode", value:requestedMode])
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Canonical [method:...] recordError ctx must not flag RULE43, got: {findings}"
+        )
+
+    def test_bare_site_outside_recordError_passes(self):
+        """
+        A bare 'site:' map key NOT inside a recordError call must NOT flag —
+        the rule requires the recordError( co-occurrence.
+        """
+        src = textwrap.dedent("""\
+            def buildPayload() {
+                def cfg = [site:"home", region:"us"]
+                return cfg
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
+            f"Bare [site:...] outside recordError must not flag RULE43, got: {findings}"
         )

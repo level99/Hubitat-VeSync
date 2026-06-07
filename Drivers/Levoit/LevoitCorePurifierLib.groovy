@@ -357,22 +357,31 @@ def setMode(mode) {
     }
     ensureSwitchOn()                                                             // BP24-B auto-on (after rejection checks)
 
-    handleMode(m)
-    state.mode = m
-    handleEvent("mode", m)
-    logInfo "Mode: ${m}"
+    // Only commit state + emit events when the cloud accepted the mode change. Previously
+    // state.mode + the mode/speed events were set unconditionally, creating a state-vs-reality
+    // mismatch when handleMode failed (e.g. transient API error) — the device stayed in its prior
+    // mode but the driver reported the new one. On failure, leave state untouched; the next poll
+    // owns reconciliation. (Same fix class as CoreAQ setAutoMode.)
+    boolean ok = handleMode(m)
+    if (ok) {
+        state.mode = m
+        handleEvent("mode", m)
+        logInfo "Mode: ${m}"
 
-    switch(m)
-    {
-        case "manual":
-            handleEvent("speed", state.speed)
-            break;
-        case "auto":
-            handleEvent("speed", "auto")
-            break;
-        case "sleep":
-            handleEvent("speed", "on")
-            break;
+        switch(m)
+        {
+            case "manual":
+                handleEvent("speed", state.speed)
+                break;
+            case "auto":
+                handleEvent("speed", "auto")
+                break;
+            case "sleep":
+                handleEvent("speed", "on")
+                break;
+        }
+    } else {
+        reportWriteError("Mode write failed: ${m}", [method:"setMode"])
     }
 }
 
@@ -543,13 +552,13 @@ def checkHttpResponse(action, resp) {
 	else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500)
 	{
 		logError "${action}: ${resp.status} - ${resp.getData()}"
-		recordError("${action}: ${resp.status}", [site:"checkHttpResponse"])
+		recordError("${action}: ${resp.status}", [method:"checkHttpResponse"])
 		return false
 	}
 	else
 	{
 		logError "${action}: unexpected HTTP response: ${resp.status}"
-		recordError("${action}: unexpected HTTP response: ${resp.status}", [site:"checkHttpResponse"])
+		recordError("${action}: unexpected HTTP response: ${resp.status}", [method:"checkHttpResponse"])
 		return false
 	}
 }

@@ -3592,7 +3592,7 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     // Validates:
     //   R1  first network-class exception fires single WARN; state seeded
     //   R2  second network-class exception during same outage is DEBUG-only
-    //   R3  emitNetworkWarnIfDue defense-in-depth: null lastNetworkWarnAt → seed+skip
+    //   R3  emitNetworkWarnIfDue defense-in-depth: null lastNetworkWarnHourBucket → seed+skip
     //   R4  emitNetworkWarnIfDue cadence: 1h elapsed → WARN + update; immediate retry → no-op
     //   R5  successful httpPost while outage state is set → INFO recovery + state cleared
     //   R6  non-network exception does NOT touch state.networkUnreachableSince
@@ -3600,13 +3600,14 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
     def "sendBypassRequest() first network-class exception emits one WARN and seeds state (R1)"() {
         // R1: UnknownHostException is a network-class exception. First occurrence of an
-        // outage must emit exactly one WARN and set both networkUnreachableSince and
-        // lastNetworkWarnAt to now(). Subsequent polls should be DEBUG-only (R2).
+        // outage must emit exactly one WARN, set networkUnreachableSince to now(), and seed
+        // the epoch-hour WARN bucket so emitNetworkWarnIfDue() does not re-fire this same
+        // hour. Subsequent polls should be DEBUG-only (R2).
         given: "no prior outage state; httpPost throws UnknownHostException"
         settings.descriptionTextEnable = true
         settings.debugOutput = false
         state.networkUnreachableSince = null
-        state.lastNetworkWarnAt = null
+        state.lastNetworkWarnHourBucket = null
 
         // sendBypassRequest needs a minimal equipment stub and payload
         def equip = new TestDevice()
@@ -3630,8 +3631,8 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         and: "networkUnreachableSince is set to driver.now()"
         (state.networkUnreachableSince as Long) == driver.now()
 
-        and: "lastNetworkWarnAt is also set to driver.now()"
-        (state.lastNetworkWarnAt as Long) == driver.now()
+        and: "the epoch-hour WARN bucket is seeded to the current bucket (BP22 v2.9 bucket)"
+        (state.lastNetworkWarnHourBucket as Long) == ((driver.now() / 3600000L) as long)
     }
 
     def "sendBypassRequest() subsequent network exceptions during outage are DEBUG-only (R2)"() {
@@ -3641,9 +3642,11 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         settings.debugOutput = true   // enable debug so we can assert the debug line
         long outageStart = driver.now() - 60000L   // outage started 1 min ago
-        state.networkUnreachableSince = outageStart
-        state.lastNetworkWarnAt       = outageStart
-        state.lastNetworkProbeAt      = driver.now() - 360000L   // last probe 6 min ago — interval expired, call passes through to httpPost
+        state.networkUnreachableSince  = outageStart
+        state.lastNetworkWarnHourBucket = (outageStart / 3600000L) as long
+        // Stored probe bucket one window behind the current bucket → per-call breaker lets this
+        // call through to httpPost as a recovery probe (BP22 v2.9 bucket).
+        state.lastNetworkProbeBucket   = ((driver.now() / 300000L) as long) - 1L
         testLog.warns.clear()
 
         def equip = new TestDevice()
@@ -3669,15 +3672,15 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         (state.networkUnreachableSince as Long) == outageStart
     }
 
-    def "emitNetworkWarnIfDue() seeds lastNetworkWarnAt and skips WARN when it is null (R3)"() {
-        // R3: defense-in-depth — if networkUnreachableSince is set but lastNetworkWarnAt
-        // is absent (e.g. state migrated from pre-BP22 install), the helper must seed
-        // lastNetworkWarnAt = now() and NOT emit a WARN this cycle.
-        given: "networkUnreachableSince set but lastNetworkWarnAt absent"
+    def "emitNetworkWarnIfDue() seeds the epoch-hour bucket and skips WARN when it is null (R3, BP22 v2.9 bucket)"() {
+        // R3 (bucket form): defense-in-depth — if networkUnreachableSince is set but
+        // lastNetworkWarnHourBucket is absent (e.g. state migrated from a pre-bucket install),
+        // the helper must seed the current bucket and NOT emit a WARN this cycle.
+        given: "networkUnreachableSince set but lastNetworkWarnHourBucket absent"
         settings.descriptionTextEnable = true
         settings.debugOutput = false
         state.networkUnreachableSince = driver.now() - 7200000L   // 2h ago
-        state.lastNetworkWarnAt = null
+        state.lastNetworkWarnHourBucket = null
         testLog.warns.clear()
 
         when:
@@ -3686,21 +3689,24 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         then: "no WARN emitted this cycle"
         testLog.warns.isEmpty()
 
-        and: "lastNetworkWarnAt seeded to driver.now()"
-        (state.lastNetworkWarnAt as Long) == driver.now()
+        and: "lastNetworkWarnHourBucket seeded to the current epoch-hour bucket"
+        (state.lastNetworkWarnHourBucket as Long) == ((driver.now() / 3600000L) as long)
     }
 
-    def "emitNetworkWarnIfDue() fires WARN after 1h cadence and suppresses immediate retry (R4)"() {
-        // R4: normal hourly cadence — 1h elapsed → WARN fires; immediate second call → suppressed.
-        given: "outage state with lastNetworkWarnAt set 1h ago"
+    def "emitNetworkWarnIfDue() fires once per new hour bucket and suppresses same-bucket retries (R4, BP22 v2.9 bucket)"() {
+        // R4 (bucket form): a stored bucket that differs from the current hour → WARN fires
+        // once and advances the stored bucket; any subsequent call in the SAME hour bucket
+        // (including a concurrent cycle that read a stale value) is suppressed. This is the
+        // stale-read race fix: same-hour reads compute the same bucket and can't re-fire.
+        given: "outage state with the stored bucket one hour BEHIND the current bucket"
         settings.descriptionTextEnable = true
         settings.debugOutput = false
-        long oneHourAgo = driver.now() - 3600000L
+        long currentBucket = (driver.now() / 3600000L) as long
         state.networkUnreachableSince = driver.now() - 7200000L   // 2h outage
-        state.lastNetworkWarnAt = oneHourAgo
+        state.lastNetworkWarnHourBucket = currentBucket - 1L
         testLog.warns.clear()
 
-        when: "first emitNetworkWarnIfDue call (1h elapsed)"
+        when: "first emitNetworkWarnIfDue call (new hour bucket)"
         driver.emitNetworkWarnIfDue()
 
         then: "one WARN was emitted"
@@ -3708,14 +3714,14 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         testLog.warns[0].contains("BP22")
         testLog.warns[0].contains("still unreachable")
 
-        and: "lastNetworkWarnAt updated to driver.now()"
-        (state.lastNetworkWarnAt as Long) == driver.now()
+        and: "stored bucket advanced to the current hour bucket"
+        (state.lastNetworkWarnHourBucket as Long) == currentBucket
 
-        when: "second call immediately after (within 1h window)"
+        when: "second call immediately after (same hour bucket — simulates a concurrent stale-read cycle)"
         int warnsBefore = testLog.warns.size()
         driver.emitNetworkWarnIfDue()
 
-        then: "no additional WARN"
+        then: "no additional WARN — same bucket can't re-fire (the race fix)"
         testLog.warns.size() == warnsBefore
     }
 
@@ -3727,7 +3733,8 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         settings.debugOutput = false
         long outageStart = driver.now() - 3600000L   // 1h outage
         state.networkUnreachableSince = outageStart
-        state.lastNetworkWarnAt = outageStart
+        state.lastNetworkWarnHourBucket = (outageStart / 3600000L) as long
+        state.lastNetworkProbeBucket = (outageStart / 300000L) as long
         testLog.infos.clear()
 
         def equip = new TestDevice()
@@ -3752,8 +3759,9 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         and: "networkUnreachableSince cleared"
         state.networkUnreachableSince == null
 
-        and: "lastNetworkWarnAt cleared"
-        state.lastNetworkWarnAt == null
+        and: "the epoch-bucket cadence fields cleared on recovery (BP22 v2.9 bucket)"
+        state.lastNetworkWarnHourBucket == null
+        state.lastNetworkProbeBucket == null
     }
 
     def "sendBypassRequest() non-network exception does NOT touch BP22 outage state (R6)"() {
@@ -3763,7 +3771,7 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         settings.descriptionTextEnable = true
         settings.debugOutput = false
         state.networkUnreachableSince = null
-        state.lastNetworkWarnAt = null
+        state.lastNetworkWarnHourBucket = null
 
         def equip = new TestDevice()
         equip.updateDataValue("cid", "r6-cid")
@@ -3783,8 +3791,8 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         and: "networkUnreachableSince remains null (BP22 not triggered)"
         state.networkUnreachableSince == null
 
-        and: "lastNetworkWarnAt remains null"
-        state.lastNetworkWarnAt == null
+        and: "lastNetworkWarnHourBucket remains null"
+        state.lastNetworkWarnHourBucket == null
     }
 
     @groovy.transform.CompileDynamic
@@ -3865,17 +3873,18 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         ]
     }
 
-    def "sendBypassRequest() skips httpPost within 5-minute probe interval during outage (R9)"() {
-        // R9: circuit-breaker. When networkUnreachableSince is set and lastNetworkProbeAt
-        // is recent (< 5 min), sendBypassRequest must return false without calling httpPost.
-        given: "outage in progress; last probe was 1 minute ago"
+    def "sendBypassRequest() skips httpPost within the same 5-min probe bucket during outage (R9, BP22 v2.9 bucket)"() {
+        // R9 (bucket form): when networkUnreachableSince is set and lastNetworkProbeBucket
+        // equals the current 5-min bucket, sendBypassRequest must return false without calling
+        // httpPost (a stale-read concurrent cycle in the same window can't double-probe).
+        given: "outage in progress; last probe was in the SAME 5-min bucket"
         settings.descriptionTextEnable = true
         settings.debugOutput = true
-        long outageStart = driver.now() - 120000L   // 2 min outage
-        long recentProbe = driver.now() - 60000L    // probed 1 min ago (within 5-min window)
+        long outageStart  = driver.now() - 120000L   // 2 min outage
+        long currentProbeBucket = (driver.now() / 300000L) as long
         state.networkUnreachableSince = outageStart
-        state.lastNetworkWarnAt       = outageStart
-        state.lastNetworkProbeAt      = recentProbe
+        state.lastNetworkWarnHourBucket = (outageStart / 3600000L) as long
+        state.lastNetworkProbeBucket  = currentProbeBucket   // same bucket → breaker stays open
 
         boolean httpPostCalled = false
         driver.metaClass.httpPost = { Map params, Closure cb ->
@@ -3897,21 +3906,21 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         and: "returned false silently"
         result == false
 
-        and: "lastNetworkProbeAt unchanged"
-        (state.lastNetworkProbeAt as Long) == recentProbe
+        and: "lastNetworkProbeBucket unchanged (same bucket)"
+        (state.lastNetworkProbeBucket as Long) == currentProbeBucket
     }
 
-    def "sendBypassRequest() fires probe when 5-minute interval expires during outage (R10)"() {
-        // R10: after 5+ minutes since lastNetworkProbeAt, sendBypassRequest must let the
-        // call through as a probe attempt and update lastNetworkProbeAt to now().
-        given: "outage in progress; last probe was 6 minutes ago (interval expired)"
+    def "sendBypassRequest() fires probe when the 5-min bucket advances during outage (R10, BP22 v2.9 bucket)"() {
+        // R10 (bucket form): when the stored probe bucket is behind the current 5-min bucket,
+        // sendBypassRequest must let the call through as a probe and advance the stored bucket.
+        given: "outage in progress; last probe was in an earlier 5-min bucket"
         settings.descriptionTextEnable = true
         settings.debugOutput = true
         long outageStart = driver.now() - 600000L   // 10 min outage
-        long staleProbe  = driver.now() - 360000L   // probed 6 min ago (> 5 min threshold)
+        long currentProbeBucket = (driver.now() / 300000L) as long
         state.networkUnreachableSince = outageStart
-        state.lastNetworkWarnAt       = outageStart
-        state.lastNetworkProbeAt      = staleProbe
+        state.lastNetworkWarnHourBucket = (outageStart / 3600000L) as long
+        state.lastNetworkProbeBucket  = currentProbeBucket - 2L   // older bucket → probe fires
 
         boolean httpPostCalled = false
         driver.metaClass.httpPost = { Map params, Closure cb ->
@@ -3931,22 +3940,21 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         then: "httpPost WAS called (probe attempt fired)"
         httpPostCalled
 
-        and: "lastNetworkProbeAt updated to driver.now()"
-        (state.lastNetworkProbeAt as Long) == driver.now()
+        and: "lastNetworkProbeBucket advanced to the current 5-min bucket"
+        (state.lastNetworkProbeBucket as Long) == currentProbeBucket
     }
 
-    def "sendBypassRequest() probe success clears all 3 BP22 state fields (R11)"() {
-        // R11: when the probe fires (interval expired) and httpPost succeeds, the
-        // recovery path must clear networkUnreachableSince, lastNetworkWarnAt, AND
-        // lastNetworkProbeAt — all three state fields.
-        given: "outage state set; probe interval expired; httpPost succeeds this time"
+    def "sendBypassRequest() probe success clears the BP22 bucket state fields (R11, BP22 v2.9 bucket)"() {
+        // R11 (bucket form): when the probe fires (bucket advanced) and httpPost succeeds, the
+        // recovery path must clear networkUnreachableSince AND both epoch-bucket cadence fields.
+        given: "outage state set; probe bucket advanced; httpPost succeeds this time"
         settings.descriptionTextEnable = true
         settings.debugOutput = false
         long outageStart = driver.now() - 600000L   // 10 min outage
-        long staleProbe  = driver.now() - 360000L   // 6 min ago — probe fires
+        long currentProbeBucket = (driver.now() / 300000L) as long
         state.networkUnreachableSince = outageStart
-        state.lastNetworkWarnAt       = outageStart
-        state.lastNetworkProbeAt      = staleProbe
+        state.lastNetworkWarnHourBucket = (outageStart / 3600000L) as long
+        state.lastNetworkProbeBucket  = currentProbeBucket - 2L   // older bucket → probe fires
         testLog.infos.clear()
 
         driver.metaClass.httpPost = { Map params, Closure cb ->
@@ -3970,11 +3978,9 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         and: "networkUnreachableSince cleared"
         state.networkUnreachableSince == null
 
-        and: "lastNetworkWarnAt cleared"
-        state.lastNetworkWarnAt == null
-
-        and: "lastNetworkProbeAt cleared"
-        state.lastNetworkProbeAt == null
+        and: "both epoch-bucket cadence fields cleared"
+        state.lastNetworkWarnHourBucket == null
+        state.lastNetworkProbeBucket == null
     }
 
     def "isNetworkException() walks cause chain to find wrapped network exceptions (R12)"() {
@@ -4003,20 +4009,20 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     }
 
     def "updateDevices() top-level circuit-breaker skips entire cycle when probe interval not elapsed (R13)"() {
-        // R13: during a known outage with a recent probe (< 5 min ago), updateDevices()
-        // must return false immediately — before iterating children or calling httpPost.
-        // This is the parallel-poll fix: none of the children dispatch their httpPost calls
-        // at all, so no stalls can occur.
-        given: "outage in progress; last probe 1 minute ago (interval not elapsed)"
+        // R13 (bucket form): during a known outage with the stored probe bucket equal to the
+        // current 5-min bucket, updateDevices() must return false immediately — before iterating
+        // children or calling httpPost. This is the parallel-poll fix: none of the children
+        // dispatch their httpPost calls at all, so no stalls can occur.
+        given: "outage in progress; last probe in the SAME 5-min bucket (interval not elapsed)"
         settings.refreshInterval = 30
         settings.debugOutput = true
         state.prefsSeeded = true
         state.scheduleVersion = "2.2"
         long outageStart = driver.now() - 120000L    // outage for 2 min
-        long recentProbe = driver.now() - 60000L     // probed 1 min ago
+        long currentProbeBucket = (driver.now() / 300000L) as long
         state.networkUnreachableSince = outageStart
-        state.lastNetworkWarnAt       = outageStart
-        state.lastNetworkProbeAt      = recentProbe
+        state.lastNetworkWarnHourBucket = (outageStart / 3600000L) as long
+        state.lastNetworkProbeBucket  = currentProbeBucket   // same bucket → breaker skips cycle
 
         // Register a child device — if the circuit-breaker works, it must never be iterated
         boolean childUpdateCalled = false
@@ -4044,28 +4050,28 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         and: "child update was NOT called"
         !childUpdateCalled
 
-        and: "lastNetworkProbeAt unchanged"
-        (state.lastNetworkProbeAt as Long) == recentProbe
+        and: "lastNetworkProbeBucket unchanged (same bucket)"
+        (state.lastNetworkProbeBucket as Long) == currentProbeBucket
 
         and: "one DEBUG log emitted for the skip"
         testLog.debugs.any { it.contains("skipping updateDevices cycle") }
     }
 
     def "updateDevices() top-level circuit-breaker allows probe cycle when interval elapsed (R14)"() {
-        // R14: when the probe interval has elapsed (> 5 min since lastNetworkProbeAt),
-        // updateDevices() must let the full cycle run as a recovery probe, update
-        // lastNetworkProbeAt to now(), and set networkProbeInFlight before iterating.
-        // Here the probe still fails (outage continues) — verifies state update, not recovery.
-        given: "outage in progress; last probe 6 minutes ago (interval expired)"
+        // R14 (bucket form): when the stored probe bucket is behind the current 5-min bucket,
+        // updateDevices() must let the full cycle run as a recovery probe, advance the stored
+        // probe bucket, and set networkProbeInFlight before iterating. Here the probe still fails
+        // (outage continues) — verifies state update, not recovery.
+        given: "outage in progress; last probe in an earlier 5-min bucket (interval expired)"
         settings.refreshInterval = 30
         settings.debugOutput = true
         state.prefsSeeded = true
         state.scheduleVersion = "2.2"
         long outageStart = driver.now() - 600000L   // outage for 10 min
-        long staleProbe  = driver.now() - 360000L   // probed 6 min ago
+        long currentProbeBucket = (driver.now() / 300000L) as long
         state.networkUnreachableSince = outageStart
-        state.lastNetworkWarnAt       = outageStart
-        state.lastNetworkProbeAt      = staleProbe
+        state.lastNetworkWarnHourBucket = (outageStart / 3600000L) as long
+        state.lastNetworkProbeBucket  = currentProbeBucket - 2L   // older bucket → probe fires
 
         boolean httpPostCalled = false
         driver.metaClass.httpPost = { Map params, Closure cb ->
@@ -4085,8 +4091,8 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         then: "cycle ran — httpPost was called (probe attempt)"
         httpPostCalled
 
-        and: "lastNetworkProbeAt updated to driver.now()"
-        (state.lastNetworkProbeAt as Long) == driver.now()
+        and: "lastNetworkProbeBucket advanced to the current 5-min bucket"
+        (state.lastNetworkProbeBucket as Long) == currentProbeBucket
 
         and: "DEBUG probe log emitted"
         testLog.debugs.any { it.contains("probing updateDevices cycle") }
@@ -4096,14 +4102,14 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         // R15: when state.networkProbeInFlight is true (set by the top-level breaker),
         // the per-call circuit-breaker in sendBypassRequest() must bypass its short-circuit
         // and allow the httpPost through. Without this, the top-level probe would set
-        // lastNetworkProbeAt = now() and then each child's per-call check would see
-        // sinceLastProbe=0 and skip — deadlock where no probe actually fires.
+        // the probe bucket and then each child's per-call check would see the same just-advanced
+        // bucket and skip — deadlock where no probe actually fires.
         given: "outage state set but networkProbeInFlight signals this IS the probe"
         settings.debugOutput = true
         long outageStart = driver.now() - 600000L
         state.networkUnreachableSince = outageStart
-        state.lastNetworkWarnAt       = outageStart
-        state.lastNetworkProbeAt      = driver.now()   // just updated by top-level breaker
+        state.lastNetworkWarnHourBucket = (outageStart / 3600000L) as long
+        state.lastNetworkProbeBucket  = (driver.now() / 300000L) as long   // just advanced by top-level breaker
         state.networkProbeInFlight    = true            // top-level breaker set this
 
         boolean httpPostCalled = false
@@ -4138,10 +4144,9 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         state.prefsSeeded = true
         state.scheduleVersion = "2.2"
         long outageStart = driver.now() - 600000L
-        long staleProbe  = driver.now() - 360000L   // expired — cycle will arm as probe
         state.networkUnreachableSince = outageStart
-        state.lastNetworkWarnAt       = outageStart
-        state.lastNetworkProbeAt      = staleProbe
+        state.lastNetworkWarnHourBucket = (outageStart / 3600000L) as long
+        state.lastNetworkProbeBucket  = ((driver.now() / 300000L) as long) - 2L   // older bucket → cycle will arm as probe
 
         and: "driver is flagged as reloading"
         state.driverReloading = true
@@ -4163,10 +4168,9 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         state.prefsSeeded = true
         state.scheduleVersion = "2.2"
         long outageStart = driver.now() - 600000L
-        long staleProbe  = driver.now() - 360000L   // expired
         state.networkUnreachableSince = outageStart
-        state.lastNetworkWarnAt       = outageStart
-        state.lastNetworkProbeAt      = staleProbe
+        state.lastNetworkWarnHourBucket = (outageStart / 3600000L) as long
+        state.lastNetworkProbeBucket  = ((driver.now() / 300000L) as long) - 2L   // older bucket → cycle arms as probe
 
         // httpPost throws (outage continues) — verify finally clears flag even on failure
         driver.metaClass.httpPost = { Map params, Closure cb ->
@@ -4415,11 +4419,11 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         // "VeSync inner code=" path; assert that path was NOT taken.
         !testLog.errors.any { it.contains("VeSync inner code=-11260022") }
 
-        and: "recordError was invoked with site='getAuthorizationCode' AND the cross-region tag"
+        and: "recordError was invoked with method='getAuthorizationCode' AND the cross-region tag"
         Map history = state.errorHistory as Map
         def slot = (history["test-device-001"] ?: []) as List
         slot.any { entry ->
-            (entry.ctx as Map)?.site == "getAuthorizationCode" &&
+            (entry.ctx as Map)?.method == "getAuthorizationCode" &&
             (entry.msg as String).contains("cross-region at Stage 1")
         }
 
@@ -4956,7 +4960,7 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         history["test-device-001"] != null
         def slot = history["test-device-001"] as List
         slot.any { entry ->
-            (entry.ctx as Map)?.site == "exchangeAuthCode" &&
+            (entry.ctx as Map)?.method == "exchangeAuthCode" &&
             (entry.msg as String).contains("cross-region retry depth exceeded")
         }
 

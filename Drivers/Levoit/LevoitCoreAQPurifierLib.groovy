@@ -31,6 +31,10 @@ library(
 //   REQUIRES: #include level99.LevoitChildBase    (provides logDebug/logError/ensureDebugWatchdog/seedPrefs/requireNonEmptyEnum/safeIntArg)
 //   REQUIRES: #include level99.LevoitCorePurifier (provides checkHttpResponse/handleEvent/handleMode)
 //   REQUIRES: host driver provides `def mapIntegerToSpeed(level)` returning a String speed name
+//   REQUIRES: host driver provides `def getAutoModes()` returning a List of valid auto-preference
+//             mode names. The list MUST match the host's `setAutoMode` command-constraint enum
+//             (e.g. ["default","quiet","efficient"] for 300S/400S; add "eco" for 600S). setAutoMode
+//             consumes it to reject invalid input BEFORE waking an off device (BP24 invariant).
 //   PROVIDES: update() (0-arg self-fetch), update(status, nightLight) (2-arg poll dispatcher),
 //             setAutoMode(mode), setAutoMode(mode, roomSize), handleAutoMode(mode),
 //             handleAutoMode(mode, size), updateAQIandFilter(String, filter), convertRange(...)
@@ -55,7 +59,7 @@ def update() {
                 def status = resp.data.result
                 if (status == null) {
                     logError "No status returned from getPurifierStatus: ${resp.msg}"
-                    recordError("No status returned from getPurifierStatus", [site:"update"])
+                    recordError("No status returned from getPurifierStatus", [method:"update"])
                 } else
                     result = update(status, null)
 			}
@@ -139,8 +143,20 @@ def setAutoMode(mode) {
     setAutoMode(mode, state.room_size ?: 800);
 }
 
+// BP24: SHOULD-ON — asking an off device to switch to auto mode auto-turns it on (matches
+//   setMode / speed setters; pyvesync set_mode has no power gate). ensureSwitchOn() runs AFTER
+//   validation so invalid input cannot wake an off device.
 def setAutoMode(mode, roomSize) {
     if (!requireNonEmptyEnum(mode, "setAutoMode")) return
+    // Reject invalid auto-mode BEFORE ensureSwitchOn so garbage input cannot wake an off device
+    // (BP24 invariant — invalid input must not turn a device on). getAutoModes() is the host's
+    // authoritative per-model enum, identical to the setAutoMode command-constraint list.
+    String m = (mode as String).trim().toLowerCase()
+    List allowed = getAutoModes()
+    if (!(m in allowed)) {
+        logWarn "setAutoMode: invalid mode '${m}' -- must be one of: ${allowed.join(', ')}; ignoring"
+        return
+    }
     // BP26: safe integer coercion — Rule Machine passes "" or null for blank numeric slots.
     // Nested safeIntArg: the inner call guards the fallback expression itself.
     // An unguarded `(state.room_size ?: 800) as Integer` cast can throw NumberFormatException
@@ -154,23 +170,40 @@ def setAutoMode(mode, roomSize) {
     // Max clamp deferred: no authoritative upper bound confirmed from pyvesync or VeSync API docs.
     sz = Math.max(1, sz)
 
-    logDebug "setAutoMode(${mode}, ${sz})"
+    logDebug "setAutoMode(${m}, ${sz})"
 
-    if (mode == "efficient") {
-        handleAutoMode(mode, sz);
+    // SHOULD-ON: turn the device on if off BEFORE issuing the mode change, so an auto request
+    // from an off device powers it on (matches setMode / speed setters). Validation above already
+    // ran, so invalid input never reaches here.
+    ensureSwitchOn()
+
+    // Two independent cloud writes: the auto-preference (type/room_size) and the mode switch to
+    // "auto". Commit each piece of state only when its corresponding write succeeded, so a partial
+    // failure (e.g. the preference write goes through but the mode write fails, or vice-versa) does
+    // not leave state-vs-reality mismatched. The next poll owns reconciliation of any uncommitted leg.
+    boolean prefOk
+    if (m == "efficient") {
+        prefOk = handleAutoMode(m, sz);
     }
     else {
-        handleAutoMode(mode);
+        prefOk = handleAutoMode(m);
+    }
+    if (prefOk) {
+        state.auto_mode = m;
+        state.room_size = sz;
+        handleEvent("auto_mode", m)
+    } else {
+        reportWriteError("Auto preference write failed: ${m}", [method:"setAutoMode"])
     }
 
-    handleMode("auto");
-    state.mode = "auto";
-    state.auto_mode = mode;
-    state.room_size = sz;
-
-	handleEvent("auto_mode", mode)
-	handleEvent("mode", "auto")
-    handleEvent("speed",  "auto")
+    boolean modeOk = handleMode("auto");
+    if (modeOk) {
+        state.mode = "auto";
+        handleEvent("mode", "auto")
+        handleEvent("speed",  "auto")
+    } else {
+        reportWriteError("Auto mode write failed: ${m}", [method:"setAutoMode"])
+    }
 }
 
 def handleAutoMode(mode) {

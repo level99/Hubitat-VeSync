@@ -92,7 +92,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Tower Fan (LTF-F422S-WUS/WUSR/KEU/WJP) — power, fan speed 1-12, modes (normal/turbo/auto/sleep), oscillation, mute, display, timer, ambient temperature; canonical pyvesync payloads",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -215,6 +215,8 @@ def setSpeed(spd){
 //   If contradicted in the future: a community report showing "advancedSleep" is rejected
 //     and "sleep" is the correct literal would mean removing the reverse-mapping and
 //     sending "sleep" directly. No such report yet — current behavior follows pyvesync.
+// BP24: SHOULD-ON — asking an off fan to change mode auto-turns it on (matches speed/level
+//   setters). ensureSwitchOn() runs AFTER validation so invalid input cannot wake an off device.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -224,6 +226,7 @@ def setMode(mode){
         recordError("setMode: invalid mode '${m}'", [method:"setTowerFanMode"])
         return
     }
+    ensureSwitchOn()
     // Map user-facing "sleep" to API "advancedSleep" (HA finding #d + pyvesync device_map.py)
     String apiMode = (m == "sleep") ? "advancedSleep" : m
     def resp = hubBypass("setTowerFanMode", [workMode: apiMode], "setTowerFanMode(${apiMode})")
@@ -232,7 +235,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
-        logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setTowerFanMode"])
+        reportWriteError("Mode write failed: ${m}", [method:"setTowerFanMode"])
     }
 }
 
@@ -251,13 +254,16 @@ def setOscillation(onOff){
     if (!(s in ["on","off"])) { logError "setOscillation: invalid value '${s}'"; recordError("setOscillation invalid: ${s}", [method:"setOscillationSwitch"]); return }
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("oscillation") == s) return
+    // BP24 NO-ON note: still send the command; just inform if the fan is off (setting applies on power-on).
+    noteOscillationOffState()
     int v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
     def resp = hubBypass("setOscillationSwitch", [oscillationSwitch: v], "setOscillationSwitch(${s})")
     if (httpOk(resp)) {
         device.sendEvent(name:"oscillation", value: s)
         logInfo "Oscillation: ${s}"
     } else {
-        logError "Oscillation write failed"; recordError("Oscillation write failed", [method:"setOscillationSwitch"])
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Oscillation write failed", resp, [method:"setOscillationSwitch"])
     }
 }
 
@@ -277,6 +283,7 @@ def setOscillation(onOff){
 // BP18 normalization: explicit requireNotNull guards on seconds and action args,
 // replacing the previous implicit ?: coercions. Matches the codebase convention
 // used by all other fan/humidifier command methods.
+// BP24: NO-ON — schedules a future power action; powering on now is not implied.
 def setTimer(seconds, action="off"){
     if (!requireNotNull(seconds, "setTimer")) return
     int secs = safeIntArg(seconds, 0)
@@ -296,7 +303,7 @@ def setTimer(seconds, action="off"){
         }
         logInfo "Timer set: ${act} in ${secs}s (id=${state.timerId})"
     } else {
-        logError "Timer set failed"; recordError("Timer set failed", [method:"setTimer"])
+        reportWriteFailure("Timer set failed", resp, [method:"setTimer"])
     }
 }
 
@@ -311,7 +318,7 @@ def cancelTimer(){
         state.remove("timerId")
         logInfo "Timer cancelled"
     } else {
-        logError "Timer cancel failed"; recordError("Timer cancel failed", [method:"clearTimer"])
+        reportWriteFailure("Timer cancel failed", resp, [method:"clearTimer"])
     }
 }
 

@@ -143,7 +143,7 @@ def check_rule25_bp16_watchdog_call_site(path, raw_lines, cleaned_lines, raw_tex
             "Add a call to ensureDebugWatchdog() in the driver's primary poll entry method "
             "(e.g. applyStatus(), update(status, nightLight), or updateDevices() for the "
             "parent). The method reads state.debugEnabledAt and auto-disables debugOutput "
-            "if 30+ min have elapsed. See CLAUDE.md Bug Pattern #16 for the canonical "
+            "if 30+ min have elapsed. See Bug Pattern #16 in docs/BUG-PATTERNS.md for the canonical "
             "pattern. If this driver intentionally has no poll cycle and no debug logging, "
             "add an exemption in tests/lint_config.yaml with a substantive reason string."
         ),

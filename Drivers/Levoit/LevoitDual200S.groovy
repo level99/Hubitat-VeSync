@@ -74,7 +74,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.2] Levoit Dual 200S (LUH-D301S-WUSR/-WJP/-WEU/-KEUR + 'Dual200S' literal) -- mist 1-2 (2-level only), target humidity 30-80%, auto/manual modes, auto-stop, display; canonical pyvesync VeSyncHumid200300S payloads. No night-light command (feature flag absent); no sleep mode (not in device_map.py mist_modes). Night-light brightness read passively if API returns it.",
-        version: "2.8",
+        version: "2.9",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -174,6 +174,8 @@ Map powerPayload(boolean on){ [enabled: on, id: 0] }
 //   Refutation: community user with LUH-D301S-WEU reports auto broken even after "humidity"
 //     fallback --> both variants tried; log both inner codes; escalate to pyvesync issue.
 // Payload: {mode: <value>} -- NOT {workMode: <value>} (Superior 6000S difference)
+// BP24: SHOULD-ON — asking an off device to change mode auto-turns it on (ensureSwitchOn below,
+//   after validation). Matches speed/level setters; pyvesync set_mode has no power gate.
 def setMode(mode){
     logDebug "setMode(${mode})"
     if (!requireNonEmptyEnum(mode, "setMode")) return
@@ -194,7 +196,7 @@ def setMode(mode){
             device.sendEvent(name:"mode", value: m)
             logInfo "Mode: ${m}"
         } else {
-            logError "Mode write failed: ${m}"; recordError("Mode write failed: ${m}", [method:"setHumidityMode"])
+            reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
         }
     }
 }
@@ -223,8 +225,7 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
         sendModeRequest(alternate, userMode, true)
     } else {
         // Both variants rejected
-        logError "Mode '${userMode}' rejected by both payload variants ('auto' and 'humidity', inner code: ${innerCode}). Check device connectivity or report via GitHub issue."
-        recordError("Mode '${userMode}' rejected by both payload variants (inner code: ${innerCode})", [method:"setHumidityMode"])
+        reportWriteError("Mode '${userMode}' rejected by both payload variants ('auto' and 'humidity', inner code: ${innerCode}). Check device connectivity or report via GitHub issue.", [method:"setHumidityMode"])
     }
 }
 
@@ -257,7 +258,7 @@ def setMistLevel(level){
         device.sendEvent(name:"mistLevel", value: clamped)
         logInfo "Mist level: ${clamped}"
     } else {
-        logError "Mist level write failed: ${clamped}"; recordError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
+        reportWriteError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
     }
 }
 

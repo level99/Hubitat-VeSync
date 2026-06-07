@@ -42,6 +42,22 @@ class LevoitCore200SLightSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // Cov1: night-light SwitchLevel capability presence (v2.9 typo-fix guard)
+    // -------------------------------------------------------------------------
+
+    def "driver declares capability SwitchLevel (night-light dimmer registers on dashboards/RM)"() {
+        // A typo in the capability declaration (e.g. 'Switch Level' with a space) silently
+        // unregisters the dimmer, so the dashboard level slider and the Rule Machine
+        // "Set Level" binding for the night light never appear. RULE42 lint catches the
+        // malformed-space form; this presence assertion closes the test layer.
+        when: "the driver source is read"
+        def source = new File(driverSourcePath()).text
+
+        then: "it declares the canonical one-word SwitchLevel capability"
+        source =~ /capability\s+["']SwitchLevel["']/
+    }
+
+    // -------------------------------------------------------------------------
     // Bug Pattern #12: pref-seed
     // -------------------------------------------------------------------------
 
