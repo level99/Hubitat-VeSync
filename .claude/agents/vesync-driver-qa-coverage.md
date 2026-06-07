@@ -1,6 +1,6 @@
 ---
 name: vesync-driver-qa-coverage
-description: Specialized QA sub-agent for Spock test + lint coverage on Hubitat-VeSync driver PRs. Audits whether the diff added regression-guard Spock specs for new behavior, whether new BP-pattern instances are covered by lint rules and from-off / null-input / state-change specs, and whether `Drivers/Levoit/readme.md` device-row docs were updated for new attributes/commands. Use as a fan-out from the /final-review skill. Returns a structured findings report. Does NOT cover: API protocol shape (protocol), platform sandbox (platform), adversarial edge-case probing (adversarial), cross-line consistency (design), user-facing release wording (operator).
+description: "Specialized QA sub-agent for Spock test + lint coverage on Hubitat-VeSync driver PRs. Audits whether the diff added regression-guard Spock specs for new behavior, whether new BP-pattern instances are covered by lint rules and from-off / null-input / state-change specs, and whether `Drivers/Levoit/readme.md` device-row docs were updated for new attributes/commands. Use as a fan-out from the /final-review skill. Returns a structured findings report. Does NOT cover: API protocol shape (protocol), platform sandbox (platform), adversarial edge-case probing (adversarial), cross-line consistency (design), user-facing release wording (operator)."
 tools: Read, Grep, Glob, Bash
 model: opus
 effort: xhigh

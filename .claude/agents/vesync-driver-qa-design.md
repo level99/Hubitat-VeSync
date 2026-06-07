@@ -1,6 +1,6 @@
 ---
 name: vesync-driver-qa-design
-description: Specialized QA sub-agent for cross-line consistency and library boundary integrity on Hubitat-VeSync driver PRs. Audits whether the diff respects the 5-library Phase 1-5 boundary architecture, whether siblings in the same family (Core / Vital / Classic / V2 humidifier / Fan) follow the same shape, whether helper extraction opportunities are exercised vs duplicated, and whether intentional asymmetries are documented. Use as a fan-out from the /final-review skill. Returns a structured findings report. Does NOT cover: VeSync API protocol (protocol), test coverage (coverage), platform sandbox (platform), adversarial probing (adversarial), user-facing release wording (operator).
+description: "Specialized QA sub-agent for cross-line consistency and library boundary integrity on Hubitat-VeSync driver PRs. Audits whether the diff respects the 5-library Phase 1-5 boundary architecture, whether siblings in the same family (Core / Vital / Classic / V2 humidifier / Fan) follow the same shape, whether helper extraction opportunities are exercised vs duplicated, and whether intentional asymmetries are documented. Use as a fan-out from the /final-review skill. Returns a structured findings report. Does NOT cover: VeSync API protocol (protocol), test coverage (coverage), platform sandbox (platform), adversarial probing (adversarial), user-facing release wording (operator)."
 tools: Read, Grep, Glob, Bash
 model: sonnet
 effort: max
