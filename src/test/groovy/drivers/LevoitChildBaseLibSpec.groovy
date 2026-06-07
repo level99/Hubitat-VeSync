@@ -676,6 +676,72 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         !driver.isDeviceOffResp(null)
     }
 
+    // BP29 crash-repro (load-bearing both-ways guard). On a non-JSON error response
+    // (CDN/gateway HTTP 502/504 with a raw HTML body), hubBypass returns
+    // [status:5xx, data:"<html>...</html>"] — resp.data is a NON-NULL String. The
+    // pre-fix predicate did `resp?.data?.result?.code`: ?. guards null but NOT
+    // wrong-type, so .result is a property access on a String and throws
+    // groovy.lang.MissingPropertyException, crashing the driver from the write-fail
+    // branch. The instanceof-Map guards make this return false instead.
+    //
+    // DISCRIMINATION: against the OLD code this spec FAILS — the property access on a
+    // String throws MissingPropertyException, so the `notThrown` block goes RED. Against
+    // the fixed code resp.data is not a Map, the chained guard short-circuits, and the
+    // predicate returns false. (Orchestrator owns the both-ways proof.)
+    def "isDeviceOffResp: non-JSON String body (HTTP 502/504 HTML) does NOT throw and returns false (BP29 crash-repro)"() {
+        when: "a gateway error whose inner resp.data is a raw HTML String, not a Map"
+        boolean result = driver.isDeviceOffResp([status: 502, data: "<html><body>502 Bad Gateway</body></html>"])
+
+        then: "no MissingPropertyException — the property access on a String is never attempted"
+        notThrown(Exception)
+
+        and: "a non-Map body is not a device-off envelope"
+        result == false
+    }
+
+    def "isDeviceOffResp: still returns true for the genuine device-off Map shape (BP29 fix did not break detection)"() {
+        expect: "the canonical device-off envelope [status:200, data:[result:[code:11005000]]]"
+        driver.isDeviceOffResp([status: 200, data: [result: [code: 11005000]]])
+    }
+
+    def "isDeviceOffResp: returns false for a normal-success Map and for null (BP29 fix regression net)"() {
+        expect:
+        !driver.isDeviceOffResp([status: 200, data: [result: [code: 0]]])
+        !driver.isDeviceOffResp(null)
+    }
+
+    // BP29 crash-repro for the hubBypass() callback's inner-code peel (sibling site).
+    // The callback runs UNCONDITIONALLY on every hubBypass call (the logDebug trace
+    // always fires since callers pass a tag) and is NOT wrapped in try/catch — so a
+    // non-JSON 502/504 HTML body (resp.data is a non-null String) made the pre-fix
+    // `resp?.data?.result?.code` throw MissingPropertyException INSIDE the async
+    // callback, before reportWriteFailure/isDeviceOffResp could ever run.
+    //
+    // The harness CAN deliver a String-bodied response with no changes: TestParent
+    // drives the callback with cannedResponse, and TestHttpResponse.getData() returns
+    // backing.data untyped — so a String `data` surfaces verbatim to resp.data.
+    //
+    // DISCRIMINATION: against the OLD callback line this spec FAILS — the property
+    // access on the String throws inside the callback, so the `notThrown` block goes
+    // RED. Against the type-guarded line the `instanceof Map` check is false, inner is
+    // null, the logDebug trace prints "inner null", and no exception is thrown.
+    // (Orchestrator owns the both-ways proof.)
+    def "hubBypass: non-JSON String body (HTTP 502/504 HTML) does NOT throw in the callback (BP29 sibling crash-repro)"() {
+        given: "debug on so the always-fired trace line evaluates `inner`"
+        settings.debugOutput = true
+        testParent.cannedResponse = [status: 502, data: "<html><body>502 Bad Gateway</body></html>"]
+
+        when: "a write whose response carries a raw HTML String body reaches the hubBypass callback"
+        def resp = driver.hubBypass("setDisplay", [screenSwitch: 1], "setDisplay")
+
+        then: "the callback's inner-code peel did not throw on the String body"
+        notThrown(Exception)
+
+        and: "the transport result still surfaces the status and the raw String data unchanged"
+        resp.status == 502
+        resp.data == "<html><body>502 Bad Gateway</body></html>"
+    }
+
     def "httpOk: device-off (11005000) returns false but does NOT itself log WARN/ERROR or record (BP29 — reporting is the caller's job)"() {
         given:
         settings.descriptionTextEnable = true

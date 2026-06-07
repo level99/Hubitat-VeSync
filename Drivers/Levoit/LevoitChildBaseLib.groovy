@@ -309,7 +309,12 @@ private hubBypass(method, Map data=[:], tag=null, cb=null) {
     def rspObj = [status: -1, data: null]
     parent.sendBypassRequest(device, [method: method, source: "APP", data: data]) { resp ->
         rspObj = [status: resp?.status, data: resp?.data]
-        def inner = resp?.data?.result?.code
+        // Type-guard before peeling: on a non-JSON error response (CDN/gateway HTTP
+        // 502/504 with a raw HTML body) resp.data is a non-null String. The ?. operator
+        // guards null but NOT wrong-type, so a bare resp?.data?.result?.code would do a
+        // property access on a String and throw MissingPropertyException inside this
+        // async callback. inner is null on a non-Map body (no inner code to report).
+        def inner = (resp?.data instanceof Map) ? resp.data.result?.code : null
         if (tag) logDebug "${tag} -> HTTP ${resp?.status}, inner ${inner}"
         if (cb) cb(resp)
     }
@@ -359,8 +364,17 @@ private boolean networkOutageKnown() {
 
 // BP29: stateless device-off predicate — inspects THIS envelope's inner result code.
 // No persisted state, so it cannot misclassify a later call. Used by reportWriteFailure().
+//
+// Each level is instanceof-Map-guarded before the property access: on a non-JSON error
+// response (e.g. a CDN/gateway HTTP 502/504 with a raw HTML body) the inner resp.data is a
+// non-null String, so a bare resp?.data?.result would do a property access on a String and
+// throw MissingPropertyException. The ?. operator only guards null, not wrong-type — hence
+// the explicit type guards.
 private boolean isDeviceOffResp(resp) {
-    return (resp?.data?.result?.code == BYPASS_DEVICE_IS_OFF)
+    return (resp instanceof Map &&
+            resp.data instanceof Map &&
+            resp.data.result instanceof Map &&
+            resp.data.result.code == BYPASS_DEVICE_IS_OFF)
 }
 
 // BP29: stateless write-failure reporter. Call from a write-failure branch (after
