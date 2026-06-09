@@ -147,6 +147,12 @@ git -C $REVIEW_CWD diff <BASE_SHA>..<HEAD_SHA> > $REVIEW_CWD/.review_diff_<short
 
 `<short-sha>` = first 8 chars of the audit HEAD SHA. (Codex doesn't need the pre-staged file — it runs git itself — but staging once for the pack is harmless and keeps one diff source of truth.)
 
+**Diff-size ceiling — drop the 3 context-bound pack members above ~7K lines.** After staging, check the diff size:
+```bash
+wc -l $REVIEW_CWD/.review_diff_<short-sha>.txt
+```
+On diffs **≥ ~7K lines**, three OpenCode members reliably context-truncate mid-exploration and return 0 findings at non-zero latency — `opencode/mimo-v2.5-free`, `opencode/deepseek-v4-flash-free`, and `opencode-go/kimi-k2.6` (detection signature: output < 5 KB, no `## Verdict`, tail ends in a `→ Read .review_diff…` tool-call stream). At/above the ceiling, **drop those 3 from the Step-4b dispatch** and run the remaining 3 (`big-pickle` FREE, `deepseek-v4-flash` PAID, `deepseek-v4-pro` PAID) which scale cleanly — plus Codex (no such limit). State the drop in synthesis ("pack: 3/6 — mimo/dsflash-free/kimi dropped, diff >7K lines"). Below the ceiling (≤5K lines, the calibrated range), dispatch all 6. The free seats "add no marginal cost" framing only holds when they actually produce signal; above the ceiling they're 0 signal at $0 + latency drag.
+
 ### Step 4b — Issue the parallel fan-out
 
 **First author the shared prompt file (ONCE).** Codex AND every OpenCode pack member consume the SAME prompt — identical input makes the cross-reviewer comparison meaningful and saves authoring N prompts. Build the Step-4c prompt (with `<BASE_SHA>`/`<HEAD_SHA>`, the explicit changed-file list, and the per-diff HUNT invariants substituted) and `Write` it to `<repo-parent>/.final_review_prompt_<short-sha>.md`. Tell the prompt to read the pre-staged diff at `.review_diff_<short-sha>.txt` (workdir-relative — the OpenCode `--dir .` policy can read that but not `/tmp`); Codex can also just run `git diff` itself.
@@ -198,7 +204,9 @@ Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode/de
 Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode-go/deepseek-v4-flash --dir . "$PROMPT" < /dev/null > .opencode_dsflash_<short-sha>.md 2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — deepseek-v4-flash (PAID ~$0.033, dominant $/finding)' })
 Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode-go/kimi-k2.6       --dir . "$PROMPT" < /dev/null > .opencode_kimi_<short-sha>.md     2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — kimi-k2.6 (PAID ~$0.50, sibling-gap specialist)' })
 Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode-go/deepseek-v4-pro  --dir . "$PROMPT" < /dev/null > .opencode_dspro_<short-sha>.md   2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — deepseek-v4-pro (PAID ~$0.31, premium voice)' })
-// All 6 only if opencode_available; dispatch ALL if the family gate is YES (no cherry-pick).
+// All 6 only if opencode_available; dispatch ALL if the family gate is YES (no cherry-pick) —
+// EXCEPT the principled Step-4a diff-size ceiling: on a staged diff ≥~7K lines, drop the 3
+// context-bound members (mimo-v2.5-free, deepseek-v4-flash-free, kimi-k2.6) and run the other 3.
 // The 3 free seats keep distinct-family signal at $0 even if the paid Go account is rate-capped.
 ```
 
@@ -276,10 +284,14 @@ Markdown. Each finding:
 
 SEVERITY: BLOCKING (ships a bug or regression), WARN (should-fix before merge), NIT (improvement, not blocking).
 
+DO NOT use any Write / file-creation tool to dump your findings to a separate file in the workspace. Your review-findings document MUST be your final stdout response — the text the CLI captures. The orchestrator reads captured stdout; if you side-write to a workspace file, it sees only an empty/summary stdout and wrongly concludes your review was truncated. Write tools are for code edits, not review output. Output findings inline.
+
 If you find nothing material, say so explicitly. Don't pad with style nits or hypothetical concerns.
 ````
 
 This template is the source of truth; do not duplicate it elsewhere in the codebase.
+
+**Keep the authored prompt file framing-free — it MUST open cold with the `# Your role` heading.** When you `Write` the prompt to `.final_review_prompt_<short-sha>.md` (Step 4b), do NOT prepend any meta-framing — no "this is the shared prompt template", no "dispatch contract", no orchestrator notes, not even wrapped in `<!-- -->` (HTML comments are still passed to the model as input text; they don't strip). Strong-RLHF models read framing-about-the-task as a document *describing* a task and pivot to clarifying-question mode instead of executing the review — empirically isolated across three model families (two returned only a meta-question / A-B-C menu until the framing was stripped, then produced full substantive reviews from the identical body). Orchestrator-facing notes (template purpose, placeholder list) live HERE in the SKILL, never in the reviewer-facing file.
 
 ### Step 5 — Run sub-agents in background optional
 
@@ -301,6 +313,12 @@ sed 's/\x1b\[[0-9;]*[mGKHF]//g' <repo-parent>/.opencode_<model>_<short-sha>.md |
 - **Tiny output (< ~200 bytes) + `API key not valid` in tail** → that provider's key isn't configured in the OpenCode router. The other members still ran. Drop it: note "pack: N/M dispatched, `<model>` skipped — auth".
 - **Output ends mid-stream + `permission requested: external_directory; auto-rejecting`** → the member tried `/tmp` despite the prompt and gave up. The §4a pre-staged diff should prevent this; if it recurs, confirm the prompt names the workdir-relative diff path and re-dispatch just that member.
 - **Per-member cost variance is wide** — within the same nominal tier, one member can spend an order of magnitude more than another on the same prompt. Watch $/run per member, not per family; the cheapest member often matches or beats the priciest on $/real-finding.
+
+**Side-write trap — a small stdout file is NOT proof of truncation.** Some agentic CLI reviewers (paid Flash observed; any member with a Write tool can do it) decide to compile their findings via the Write tool to a workspace-relative file (model picks the filename), leaving the captured stdout with only a TUI summary + a pointer. The orchestrator then naively reads the 3-5 KB stdout and concludes "truncated" — while the real 10-12 KB review sits in a side file. **Sampling discipline: do NOT characterize any external output as truncated until BOTH (1) that reviewer's background-task completion notification has fired (you have the final byte count, not a mid-write snapshot), AND (2) you have run the side-write detection grep and inspected any pointed-to file.** Detection (run per suspiciously-small output, < ~8 KB):
+```bash
+grep -oE 'written to [^[:space:]]+|← Write [^[:space:]]+|Wrote file' <repo-parent>/.opencode_<model>_<short-sha>.md
+```
+A hit → the actual review is at the named workdir-relative path (common shapes: `.opencode_diff_<sha>_review.md`, `.opencode_review_<model>_short.md`); read THAT as the findings. (Lived 2026-06-08: 5 of 6 OpenCode members were first miscalled "truncated"; 4 had completed substantively and 2 had genuinely side-written 4 high-value findings — the miss cost an extra dev round + a credibility hit.) The Step-4c prompt's "output findings inline, do NOT Write to a file" directive is the preventive layer; this grep is the backstop for members that ignore it. Codex hasn't been observed side-writing (it streams to stdout), but the grep catches it if a future version changes.
 
 **Brief throttle (wait) vs structural rate cap (needs paid tier) — by the reset interval in the error text.** "retry after *N **seconds***" auto-recovers → within the parallel window, grant a short grace then proceed. "reset after *N **hours***" / "quota exhausted" is a structural cap → waiting and model-switching won't fix it; it needs the paid tier. Don't retry-loop a structural cap.
 
