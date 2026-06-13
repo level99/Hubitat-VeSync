@@ -187,7 +187,9 @@ Bash({
 // attached files ITSELF (bytes never enter THIS session — only paths do), returns clean markdown,
 // and cannot side-write or step-cap-truncate. Context is the caller's job → ATTACH the convention
 // docs + the FULL changed files + the staged diff (a diff-only review false-positives).
-//   CLI="uv run --python 3.12 ~/OneDrive/bin/opencode_go_qa_client.py"
+//   CLI="uv run --python 3.12 $HOME/OneDrive/bin/opencode_go_qa_client.py"  # $HOME, NOT ~ — bash does
+//        NOT tilde-expand `~` after variable expansion, so `CLI="…~…"; $CLI` hands uv a literal ~ and
+//        fails to spawn on Windows/Git-Bash. $HOME expands at assignment. (Bare-word ~ inline is fine.)
 //   PROMPT=/c/tmp/qa/final_review_prompt_<short-sha>.md
 //   ATTACH="-a bugpatterns=docs/BUG-PATTERNS.md -a contributing=CONTRIBUTING.md -a claudemd=CLAUDE.md \
 //           -a diff=/c/tmp/qa/review_diff_<short-sha>.txt <one  -a label=<path>  per changed file, IN FULL>"
