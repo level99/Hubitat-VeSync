@@ -131,6 +131,25 @@ class LevoitSproutAirSpec extends HubitatSpec {
         lastEventValue("fanSpeed") == 0                              // driver maps 255 -> 0
     }
 
+    def "applyStatus off-state with manualSpeedLevel fallback clamps fanSpeed to 0 (Bug Pattern #6)"() {
+        given: "device off, fanSpeedLevel ABSENT (not the 255 sentinel) + retained manualSpeedLevel=3"
+        // NON-VACUOUS clampOffLevel guard: the 255-sentinel test above maps 255->0 BEFORE the clamp,
+        // so it passes with or without clampOffLevel. This exercises the manualSpeedLevel fallback
+        // branch (fanSpeedLevel absent), where fanSpeedRaw=3 and ONLY clampOffLevel forces it to 0.
+        // Goes RED if clampOffLevel is reverted (would emit fanSpeed=3 on an off device).
+        def deviceData = [powerSwitch: 0, workMode: "manual", manualSpeedLevel: 3,
+                          childLockSwitch: 0, AQLevel: 1, PM25: 5, PM1: 2, PM10: 5, AQI: 98,
+                          screenSwitch: 0, screenState: 0]
+
+        when:
+        driver.applyStatus([code: 0, result: deviceData])
+
+        then:
+        lastEventValue("switch")   == "off"
+        lastEventValue("fanSpeed") == 0    // depends on clampOffLevel, NOT the 255 mapping
+        lastEventValue("info")?.contains("Fan: 0")
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #12: pref-seed
     // -------------------------------------------------------------------------

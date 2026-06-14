@@ -185,11 +185,14 @@ class LevoitLV600SSpec extends HubitatSpec {
         when:
         driver.applyStatus(v2StatusEnvelope(deviceData))
 
-        then: "the info status tile shows 'Warm: off' and 'Mist: L0', not the retained levels"
+        then: "the info status tile shows 'Warm: off' and 'Mist: off', not the retained levels"
+        // FIX 1 (v2.10 R1): an off device renders 'Mist: off', NOT the bare 'Mist: L0' the
+        // pre-fix tile produced (clampOffLevel returns 0, so the >0 ? : 'off' guard reads 'off').
         def info = lastEventValue("info") as String
         info.contains("Warm: off")
         !info.contains("Warm: L2")
-        info.contains("Mist: L0")
+        info.contains("Mist: off")
+        !info.contains("Mist: L")
     }
 
     // -------------------------------------------------------------------------

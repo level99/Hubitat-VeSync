@@ -264,6 +264,33 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         lastEventValue("warmMistEnabled") == "off"
     }
 
+    def "applyStatus off-state with RETAINED nonzero mist+warm levels clamps both attrs and tile to off (Bug Pattern #6)"() {
+        given: "device off (enabled=false) but API still reports retained mist_virtual_level=5 + warm_level=2"
+        // NON-VACUOUS: device_off has mist_virtual_level=0 / warm_level=0, which pass with or
+        // without the clamp. Override to retained nonzero values so the emitted mistLevel,
+        // warmMistLevel, and the info tile depend on clampOffLevel; the guard goes RED if reverted.
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
+        def deviceData = (fixture.responses.device_off as Map) +
+            [mist_virtual_level: 5, mist_level: 5, warm_level: 2, warm_enabled: true]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "active mist + warm clamp to 0/off even though the API retains nonzero values"
+        lastEventValue("switch") == "off"
+        lastEventValue("mistLevel") == 0
+        lastEventValue("warmMistLevel") == 0
+        lastEventValue("warmMistEnabled") == "off"
+
+        and: "info tile shows Mist: off and Warm: off (no stale L-level rendered)"
+        lastEventValue("info")?.contains("Mist: off")
+        lastEventValue("info")?.contains("Warm: off")
+        !lastEventValue("info")?.contains("Mist: L")
+        !lastEventValue("info")?.contains("Warm: L")
+    }
+
     def "applyStatus normalizes mode='humidity' (alt-firmware auto mode) to user-facing 'auto' (v2.2 read-path)"() {
         // v2.2: 'humidity' in the API response is the alt-firmware name for auto mode
         // (pyvesync PR #505 / LUH-A602S-WEU variant). The driver normalizes it to 'auto'

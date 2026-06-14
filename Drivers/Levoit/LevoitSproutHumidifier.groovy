@@ -456,7 +456,7 @@ def applyStatus(status){
     def parts = []
     if (r.humidity != null)         parts << "Humidity: ${r.humidity as Integer}%"
     if (r.targetHumidity != null)   parts << "Target: ${r.targetHumidity as Integer}%"
-    if (mistVirtual != null)        parts << "Mist: L${mistVirtual} (1-2)"
+    if (mistVirtual != null)        parts << "Mist: ${mistVirtual > 0 ? 'L'+mistVirtual+' (1-2)' : 'off'}"
     parts << "Mode: ${userMode}"
     parts << "Water: ${waterLacksStr == 'yes' ? 'empty' : 'ok'}"
     if (r.filterLifePercent != null)     parts << "Filter: ${r.filterLifePercent as Integer}%"

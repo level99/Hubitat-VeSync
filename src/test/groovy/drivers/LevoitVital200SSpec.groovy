@@ -926,6 +926,46 @@ class LevoitVital200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP22 network-outage suppression for migrated Vital NO-ON setters (v2.10).
+    // reportWriteFailure() routes the genuine-fault leg through
+    //   `if (networkOutageKnown()) { logDebug; return }`
+    // BEFORE the logError/recordError path. The "genuine -1 is reported" specs above
+    // pass only because TestParent.networkUnreachable defaults false; this guard
+    // exercises the suppression leg with the parent's outage flag set TRUE.
+    //
+    // Both-ways: with networkUnreachable=true, an inner -1 (a genuine non-device-off
+    // failure) must be DEBUG-suppressed (parent already surfaced the outage), NOT
+    // logged at ERROR nor written to the diagnostics ring-buffer (state.errorHistory).
+    // If the networkOutageKnown() gate in reportWriteFailure() is removed, this goes RED
+    // (the failure would hit logError + recordError despite the known outage).
+    // -------------------------------------------------------------------------
+
+    def "setChildLock genuine -1 during a known network outage is DEBUG-suppressed, not ERROR/recorded (BP22)"() {
+        given: "childLock 'off' so C3 passes; parent reports a known network outage; cloud returns inner -1"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = true   // logDebug is debugOutput-gated; enable so the suppression DEBUG is captured
+        testDevice.events.add([name: "childLock", value: "off"])
+        testParent.networkUnreachable = true                      // parent.isNetworkUnreachable() -> true
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1 (genuine, non-device-off)
+
+        when:
+        driver.setChildLock("on")
+
+        then: "the write was attempted"
+        testParent.allRequests.find { it.method == "setChildLock" } != null
+
+        and: "the failure is DEBUG-suppressed (parent already surfaced the outage), not ERROR spam"
+        testLog.debugs.any { it.contains("Child lock write failed") && it.contains("BP22") }
+        !testLog.errors.any { it.contains("Child lock write failed") }
+
+        and: "no diagnostics ring-buffer record was written (recordError skipped)"
+        (state.errorHistory == null) || (state.errorHistory.isEmpty())
+
+        and: "the attribute is NOT advanced to 'on' on a failed write"
+        lastEventValue("childLock") != "on"
+    }
+
+    // -------------------------------------------------------------------------
     // Cross-driver consistency (v2.10 / #258 class-wide): the remaining Vital NO-ON
     // action/scheduling setters — resetFilter, setTimer, cancelTimer — now report
     // write failures via reportWriteFailure, matching the EverestAir precedent.

@@ -345,12 +345,15 @@ def applyStatus(status){
     // Hoist one clamped warm local (BP#6) reused by both the event emit and the info tile.
     Integer warmLvl = null
     if (r.warmLevel != null) {
-        warmLvl = clampOffLevel(r.warmLevel as Integer, powerOn)
+        // Persist the RAW last-set level (state.warmMistLevel resumes the user's choice);
+        // only the EMITTED attribute + info tile are clamped to 0 while off (BP#6).
+        Integer warmRaw = r.warmLevel as Integer
+        warmLvl = clampOffLevel(warmRaw, powerOn)
         boolean warmOn = (warmLvl > 0)
         String warmOnStr = warmOn ? "on" : "off"
         device.sendEvent(name:"warmMistLevel", value: warmLvl)
         device.sendEvent(name:"warmMistEnabled", value: warmOnStr)
-        state.warmMistLevel = warmLvl
+        state.warmMistLevel = warmRaw
         state.warmMistEnabled = warmOnStr
     } else if (r.warmPower != null) {
         // warmLevel absent but warmPower present -- use as fallback.
@@ -407,7 +410,7 @@ def applyStatus(status){
     def parts = []
     if (r.humidity != null) parts << "Humidity: ${r.humidity as Integer}%"
     if (r.targetHumidity != null) parts << "Target: ${r.targetHumidity as Integer}%"
-    if (mistVirtual != null) parts << "Mist: L${mistVirtual} (1-9)"
+    if (mistVirtual != null) parts << "Mist: ${mistVirtual > 0 ? 'L'+mistVirtual+' (1-9)' : 'off'}"
     parts << "Mode: ${userMode}"
     // BP#6: reuse the already-clamped warmLvl local (no second parse of r.warmLevel).
     if (warmLvl != null) parts << "Warm: ${warmLvl > 0 ? 'L'+warmLvl : 'off'}"

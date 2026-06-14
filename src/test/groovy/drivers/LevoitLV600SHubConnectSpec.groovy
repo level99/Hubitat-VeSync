@@ -125,11 +125,15 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
     // Bug Pattern #6: mist level 0 when device is off
     // -------------------------------------------------------------------------
 
-    def "applyStatus device_off: switch=off, mistLevel=0 from virtualLevel=0 (Bug Pattern #6)"() {
-        given:
+    def "applyStatus off-state with RETAINED nonzero virtualLevel clamps mistLevel and tile to off (Bug Pattern #6)"() {
+        given: "device off (powerSwitch=0) but the API still reports a retained nonzero virtualLevel=5"
+        // NON-VACUOUS: device_off has virtualLevel=0, which would pass with or without the clamp.
+        // Override to virtualLevel=5 (HubConnect reads mist from virtualLevel first) so the
+        // emitted mistLevel and info tile depend on clampOffLevel; the guard goes RED if reverted.
         settings.descriptionTextEnable = false
         def fixture = loadYamlFixture("LUH-A603S-WUS.yaml")
-        def status = v2StatusEnvelope(fixture.responses.device_off as Map)
+        def deviceData = (fixture.responses.device_off as Map) + [virtualLevel: 5, mistLevel: 5]
+        def status = v2StatusEnvelope(deviceData)
 
         when:
         driver.applyStatus(status)
@@ -137,6 +141,8 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         then:
         lastEventValue("switch") == "off"
         lastEventValue("mistLevel") == 0
+        lastEventValue("info")?.contains("Mist: off")
+        !lastEventValue("info")?.contains("Mist: L")
     }
 
     // -------------------------------------------------------------------------

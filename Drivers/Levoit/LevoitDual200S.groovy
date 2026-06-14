@@ -433,7 +433,7 @@ def applyStatus(status){
     def parts = []
     if (r.humidity != null) parts << "Humidity: ${r.humidity as Integer}%"
     if (targetH != null)    parts << "Target: ${targetH}%"
-    if (mistVirtual != null) parts << "Mist: L${mistVirtual} (1-2)"
+    if (mistVirtual != null) parts << "Mist: ${mistVirtual > 0 ? 'L'+mistVirtual+' (1-2)' : 'off'}"
     parts << "Mode: ${userMode}"
     parts << "Water: ${waterLacksStr == 'yes' ? 'empty' : 'ok'}"
     device.sendEvent(name:"info", value: parts.join("<br>"))
