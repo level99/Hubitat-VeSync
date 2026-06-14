@@ -369,7 +369,7 @@ private void noteOscillationOffState() {
 // Other modes (Tower: normal/turbo/auto; Pedestal: normal/turbo/eco) pass through unchanged.
 private Map applyFanCommonHead(Map r) {
     // ---- Power ----
-    boolean powerOn = (r.powerSwitch as Integer) == 1
+    boolean powerOn = asBool(r.powerSwitch)
     device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
 
     // ---- Fan speed ----

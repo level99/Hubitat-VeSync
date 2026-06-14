@@ -665,7 +665,7 @@ def applyStatus(status){
     //     device 1132 (2026-04-30). Write candidate #1 (current): setChildLock + {childLock}.
     //   See setChildLock() CROSS-CHECK block above for full refutation chain and remaining candidates.
     if (r.childLock != null) {
-        device.sendEvent(name:"childLock", value: (r.childLock as Integer) == 1 ? "on" : "off")
+        device.sendEvent(name:"childLock", value: asBool(r.childLock) ? "on" : "off")
     }
 
     // ---- Temperature (shared LevoitFanLib block) ----

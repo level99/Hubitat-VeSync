@@ -89,11 +89,12 @@ def update(status, nightLight)
     def auto_mode = status?.result?.configuration?.auto_preference?.type
     def room_size = status?.result?.configuration?.auto_preference?.room_size
 
-    // Normalize enabled defensively without ever throwing: Boolean -> as-is; Number 1 -> true;
-    // anything else (incl. a String like "false") -> false. NOTE: do NOT use `as Integer` here —
-    // `"false" as Integer` throws NumberFormatException and would abort the whole status parse.
+    // Normalize enabled defensively without ever throwing via the shared asBool() helper:
+    // Boolean -> as-is; Number 1 -> true (2 -> false); String "true"/"1"/"on"/"yes" -> true;
+    // anything else -> false. Avoids `as Integer` (which throws NumberFormatException on a
+    // String like "false" and would abort the whole status parse).
     def enabledRaw = status.result.enabled
-    boolean enabled = (enabledRaw instanceof Boolean) ? enabledRaw : (enabledRaw instanceof Number ? (enabledRaw.intValue() == 1) : false)
+    boolean enabled = asBool(enabledRaw)
 
     handleEvent("switch", enabled ? "on" : "off")
     if (state.mode == null || mode != state.mode)

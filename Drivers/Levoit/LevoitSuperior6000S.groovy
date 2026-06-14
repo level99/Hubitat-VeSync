@@ -281,7 +281,7 @@ def applyStatus(status){
     logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     // Power
-    def powerOn = (r.powerSwitch as Integer) == 1
+    def powerOn = asBool(r.powerSwitch)
     device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
 
     // Current ambient humidity
@@ -322,22 +322,26 @@ def applyStatus(status){
 
     // Water status — removed takes priority over empty
     String water = "ok"
-    if ((r.waterTankLifted as Integer) == 1)  water = "removed"
-    else if ((r.waterLacksState as Integer) == 1) water = "empty"
+    if (asBool(r.waterTankLifted))  water = "removed"
+    else if (asBool(r.waterLacksState)) water = "empty"
     if (state.lastWater != water) logInfo "Water: ${water}"
     state.lastWater = water
     device.sendEvent(name:"water", value: water)
 
-    // Display: prefer screenState (actual) over screenSwitch (config) if both present
-    Integer screen = (r.screenState != null ? r.screenState : r.screenSwitch) as Integer
-    device.sendEvent(name:"displayOn", value: screen == 1 ? "on" : "off")
+    // Display: prefer screenState (actual) over screenSwitch (config) if both present.
+    // asBool() coercion (matches the sibling display blocks) — never throws on a String
+    // flag value; the null-guard avoids emitting a bogus "off" when neither field is present.
+    def displayRaw = r.screenState != null ? r.screenState : r.screenSwitch
+    if (displayRaw != null) {
+        device.sendEvent(name:"displayOn", value: asBool(displayRaw) ? "on" : "off")
+    }
 
     // Child lock
-    device.sendEvent(name:"childLock", value: (r.childLockSwitch as Integer) == 1 ? "on" : "off")
+    device.sendEvent(name:"childLock", value: asBool(r.childLockSwitch) ? "on" : "off")
 
     // Auto-stop: config (switch) vs active state
-    device.sendEvent(name:"autoStopEnabled", value: (r.autoStopSwitch as Integer) == 1 ? "on" : "off")
-    device.sendEvent(name:"autoStopReached", value: (r.autoStopState as Integer) == 1 ? "yes" : "no")
+    device.sendEvent(name:"autoStopEnabled", value: asBool(r.autoStopSwitch) ? "on" : "off")
+    device.sendEvent(name:"autoStopReached", value: asBool(r.autoStopState) ? "yes" : "no")
 
     // Drying mode — nested map. dryingState enum (per pyvesync DryingModes): 0=OFF, 1=DRYING, 2=COMPLETE
     if (r.dryingMode instanceof Map) {
@@ -360,10 +364,11 @@ def applyStatus(status){
     }
 
     // Water pump cleaning cycle status (Superior 6000S exclusive — undocumented in pyvesync)
+    // cleanStatus is a 0/1 flag (0 = idle, 1 = cleaning) — asBool() coercion never throws on
+    // a String value; remainTime is a genuine numeric, so it keeps its plain `as Integer`.
     if (r.waterPump instanceof Map) {
-        Integer pumpClean = r.waterPump.cleanStatus as Integer  // 0 = idle, 1 = cleaning
         Integer pumpRemain = r.waterPump.remainTime as Integer
-        device.sendEvent(name:"pumpCleanStatus", value: pumpClean == 1 ? "cleaning" : "idle")
+        device.sendEvent(name:"pumpCleanStatus", value: asBool(r.waterPump.cleanStatus) ? "cleaning" : "idle")
         device.sendEvent(name:"pumpCleanRemain", value: pumpRemain ?: 0)
     }
 

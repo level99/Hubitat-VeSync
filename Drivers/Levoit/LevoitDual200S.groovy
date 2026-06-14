@@ -306,7 +306,7 @@ def applyStatus(status){
     // Dual 200S response uses `enabled` (boolean), NOT `powerSwitch` (int)
     // Same humidifier shape as Classic 300S, LV600S, OasisMist 450S (all VeSyncHumid200300S)
     def enabledRaw = r.enabled
-    boolean powerOn = (enabledRaw instanceof Boolean) ? enabledRaw : ((enabledRaw as Integer) == 1)
+    boolean powerOn = asBool(enabledRaw)
     device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
 
     // ---- Humidity ----
@@ -358,7 +358,7 @@ def applyStatus(status){
 
     // ---- Water lacks ----
     def waterLacksRaw = r.water_lacks
-    boolean waterLacks = (waterLacksRaw instanceof Boolean) ? waterLacksRaw : ((waterLacksRaw as Integer) == 1)
+    boolean waterLacks = asBool(waterLacksRaw)
     String waterLacksStr = waterLacks ? "yes" : "no"
     if (state.lastWaterLacks != waterLacksStr) {
         if (waterLacks) logInfo "Water reservoir empty"
@@ -373,14 +373,14 @@ def applyStatus(status){
 
     // ---- Auto-stop reached ----
     def autoStopReach = r.automatic_stop_reach_target
-    boolean autoStopBool = (autoStopReach instanceof Boolean) ? autoStopReach : ((autoStopReach as Integer) == 1)
+    boolean autoStopBool = asBool(autoStopReach)
     device.sendEvent(name:"autoStopReached", value: autoStopBool ? "yes" : "no")
 
     // ---- Auto-stop enabled -- from configuration.automatic_stop ----
     Boolean autoStopEnabled = null
     if (r.configuration instanceof Map && r.configuration.automatic_stop != null) {
         def asRaw = r.configuration.automatic_stop
-        autoStopEnabled = (asRaw instanceof Boolean) ? asRaw : ((asRaw as Integer) == 1)
+        autoStopEnabled = asBool(asRaw)
     }
     if (autoStopEnabled != null) device.sendEvent(name:"autoStopEnabled", value: autoStopEnabled ? "on" : "off")
 
@@ -401,7 +401,7 @@ def applyStatus(status){
         displayRaw = r.configuration.display
     }
     if (displayRaw != null) {
-        boolean displayOn = (displayRaw instanceof Boolean) ? displayRaw : ((displayRaw as Integer) == 1)
+        boolean displayOn = asBool(displayRaw)
         device.sendEvent(name:"displayOn", value: displayOn ? "on" : "off")
     }
 

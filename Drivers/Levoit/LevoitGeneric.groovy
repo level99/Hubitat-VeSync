@@ -240,7 +240,7 @@ def applyStatus(status){
 
     // --- Power (all known shapes use powerSwitch) ---
     if (r.powerSwitch != null) {
-        boolean powerOn = (r.powerSwitch as Integer) == 1
+        boolean powerOn = asBool(r.powerSwitch)
         device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
     }
 

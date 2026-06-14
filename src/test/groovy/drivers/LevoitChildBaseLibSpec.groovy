@@ -26,6 +26,11 @@ import support.HubitatSpec
  *                            returns true silently when non-null
  *   safeIntArg (BP26)     — null/empty/blank/non-numeric/over-range/decimal contract;
  *                            4-arg clamp overload; W2 warn fires only on non-null/non-empty failures
+ *   asBool                — total never-throwing boolean coercion (Boolean/Number==1/truthy
+ *                            String -> true; 2/null/""/uncoercible -> false; never throws on
+ *                            a non-numeric String — the fault that aborted the old as-Integer path)
+ *   clampOffLevel (BP6)   — hardened to accept def; null/String/non-Number first arg passes
+ *                            through unchanged with no throw; Integer-caller behavior unchanged
  */
 class LevoitChildBaseLibSpec extends HubitatSpec {
 
@@ -955,5 +960,86 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
 
         expect: "the gate returns false, so callers behave exactly as pre-BP22"
         driver.networkOutageKnown() == false
+    }
+
+    // -------------------------------------------------------------------------
+    // asBool — total, never-throwing boolean coercion (replaces the ~69 throw-prone
+    // `(x instanceof Boolean) ? x : ((x as Integer) == 1)` sites). Number==1 semantics
+    // (2 -> false); truthy Strings -> true; everything else (null, "", uncoercible) -> false.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "asBool(#desc) == #expected"() {
+        expect:
+        driver.asBool(raw) == expected
+
+        where:
+        desc                 | raw            || expected
+        "Boolean true"       | true           || true
+        "Boolean false"      | false          || false
+        "Number 1"           | 1              || true
+        "Number 0"           | 0              || false
+        "Number 2 (->false)" | 2              || false   // ONLY 1 is true, matches old as-Integer==1
+        "String 'true'"      | "true"         || true
+        "String '1'"         | "1"            || true
+        "String 'on'"        | "on"           || true
+        "String 'yes'"       | "yes"          || true
+        "String 'TRUE'"      | "TRUE"         || true    // case-insensitive
+        "String 'false'"     | "false"        || false
+        "String 'off'"       | "off"          || false
+        "String '0'"         | "0"            || false
+        "String '' (empty)"  | ""             || false
+        "String '  on  '"    | "  on  "       || true    // trimmed
+        "null"               | null           || false
+        "uncoercible object" | [a: 1]         || false   // a Map -> not Boolean/Number/CharSequence
+    }
+
+    def "asBool never throws on a non-numeric String (the bug it fixes)"() {
+        when: "the value that broke the old `(x as Integer)` path"
+        boolean result = driver.asBool("false")
+
+        then: "no NumberFormatException; correctly parsed to false"
+        noExceptionThrown()
+        result == false
+    }
+
+    // -------------------------------------------------------------------------
+    // clampOffLevel — hardened to accept def (FIX E): a non-Integer/null first arg must
+    // pass through unchanged with no throw/NPE. Behavior for the current Integer callers
+    // is unchanged (positive Number while off -> 0; otherwise unchanged).
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "clampOffLevel(#v, powerOn=#powerOn) == #expected (#desc)"() {
+        expect:
+        driver.clampOffLevel(v, powerOn) == expected
+
+        where:
+        desc                          | v     | powerOn || expected
+        "off + positive -> 0"         | 5     | false   || 0
+        "on + positive -> unchanged"  | 5     | true    || 5
+        "off + zero -> unchanged"     | 0     | false   || 0
+        "off + null -> null (no NPE)" | null  | false   || null
+        "on + null -> null (no NPE)"  | null  | true    || null
+        "off + String -> unchanged"   | "x"   | false   || "x"
+        "off + Boolean -> unchanged"  | true  | false   || true
+    }
+
+    def "clampOffLevel does not throw on a null first arg (FIX E hardening)"() {
+        when:
+        def result = driver.clampOffLevel(null, false)
+
+        then:
+        noExceptionThrown()
+        result == null
+    }
+
+    def "clampOffLevel does not throw on a String first arg (FIX E hardening)"() {
+        when:
+        def result = driver.clampOffLevel("notanumber", false)
+
+        then: "non-Number passes through unchanged, no GroovyCastException"
+        noExceptionThrown()
+        result == "notanumber"
     }
 }

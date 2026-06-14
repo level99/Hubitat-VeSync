@@ -316,7 +316,7 @@ def applyStatus(status){
     // ---- Power ----
     // 1000S response: powerSwitch (int 0|1) NOT `enabled` (bool).
     def powerRaw = r.powerSwitch
-    boolean powerOn = (powerRaw instanceof Boolean) ? powerRaw : ((powerRaw as Integer) == 1)
+    boolean powerOn = asBool(powerRaw)
     device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
 
     // ---- Humidity ----
@@ -350,11 +350,11 @@ def applyStatus(status){
     // ---- Water lacks ----
     // 1000S: waterLacksState (int 0|1 or bool). Also check waterTankLifted.
     def waterLacksRaw = r.waterLacksState
-    boolean waterLacks = (waterLacksRaw instanceof Boolean) ? waterLacksRaw : ((waterLacksRaw as Integer) == 1)
+    boolean waterLacks = asBool(waterLacksRaw)
     // Also consider tank lifted as a water-unavailable signal.
     if (!waterLacks && r.waterTankLifted != null) {
         def liftedRaw = r.waterTankLifted
-        waterLacks = (liftedRaw instanceof Boolean) ? liftedRaw : ((liftedRaw as Integer) == 1)
+        waterLacks = asBool(liftedRaw)
     }
     String waterLacksStr = waterLacks ? "yes" : "no"
     if (state.lastWaterLacks != waterLacksStr) {
@@ -367,12 +367,12 @@ def applyStatus(status){
     // autoStopSwitch = config; autoStopState = currently active
     def autoStopSwitchRaw = r.autoStopSwitch
     if (autoStopSwitchRaw != null) {
-        boolean autoStopEnabled = (autoStopSwitchRaw instanceof Boolean) ? autoStopSwitchRaw : ((autoStopSwitchRaw as Integer) == 1)
+        boolean autoStopEnabled = asBool(autoStopSwitchRaw)
         device.sendEvent(name:"autoStopEnabled", value: autoStopEnabled ? "on" : "off")
     }
     def autoStopStateRaw = r.autoStopState
     if (autoStopStateRaw != null) {
-        boolean autoStopReached = (autoStopStateRaw instanceof Boolean) ? autoStopStateRaw : ((autoStopStateRaw as Integer) == 1)
+        boolean autoStopReached = asBool(autoStopStateRaw)
         device.sendEvent(name:"autoStopReached", value: autoStopReached ? "yes" : "no")
     }
 
@@ -386,7 +386,7 @@ def applyStatus(status){
         displayRaw = r.screenSwitch
     }
     if (displayRaw != null) {
-        boolean displayOn = (displayRaw instanceof Boolean) ? displayRaw : ((displayRaw as Integer) == 1)
+        boolean displayOn = asBool(displayRaw)
         device.sendEvent(name:"displayOn", value: displayOn ? "on" : "off")
     }
 
@@ -401,7 +401,7 @@ def applyStatus(status){
         def nlSwitchRaw = nl.nightLightSwitch
         def nlBrightness = nl.brightness
         if (nlSwitchRaw != null) {
-            boolean nlOn = (nlSwitchRaw instanceof Boolean) ? nlSwitchRaw : ((nlSwitchRaw as Integer) == 1)
+            boolean nlOn = asBool(nlSwitchRaw)
             device.sendEvent(name:"nightlightOn", value: nlOn ? "on" : "off")
         }
         if (nlBrightness != null) {

@@ -364,7 +364,7 @@ def applyStatus(status){
 
     // ---- Power ----
     def powerRaw = r.powerSwitch
-    boolean powerOn = (powerRaw instanceof Boolean) ? powerRaw : ((powerRaw as Integer) == 1)
+    boolean powerOn = asBool(powerRaw)
     device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
 
     // ---- Mode ----
@@ -416,14 +416,14 @@ def applyStatus(status){
     // Prefer screenState (actual) over screenSwitch (config).
     def displayRaw = r.screenState != null ? r.screenState : r.screenSwitch
     if (displayRaw != null) {
-        boolean displayOn = (displayRaw instanceof Boolean) ? displayRaw : ((displayRaw as Integer) == 1)
+        boolean displayOn = asBool(displayRaw)
         device.sendEvent(name:"displayOn", value: displayOn ? "on" : "off")
     }
 
     // ---- Child lock ----
     def childLockRaw = r.childLockSwitch
     if (childLockRaw != null) {
-        boolean childLock = (childLockRaw instanceof Boolean) ? childLockRaw : ((childLockRaw as Integer) == 1)
+        boolean childLock = asBool(childLockRaw)
         device.sendEvent(name:"childLock", value: childLock ? "on" : "off")
     }
 
@@ -434,7 +434,7 @@ def applyStatus(status){
     if (nl instanceof Map) {
         def nlSwitchRaw = nl.nightLightSwitch
         if (nlSwitchRaw != null) {
-            boolean nlOn = (nlSwitchRaw instanceof Boolean) ? nlSwitchRaw : ((nlSwitchRaw as Integer) == 1)
+            boolean nlOn = asBool(nlSwitchRaw)
             device.sendEvent(name:"nightlightOn", value: nlOn ? "on" : "off")
         }
         if (nl.brightness != null) device.sendEvent(name:"nightlightBrightness", value: nl.brightness as Integer)

@@ -304,7 +304,7 @@ def applyStatus(status){
     // CROSS-CHECK: LV600S Hub Connect response uses `powerSwitch` (int 0|1), NOT `enabled` (bool).
     // This is the V2-class response convention: powerSwitch: int.
     def pwRaw = r.powerSwitch
-    boolean powerOn = (pwRaw instanceof Boolean) ? pwRaw : ((pwRaw as Integer) == 1)
+    boolean powerOn = asBool(pwRaw)
     device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
 
     // ---- Humidity ----
@@ -359,14 +359,14 @@ def applyStatus(status){
         // warmLevel absent but warmPower present -- use as fallback.
         // BP#6: when off, warm mist is never active regardless of the warmPower flag.
         def warmPowerRaw = r.warmPower
-        boolean warmOn = powerOn && ((warmPowerRaw instanceof Boolean) ? warmPowerRaw : ((warmPowerRaw as Integer) == 1))
+        boolean warmOn = powerOn && (asBool(warmPowerRaw))
         device.sendEvent(name:"warmMistEnabled", value: warmOn ? "on" : "off")
     }
 
     // ---- Water lacks ----
     // CROSS-CHECK: LV600SResult uses waterLacksState (int 0|1), NOT water_lacks (bool).
     def wlRaw = r.waterLacksState
-    boolean waterLacks = (wlRaw instanceof Boolean) ? wlRaw : ((wlRaw as Integer) == 1)
+    boolean waterLacks = asBool(wlRaw)
     String waterLacksStr = waterLacks ? "yes" : "no"
     if (state.lastWaterLacks != waterLacksStr) {
         if (waterLacks) logInfo "Water reservoir empty"
@@ -379,12 +379,12 @@ def applyStatus(status){
     // AUTO_STOP not in device_map.py features -- emitting as read-only attributes only.
     if (r.autoStopSwitch != null) {
         def asRaw = r.autoStopSwitch
-        boolean asEnabled = (asRaw instanceof Boolean) ? asRaw : ((asRaw as Integer) == 1)
+        boolean asEnabled = asBool(asRaw)
         device.sendEvent(name:"autoStopEnabled", value: asEnabled ? "on" : "off")
     }
     if (r.autoStopState != null) {
         def asStateRaw = r.autoStopState
-        boolean asReached = (asStateRaw instanceof Boolean) ? asStateRaw : ((asStateRaw as Integer) == 1)
+        boolean asReached = asBool(asStateRaw)
         device.sendEvent(name:"autoStopReached", value: asReached ? "yes" : "no")
     }
 
@@ -399,7 +399,7 @@ def applyStatus(status){
         displayRaw = r.screenSwitch
     }
     if (displayRaw != null) {
-        boolean displayOn = (displayRaw instanceof Boolean) ? displayRaw : ((displayRaw as Integer) == 1)
+        boolean displayOn = asBool(displayRaw)
         device.sendEvent(name:"displayOn", value: displayOn ? "on" : "off")
     }
 

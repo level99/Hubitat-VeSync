@@ -468,7 +468,7 @@ def applyStatus(status){
 
     // ---- Power ----
     def powerRaw = r.powerSwitch
-    boolean powerOn = (powerRaw instanceof Boolean) ? powerRaw : ((powerRaw as Integer) == 1)
+    boolean powerOn = asBool(powerRaw)
     device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
 
     // ---- Mode ----
@@ -511,14 +511,14 @@ def applyStatus(status){
     // Prefer screenState (actual) over screenSwitch (config).
     def displayRaw = r.screenState != null ? r.screenState : r.screenSwitch
     if (displayRaw != null) {
-        boolean displayOn = (displayRaw instanceof Boolean) ? displayRaw : ((displayRaw as Integer) == 1)
+        boolean displayOn = asBool(displayRaw)
         device.sendEvent(name:"displayOn", value: displayOn ? "on" : "off")
     }
 
     // ---- Child lock ----
     def childLockRaw = r.childLockSwitch
     if (childLockRaw != null) {
-        boolean childLock = (childLockRaw instanceof Boolean) ? childLockRaw : ((childLockRaw as Integer) == 1)
+        boolean childLock = asBool(childLockRaw)
         device.sendEvent(name:"childLock", value: childLock ? "on" : "off")
     }
 
@@ -527,12 +527,12 @@ def applyStatus(status){
     // environmentLightState: whether ambient light is currently sensed (passive read).
     def ldSwitch = r.lightDetectionSwitch
     if (ldSwitch != null) {
-        boolean ldOn = (ldSwitch instanceof Boolean) ? ldSwitch : ((ldSwitch as Integer) == 1)
+        boolean ldOn = asBool(ldSwitch)
         device.sendEvent(name:"lightDetection", value: ldOn ? "on" : "off")
     }
     def ldState = r.environmentLightState
     if (ldState != null) {
-        boolean ldDetected = (ldState instanceof Boolean) ? ldState : ((ldState as Integer) == 1)
+        boolean ldDetected = asBool(ldState)
         device.sendEvent(name:"lightDetected", value: ldDetected ? "yes" : "no")
     }
 

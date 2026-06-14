@@ -226,8 +226,32 @@ Integer parseLevelOrNull(raw) {
 // NOT for SETPOINT values (Superior virtualLevel/level dimmer attribute) — those
 // intentionally retain the target while off; only the "currently misting at" display
 // is clamped.
-Integer clampOffLevel(Integer v, boolean powerOn) {
-    return (!powerOn && v != null && v > 0) ? 0 : v
+def clampOffLevel(v, boolean powerOn) {
+    // Accept AND return def (not strictly Integer): a future caller passing a null Boolean
+    // or a String must not NPE/throw at the parameter boundary, AND the unchanged value
+    // must pass through without an Integer-return coercion (which would throw on a String
+    // or silently turn a Boolean into 0/1). The clamp only fires for a positive Number;
+    // everything else (null, String, non-positive Number) passes through unchanged so the
+    // caller's own null-guard still governs whether to emit. Current Integer callers still
+    // receive an Integer (0 or the original Integer) — behavior is identical for them.
+    return (!powerOn && v instanceof Number && v > 0) ? 0 : v
+}
+
+// Total, never-throwing boolean coercion for VeSync flag fields (enabled, water_lacks,
+// display, child_lock, warm_enabled, etc.) that may arrive as Boolean, Number (0/1), or
+// (defensively) a String. Single source of truth — replaces the hand-inlined
+// instanceof-Boolean-ternary-else-as-Integer sites that threw
+// NumberFormatException when the field arrived as a non-numeric String (e.g. "false").
+//
+// Number semantics intentionally match the prior as-Integer-equals-1 form: ONLY 1 is
+// true (2 -> false). Strings parse the truthy-variant set ("true"/"1"/"on"/"yes",
+// case-insensitive, trimmed) -> true; anything else (incl. null, empty string, or an
+// uncoercible object) -> false.
+boolean asBool(raw) {
+    if (raw instanceof Boolean) return raw
+    if (raw instanceof Number)  return raw.intValue() == 1
+    if (raw instanceof CharSequence) return raw.toString().trim().toLowerCase() in ["true","1","on","yes"]
+    return false
 }
 
 // BP25 canonical on/off coercion: the single blessed source for the permissive

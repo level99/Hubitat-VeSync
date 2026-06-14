@@ -2916,6 +2916,198 @@ class TestRule44BP6PowerGate:
         )
 
 
+class TestRule45BoolCoercionAsInteger:
+    """
+    RULE45: the throw-prone `(<expr> as Integer) == 1` boolean-coercion idiom (the bare,
+    inline-event, and verbose `instanceof Boolean ? : as Integer == 1` single-line forms)
+    AND the SPLIT form (`Integer s = (...) as Integer` on one line, `s == 1` a few lines
+    later) must be replaced by the shared asBool() helper. asBool's OWN body coerces via
+    `raw.intValue() == 1`, NOT `as Integer) == 1`, so it is exempt by construction.
+    A genuine numeric-level cast (compared to a range/threshold, never `== 1`) must NOT flag.
+    """
+
+    from lint_rules.bool_coercion_as_integer import (
+        check_rule45_bool_coercion_as_integer as _rule,
+    )
+
+    # MUST-CATCH: the bare assignment form.
+    BAD_BARE = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = (r.powerSwitch as Integer) == 1
+            device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+        }
+    """)
+
+    # MUST-CATCH: the SPLIT form — cast assigned on one line, `== 1` compare on a later
+    # line (this is exactly how Sup6000S:332/333 evaded the single-line rule).
+    BAD_SPLIT = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            Integer screen = (r.screenState != null ? r.screenState : r.screenSwitch) as Integer
+            device.sendEvent(name:"displayOn", value: screen == 1 ? "on" : "off")
+        }
+    """)
+
+    # MUST-CATCH: the SPLIT form with a bare `def`-typed cast and a bare `== 1` compare.
+    BAD_SPLIT_BARE_COMPARE = textwrap.dedent("""\
+        def applyStatus(status) {
+            def lifted = status.result.waterTankLifted as Integer
+            boolean removed = lifted == 1
+        }
+    """)
+
+    # MUST-CATCH: the verbose instanceof-Boolean ternary (its tail is `as Integer) == 1`).
+    BAD_VERBOSE_TERNARY = textwrap.dedent("""\
+        def applyStatus(status) {
+            def waterLacksRaw = status.result.water_lacks
+            boolean waterLacks = (waterLacksRaw instanceof Boolean) ? waterLacksRaw : ((waterLacksRaw as Integer) == 1)
+        }
+    """)
+
+    # MUST-CATCH: the inline sendEvent form (`? "on" : "off"`).
+    BAD_INLINE_EVENT = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            device.sendEvent(name:"childLock", value: (r.childLockSwitch as Integer) == 1 ? "on" : "off")
+        }
+    """)
+
+    # MUST-NOT-CATCH: the asBool() call (the blessed replacement).
+    GOOD_ASBOOL_CALL = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.powerSwitch)
+            device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+        }
+    """)
+
+    # MUST-NOT-CATCH: asBool's own body — coerces via raw.intValue() == 1, NOT as Integer.
+    GOOD_ASBOOL_BODY = textwrap.dedent("""\
+        boolean asBool(raw) {
+            if (raw instanceof Boolean) return raw
+            if (raw instanceof Number)  return raw.intValue() == 1
+            if (raw instanceof CharSequence) return raw.toString().trim().toLowerCase() in ["true","1","on","yes"]
+            return false
+        }
+    """)
+
+    # MUST-NOT-CATCH: a comment mentioning the idiom (line-comment stripped before match).
+    GOOD_COMMENT_MENTION = textwrap.dedent("""\
+        // replaces the hand-inlined (x as Integer) == 1 sites that threw
+        boolean asBool(raw) { return raw instanceof Number ? raw.intValue() == 1 : false }
+    """)
+
+    # MUST-NOT-CATCH: an `as Integer` cast NOT compared to 1 (out of the coercion class).
+    GOOD_PLAIN_CAST = textwrap.dedent("""\
+        def applyStatus(status) {
+            Integer level = status.result.level as Integer
+            device.sendEvent(name:"level", value: level)
+        }
+    """)
+
+    # MUST-NOT-CATCH: a genuine NUMERIC-level cast assigned then compared to a THRESHOLD
+    # (`> 0`) / used in arithmetic — NOT `== 1`. The split-form discriminator must keep this
+    # out: it is a real mist level, not a 0/1 flag. (If pass 2 keyed on `as Integer` + "any
+    # downstream use" instead of specifically `== 1`, this would false-positive.)
+    GOOD_SPLIT_NUMERIC_LEVEL = textwrap.dedent("""\
+        def applyStatus(status) {
+            Integer lvl = status.result.mist_virtual_level as Integer
+            if (lvl > 0) device.sendEvent(name:"mistLevel", value: lvl)
+            Integer pct = lvl * 10
+            device.sendEvent(name:"level", value: pct)
+        }
+    """)
+
+    # MUST-NOT-CATCH: a numeric cast compared to a value OTHER than 1 (e.g. `== 5`) — also
+    # not a 0/1 flag; the discriminator is specifically `== 1`.
+    GOOD_SPLIT_EQ_OTHER = textwrap.dedent("""\
+        def applyStatus(status) {
+            Integer mode = status.result.workModeCode as Integer
+            if (mode == 5) device.sendEvent(name:"mode", value:"turbo")
+        }
+    """)
+
+    def test_bare_form_fails(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_BARE)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for bare `(x as Integer) == 1`, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE45_bool_coercion_as_integer'), (
+            f"RULE45 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_verbose_ternary_fails(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_VERBOSE_TERNARY)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for verbose instanceof-Boolean ternary, got: {findings}"
+        )
+
+    def test_inline_event_form_fails(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_INLINE_EVENT)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for inline sendEvent `(x as Integer) == 1 ? ...`, got: {findings}"
+        )
+
+    def test_asbool_call_passes(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_ASBOOL_CALL)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"asBool() call must not flag RULE45, got: {findings}"
+        )
+
+    def test_asbool_body_passes(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_ASBOOL_BODY)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"asBool()'s own body (raw.intValue() == 1) must not flag RULE45, got: {findings}"
+        )
+
+    def test_comment_mention_passes(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_COMMENT_MENTION)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"A line-comment mentioning the idiom must not flag RULE45, got: {findings}"
+        )
+
+    def test_plain_cast_passes(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_PLAIN_CAST)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"`as Integer` not compared to 1 must not flag RULE45, got: {findings}"
+        )
+
+    def test_split_form_fails(self):
+        """SPLIT form: cast assigned on one line, `<var> == 1` a few lines later. This is
+        the exact shape Sup6000S:332/333 used to evade the single-line rule."""
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_SPLIT)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for the SPLIT cast/compare form, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE45_bool_coercion_as_integer'), (
+            f"split-form RULE45 finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_split_form_bare_compare_fails(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_SPLIT_BARE_COMPARE)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for the SPLIT form with a bare `var == 1`, got: {findings}"
+        )
+
+    def test_split_numeric_level_passes(self):
+        """A genuine numeric-level cast compared to a threshold (`> 0`) / used in arithmetic —
+        never `== 1` — must NOT flag. This is the discriminator that keeps pass 2 safe."""
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_SPLIT_NUMERIC_LEVEL)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"numeric-level cast (compared to threshold, not == 1) must not flag RULE45, got: {findings}"
+        )
+
+    def test_split_eq_other_value_passes(self):
+        """A numeric cast compared to a value other than 1 (e.g. == 5) is not a 0/1 flag."""
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_SPLIT_EQ_OTHER)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"`as Integer` compared to a non-1 value must not flag RULE45, got: {findings}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # RULE20 version_lockstep — _extract_definition_block parser robustness
 # ---------------------------------------------------------------------------

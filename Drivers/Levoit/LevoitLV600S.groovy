@@ -339,7 +339,7 @@ def applyStatus(status){
     // LV600S response uses `enabled` (boolean), NOT `powerSwitch` (int)
     // Same humidifier shape as Classic 300S / OasisMist 450S (all VeSyncHumid200300S class)
     def enabledRaw = r.enabled
-    boolean powerOn = (enabledRaw instanceof Boolean) ? enabledRaw : ((enabledRaw as Integer) == 1)
+    boolean powerOn = asBool(enabledRaw)
     device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
 
     // ---- Humidity ----
@@ -409,13 +409,13 @@ def applyStatus(status){
         // warm_level absent but warm_enabled present -- use it as fallback.
         // BP#6: when off, warm mist is never active regardless of the warm_enabled flag.
         def warmEnabledRaw = r.warm_enabled
-        boolean warmOn = powerOn && ((warmEnabledRaw instanceof Boolean) ? warmEnabledRaw : ((warmEnabledRaw as Integer) == 1))
+        boolean warmOn = powerOn && (asBool(warmEnabledRaw))
         device.sendEvent(name:"warmMistEnabled", value: warmOn ? "on" : "off")
     }
 
     // ---- Water lacks ----
     def waterLacksRaw = r.water_lacks
-    boolean waterLacks = (waterLacksRaw instanceof Boolean) ? waterLacksRaw : ((waterLacksRaw as Integer) == 1)
+    boolean waterLacks = asBool(waterLacksRaw)
     String waterLacksStr = waterLacks ? "yes" : "no"
     if (state.lastWaterLacks != waterLacksStr) {
         if (waterLacks) logInfo "Water reservoir empty"
@@ -425,14 +425,14 @@ def applyStatus(status){
 
     // ---- Auto-stop reached ----
     def autoStopReach = r.automatic_stop_reach_target
-    boolean autoStopBool = (autoStopReach instanceof Boolean) ? autoStopReach : ((autoStopReach as Integer) == 1)
+    boolean autoStopBool = asBool(autoStopReach)
     device.sendEvent(name:"autoStopReached", value: autoStopBool ? "yes" : "no")
 
     // ---- Auto-stop enabled -- from configuration.automatic_stop ----
     Boolean autoStopEnabled = null
     if (r.configuration instanceof Map && r.configuration.automatic_stop != null) {
         def asRaw = r.configuration.automatic_stop
-        autoStopEnabled = (asRaw instanceof Boolean) ? asRaw : ((asRaw as Integer) == 1)
+        autoStopEnabled = asBool(asRaw)
     }
     if (autoStopEnabled != null) device.sendEvent(name:"autoStopEnabled", value: autoStopEnabled ? "on" : "off")
 
@@ -458,7 +458,7 @@ def applyStatus(status){
         displayRaw = r.configuration.display
     }
     if (displayRaw != null) {
-        boolean displayOn = (displayRaw instanceof Boolean) ? displayRaw : ((displayRaw as Integer) == 1)
+        boolean displayOn = asBool(displayRaw)
         device.sendEvent(name:"displayOn", value: displayOn ? "on" : "off")
     }
 
