@@ -119,7 +119,12 @@ def setLightDetection(onOff) {
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("lightDetection") == canon) return
     def resp = hubBypass("setLightDetection", [lightDetectionSwitch: (canon == "on") ? 1 : 0], "setLightDetection(${canon})")
-    if (httpOk(resp)) device.sendEvent(name:"lightDetection", value: canon)
+    if (httpOk(resp)) {
+        device.sendEvent(name:"lightDetection", value: canon)
+    } else {
+        // BP29: device-off => one WARN (expected); any other failure => logError + record.
+        reportWriteFailure("Light detection write failed", resp, [method:"setLightDetection"])
+    }
 }
 
 def applyStatus(status) {

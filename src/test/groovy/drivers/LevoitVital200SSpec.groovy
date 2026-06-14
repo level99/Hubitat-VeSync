@@ -926,6 +926,55 @@ class LevoitVital200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP29 class-completion (#258 follow-up): the LAST remaining Vital NO-ON setter —
+    // setLightDetection (V200S-only) — previously had `if (httpOk(resp))` with NO else
+    // at all, silently swallowing a genuine cloud failure AND a device-off rejection.
+    // The BP29 catalog had explicitly left it out ("never spammed"), but that predates
+    // reportWriteFailure (which downgrades device-off to a single WARN), and the sibling
+    // setLightDetection on EverestAir already reports — so leaving Vital's silent was a
+    // real cross-driver inconsistency. Now routes through reportWriteFailure.
+    //
+    // Both-ways: deleting the new `else { reportWriteFailure(...) }` branch makes the
+    // genuine-fail leg go RED (no ERROR logged) and the device-off leg go RED (no WARN).
+    // -------------------------------------------------------------------------
+
+    def "setLightDetection genuine write failure (inner -1) is reported, not swallowed silently (BP29)"() {
+        given: "lightDetection 'off' so the C3 gate passes, and the cloud returns a genuine failure"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "lightDetection", value: "off"])
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver.setLightDetection("on")
+
+        then: "the write was attempted"
+        testParent.allRequests.find { it.method == "setLightDetection" } != null
+
+        and: "the failure is surfaced (ERROR via reportWriteFailure for a genuine -1), not silently dropped"
+        testLog.errors.any { it.contains("Light detection write failed") }
+
+        and: "the attribute is NOT advanced to 'on' on a failed write"
+        lastEventValue("lightDetection") != "on"
+    }
+
+    def "setLightDetection device-off rejection (11005000) logs one WARN, no ERROR (BP29 via reportWriteFailure)"() {
+        given: "lightDetection 'off' so C3 passes; cloud rejects with BYPASS_DEVICE_IS_OFF (device powered off)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "lightDetection", value: "off"])
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver.setLightDetection("on")
+
+        then: "device-off is an EXPECTED condition: WARN only, no ERROR spam"
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Light detection write failed") }
+    }
+
+    // -------------------------------------------------------------------------
     // BP22 network-outage suppression for migrated Vital NO-ON setters (v2.10).
     // reportWriteFailure() routes the genuine-fault leg through
     //   `if (networkOutageKnown()) { logDebug; return }`

@@ -8711,3 +8711,201 @@ class TestRule43RecordErrorKeyStyle:
         assert not any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
             f"Bare [site:...] outside recordError must not flag RULE43, got: {findings}"
         )
+
+
+# ---------------------------------------------------------------------------
+# RULE46 — NO-ON setter write-failure feedback (Bug Pattern #29)
+# ---------------------------------------------------------------------------
+
+from lint_rules.bp29_noon_write_feedback import check_rule46_noon_write_feedback
+
+
+class TestRule46NoOnWriteFeedback:
+    """
+    RULE46: a NO-ON setter that issues a bypassV2 write + ``if (httpOk(resp))``
+    check must route its failure branch through ``reportWriteFailure`` — else a
+    genuine cloud failure (and the expected device-off rejection) is silently
+    swallowed with no user feedback (Bug Pattern #29 class-completion).
+
+    Non-vacuity contracts:
+      - must-catch tests FAIL if the predicate is disabled/narrowed (rule returns
+        [] and the ``any(...)`` assertion fails). The first must-catch is the
+        verbatim pre-fix LevoitVital200S.setLightDetection shape — proving the rule
+        would have caught the shipped bug.
+      - must-not-catch tests FAIL if the rule over-fires on a fixed NO-ON setter,
+        a SHOULD-ON setter, a pure-delegation NO-ON setter, or a power path.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    @staticmethod
+    def _run(src: str) -> list:
+        return run_rule(check_rule46_noon_write_feedback, src, fname="TestDriver.groovy")
+
+    # -----------------------------------------------------------------------
+    # Must-catch
+    # -----------------------------------------------------------------------
+
+    def test_catches_setlightdetection_prefix_shape(self):
+        """
+        The exact pre-fix LevoitVital200S.setLightDetection shape: NO-ON marker,
+        hubBypass write, bare ``if (httpOk(resp))`` with NO else. MUST flag.
+        """
+        src = textwrap.dedent("""\
+            // BP24: NO-ON — configures a device preference; powering on is not implied.
+            def setLightDetection(onOff) {
+                if (!requireNonEmptyEnum(onOff, "setLightDetection")) return
+                String canon = canonOnOff((onOff as String).trim().toLowerCase())
+                if (device.currentValue("lightDetection") == canon) return
+                def resp = hubBypass("setLightDetection", [lightDetectionSwitch: (canon == "on") ? 1 : 0], "setLightDetection(${canon})")
+                if (httpOk(resp)) device.sendEvent(name:"lightDetection", value: canon)
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Expected RULE46 for NO-ON setter with bare if(httpOk)-no-else, got: {findings}"
+        )
+
+    def test_catches_block_form_no_else(self):
+        """
+        Block-form ``if (httpOk(resp)) { ... }`` with NO else, NO-ON marker. MUST flag.
+        """
+        src = textwrap.dedent("""\
+            // BP24: NO-ON — configures a device preference; powering on is not implied.
+            def setDisplay(onOff) {
+                String canon = canonOnOff((onOff as String).trim().toLowerCase())
+                def resp = hubBypass("setDisplay", [screenSwitch: canon == "on" ? 1 : 0], "setDisplay")
+                if (httpOk(resp)) {
+                    device.sendEvent(name:"display", value: canon)
+                    logInfo "Display: ${canon}"
+                }
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Expected RULE46 for block-form NO-ON setter with no else, got: {findings}"
+        )
+
+    def test_catches_dash_variant_marker(self):
+        """The ``// BP24: NO-ON -`` (ASCII hyphen) marker variant also keys the rule."""
+        src = textwrap.dedent("""\
+            // BP24: NO-ON - maintenance action; powering on is not implied.
+            def resetFilter() {
+                def resp = hubBypass("resetFilter", [:], "resetFilter")
+                if (httpOk(resp)) logDebug "Filter reset requested"
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Expected RULE46 for dash-variant NO-ON marker, got: {findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch
+    # -----------------------------------------------------------------------
+
+    def test_fixed_noon_setter_passes(self):
+        """A NO-ON setter WITH a reportWriteFailure else branch must NOT flag (the fix)."""
+        src = textwrap.dedent("""\
+            // BP24: NO-ON — configures a device preference; powering on is not implied.
+            def setLightDetection(onOff) {
+                String canon = canonOnOff((onOff as String).trim().toLowerCase())
+                if (device.currentValue("lightDetection") == canon) return
+                def resp = hubBypass("setLightDetection", [lightDetectionSwitch: (canon == "on") ? 1 : 0], "setLightDetection(${canon})")
+                if (httpOk(resp)) {
+                    device.sendEvent(name:"lightDetection", value: canon)
+                } else {
+                    reportWriteFailure("Light detection write failed", resp, [method:"setLightDetection"])
+                }
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Fixed NO-ON setter (reportWriteFailure else) must not flag RULE46, got: {findings}"
+        )
+
+    def test_should_on_setter_passes(self):
+        """
+        A SHOULD-ON setter using reportWriteError (NOT reportWriteFailure) must NOT
+        flag — it carries the ``// BP24: SHOULD-ON`` marker, not NO-ON, so it is out
+        of scope by construction even without reportWriteFailure.
+        """
+        src = textwrap.dedent("""\
+            // BP24: SHOULD-ON — mist-level command; calls ensureSwitchOn() (SwitchLevel convention).
+            def setMistLevel(level) {
+                Integer clamped = Math.max(1, Math.min(9, parseLevelOrNull(level) ?: 1))
+                ensureSwitchOn()
+                def resp = hubBypass("setVirtualLevel", [id: 0, level: clamped, type: "mist"], "setVirtualLevel(${clamped})")
+                if (httpOk(resp)) {
+                    device.sendEvent(name:"mistLevel", value: clamped)
+                } else {
+                    reportWriteError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
+                }
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"SHOULD-ON setter must not flag RULE46, got: {findings}"
+        )
+
+    def test_pure_delegation_noon_setter_passes(self):
+        """
+        A NO-ON setter that delegates to a shared doSet* helper (no own hubBypass /
+        no own if(httpOk)) must NOT flag — the helper carries the reportWriteFailure
+        branch.
+        """
+        src = textwrap.dedent("""\
+            // BP24: NO-ON — configures a device preference; powering on is not implied.
+            def setDisplay(onOff) { doSetDisplayStateSwitch(onOff) }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Pure-delegation NO-ON setter must not flag RULE46, got: {findings}"
+        )
+
+    def test_power_path_no_marker_passes(self):
+        """
+        A power path (on()) with hubBypass + if(httpOk) but NO ``// BP24: NO-ON``
+        marker must NOT flag — power is SHOULD-ON and out of scope.
+        """
+        src = textwrap.dedent("""\
+            def on() {
+                def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(power=1)")
+                if (httpOk(resp)) {
+                    device.sendEvent(name:"switch", value:"on")
+                } else {
+                    logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"])
+                }
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Power path with no NO-ON marker must not flag RULE46, got: {findings}"
+        )
+
+    def test_marker_for_earlier_method_does_not_leak(self):
+        """
+        A ``// BP24: NO-ON`` marker documenting an EARLIER method must not leak onto
+        a later method separated by intervening code (the upward scan stops at the
+        first non-blank, non-comment line).
+        """
+        src = textwrap.dedent("""\
+            // BP24: NO-ON — configures a device preference; powering on is not implied.
+            def setChildLock(onOff) {
+                def resp = hubBypass("setChildLock", [childLockSwitch: 1], "setChildLock")
+                if (httpOk(resp)) { device.sendEvent(name:"childLock", value:"on") }
+                else { reportWriteFailure("Child lock write failed", resp, [method:"setChildLock"]) }
+            }
+
+            def someUnrelatedHelper() {
+                def resp = hubBypass("doThing", [:], "doThing")
+                if (httpOk(resp)) logDebug "ok"
+            }
+        """)
+        findings = self._run(src)
+        # setChildLock is fixed (has else); someUnrelatedHelper has no NO-ON marker
+        # above it (the def setChildLock line is the first non-comment line above it),
+        # so neither should flag.
+        assert not any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"NO-ON marker must not leak onto a later unrelated method, got: {findings}"
+        )
