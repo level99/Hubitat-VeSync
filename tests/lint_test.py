@@ -2764,11 +2764,14 @@ class TestRule40BP28LevelOffAmbiguity:
 
 class TestRule44BP6PowerGate:
     """
-    RULE44 (Bug Pattern #6): an applyStatus/update status-parse body that emits an
-    active-level attribute (mistLevel / warmMistLevel / warmMistEnabled / speed /
-    fanSpeed) must be power-gated (clampOffLevel / !powerOn / !enabled). Setpoint
-    attributes (virtualLevel / level) are intentionally out of scope, and write-path
-    command setters (set* / cycle* / on / off) are not scanned.
+    RULE44 (Bug Pattern #6): PER-EMIT power-gating of active-level attributes (mistLevel /
+    warmMistLevel / warmMistEnabled / speed / fanSpeed) in status-parse methods AND helpers.
+    Each active-level emit must be individually gated (clampOffLevel on the value, a
+    gated-local reference resolved by nearest-preceding assignment, or enclosure in a
+    power-gated if-block). Scope = applyStatus / update(status…) / apply* helpers; write-path
+    methods (set*/send*/handle*/on/off/configureOnState/…) are out of scope. Setpoint attrs
+    (virtualLevel / level) are never flagged. Comments (// and /* */) and string literals are
+    stripped string-literal-aware before the scan.
     """
 
     from lint_rules.bp6_speed_level_power_gate import check_rule44_bp6_power_gate as _rule
@@ -2914,6 +2917,490 @@ class TestRule44BP6PowerGate:
         assert any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
             f"Expected RULE44 for ungated fanSpeed emit, got: {findings}"
         )
+
+    # -------------------------------------------------------------------------
+    # FIX #3 — PER-EMIT (not method-level): a body that gates ONE active emit but emits a
+    # SECOND active attr ungated must be flagged on the second emit. (Method-level "any
+    # gating token anywhere" green-lit the LV600S warm-fallback regression.)
+    # -------------------------------------------------------------------------
+
+    # MUST-CATCH: mistLevel is clampOffLevel'd, but warmMistEnabled is emitted ungated in
+    # the warm-fallback branch (the exact LV600S:409 shape with `powerOn &&` removed).
+    BAD_PER_EMIT_SECOND_UNGATED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            Integer mistVirtual = clampOffLevel(r.mist_virtual_level as Integer, powerOn)
+            if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
+            if (r.warm_enabled != null) {
+                boolean warmOn = asBool(r.warm_enabled)
+                device.sendEvent(name:"warmMistEnabled", value: warmOn ? "on" : "off")
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: the REAL LV600S warm-fallback — warmMistEnabled gated via
+    # `warmOn = powerOn && asBool(...)`, sibling warm_level branch gates via the clamped
+    # warmLvl chain. Both warmMistEnabled emits are individually gated.
+    GOOD_WARM_FALLBACK = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            Integer mistVirtual = clampOffLevel(r.mist_virtual_level as Integer, powerOn)
+            if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
+            Integer warmLvl = null
+            if (r.warm_level != null) {
+                warmLvl = clampOffLevel(r.warm_level as Integer, powerOn)
+                boolean warmOn = (warmLvl > 0)
+                String warmOnStr = warmOn ? "on" : "off"
+                device.sendEvent(name:"warmMistLevel", value: warmLvl)
+                device.sendEvent(name:"warmMistEnabled", value: warmOnStr)
+            } else if (r.warm_enabled != null) {
+                boolean warmOn = powerOn && asBool(r.warm_enabled)
+                device.sendEvent(name:"warmMistEnabled", value: warmOn ? "on" : "off")
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: the Core per-mode speed shape — every speed emit is inside the
+    # `if (!enabled) { speed=off } else { switch(mode) … }` structure.
+    GOOD_PER_MODE_SPEED = textwrap.dedent("""\
+        def update(status, nightLight) {
+            boolean enabled = asBool(status.result.enabled)
+            if (!enabled) {
+                device.sendEvent(name: "speed", value: "off")
+            } else {
+                switch(state.mode) {
+                    case "manual": device.sendEvent(name: "speed", value: mapIntegerToSpeed(status.result.level)); break
+                    case "sleep":  device.sendEvent(name: "speed", value: "on"); break
+                }
+            }
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # FIX #4 — status-parse HELPER methods (apply*) are scanned, not just applyStatus/update.
+    # -------------------------------------------------------------------------
+
+    # MUST-NOT-CATCH: the real FanLib applyFanCommonHead — speed emits inside if(!powerOn)/else.
+    GOOD_FAN_HELPER_GATED = textwrap.dedent("""\
+        private Map applyFanCommonHead(Map r) {
+            boolean powerOn = asBool(r.powerSwitch)
+            device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+            Integer activeSpeed = (r.fanSpeedLevel ?: r.manualSpeedLevel ?: 1) as Integer
+            if (!powerOn) {
+                device.sendEvent(name:"speed", value:"off")
+            } else {
+                String speedEnum = levelToFanControlEnum(activeSpeed)
+                device.sendEvent(name:"speed", value: speedEnum)
+            }
+            return [powerOn: powerOn]
+        }
+    """)
+
+    # MUST-CATCH: an apply* helper that emits speed UNGATED (the FanLib vacuous-pass regression).
+    BAD_FAN_HELPER_UNGATED = textwrap.dedent("""\
+        private Map applyFanCommonHead(Map r) {
+            boolean powerOn = asBool(r.powerSwitch)
+            Integer activeSpeed = (r.fanSpeedLevel ?: 1) as Integer
+            String speedEnum = levelToFanControlEnum(activeSpeed)
+            device.sendEvent(name:"speed", value: speedEnum)
+            return [powerOn: powerOn]
+        }
+    """)
+
+    # MUST-NOT-CATCH: a write-path helper (NOT apply*) that emits speed after a command it
+    # just issued — sendLevel / configureOnState shape. Out of scope (not a poll).
+    GOOD_WRITE_PATH_HELPER = textwrap.dedent("""\
+        private boolean sendLevel(Integer level) {
+            def resp = hubBypass("setLevel", [manualSpeedLevel: level], "setLevel")
+            if (httpOk(resp)) {
+                String enumVal = levelToFanControlEnum(level)
+                device.sendEvent(name:"speed", value: enumVal)
+                return true
+            }
+            return false
+        }
+    """)
+
+    GOOD_CONFIGURE_ON_STATE = textwrap.dedent("""\
+        def configureOnState() {
+            if (device.currentValue("switch") != "on") return
+            def targetSpeed = state.speed ?: "low"
+            device.sendEvent(name: "speed", value: targetSpeed)
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # FIX #10 — comment/string-literal stripping.
+    # -------------------------------------------------------------------------
+
+    # MUST-CATCH: the ONLY gating token is inside a /* */ block comment — must NOT gate.
+    BAD_GATE_IN_BLOCK_COMMENT = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            /* clampOffLevel(x, powerOn) -- mentioned only in a comment, does not gate */
+            Integer mistVirtual = r.mist_virtual_level as Integer
+            if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
+        }
+    """)
+
+    # MUST-NOT-CATCH: a `//` inside a string co-located with a REAL gating token — the
+    # string's `//` must not truncate the line and hide the real clampOffLevel.
+    GOOD_STRING_WITH_SLASHES = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            logDebug("source url http://vesync.example/path")
+            Integer mistVirtual = clampOffLevel(r.mist_virtual_level as Integer, asBool(r.enabled))
+            if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
+        }
+    """)
+
+    def test_per_emit_second_ungated_fails(self):
+        """FIX #3: a body that clamps mistLevel but emits warmMistEnabled ungated in the
+        warm-fallback branch must be flagged on the SECOND emit (per-emit, not method-level)."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.BAD_PER_EMIT_SECOND_UNGATED)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE44_bp6_power_gate']
+        assert rule_findings, f"Expected RULE44 for the ungated warmMistEnabled emit, got: {findings}"
+        assert any('warmMistEnabled' in f['title'] for f in rule_findings), (
+            f"RULE44 must flag the warmMistEnabled emit specifically, got: {rule_findings}"
+        )
+        assert all(f['severity'] == 'FAIL' for f in rule_findings)
+
+    def test_warm_fallback_gated_passes(self):
+        """FIX #3 must-not-catch: the real LV600S warm-fallback (powerOn && asBool, plus the
+        clamped-warmLvl chain) is fully per-emit gated."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_WARM_FALLBACK)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"real warm-fallback must not flag RULE44, got: {findings}"
+        )
+
+    def test_per_mode_speed_gated_passes(self):
+        """FIX #3 must-not-catch: Core per-mode speed inside if(!enabled){…}else{switch…}."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_PER_MODE_SPEED)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"Core per-mode speed must not flag RULE44, got: {findings}"
+        )
+
+    def test_fan_helper_gated_passes(self):
+        """FIX #4 must-not-catch: applyFanCommonHead (a helper) with if(!powerOn)/else speed."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_FAN_HELPER_GATED)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"gated apply* helper must not flag RULE44, got: {findings}"
+        )
+
+    def test_fan_helper_ungated_fails(self):
+        """FIX #4 must-catch: an apply* helper that emits speed ungated is now scanned
+        (previously the Fan family passed VACUOUSLY because helpers weren't scanned)."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.BAD_FAN_HELPER_UNGATED)
+        assert any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"Expected RULE44 for ungated apply* helper, got: {findings}"
+        )
+
+    def test_write_path_send_helper_passes(self):
+        """FIX #4 must-not-catch: sendLevel (write-path helper, not apply*) is out of scope."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_WRITE_PATH_HELPER)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"write-path sendLevel helper must not flag RULE44, got: {findings}"
+        )
+
+    def test_configure_on_state_passes(self):
+        """FIX #4 must-not-catch: configureOnState (post-power-on write-path config) is out
+        of scope — not apply*/applyStatus/update."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_CONFIGURE_ON_STATE)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"configureOnState must not flag RULE44, got: {findings}"
+        )
+
+    def test_gate_in_block_comment_fails(self):
+        """FIX #10 must-catch: a gating token present ONLY inside a /* */ block comment must
+        not gate the ungated mistLevel emit."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.BAD_GATE_IN_BLOCK_COMMENT)
+        assert any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"gating token in a block comment must not gate; expected RULE44, got: {findings}"
+        )
+
+    def test_string_with_slashes_passes(self):
+        """FIX #10 must-not-catch: a `//` inside a string must not truncate the line and hide
+        the real clampOffLevel gating the emit."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_STRING_WITH_SLASHES)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"string-with-// must not hide the real gate; expected no RULE44, got: {findings}"
+        )
+
+
+class TestRule44BP6ParserRobustness:
+    """
+    RULE44 R3-follow-up parser-robustness gaps (all verified real against source, zero-impact
+    on the current corpus). Each gap gets a must-catch (the edge form now caught) AND a
+    must-not-catch (a legit shape that must still pass).
+    """
+
+    from lint_rules.bp6_speed_level_power_gate import check_rule44_bp6_power_gate as _rule
+
+    def _ids(self, findings):
+        return [f for f in findings if f['rule_id'] == 'RULE44_bp6_power_gate']
+
+    # -------------------------------------------------------------------------
+    # GAP #1 — return-type allowlist widened to any valid Groovy type.
+    # -------------------------------------------------------------------------
+
+    # MUST-CATCH: an apply* helper with a `Boolean` return emitting ungated speed (the old
+    # fixed allowlist {def,void,Map,String,Integer,boolean,int,List,Object} silently skipped
+    # `Boolean`/`Long`/custom-typed methods).
+    BAD_BOOLEAN_RETURN_HELPER = textwrap.dedent("""\
+        Boolean applyFanCommonHead(Map r) {
+            Integer activeSpeed = r.fanSpeedLevel as Integer
+            device.sendEvent(name:"speed", value: levelToFanControlEnum(activeSpeed))
+            return true
+        }
+    """)
+
+    BAD_LONG_RETURN_HELPER = textwrap.dedent("""\
+        Long applyFanCommonHead(Map r) {
+            device.sendEvent(name:"fanSpeed", value: r.fanSpeedLevel as Integer)
+            return 0L
+        }
+    """)
+
+    # MUST-NOT-CATCH: a non-status method (write-path name) with a Boolean return is still
+    # ignored — widening the type allowlist must not pull write-path methods into scope.
+    GOOD_BOOLEAN_RETURN_WRITE_PATH = textwrap.dedent("""\
+        Boolean setSpeed(spd) {
+            device.sendEvent(name:"speed", value: spd)
+            return true
+        }
+    """)
+
+    # MUST-NOT-CATCH: a `return foo(x)` statement must not be mis-parsed as a method header
+    # (rettype="return") and pull an unrelated body into scope.
+    GOOD_RETURN_STATEMENT_NOT_METHOD = textwrap.dedent("""\
+        def helper() {
+            return computeSomething(1)
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #2 — multi-line emit (name:/value: span newlines).
+    # -------------------------------------------------------------------------
+
+    BAD_MULTILINE_UNGATED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            Integer fanSpeedRaw = r.fanSpeedLevel as Integer
+            device.sendEvent(
+                name:"speed",
+                value: fanSpeedRaw)
+        }
+    """)
+
+    GOOD_MULTILINE_GATED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            device.sendEvent(
+                name:"speed",
+                value: clampOffLevel(r.fanSpeedLevel as Integer, powerOn))
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #3 — named-arg order: value before name.
+    # -------------------------------------------------------------------------
+
+    BAD_VALUE_BEFORE_NAME = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            Integer fanSpeedRaw = r.fanSpeedLevel as Integer
+            device.sendEvent(value: fanSpeedRaw, name:"speed")
+        }
+    """)
+
+    GOOD_VALUE_BEFORE_NAME_GATED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            device.sendEvent(value: clampOffLevel(r.fanSpeedLevel as Integer, powerOn), name:"speed")
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #4 — multi-line RHS in a gated-local assignment (must NOT false-positive).
+    # -------------------------------------------------------------------------
+
+    GOOD_MULTILINE_ASSIGN_GATED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            Integer warmLvl =
+                clampOffLevel(r.warm_level as Integer, powerOn)
+            device.sendEvent(name:"warmMistLevel", value: warmLvl)
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #5 — Groovy string-flavour lexing (triple-quoted / slashy / dollar-slashy).
+    # -------------------------------------------------------------------------
+
+    # MUST-CATCH: a gating token present ONLY inside a triple-quoted string is NOT a real
+    # gate; the emit (ungated) must still be flagged.
+    BAD_GATE_IN_TRIPLE_QUOTE = textwrap.dedent('''\
+        def applyStatus(status) {
+            def r = status.result
+            logDebug("""note: clampOffLevel(x, powerOn) lives only in this doc string""")
+            Integer fanSpeedRaw = r.fanSpeedLevel as Integer
+            device.sendEvent(name:"speed", value: fanSpeedRaw)
+        }
+    ''')
+
+    # MUST-NOT-CATCH: a slashy regex literal containing `//` co-located with a real gate must
+    # not be mis-lexed (the `//` inside `/…/` is data, must not truncate the line).
+    GOOD_SLASHY_WITH_SLASHES = textwrap.dedent(r"""
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            def m = (r.note ?: "") =~ /a\/\/b/
+            device.sendEvent(name:"speed", value: clampOffLevel(r.fanSpeedLevel as Integer, powerOn))
+        }
+    """)
+
+    # MUST-NOT-CATCH: dollar-slashy string containing // co-located with a real gate.
+    GOOD_DOLLAR_SLASHY = textwrap.dedent(r"""
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            def doc = $/ url http://x and clampOffLevel-looking text /$
+            device.sendEvent(name:"speed", value: clampOffLevel(r.fanSpeedLevel as Integer, powerOn))
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #6 — else-if chain under a NEGATIVE gating if (whole chain gated).
+    # -------------------------------------------------------------------------
+
+    GOOD_NEG_ELSEIF_CHAIN = textwrap.dedent("""\
+        def update(status, nightLight) {
+            boolean enabled = asBool(status.result.enabled)
+            if (!enabled) {
+                device.sendEvent(name: "speed", value: "off")
+            } else if (state.mode == "manual") {
+                device.sendEvent(name: "speed", value: mapIntegerToSpeed(status.result.level))
+            } else if (state.mode == "sleep") {
+                device.sendEvent(name: "speed", value: "on")
+            }
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #7 — POSITIVE if(powerOn): else-branch active emit is NOT gated (BP6 bug).
+    # -------------------------------------------------------------------------
+
+    # MUST-CATCH: if(powerOn){ on-emit } else { active emit while OFF } — the else emit is
+    # ungated (runs when powerOn is false) and must be flagged.
+    BAD_POS_IF_ELSE_UNGATED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            if (powerOn) {
+                device.sendEvent(name:"speed", value: levelToEnum(r.fanSpeedLevel as Integer))
+            } else {
+                device.sendEvent(name:"speed", value: levelToEnum(r.fanSpeedLevel as Integer))
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: if(powerOn){ active emit } — the THEN block (power true) is gated.
+    GOOD_POS_IF_THEN = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            if (powerOn) {
+                device.sendEvent(name:"speed", value: levelToEnum(r.fanSpeedLevel as Integer))
+            }
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #8 — same-line emit-then-gated-assign (assignment offset is AFTER the emit).
+    # -------------------------------------------------------------------------
+
+    # MUST-CATCH: the emit uses `mistVirtual` BEFORE it is (re)assigned via clampOffLevel on
+    # the SAME line — the assignment does not gate an earlier emit.
+    BAD_EMIT_THEN_ASSIGN_SAME_LINE = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            Integer mistVirtual = r.mist_virtual_level as Integer
+            device.sendEvent(name:"mistLevel", value: mistVirtual); mistVirtual = clampOffLevel(mistVirtual, powerOn)
+        }
+    """)
+
+    def test_gap1_boolean_return_helper_fails(self):
+        f = self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_BOOLEAN_RETURN_HELPER))
+        assert f, "GAP#1: Boolean-return apply* helper with ungated speed must be flagged"
+        assert all(x['severity'] == 'FAIL' for x in f)
+
+    def test_gap1_long_return_helper_fails(self):
+        assert self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_LONG_RETURN_HELPER)), \
+            "GAP#1: Long-return apply* helper with ungated fanSpeed must be flagged"
+
+    def test_gap1_boolean_write_path_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_BOOLEAN_RETURN_WRITE_PATH)), \
+            "GAP#1: a Boolean-return WRITE-PATH (setSpeed) must still be out of scope"
+
+    def test_gap1_return_statement_not_method(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_RETURN_STATEMENT_NOT_METHOD)), \
+            "GAP#1: a `return foo(x)` statement must not be parsed as a method header"
+
+    def test_gap2_multiline_ungated_fails(self):
+        assert self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_MULTILINE_UNGATED)), \
+            "GAP#2: a multi-line ungated speed emit must be flagged"
+
+    def test_gap2_multiline_gated_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_MULTILINE_GATED)), \
+            "GAP#2: a multi-line clampOffLevel-gated emit must pass"
+
+    def test_gap3_value_before_name_fails(self):
+        assert self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_VALUE_BEFORE_NAME)), \
+            "GAP#3: value-before-name ungated emit must be flagged"
+
+    def test_gap3_value_before_name_gated_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_VALUE_BEFORE_NAME_GATED)), \
+            "GAP#3: value-before-name gated emit must pass"
+
+    def test_gap4_multiline_assign_gated_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_MULTILINE_ASSIGN_GATED)), \
+            "GAP#4: a multi-line gated-local assignment must be recognised (no false positive)"
+
+    def test_gap5_gate_in_triple_quote_fails(self):
+        assert self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_GATE_IN_TRIPLE_QUOTE)), \
+            "GAP#5: a gating token only inside a triple-quoted string must not gate"
+
+    def test_gap5_slashy_with_slashes_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_SLASHY_WITH_SLASHES)), \
+            "GAP#5: a slashy regex with // inside must not be mis-lexed and hide the real gate"
+
+    def test_gap5_dollar_slashy_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_DOLLAR_SLASHY)), \
+            "GAP#5: a dollar-slashy string with // inside must not be mis-lexed"
+
+    def test_gap6_neg_elseif_chain_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_NEG_ELSEIF_CHAIN)), \
+            "GAP#6: every else-if branch under if(!enabled) is gated (on-branch); must pass"
+
+    def test_gap7_pos_if_else_ungated_fails(self):
+        f = self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_POS_IF_ELSE_UNGATED))
+        assert f, "GAP#7: an active emit in the ELSE of if(powerOn) (off-branch) must be flagged"
+        # exactly the else emit, not the then emit
+        assert all(x['severity'] == 'FAIL' for x in f)
+
+    def test_gap7_pos_if_then_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_POS_IF_THEN)), \
+            "GAP#7: an active emit in the THEN of if(powerOn) (on-branch) is gated; must pass"
+
+    def test_gap8_emit_then_assign_same_line_fails(self):
+        assert self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_EMIT_THEN_ASSIGN_SAME_LINE)), \
+            "GAP#8: an emit BEFORE a same-line gated assignment must still be flagged (offset order)"
 
 
 class TestRule45BoolCoercionAsInteger:
