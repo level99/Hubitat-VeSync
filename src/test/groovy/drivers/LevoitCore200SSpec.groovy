@@ -158,6 +158,26 @@ class LevoitCore200SSpec extends HubitatSpec {
         lastEventValue("speed") == "off"
     }
 
+    def "update(status, nightLight) with enabled as STRING 'false' does not throw and reports off (defensive normalize)"() {
+        given: "API returns enabled as the String 'false' (the case the #5 normalize must survive)"
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def base = fixture.responses.device_off as Map
+        // Override enabled to the String "false". `"false" as Integer` would throw — the
+        // normalize must treat any non-Boolean/non-Number as false WITHOUT coercing.
+        def status = [code: 0, result: (base.result as Map) + [enabled: "false", mode: "manual", level: 2]]
+
+        when:
+        driver.update(status, null)
+
+        then: "no exception thrown (the whole status parse must not abort)"
+        noExceptionThrown()
+
+        and: "switch and speed both report off (String 'false' -> false)"
+        lastEventValue("switch") == "off"
+        lastEventValue("speed") == "off"
+    }
+
     def "filter life threshold INFO logs when below 10 percent"() {
         given: "prior filter life was 15 (above critical)"
         settings.descriptionTextEnable = true

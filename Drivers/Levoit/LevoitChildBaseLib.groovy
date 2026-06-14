@@ -215,6 +215,21 @@ Integer parseLevelOrNull(raw) {
     }
 }
 
+// BP6 off-clamp: the single source of truth for "a level the device reports while
+// powered OFF should display as 0, not the retained last-set value." VeSync keeps
+// mist_virtual_level / warm_level / mistLevel etc. at their last-set value when the
+// device is off; emitting them verbatim produces a "switch=off, Mist: L5" contradiction
+// on dashboards. Every applyStatus level emit (mist + warm-mist event AND the info-tile
+// equivalents) routes the active-level value through this helper before display.
+// Returns 0 when off and the level is positive; otherwise the value unchanged (null
+// passes through so the caller's own null-guard still governs whether to emit at all).
+// NOT for SETPOINT values (Superior virtualLevel/level dimmer attribute) — those
+// intentionally retain the target while off; only the "currently misting at" display
+// is clamped.
+Integer clampOffLevel(Integer v, boolean powerOn) {
+    return (!powerOn && v != null && v > 0) ? 0 : v
+}
+
 // BP25 canonical on/off coercion: the single blessed source for the permissive
 // truthy-variant set. Returns "on" when the (already-normalized, lowercase) input
 // is one of "on"/"true"/"1"/"yes"; otherwise "off". The input is re-normalized

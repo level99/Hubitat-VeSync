@@ -285,6 +285,14 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         then: "switch off and mistLevel reports 0 (no stale 'Mist: 5' on an off device)"
         lastEventValue("switch") == "off"
         lastEventValue("mistLevel") == 0
+
+        and: "the info tile shows 'Mist: off' (sourced from the setpoint, but clamped for display) — not 'Mist: L5'"
+        def info = lastEventValue("info") as String
+        info.contains("Mist: off")
+        !info.contains("Mist: L5")
+
+        and: "the virtualLevel/level SETPOINT attributes are intentionally retained (dimmer convention)"
+        lastEventValue("virtualLevel") == 5
     }
 
     def "autoPro workMode is reverse-mapped to 'auto' in mode attribute"() {

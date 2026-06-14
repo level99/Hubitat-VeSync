@@ -19,7 +19,7 @@ Use this when reviewing a diff in the absence of one or more verification layers
 | 3 — Envelope peel | — | ✓ | ✓ | ✓ |
 | 4 — V201S setLevel field-name | — | ✓ (PyvesyncCoverageSpec) | ✓ (FIXTURE_OPS) | ✓ |
 | 5 — V201S manual-mode wrong method | — | ✓ (PyvesyncCoverageSpec) | ✓ (FIXTURE_OPS) | ✓ |
-| 6 — Speed reports while off | — | ✓ | ✓ | ✓ |
+| 6 — Active level/speed reports while off | ✓ (RULE44) | ✓ | ✓ | ✓ |
 | 7 — Info HTML async race | — | — (mock is sync) | ✓ | ✓ |
 | 8 — Drying state mapped as boolean | — | ✓ | ✓ | ✓ |
 | 9 — Driver name change | ✓ (RULE19) | — | ✓ | ✓ |
@@ -131,22 +131,32 @@ if (mode == "manual") {
 
 ---
 
-## BP6 — Speed reports last setting while switch is "off"
+## BP6 — Active level/speed reports last setting while switch is "off"
 
-**Symptom:** Device is off, but the `speed` attribute still shows the last manual setting (e.g. "high"). Visible contradiction in dashboard tiles.
+**Fix scope:** class-wide — EVERY status-parse (`applyStatus` / `update(status…)`) emit of an ACTIVE-level attribute (`mistLevel`, `warmMistLevel`, `warmMistEnabled`, `speed`, `fanSpeed`) AND the info-tile equivalents, across every humidifier and purifier driver. NOT the SETPOINT attributes (`virtualLevel`, `level`) — those are dimmer/SwitchLevel targets that intentionally retain their value while off.
 
-**Root cause:** Driver's `applyStatus` always emits speed from `r.fanSpeedLevel` or `r.manualSpeedLevel`. When device is off, `fanSpeedLevel: 255` (special "off" code) — but driver fell through to `manualSpeedLevel` which retains the last user setting.
+**Symptom:** Device is off, but the `speed` / `mistLevel` / `warmMistLevel` attribute (or the `info` status tile, e.g. "Mist: L5" / "Warm: L2") still shows the last manual setting. Visible "switch=off but still running at L5" contradiction in dashboard tiles.
 
-**Fix:** Gate speed emission on power state:
+**Root cause:** VeSync keeps `mist_virtual_level` / `warm_level` / `fanSpeedLevel` / `manualSpeedLevel` at their last-set value when the device is off (it remembers what to resume at). `applyStatus` emits those verbatim. Purifier `speed` has the same shape: the API keeps `mode=manual/auto/sleep` even when `enabled:false`, so a per-mode `switch(state.mode)` with no off-case reports a non-off speed.
+
+**Fix:** Route the active level through the shared helper `clampOffLevel(value, powerOn)` from `LevoitChildBaseLib` (returns 0 when off, value unchanged otherwise), OR gate the emit behind a `!powerOn` / `!status.result.enabled` branch:
 ```groovy
-if (!powerOn) {
-    device.sendEvent(name: "speed", value: "off")
-} else {
-    // normal speed-from-fanSpeedLevel logic
-}
+mistVirtual = clampOffLevel(mistVirtual, powerOn)        // humidifier active mist/warm
+device.sendEvent(name:"mistLevel", value: mistVirtual)
 ```
+```groovy
+if (!status.result.enabled) device.sendEvent(name:"speed", value:"off")   // purifier speed
+else { /* per-mode speed */ }
+```
+The same clamped local is reused at the info-tile (don't re-parse the raw response there — that is how the warm-tile stale-level edge bug slipped in). The `warm_enabled`/`warmPower` FALLBACK branch (when `warm_level` is absent) must also be power-gated: `warmOn = powerOn && <flag>`.
 
 Reverse-mappings for user-facing values: V201S returns `fanSpeedLevel: 255` for "off" — driver should report `speed: "off"` only when `powerSwitch == 0`, not based on fanSpeedLevel alone.
+
+**Lint rule:** RULE44 (`tests/lint_rules/bp6_speed_level_power_gate.py`) — flags any `applyStatus`/`update(status…)` body that emits an active-level attribute (`mistLevel`/`warmMistLevel`/`warmMistEnabled`/`speed`/`fanSpeed`) with no power-gating token (`clampOffLevel` / `!powerOn` / `!enabled` / `!status.result.enabled`). Keyed on the attribute-name allowlist (NOT dataflow), so setpoint attrs (`virtualLevel`/`level`) and write-path setter emits are out of scope by construction. Must-catch + must-not-catch fixtures in `tests/lint_test.py::TestRule44BP6PowerGate`. Exemptions via `bp6_speed_level_power_gate_exemptions` in `lint_config.yaml`.
+
+**Regression coverage:** every BP6-bearing driver ships a from-off Spock guard asserting the active level emits 0/"off" when the device is off WHILE the API still reports a retained nonzero level (a fixture with `enabled:false` + nonzero `mist_virtual_level`/`warm_level`/`level`/`fanSpeedLevel`). Note: a from-off test whose fixture already has the level at 0 is VACUOUS — it passes with or without the clamp; the retained-nonzero fixture is what makes the guard real. The warm-`enabled`-fallback edge needs a fixture that OMITS `warm_level` and sets `warm_enabled:true`. Covered drivers: LV600S, LV600S Hub Connect, OasisMist 450S, Classic 200S/300S, Dual 200S, Superior 6000S, OasisMist 1000S, Sprout Humidifier (mist/warm); Core 200S/300S/400S/600S (speed); EverestAir, Sprout Air (fanSpeed). The shared `clampOffLevel` helper is unit-tested in `LevoitChildBaseLibSpec`.
+
+**Shipped:** clamp + per-driver gating v2.10; shared `clampOffLevel` helper + RULE44 + info-tile/warm-fallback edge fixes v2.10 (closed-mechanism extraction).
 
 ---
 

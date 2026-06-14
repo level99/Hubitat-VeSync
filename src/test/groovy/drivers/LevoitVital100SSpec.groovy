@@ -770,6 +770,64 @@ class LevoitVital100SSpec extends HubitatSpec {
         "setRoomSize"       | "setAutoPreference"
     }
 
+    // -------------------------------------------------------------------------
+    // Cross-driver consistency (v2.10): Vital setChildLock/setDisplay write-fail
+    // feedback. The else { reportWriteFailure(...) } branch lives in the SHARED
+    // LevoitVitalPurifierLib #include'd by BOTH Vital100S and Vital200S; these guards
+    // exercise it through the Vital100S include (Vital200S has the parallel pair).
+    //
+    // Both-ways: deleting the lib's `else { reportWriteFailure(...) }` branch makes
+    // these go RED (no ERROR logged on a genuine -1 failure).
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "#driverMethod genuine write failure (inner -1) is reported, not swallowed silently"() {
+        given: "#attr currently 'off' so the C3 gate passes, and the cloud returns a genuine failure"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: attr, value: "off"])
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver."$driverMethod"("on")
+
+        then: "the write was attempted"
+        testParent.allRequests.find { it.method == apiMethod } != null
+
+        and: "the failure is surfaced (ERROR via reportWriteFailure for a genuine -1), not silently dropped"
+        testLog.errors.any { it.contains(tag) }
+
+        and: "the attribute is NOT advanced to 'on' on a failed write"
+        lastEventValue(attr) != "on"
+
+        where:
+        driverMethod   | apiMethod      | attr        | tag
+        "setChildLock" | "setChildLock" | "childLock" | "Child lock write failed"
+        "setDisplay"   | "setDisplay"   | "display"   | "Display write failed"
+    }
+
+    @Unroll
+    def "#driverMethod device-off rejection (11005000) logs one WARN, no ERROR (BP29 via reportWriteFailure)"() {
+        given: "#attr 'off' so C3 passes; cloud rejects with BYPASS_DEVICE_IS_OFF (device powered off)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: attr, value: "off"])
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver."$driverMethod"("on")
+
+        then: "device-off is an EXPECTED condition: WARN only, no ERROR spam"
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains(tag) }
+
+        where:
+        driverMethod   | apiMethod      | attr        | tag
+        "setChildLock" | "setChildLock" | "childLock" | "Child lock write failed"
+        "setDisplay"   | "setDisplay"   | "display"   | "Display write failed"
+    }
+
     // ---- BP25: setPetMode (VitalPurifierLib shared) ----
 
     @Unroll

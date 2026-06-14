@@ -1995,6 +1995,8 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         testParent.allRequests.findAll { it.method == "setVirtualLevel" && it.data.type == "warm" }.isEmpty()
         and: "a warning is logged pointing at the bad value"
         testLog.warns.any { it.contains("setWarmMistLevel") }
+        and: "garbage input is a WARN, NOT an ERROR/recordError (bad input != driver fault)"
+        testLog.errors.isEmpty()
         noExceptionThrown()
 
         where:

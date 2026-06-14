@@ -89,7 +89,13 @@ def update(status, nightLight)
     def auto_mode = status?.result?.configuration?.auto_preference?.type
     def room_size = status?.result?.configuration?.auto_preference?.room_size
 
-    handleEvent("switch", status.result.enabled ? "on" : "off")
+    // Normalize enabled defensively without ever throwing: Boolean -> as-is; Number 1 -> true;
+    // anything else (incl. a String like "false") -> false. NOTE: do NOT use `as Integer` here —
+    // `"false" as Integer` throws NumberFormatException and would abort the whole status parse.
+    def enabledRaw = status.result.enabled
+    boolean enabled = (enabledRaw instanceof Boolean) ? enabledRaw : (enabledRaw instanceof Number ? (enabledRaw.intValue() == 1) : false)
+
+    handleEvent("switch", enabled ? "on" : "off")
     if (state.mode == null || mode != state.mode)
         handleEvent("mode",   status.result.mode)
     if (state.auto_mode == null || auto_mode != state.auto_mode)
@@ -104,7 +110,7 @@ def update(status, nightLight)
     // BP#6: when the device is off, speed reports "off" regardless of last-set mode/level.
     // The API keeps mode=manual/auto/sleep even when enabled:false, so without this gate the
     // speed tile would show a non-off value (e.g. "medium") on a powered-off device.
-    if (!status.result.enabled) {
+    if (!enabled) {
         handleEvent("speed", "off")
     } else {
         switch(state.mode)

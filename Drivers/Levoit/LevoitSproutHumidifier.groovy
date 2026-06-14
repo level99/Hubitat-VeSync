@@ -373,14 +373,14 @@ def applyStatus(status){
     device.sendEvent(name:"mode", value: userMode)
 
     // ---- Mist level (1-2 range) ----
-    // BP#6: clamp to 0 when device is off (virtualLevel may retain last-set value).
+    // BP#6: clamp the active mist level to 0 when off (virtualLevel may retain last-set value).
     Integer mistVirtual = null
     if (r.virtualLevel != null) {
         mistVirtual = r.virtualLevel as Integer
     } else if (r.mistLevel != null) {
         mistVirtual = r.mistLevel as Integer
     }
-    if (!powerOn && mistVirtual != null && mistVirtual > 0) mistVirtual = 0
+    mistVirtual = clampOffLevel(mistVirtual, powerOn)
     if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
 
     // ---- Water lacks ----

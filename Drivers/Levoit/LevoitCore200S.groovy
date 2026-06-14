@@ -165,7 +165,13 @@ def update(status, nightLight)
     state.speed = mapIntegerToSpeed(status.result.level)
     state.mode = status.result.mode
 
-    device.sendEvent(name: "switch", value: status.result.enabled ? "on" : "off")
+    // Normalize enabled defensively without ever throwing: Boolean -> as-is; Number 1 -> true;
+    // anything else (incl. a String like "false") -> false. NOTE: do NOT use `as Integer` here —
+    // `"false" as Integer` throws NumberFormatException and would abort the whole status parse.
+    def enabledRaw = status.result.enabled
+    boolean enabled = (enabledRaw instanceof Boolean) ? enabledRaw : (enabledRaw instanceof Number ? (enabledRaw.intValue() == 1) : false)
+
+    device.sendEvent(name: "switch", value: enabled ? "on" : "off")
     device.sendEvent(name: "mode", value: status.result.mode)
 
     def fl = status.result.filter_life
@@ -185,7 +191,7 @@ def update(status, nightLight)
     // BP#6: when the device is off, speed reports "off" regardless of last-set mode/level.
     // The API keeps mode=manual/sleep even when enabled:false, so without this gate the speed
     // tile would show a non-off value (e.g. "medium") on a powered-off device.
-    if (!status.result.enabled) {
+    if (!enabled) {
         device.sendEvent(name: "speed", value: "off")
     } else {
         switch(state.mode)

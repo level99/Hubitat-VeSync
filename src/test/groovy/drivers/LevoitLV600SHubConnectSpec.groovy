@@ -551,6 +551,27 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         testDevice.events.find { it.name == "warmMistLevel" } == null
     }
 
+    def "applyStatus warmLevel absent + warmPower=true while OFF: warmMistEnabled='off' (Bug Pattern #6, fallback gated)"() {
+        given: "device OFF, warmLevel ABSENT (fallback branch runs), warmPower=true retained"
+        settings.descriptionTextEnable = false
+        def deviceData = [
+            powerSwitch: 0, humidity: 55, targetHumidity: 60,   // device is OFF
+            virtualLevel: 0, mistLevel: 4, workMode: "manual",
+            waterLacksState: 0, waterTankLifted: 0,
+            autoStopSwitch: 1, autoStopState: 0,
+            screenSwitch: 1, screenState: 1,
+            warmPower: true
+            // warmLevel deliberately absent -- exercises the warmPower fallback branch
+        ]
+
+        when:
+        driver.applyStatus(v2StatusEnvelope(deviceData))
+
+        then: "warmMistEnabled reports 'off' — the fallback branch is power-gated (BP6)"
+        lastEventValue("switch") == "off"
+        lastEventValue("warmMistEnabled") == "off"
+    }
+
     // -------------------------------------------------------------------------
     // Target humidity: camelCase top-level (NOT snake_case nested in configuration)
     // -------------------------------------------------------------------------
@@ -885,6 +906,8 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         testParent.allRequests.findAll { it.method == "setLevel" && it.data.levelType == "warm" }.isEmpty()
         and: "a warning is logged pointing at the bad value"
         testLog.warns.any { it.contains("setWarmMistLevel") }
+        and: "garbage input is a WARN, NOT an ERROR/recordError (bad input != driver fault)"
+        testLog.errors.isEmpty()
         noExceptionThrown()
 
         where:

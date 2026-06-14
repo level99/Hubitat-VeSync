@@ -511,6 +511,8 @@ class LevoitLV600SSpec extends HubitatSpec {
         testParent.allRequests.findAll { it.method == "setVirtualLevel" && it.data.type == "warm" }.isEmpty()
         and: "a warning is logged pointing at the bad value"
         testLog.warns.any { it.contains("setWarmMistLevel") }
+        and: "garbage input is a WARN, NOT an ERROR/recordError (bad input != driver fault)"
+        testLog.errors.isEmpty()
         noExceptionThrown()
 
         where:
@@ -592,6 +594,33 @@ class LevoitLV600SSpec extends HubitatSpec {
         lastEventValue("warmMistEnabled") == "on"
         // warmMistLevel should NOT be emitted when warm_level is absent
         testDevice.events.find { it.name == "warmMistLevel" } == null
+    }
+
+    def "applyStatus warm_enabled fallback while OFF: warm_level absent + warm_enabled=true -> warmMistEnabled='off' (Bug Pattern #6)"() {
+        given: "device OFF, warm_level ABSENT (so the fallback branch runs), warm_enabled=true retained"
+        settings.descriptionTextEnable = false
+        def deviceData = [
+            enabled: false,                 // device is OFF
+            humidity: 50,
+            mist_virtual_level: 0,
+            mist_level: 3,
+            mode: "manual",
+            water_lacks: false,
+            humidity_high: false,
+            water_tank_lifted: false,
+            warm_enabled: true,             // retained-on flag; must NOT report "on" while off
+            // warm_level deliberately absent -> exercises the warm_enabled fallback branch
+            display: true,
+            automatic_stop_reach_target: false,
+            configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
+        ]
+
+        when:
+        driver.applyStatus(v2StatusEnvelope(deviceData))
+
+        then: "warmMistEnabled reports 'off' — the fallback branch is power-gated (BP6)"
+        lastEventValue("switch") == "off"
+        lastEventValue("warmMistEnabled") == "off"
     }
 
     // -------------------------------------------------------------------------

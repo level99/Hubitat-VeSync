@@ -714,8 +714,8 @@ def applyStatus(status){
     } else if (r.mist_level != null) {
         mistVirtual = r.mist_level as Integer
     }
-    // BP#6: when switch is off, clamp mist to 0 (mist_virtual_level retains last-set value while off).
-    if (!powerOn && mistVirtual != null && mistVirtual > 0) mistVirtual = 0
+    // BP#6: clamp the active mist level to 0 when off (retains last-set value while off).
+    mistVirtual = clampOffLevel(mistVirtual, powerOn)
     if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
 
     // ---- Warm-mist ----
@@ -727,10 +727,10 @@ def applyStatus(status){
     //   See setWarmMistLevel() CROSS-CHECK block above for full rationale.
     // warm_enabled and warm_level are top-level response fields (ClassicLVHumidResult)
     // OasisMist 450S populates these (unlike Classic 300S which always has warm_enabled=false)
+    // Hoist one clamped warm local (BP#6) reused by both the event emit and the info tile.
+    Integer warmLvl = null
     if (r.warm_level != null) {
-        Integer warmLvl = r.warm_level as Integer
-        // BP#6: when switch is off, clamp warm mist to 0 (warm_level retains last-set value while off).
-        if (!powerOn && warmLvl > 0) warmLvl = 0
+        warmLvl = clampOffLevel(r.warm_level as Integer, powerOn)
         // Derive enabled state from level value (correct logic from LV600S class)
         boolean warmOn = (warmLvl > 0)
         String warmOnStr = warmOn ? "on" : "off"
@@ -739,9 +739,10 @@ def applyStatus(status){
         state.warmMistLevel = warmLvl
         state.warmMistEnabled = warmOnStr
     } else if (r.warm_enabled != null) {
-        // warm_level absent but warm_enabled present -- use it as fallback
+        // warm_level absent but warm_enabled present -- use it as fallback.
+        // BP#6: when off, warm mist is never active regardless of the warm_enabled flag.
         def warmEnabledRaw = r.warm_enabled
-        boolean warmOn = (warmEnabledRaw instanceof Boolean) ? warmEnabledRaw : ((warmEnabledRaw as Integer) == 1)
+        boolean warmOn = powerOn && ((warmEnabledRaw instanceof Boolean) ? warmEnabledRaw : ((warmEnabledRaw as Integer) == 1))
         device.sendEvent(name:"warmMistEnabled", value: warmOn ? "on" : "off")
     }
 
@@ -843,13 +844,8 @@ def applyStatus(status){
     if (targetH != null)    parts << "Target: ${targetH}%"
     if (mistVirtual != null) parts << "Mist: L${mistVirtual} (1-9)"
     parts << "Mode: ${userMode}"
-    if (r.warm_level != null) {
-        Integer wl = r.warm_level as Integer
-        // BP#6: clamp to 0 when off (warm_level retains last-set value while off) so the
-        // info tile matches the power-clamped warmMistLevel attribute.
-        if (!powerOn && wl > 0) wl = 0
-        parts << "Warm: ${wl > 0 ? 'L'+wl : 'off'}"
-    }
+    // BP#6: reuse the already-clamped warmLvl local (no second parse of r.warm_level).
+    if (warmLvl != null) parts << "Warm: ${warmLvl > 0 ? 'L'+warmLvl : 'off'}"
     parts << "Water: ${waterLacksStr == 'yes' ? 'empty' : 'ok'}"
     device.sendEvent(name:"info", value: parts.join("<br>"))
 }

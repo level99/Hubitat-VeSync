@@ -2759,6 +2759,164 @@ class TestRule40BP28LevelOffAmbiguity:
 
 
 # ---------------------------------------------------------------------------
+# RULE44 bp6_speed_level_power_gate — active-level emits must be power-gated
+# ---------------------------------------------------------------------------
+
+class TestRule44BP6PowerGate:
+    """
+    RULE44 (Bug Pattern #6): an applyStatus/update status-parse body that emits an
+    active-level attribute (mistLevel / warmMistLevel / warmMistEnabled / speed /
+    fanSpeed) must be power-gated (clampOffLevel / !powerOn / !enabled). Setpoint
+    attributes (virtualLevel / level) are intentionally out of scope, and write-path
+    command setters (set* / cycle* / on / off) are not scanned.
+    """
+
+    from lint_rules.bp6_speed_level_power_gate import check_rule44_bp6_power_gate as _rule
+
+    # MUST-NOT-CATCH: applyStatus routes the active mist level through clampOffLevel.
+    GOOD_CLAMP_HELPER = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = (r.enabled as Integer) == 1
+            Integer mistVirtual = r.mist_virtual_level as Integer
+            mistVirtual = clampOffLevel(mistVirtual, powerOn)
+            if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
+        }
+    """)
+
+    # MUST-NOT-CATCH: Core speed gated behind a !status.result.enabled branch (no helper).
+    GOOD_ENABLED_BRANCH = textwrap.dedent("""\
+        def update(status, nightLight) {
+            if (!status.result.enabled) {
+                device.sendEvent(name: "speed", value: "off")
+            } else {
+                device.sendEvent(name: "speed", value: mapIntegerToSpeed(status.result.level))
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: applyStatus emits only the SETPOINT attributes (virtualLevel/level).
+    # These intentionally retain their value while off and are NOT in the active allowlist.
+    GOOD_SETPOINT_ONLY = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            if (r.virtualLevel != null) {
+                Integer vl = r.virtualLevel as Integer
+                device.sendEvent(name:"virtualLevel", value: vl)
+                device.sendEvent(name:"level", value: percentFromLevel(vl))
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: a write-path setter emitting speed ungated is out of scope (the emit
+    # reflects the command just sent, not a poll of a possibly-off device).
+    GOOD_WRITE_PATH_SETTER = textwrap.dedent("""\
+        def setSpeed(spd) {
+            String s = (spd as String).toLowerCase()
+            ensureSwitchOn()
+            hubBypass("setLevel", [manualSpeedLevel: mapSpeedToInteger(s)], "setLevel")
+            device.sendEvent(name:"speed", value: s)
+        }
+    """)
+
+    # MUST-NOT-CATCH: an unrelated `updateFirmware(x)` (or `updateDisplay`, `update()` self-fetch)
+    # is NOT a status-parse entry point — the first-param `status` anchor must keep it out of scope
+    # even if it emits an active-allowlist attr.
+    GOOD_UPDATE_FIRMWARE = textwrap.dedent("""\
+        def updateFirmware(x) {
+            // not a status poll — must not be scanned as the status-parse path
+            device.sendEvent(name:"speed", value: x)
+        }
+    """)
+
+    # MUST-CATCH: applyStatus emits mistLevel with NO power gate (the BP6 bug).
+    BAD_UNGATED_MIST = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = (r.enabled as Integer) == 1
+            Integer mistVirtual = r.mist_virtual_level as Integer
+            if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
+        }
+    """)
+
+    # MUST-CATCH: update() emits speed from a mode switch with no off-case / no gate.
+    BAD_UNGATED_SPEED = textwrap.dedent("""\
+        def update(status, nightLight) {
+            state.mode = status.result.mode
+            switch(state.mode) {
+                case "manual": device.sendEvent(name: "speed", value: mapIntegerToSpeed(status.result.level)); break
+                case "sleep":  device.sendEvent(name: "speed", value: "on"); break
+            }
+        }
+    """)
+
+    # MUST-CATCH: applyStatus emits fanSpeed (purifier active speed) ungated.
+    BAD_UNGATED_FANSPEED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            Integer fanSpeedRaw = r.fanSpeedLevel as Integer
+            if (fanSpeedRaw != null) device.sendEvent(name:"fanSpeed", value: fanSpeedRaw)
+        }
+    """)
+
+    def test_clamp_helper_passes(self):
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_CLAMP_HELPER)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"clampOffLevel-gated body must not flag RULE44, got: {findings}"
+        )
+
+    def test_enabled_branch_passes(self):
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_ENABLED_BRANCH)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"!status.result.enabled-gated speed must not flag RULE44, got: {findings}"
+        )
+
+    def test_setpoint_only_passes(self):
+        """virtualLevel/level are setpoints, not in the active allowlist — never flagged."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_SETPOINT_ONLY)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"setpoint-only emit must not flag RULE44, got: {findings}"
+        )
+
+    def test_write_path_setter_passes(self):
+        """A set* command emitting speed ungated is out of scope (not a status-parse body)."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_WRITE_PATH_SETTER)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"write-path setter must not flag RULE44, got: {findings}"
+        )
+
+    def test_update_firmware_not_scanned(self):
+        """updateFirmware/updateDisplay/update() are not status-parse entry points — the
+        first-param `status` anchor must keep them out of scope even if they emit an active attr."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_UPDATE_FIRMWARE)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"updateFirmware (non-status method) must not flag RULE44, got: {findings}"
+        )
+
+    def test_ungated_mist_fails(self):
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.BAD_UNGATED_MIST)
+        assert any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"Expected RULE44 for ungated mistLevel emit, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE44_bp6_power_gate'), (
+            f"RULE44 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_ungated_speed_fails(self):
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.BAD_UNGATED_SPEED)
+        assert any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"Expected RULE44 for ungated speed emit, got: {findings}"
+        )
+
+    def test_ungated_fanspeed_fails(self):
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.BAD_UNGATED_FANSPEED)
+        assert any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"Expected RULE44 for ungated fanSpeed emit, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # RULE20 version_lockstep — _extract_definition_block parser robustness
 # ---------------------------------------------------------------------------
 

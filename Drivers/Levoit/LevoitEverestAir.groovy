@@ -488,7 +488,7 @@ def applyStatus(status){
     } else if (r.manualSpeedLevel != null) {
         fanSpeedRaw = r.manualSpeedLevel as Integer
     }
-    if (!powerOn && fanSpeedRaw != null && fanSpeedRaw > 0) fanSpeedRaw = 0
+    fanSpeedRaw = clampOffLevel(fanSpeedRaw, powerOn)
     if (fanSpeedRaw != null) {
         device.sendEvent(name:"fanSpeed", value: fanSpeedRaw)
         if (fanSpeedRaw > 0) state.lastFanSpeed = fanSpeedRaw

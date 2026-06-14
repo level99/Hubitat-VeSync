@@ -308,16 +308,15 @@ def applyStatus(status){
     device.sendEvent(name:"mode", value: reportedMode)
 
     // Mist levels: mistLevel = actual reported, virtualLevel = requested set level
-    // BP#6: when switch is off, clamp mist to 0 (mistLevel retains last-set value while off).
+    // BP#6: clamp the actual mist level to 0 when off (mistLevel retains last-set value while off).
     if (r.mistLevel != null) {
-        Integer ml = r.mistLevel as Integer
-        if (!powerOn && ml > 0) ml = 0
-        device.sendEvent(name:"mistLevel", value: ml)
+        device.sendEvent(name:"mistLevel", value: clampOffLevel(r.mistLevel as Integer, powerOn))
     }
     if (r.virtualLevel != null) {
         Integer vl = r.virtualLevel as Integer
+        // virtualLevel / level are the SETPOINT (dimmer/SwitchLevel target) — intentionally
+        // retain their value while off so the slider shows what the device will run at next.
         device.sendEvent(name:"virtualLevel", value: vl)
-        // SwitchLevel: map 1-9 to 0-100
         device.sendEvent(name:"level", value: percentFromLevel(vl))
     }
 
@@ -389,7 +388,14 @@ def applyStatus(status){
     def parts = []
     if (r.humidity != null)          parts << "Humidity: ${r.humidity as Integer}%"
     if (r.targetHumidity != null)    parts << "Target: ${r.targetHumidity as Integer}%"
-    if (r.virtualLevel != null)      parts << "Mist: L${r.virtualLevel as Integer} (1-9)"
+    // BP#6: the info tile shows the SET mist level (virtualLevel setpoint), clamped to "off"
+    // when the device is powered off so the tile doesn't claim a running level on an off device.
+    // The virtualLevel/level ATTRIBUTES above keep the raw setpoint (dimmer convention) — only
+    // this human-readable label is clamped for display.
+    if (r.virtualLevel != null) {
+        Integer mistDisplay = clampOffLevel(r.virtualLevel as Integer, powerOn)
+        parts << "Mist: ${mistDisplay > 0 ? 'L'+mistDisplay+' (1-9)' : 'off'}"
+    }
     parts << "Mode: ${reportedMode}"
     parts << "Water: ${water}"
     if (r.filterLifePercent != null) parts << "Wick: ${r.filterLifePercent as Integer}%"

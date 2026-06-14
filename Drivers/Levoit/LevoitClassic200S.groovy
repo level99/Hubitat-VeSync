@@ -296,8 +296,8 @@ def applyStatus(status){
     } else if (r.mist_level != null) {
         mistVirtual = r.mist_level as Integer
     }
-    // BP#6: when switch is off, clamp mist to 0 (mist_virtual_level retains last-set value while off).
-    if (!powerOn && mistVirtual != null && mistVirtual > 0) mistVirtual = 0
+    // BP#6: clamp the active mist level to 0 when off (retains last-set value while off).
+    mistVirtual = clampOffLevel(mistVirtual, powerOn)
     if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
 
     // ---- Water lacks ----
