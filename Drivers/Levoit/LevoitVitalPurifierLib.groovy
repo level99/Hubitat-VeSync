@@ -325,19 +325,23 @@ def setPetMode(onOff) {
     setMode(canon == "on" ? "pet" : "auto")
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoPreference(pref) {
     logDebug "setAutoPreference(${pref})"
     if (!requireNonEmptyEnum(pref, "setAutoPreference")) return
     def resp = hubBypass("setAutoPreference", [autoPreference: pref, roomSize: state.roomSize ?: 600], "setAutoPreference")
     if (httpOk(resp)) { state.autoPreference = pref; device.sendEvent(name:"autoPreference", value: pref) }
+    else { reportWriteFailure("Auto preference write failed", resp, [method:"setAutoPreference"]) }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setRoomSize(sz) {
     logDebug "setRoomSize(${sz})"
     if (!requireNotNull(sz, "setRoomSize")) return
     Integer roomSz = safeIntArg(sz, 600)   // BP26: safeIntArg never throws on non-numeric RM input
     def resp = hubBypass("setAutoPreference", [autoPreference: state.autoPreference ?: "default", roomSize: roomSz], "setAutoPreference(roomSize)")
     if (httpOk(resp)) { state.roomSize = roomSz; device.sendEvent(name:"roomSize", value: roomSz) }
+    else { reportWriteFailure("Room size write failed", resp, [method:"setRoomSize"]) }
 }
 
 // BP24: NO-ON — configures a device preference; powering on is not implied.
@@ -377,14 +381,20 @@ def setDisplay(onOff) {
     } else { reportWriteFailure("Display write failed", resp, [method:"setDisplay"]) }
 }
 
+// BP24: NO-ON — maintenance action; powering on is not implied.
 def resetFilter() {
     logDebug "resetFilter()"
     def resp = hubBypass("resetFilter", [:], "resetFilter")
-    if (httpOk(resp)) logDebug "Filter reset requested"
+    if (httpOk(resp)) {
+        logDebug "Filter reset requested"
+    } else {
+        reportWriteFailure("Filter reset failed", resp, [method:"resetFilter"])
+    }
 }
 
 // ---- Timer (V2-line uses addTimerV2 / delTimerV2) ----
 
+// BP24: NO-ON — scheduling action; powering on is not implied.
 def setTimer(minutes) {
     if (!requireNotNull(minutes, "setTimer")) return   // BP18: null-guard (RM blank slot)
     int n = safeIntArg(minutes, 0)                     // BP26: safeIntArg never throws on non-numeric RM input
@@ -401,9 +411,12 @@ def setTimer(minutes) {
         def tid = resp?.data?.result?.id
         if (tid != null) state.timerId = tid
         logInfo "Timer set: power off in ${n} minutes (id=${tid})"
+    } else {
+        reportWriteFailure("Timer set failed", resp, [method:"addTimerV2"])
     }
 }
 
+// BP24: NO-ON — scheduling action; powering on is not implied.
 def cancelTimer() {
     logDebug "cancelTimer()"
     if (!state.timerId) {
@@ -414,6 +427,8 @@ def cancelTimer() {
     if (httpOk(resp)) {
         state.remove("timerId")
         logInfo "Timer cancelled"
+    } else {
+        reportWriteFailure("Timer cancel failed", resp, [method:"delTimerV2"])
     }
 }
 

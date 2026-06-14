@@ -828,6 +828,155 @@ class LevoitVital100SSpec extends HubitatSpec {
         "setDisplay"   | "setDisplay"   | "display"   | "Display write failed"
     }
 
+    // -------------------------------------------------------------------------
+    // Cross-driver consistency (v2.10 / #258): setAutoPreference + setRoomSize NO-ON
+    // preference-setter write-fail feedback, exercised through the Vital100S include
+    // (#4 lesson: the else { reportWriteFailure(...) } lives in the SHARED lib — guard
+    // both consumers). Vital200S has the parallel pair.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "#driverMethod genuine write failure (inner -1) is reported, not swallowed (NO-ON preference setter)"() {
+        given: "cloud returns a genuine failure (inner -1)"
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver."$driverMethod"(input)
+
+        then: "the write was attempted (setAutoPreference cloud method)"
+        testParent.allRequests.find { it.method == "setAutoPreference" } != null
+
+        and: "the failure is surfaced (ERROR via reportWriteFailure), not silently dropped"
+        testLog.errors.any { it.contains(tag) }
+
+        and: "the attribute is NOT advanced on a failed write"
+        lastEventValue(attr) == null
+
+        where:
+        driverMethod        | input       | attr             | tag
+        "setAutoPreference" | "efficient" | "autoPreference" | "Auto preference write failed"
+        "setRoomSize"       | 500         | "roomSize"       | "Room size write failed"
+    }
+
+    @Unroll
+    def "#driverMethod device-off rejection (11005000) logs one WARN, no ERROR (BP29, NO-ON preference setter)"() {
+        given: "cloud rejects with BYPASS_DEVICE_IS_OFF (device powered off)"
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver."$driverMethod"(input)
+
+        then: "device-off is an EXPECTED condition: WARN only, no ERROR spam"
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains(tag) }
+
+        where:
+        driverMethod        | input       | tag
+        "setAutoPreference" | "efficient" | "Auto preference write failed"
+        "setRoomSize"       | 500         | "Room size write failed"
+    }
+
+    // -------------------------------------------------------------------------
+    // Cross-driver consistency (v2.10 / #258 class-wide): resetFilter / setTimer /
+    // cancelTimer NO-ON action-setter write-fail feedback, exercised through the
+    // Vital100S include (shared lib — guard both consumers). Vital200S has the parallel.
+    // Preconditions: setTimer needs a positive value; cancelTimer needs state.timerId.
+    // -------------------------------------------------------------------------
+
+    def "resetFilter genuine write failure (inner -1) is reported, not swallowed"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver.resetFilter()
+
+        then:
+        testParent.allRequests.find { it.method == "resetFilter" } != null
+        testLog.errors.any { it.contains("Filter reset failed") }
+    }
+
+    def "resetFilter device-off rejection (11005000) logs one WARN, no ERROR"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver.resetFilter()
+
+        then:
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Filter reset failed") }
+    }
+
+    def "setTimer genuine write failure (inner -1) is reported, not swallowed"() {
+        given: "a positive value so setTimer reaches the cloud (n<=0 would route to cancelTimer)"
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver.setTimer(30)
+
+        then:
+        testParent.allRequests.find { it.method == "addTimerV2" } != null
+        testLog.errors.any { it.contains("Timer set failed") }
+    }
+
+    def "setTimer device-off rejection (11005000) logs one WARN, no ERROR"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver.setTimer(30)
+
+        then:
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Timer set failed") }
+    }
+
+    def "cancelTimer genuine write failure (inner -1) is reported, not swallowed"() {
+        given: "state.timerId seeded so cancelTimer passes the no-active-timer early-exit"
+        settings.descriptionTextEnable = false
+        state.timerId = "t1"
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver.cancelTimer()
+
+        then:
+        testParent.allRequests.find { it.method == "delTimerV2" } != null
+        testLog.errors.any { it.contains("Timer cancel failed") }
+    }
+
+    def "cancelTimer device-off rejection (11005000) logs one WARN, no ERROR"() {
+        given:
+        settings.descriptionTextEnable = false
+        state.timerId = "t1"
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver.cancelTimer()
+
+        then:
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Timer cancel failed") }
+    }
+
     // ---- BP25: setPetMode (VitalPurifierLib shared) ----
 
     @Unroll
