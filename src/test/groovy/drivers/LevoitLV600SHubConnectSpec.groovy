@@ -869,26 +869,41 @@ class LevoitLV600SHubConnectSpec extends HubitatSpec {
         onReq != null
     }
 
-    def "BP26: setWarmMistLevel('') does not throw on empty-string input from Rule Machine (LV600S HubConnect)"() {
-        given:
+    // BP28: setWarmMistLevel now uses parseLevelOrNull (not safeIntArg). A non-numeric
+    // value must be IGNORED, not coerced to 0 (which would silently turn warm mist OFF on
+    // a running device — indistinguishable from an explicit "0").
+    @Unroll
+    def "BP28: setWarmMistLevel('#input') non-numeric is ignored, warm mist unchanged (LV600S HubConnect)"() {
+        given: "device is ON; a non-numeric value (RM blank slot / dashboard typo) arrives"
+        testDevice.events.add([name: "switch", value: "on"])
         settings.descriptionTextEnable = false
-        when: "setWarmMistLevel called with empty string (Rule Machine blank slot)"
-        driver.setWarmMistLevel("")
-        then: "no exception thrown"
+
+        when:
+        driver.setWarmMistLevel(input)
+
+        then: "no warm write is sent — garbage must NOT silently turn warm mist off"
+        testParent.allRequests.findAll { it.method == "setLevel" && it.data.levelType == "warm" }.isEmpty()
+        and: "a warning is logged pointing at the bad value"
+        testLog.warns.any { it.contains("setWarmMistLevel") }
         noExceptionThrown()
-        and: "no error logged"
-        testLog.errors.isEmpty()
+
+        where:
+        input << ["abc", "", "hgih", "true"]
     }
 
-    def "BP26: setWarmMistLevel('abc') does not throw on non-numeric input from Rule Machine (LV600S HubConnect)"() {
-        given:
+    def "BP28: setWarmMistLevel(0) explicit zero still turns warm mist off (contract preserved) (LV600S HubConnect)"() {
+        given: "device is ON so the lvl==0 no-op-when-off branch does not apply"
+        testDevice.events.add([name: "switch", value: "on"])
         settings.descriptionTextEnable = false
-        when: "setWarmMistLevel called with non-numeric string"
-        driver.setWarmMistLevel("abc")
-        then: "no exception thrown"
-        noExceptionThrown()
-        and: "no error logged"
-        testLog.errors.isEmpty()
+
+        when:
+        driver.setWarmMistLevel(0)
+
+        then: "explicit 0 still routes to the warm-off write (warmLevel=0)"
+        def req = testParent.allRequests.find { it.method == "setLevel" && it.data.levelType == "warm" }
+        req != null
+        req.data.warmLevel == 0
+        state.warmMistEnabled == "off"
     }
 
     // -----------------------------------------------------------------------

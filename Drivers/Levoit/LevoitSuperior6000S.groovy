@@ -308,7 +308,12 @@ def applyStatus(status){
     device.sendEvent(name:"mode", value: reportedMode)
 
     // Mist levels: mistLevel = actual reported, virtualLevel = requested set level
-    if (r.mistLevel != null) device.sendEvent(name:"mistLevel", value: r.mistLevel as Integer)
+    // BP#6: when switch is off, clamp mist to 0 (mistLevel retains last-set value while off).
+    if (r.mistLevel != null) {
+        Integer ml = r.mistLevel as Integer
+        if (!powerOn && ml > 0) ml = 0
+        device.sendEvent(name:"mistLevel", value: ml)
+    }
     if (r.virtualLevel != null) {
         Integer vl = r.virtualLevel as Integer
         device.sendEvent(name:"virtualLevel", value: vl)

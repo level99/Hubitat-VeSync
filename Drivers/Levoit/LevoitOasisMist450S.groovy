@@ -330,7 +330,10 @@ def setMistLevel(level){
 def setWarmMistLevel(level){
     logDebug "setWarmMistLevel(${level})"
     if (!requireNotNull(level, "setWarmMistLevel")) return
-    Integer lvl = safeIntArg(level, 0)   // BP26: safeIntArg never throws on non-numeric RM input
+    // BP28: distinguish explicit "0" (warm-off) from non-numeric garbage. safeIntArg would coerce
+    // garbage to 0, silently turning warm mist OFF (0 is in-range, indistinguishable from intent).
+    Integer lvl = parseLevelOrNull(level)
+    if (lvl == null) { logWarn "setWarmMistLevel: ignoring non-numeric value '${level}'"; return }
     if (lvl < 0 || lvl > 3) {
         logError "Invalid warm mist level ${lvl} -- must be 0-3 (0=off, 1-3=warm intensity)"
         recordError("Invalid warm mist level ${lvl}", [method:"setVirtualLevel"])
@@ -711,6 +714,8 @@ def applyStatus(status){
     } else if (r.mist_level != null) {
         mistVirtual = r.mist_level as Integer
     }
+    // BP#6: when switch is off, clamp mist to 0 (mist_virtual_level retains last-set value while off).
+    if (!powerOn && mistVirtual != null && mistVirtual > 0) mistVirtual = 0
     if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
 
     // ---- Warm-mist ----
@@ -724,6 +729,8 @@ def applyStatus(status){
     // OasisMist 450S populates these (unlike Classic 300S which always has warm_enabled=false)
     if (r.warm_level != null) {
         Integer warmLvl = r.warm_level as Integer
+        // BP#6: when switch is off, clamp warm mist to 0 (warm_level retains last-set value while off).
+        if (!powerOn && warmLvl > 0) warmLvl = 0
         // Derive enabled state from level value (correct logic from LV600S class)
         boolean warmOn = (warmLvl > 0)
         String warmOnStr = warmOn ? "on" : "off"
@@ -838,6 +845,9 @@ def applyStatus(status){
     parts << "Mode: ${userMode}"
     if (r.warm_level != null) {
         Integer wl = r.warm_level as Integer
+        // BP#6: clamp to 0 when off (warm_level retains last-set value while off) so the
+        // info tile matches the power-clamped warmMistLevel attribute.
+        if (!powerOn && wl > 0) wl = 0
         parts << "Warm: ${wl > 0 ? 'L'+wl : 'off'}"
     }
     parts << "Water: ${waterLacksStr == 'yes' ? 'empty' : 'ok'}"

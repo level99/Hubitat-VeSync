@@ -101,17 +101,24 @@ def update(status, nightLight)
     state.auto_mode = auto_mode
     state.room_size = room_size
 
-    switch(state.mode)
-    {
-        case "manual":
-            handleEvent("speed",  speed)
-            break;
-        case "auto":
-            handleEvent("speed",  "auto")
-            break;
-        case "sleep":
-            handleEvent("speed",  "on")
-            break;
+    // BP#6: when the device is off, speed reports "off" regardless of last-set mode/level.
+    // The API keeps mode=manual/auto/sleep even when enabled:false, so without this gate the
+    // speed tile would show a non-off value (e.g. "medium") on a powered-off device.
+    if (!status.result.enabled) {
+        handleEvent("speed", "off")
+    } else {
+        switch(state.mode)
+        {
+            case "manual":
+                handleEvent("speed",  speed)
+                break;
+            case "auto":
+                handleEvent("speed",  "auto")
+                break;
+            case "sleep":
+                handleEvent("speed",  "on")
+                break;
+        }
     }
 
     // New v2.3 fields: child_lock, display, timer, pm25, airQualityIndex

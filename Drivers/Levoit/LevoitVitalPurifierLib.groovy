@@ -357,7 +357,7 @@ def setChildLock(onOff) {
     if (httpOk(resp)) {
         device.sendEvent(name:"childLock", value: canon)
         logInfo "Child lock: ${canon}"
-    }
+    } else { reportWriteFailure("Child lock write failed", resp, [method:"setChildLock"]) }
 }
 
 // BP24: NO-ON — configures a device preference; powering on is not implied.
@@ -374,7 +374,7 @@ def setDisplay(onOff) {
     if (httpOk(resp)) {
         device.sendEvent(name:"display", value: canon)
         logInfo "Display: ${canon}"
-    }
+    } else { reportWriteFailure("Display write failed", resp, [method:"setDisplay"]) }
 }
 
 def resetFilter() {

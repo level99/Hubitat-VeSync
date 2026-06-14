@@ -140,6 +140,23 @@ class LevoitCore300SSpec extends HubitatSpec {
         testLog.errors.isEmpty()
     }
 
+    def "update(status, nightLight) off device reports speed 'off' despite mode=manual (Bug Pattern #6)"() {
+        given: "device off, but API still reports mode=manual, level=2 (last-set retained)"
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("Core300S.yaml")
+        def status = fixture.responses.device_off as Map
+        assert status.result.enabled == false
+        assert status.result.mode == "manual"   // API keeps mode while off
+        assert status.result.level == 2
+
+        when:
+        driver.update(status, null)
+
+        then: "speed reads 'off', not 'medium' — no switch=off/speed=medium contradiction"
+        lastEventValue("switch") == "off"
+        lastEventValue("speed") == "off"
+    }
+
     def "setMode sends setPurifierMode with mode field (Core-line convention)"() {
         given:
         settings.descriptionTextEnable = false

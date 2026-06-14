@@ -182,14 +182,21 @@ def update(status, nightLight)
         state.lastFilterLife = flInt
     }
 
-    switch(state.mode)
-    {
-        case "manual":
-            device.sendEvent(name: "speed", value: mapIntegerToSpeed(status.result.level))
-            break;
-        case "sleep":
-            device.sendEvent(name: "speed", value: "on")
-            break;
+    // BP#6: when the device is off, speed reports "off" regardless of last-set mode/level.
+    // The API keeps mode=manual/sleep even when enabled:false, so without this gate the speed
+    // tile would show a non-off value (e.g. "medium") on a powered-off device.
+    if (!status.result.enabled) {
+        device.sendEvent(name: "speed", value: "off")
+    } else {
+        switch(state.mode)
+        {
+            case "manual":
+                device.sendEvent(name: "speed", value: mapIntegerToSpeed(status.result.level))
+                break;
+            case "sleep":
+                device.sendEvent(name: "speed", value: "on")
+                break;
+        }
     }
 
     // New v2.3 fields: child_lock, display, timer_remain

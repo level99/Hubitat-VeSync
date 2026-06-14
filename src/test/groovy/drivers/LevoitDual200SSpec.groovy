@@ -140,6 +140,21 @@ class LevoitDual200SSpec extends HubitatSpec {
         lastEventValue("mistLevel") == 0
     }
 
+    def "applyStatus off but API retains nonzero mist level -> mistLevel clamps to 0 (Bug Pattern #6)"() {
+        given: "device OFF yet the cloud still reports the last-set mist level (2 = Dual200S max)"
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("LUH-D301S.yaml")
+        def deviceData = (fixture.responses.device_off as Map) + [mist_virtual_level: 2, mist_level: 2]
+        assert deviceData.enabled == false
+
+        when:
+        driver.applyStatus(v2StatusEnvelope(deviceData))
+
+        then: "switch off and mistLevel reports 0 (no stale 'Mist: 2' on an off device)"
+        lastEventValue("switch") == "off"
+        lastEventValue("mistLevel") == 0
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #12: pref-seed
     // -------------------------------------------------------------------------

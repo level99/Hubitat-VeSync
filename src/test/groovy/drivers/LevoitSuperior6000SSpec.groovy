@@ -268,6 +268,25 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         testLog.errors.isEmpty()
     }
 
+    def "applyStatus off but API retains nonzero mistLevel -> clamps to 0 (Bug Pattern #6)"() {
+        given: "device is OFF yet the cloud still reports the last-set mistLevel (5)"
+        settings.descriptionTextEnable = false
+        def deviceData = [
+            powerSwitch: 0, humidity: 45, targetHumidity: 55,
+            mistLevel: 5, virtualLevel: 5, workMode: "manual",
+            screenState: 1, screenSwitch: 1, childLockSwitch: 0,
+            autoStopSwitch: 1, temperature: 683
+        ]
+        def status = humidifierStatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "switch off and mistLevel reports 0 (no stale 'Mist: 5' on an off device)"
+        lastEventValue("switch") == "off"
+        lastEventValue("mistLevel") == 0
+    }
+
     def "autoPro workMode is reverse-mapped to 'auto' in mode attribute"() {
         given:
         settings.descriptionTextEnable = false

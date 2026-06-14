@@ -1947,17 +1947,15 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // BP26: safeIntArg regression — setWarmMistLevel / setHue / setSaturation
-    // non-null non-numeric inputs (the path that bypasses requireNotNull but
-    // reaches safeIntArg). Pre-fix: bare coercion threw before guard could fire.
+    // BP26/BP28: setWarmMistLevel uses parseLevelOrNull (not safeIntArg) — non-null
+    // non-numeric inputs must not throw AND must not coerce to 0 (which would silently
+    // turn warm mist off). Decimal strings still truncate to a valid Integer.
     // -------------------------------------------------------------------------
 
     def "BP26: setWarmMistLevel('abc') does not throw on non-numeric input from Rule Machine (OasisMist 450S)"() {
-        // safeIntArg("abc", 0) returns 0; range check 0<0||0>3 is false; lvl==0 &&
-        // switch!="on" hits early-return with no API call.
+        // parseLevelOrNull("abc") returns null; the null-guard logs a WARN and returns — no API call.
         given:
         settings.descriptionTextEnable = false
-        // switch=off so lvl=0 early-return fires cleanly with no cloud call
         testDevice.events.add([name: "switch", value: "off"])
 
         when:
@@ -1968,7 +1966,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
     }
 
     def "BP26: setWarmMistLevel('1.7') does not throw and makes a setVirtualLevel warm API call (OasisMist 450S)"() {
-        // safeIntArg("1.7") → 1 (truncation); 1 is within 0-3; switch is on so no early-return.
+        // parseLevelOrNull("1.7") → 1 (BigDecimal truncation); 1 is within 0-3; switch is on.
         given:
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
@@ -1981,6 +1979,41 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
 
         and: "a setVirtualLevel warm API call was made"
         testParent.allRequests.any { it.method == "setVirtualLevel" && it.data.type == "warm" }
+    }
+
+    // BP28: setWarmMistLevel non-numeric must be IGNORED, not coerced to 0 (warm-off).
+    @Unroll
+    def "BP28: setWarmMistLevel('#input') non-numeric is ignored, warm mist unchanged (OasisMist 450S)"() {
+        given: "device is ON; a non-numeric value (RM blank slot / dashboard typo) arrives"
+        testDevice.events.add([name: "switch", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setWarmMistLevel(input)
+
+        then: "no warm write is sent — garbage must NOT silently turn warm mist off"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" && it.data.type == "warm" }.isEmpty()
+        and: "a warning is logged pointing at the bad value"
+        testLog.warns.any { it.contains("setWarmMistLevel") }
+        noExceptionThrown()
+
+        where:
+        input << ["abc", "", "hgih", "true"]
+    }
+
+    def "BP28: setWarmMistLevel(0) explicit zero still turns warm mist off (contract preserved) (OasisMist 450S)"() {
+        given: "device is ON so the lvl==0 no-op-when-off branch does not apply"
+        testDevice.events.add([name: "switch", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setWarmMistLevel(0)
+
+        then: "explicit 0 still routes to the warm-off write (level=0, type=warm)"
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" && it.data.type == "warm" }
+        req != null
+        req.data.level == 0
+        state.warmMistEnabled == "off"
     }
 
     def "BP26: setHue('abc') does not throw on non-numeric input from Rule Machine (OasisMist 450S WEU)"() {

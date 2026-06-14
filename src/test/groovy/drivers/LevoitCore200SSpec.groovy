@@ -141,6 +141,23 @@ class LevoitCore200SSpec extends HubitatSpec {
         testLog.errors.isEmpty()
     }
 
+    def "update(status, nightLight) off device reports speed 'off' despite mode=manual (Bug Pattern #6)"() {
+        given: "device off, but API still reports mode=manual, level=2 (last-set retained)"
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def status = fixture.responses.device_off as Map
+        assert status.result.enabled == false
+        assert status.result.mode == "manual"   // API keeps mode while off
+        assert status.result.level == 2         // retained last-set level
+
+        when:
+        driver.update(status, null)
+
+        then: "speed reads 'off', not 'medium' — no switch=off/speed=medium contradiction"
+        lastEventValue("switch") == "off"
+        lastEventValue("speed") == "off"
+    }
+
     def "filter life threshold INFO logs when below 10 percent"() {
         given: "prior filter life was 15 (above critical)"
         settings.descriptionTextEnable = true

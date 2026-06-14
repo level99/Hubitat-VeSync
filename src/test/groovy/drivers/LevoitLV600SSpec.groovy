@@ -134,6 +134,64 @@ class LevoitLV600SSpec extends HubitatSpec {
         lastEventValue("mistLevel") == 0
     }
 
+    def "applyStatus off but API retains nonzero mist/warm levels -> both clamp to 0 (Bug Pattern #6)"() {
+        given: "device is OFF yet the cloud still reports the last-set levels (mist=5, warm=2)"
+        settings.descriptionTextEnable = false
+        def deviceData = [
+            enabled: false,
+            humidity: 50,
+            mist_virtual_level: 5,   // retained while off
+            mist_level: 5,
+            mode: "manual",
+            water_lacks: false,
+            humidity_high: false,
+            water_tank_lifted: false,
+            warm_enabled: true,
+            warm_level: 2,           // retained while off
+            display: true,
+            automatic_stop_reach_target: false,
+            configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
+        ]
+
+        when:
+        driver.applyStatus(v2StatusEnvelope(deviceData))
+
+        then: "switch off, and both mist and warm levels report 0 (no stale 'Mist: 5' on an off device)"
+        lastEventValue("switch") == "off"
+        lastEventValue("mistLevel") == 0
+        lastEventValue("warmMistLevel") == 0
+        lastEventValue("warmMistEnabled") == "off"
+    }
+
+    def "applyStatus off: info HTML warm tile reads 'Warm: off', not the stale level (Bug Pattern #6)"() {
+        given: "device OFF but cloud still reports warm_level=2 (info tile re-reads raw response)"
+        settings.descriptionTextEnable = false
+        def deviceData = [
+            enabled: false,
+            humidity: 50,
+            mist_virtual_level: 5,
+            mist_level: 5,
+            mode: "manual",
+            water_lacks: false,
+            humidity_high: false,
+            water_tank_lifted: false,
+            warm_enabled: true,
+            warm_level: 2,
+            display: true,
+            automatic_stop_reach_target: false,
+            configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
+        ]
+
+        when:
+        driver.applyStatus(v2StatusEnvelope(deviceData))
+
+        then: "the info status tile shows 'Warm: off' and 'Mist: L0', not the retained levels"
+        def info = lastEventValue("info") as String
+        info.contains("Warm: off")
+        !info.contains("Warm: L2")
+        info.contains("Mist: L0")
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #12: pref-seed
     // -------------------------------------------------------------------------
@@ -438,6 +496,40 @@ class LevoitLV600SSpec extends HubitatSpec {
         then:
         testParent.allRequests.isEmpty()
         testLog.errors.any { it.contains("4") || it.contains("warm") || it.contains("0-3") }
+    }
+
+    @Unroll
+    def "setWarmMistLevel('#input') non-numeric is ignored, warm mist unchanged (BP28)"() {
+        given: "device is ON; a non-numeric value (RM blank slot / dashboard typo) arrives"
+        testDevice.events.add([name: "switch", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setWarmMistLevel(input)
+
+        then: "no warm write is sent — garbage must NOT silently turn warm mist off"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" && it.data.type == "warm" }.isEmpty()
+        and: "a warning is logged pointing at the bad value"
+        testLog.warns.any { it.contains("setWarmMistLevel") }
+        noExceptionThrown()
+
+        where:
+        input << ["abc", "", "hgih", "true"]
+    }
+
+    def "setWarmMistLevel(0) explicit zero still turns warm mist off (BP28 contract preserved)"() {
+        given: "device is ON so the lvl==0 no-op-when-off branch does not apply"
+        testDevice.events.add([name: "switch", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setWarmMistLevel(0)
+
+        then: "explicit 0 still routes to the warm-off write (level=0)"
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" && it.data.type == "warm" }
+        req != null
+        req.data.level == 0
+        state.warmMistEnabled == "off"
     }
 
     // -------------------------------------------------------------------------
