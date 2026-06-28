@@ -9392,6 +9392,31 @@ class TestRule47CapabilityCoherence:
             f"missing supportedFanSpeeds must be WARN, got: {rule_findings}"
         )
 
+    def test_catches_fancontrol_without_cyclespeed(self):
+        """
+        FanControl requires BOTH setSpeed AND cycleSpeed (Hubitat capability contract).
+        A driver providing setSpeed (+ speed + supportedFanSpeeds) but lacking cycleSpeed
+        must FAIL on the missing command -- the EverestAir/Sprout-pre-fix shape, where a
+        dashboard/Rule-Machine cycleSpeed call throws MissingMethodException.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Fan No Cycle", namespace: "test", author: "t") {
+                    capability "FanControl"
+                    command "setSpeed", [[name:"Speed*", type:"ENUM", constraints:["low","high"]]]
+                }
+            }
+            def initialize() { device.sendEvent(name:"supportedFanSpeeds", value:'["low","high"]') }
+            def applyStatus(status) { device.sendEvent(name:"speed", value:"low") }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        cmd_findings = [f for f in rule_findings if 'cycleSpeed' in f['title']]
+        assert cmd_findings, f"Expected RULE47 FAIL for FanControl missing cycleSpeed, got: {rule_findings}"
+        assert all(f['severity'] == 'FAIL' for f in cmd_findings), (
+            f"missing cycleSpeed command must be FAIL (hard contract break), got: {cmd_findings}"
+        )
+
     def test_catches_missing_required_command_as_fail(self):
         """
         A driver declaring SwitchLevel without a setLevel command (and no def setLevel,
@@ -9472,6 +9497,28 @@ class TestRule47CapabilityCoherence:
         findings = self._run(src)
         assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
             f"Coherent AirQuality driver (emits airQuality) must not flag RULE47, got: {findings}"
+        )
+
+    def test_fancontrol_with_setspeed_and_cyclespeed_passes(self):
+        """
+        A coherent FanControl driver providing BOTH setSpeed and cycleSpeed and emitting
+        speed + supportedFanSpeeds must NOT flag -- the post-fix EverestAir/Sprout shape
+        (cycleSpeed provided as a driver-local `def`, setSpeed via `command`).
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Fan OK", namespace: "test", author: "t") {
+                    capability "FanControl"
+                    command "setSpeed", [[name:"Speed*", type:"ENUM", constraints:["low","high"]]]
+                }
+            }
+            def initialize() { device.sendEvent(name:"supportedFanSpeeds", value:'["low","high"]') }
+            def cycleSpeed() { setSpeed("low") }
+            def applyStatus(status) { device.sendEvent(name:"speed", value:"low") }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
+            f"Coherent FanControl (setSpeed + cycleSpeed) must not flag RULE47, got: {findings}"
         )
 
     def test_handleEvent_emit_satisfies_attribute(self):

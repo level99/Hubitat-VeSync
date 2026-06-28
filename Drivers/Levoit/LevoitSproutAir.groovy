@@ -75,12 +75,13 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
- *    2026-06-28: v2.10 Added standard FanControl (setSpeed enum) + SwitchLevel (setLevel)
- *                      capabilities so fan speed/level drive from dashboard tiles, Rule Machine,
- *                      and voice (Alexa/Google/HomeKit). setSpeed/setLevel resolve to a 1-3 speed
- *                      and route through the existing setFanSpeed cloud-write path (single dedup
- *                      slot; sleep/auto delegate to setMode). Existing setFanSpeed(1-3) + fanSpeed
- *                      attribute preserved (BP9). Emits speed/supportedFanSpeeds/level (RULE47).
+ *    2026-06-28: v2.10 Added standard FanControl (setSpeed enum + cycleSpeed) + SwitchLevel
+ *                      (setLevel) capabilities so fan speed/level drive from dashboard tiles, Rule
+ *                      Machine, and voice (Alexa/Google/HomeKit). setSpeed/setLevel/cycleSpeed
+ *                      resolve to a 1-3 speed and route through the existing setFanSpeed cloud-write
+ *                      path (single dedup slot; sleep/auto delegate to setMode). Existing
+ *                      setFanSpeed(1-3) + fanSpeed attribute preserved (BP9). Emits
+ *                      speed/supportedFanSpeeds/level (RULE47); off edge clears speed/level tiles.
  *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-28: v2.2.1  Initial release. All 6 LAP-B851S model codes + LAP-BAY-MAX01S
  *                        in a single driver. pyvesync VeSyncAirSprout class.
@@ -190,6 +191,10 @@ def on(){
     state.turningOn = true
     try {
         def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
+        // on() stays a PURE Switch op (emits only switch:"on") — it is the COMMON auto-on path
+        // (ensureSwitchOn()->on() from setFanSpeed/setLevel/cycleSpeed). Emitting a speed here would
+        // fire a spurious intermediate speed (stale lastFanSpeed) on every off->fan-write before the
+        // real target lands. The optimistic speed mirror is emitted by the caller (setSpeed case "on").
         if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
         else { clearPowerOnWindow(); logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
     } finally {
@@ -203,10 +208,23 @@ def off(){
     if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
     state.turningOff = true
     try {
-        // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence.
+        // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence,
+        // and clear the fanSpeed dedup slot so a low -> off -> low re-establish write within the
+        // 2s window is not suppressed (matches the release's failure-path-clear theme, RULE50).
         clearPowerOnWindow()
+        clearDuplicateWrite("fanSpeed")
         def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
-        if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
+        if (httpOk(resp)) {
+            state.lastSwitchSet = "off"
+            device.sendEvent(name:"switch", value:"off")
+            // BP6: clear the active FanControl/SwitchLevel mirrors on the off edge so the dashboard
+            // fan/dimmer tiles read off/0 immediately (not the retained level) ahead of the next poll.
+            // Centralized here so EVERY off entry point is covered: direct off(), setLevel(0),
+            // setSpeed("off"), and toggle().
+            device.sendEvent(name:"speed", value:"off")
+            device.sendEvent(name:"level", value: 0)
+            logInfo "Power off"
+        }
         else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
     } finally {
         state.remove('turningOff')
@@ -306,6 +324,22 @@ def setFanSpeed(speed){
     return ok   // A1-delegation: setMode("manual") observes this to clear its "mode" slot on failure
 }
 
+// ---------- FanControl: cycleSpeed ----------
+// Standard Hubitat FanControl command (required alongside setSpeed; without it a dashboard/RM
+// cycleSpeed throws MissingMethodException). Advances the manual fan level 1 -> 2 -> 3 -> 1 and
+// routes through the SINGLE shared setFanSpeed cloud-write path, so the optimistic speed/level
+// emit + BP30 dedup come for free. null/0 last speed -> 1.
+// BP24-A: SHOULD-ON — FanControl convention; cycling speed on an off device turns it on first.
+// The explicit ensureSwitchOn() matches the sibling cycleSpeed convention (Vital/Fan libs);
+// setFanSpeed also calls it, but by then the device is already on so that inner call is a no-op.
+def cycleSpeed(){
+    logDebug "cycleSpeed()"
+    ensureSwitchOn()
+    Integer cur = (state.lastFanSpeed ?: 0) as Integer
+    Integer next = (cur >= 3) ? 1 : (cur + 1)
+    setFanSpeed(next)
+}
+
 // ---------- FanControl: setSpeed (enum) ----------
 // Standard Hubitat FanControl command. Resolves the enum to Sprout Air's 3 manual speed levels
 // (low/medium/high -> 1/2/3) and routes through the SINGLE shared setFanSpeed cloud-write path,
@@ -319,17 +353,24 @@ def setSpeed(speed){
     logDebug "setSpeed(${speed})"
     if (!requireNonEmptyEnum(speed, "setSpeed")) return
     String s = (speed as String).trim().toLowerCase()
-    // low/medium/high route through setFanSpeed, which now emits the standard speed/level attrs
-    // optimistically. off/on/sleep/auto don't touch a fan level, so emit their optimistic `speed`
-    // here so the FanControl tile reflects the command immediately (poll reconciles either way).
+    // SUCCESS-GATED paths: low/medium/high route through setFanSpeed (emits speed+level in its
+    // `if (ok)` branch); off routes through off() (emits speed:"off"+level:0 in its httpOk branch).
+    // A failed cloud write on those paths never reports a state the device isn't in.
+    // UNCONDITIONAL paths (deferred to v2.11, task #10): on/sleep/auto emit their optimistic `speed`
+    // right after delegating. on() is the COMMON auto-on path (ensureSwitchOn()->on()), so emitting a
+    // speed inside on()'s httpOk branch would fire a spurious intermediate speed on every off->fan
+    // auto-on; and setMode() (sleep/auto) returns no reliable success boolean. Clean gating for all
+    // three needs an on()/setMode() success-bool refactor that intersects the BP30 storm/dedup guards.
+    // (V2 Air deliberately reports speed:"sleep" for sleep mode — "sleep" is a supportedFanSpeeds
+    // value — diverging from Vital's speed:"on" convention.)
     switch (s) {
-        case "off":    off();            device.sendEvent(name:"speed", value:"off");   return
-        case "on":     on();             if (state.lastFanSpeed) device.sendEvent(name:"speed", value: speedNameFor(state.lastFanSpeed)); return
+        case "off":    off();            return   // off() emits speed:"off"+level:0 in its httpOk branch (success-gated)
+        case "on":     on();             device.sendEvent(name:"speed", value: state.lastFanSpeed ? speedNameFor(state.lastFanSpeed) : "on"); return   // unconditional (deferred — on() is the common auto-on path)
         case "low":    setFanSpeed(1);   return
         case "medium": setFanSpeed(2);   return
         case "high":   setFanSpeed(3);   return
-        case "sleep":  setMode("sleep"); device.sendEvent(name:"speed", value:"sleep"); return
-        case "auto":   setMode("auto");  device.sendEvent(name:"speed", value:"auto");  return
+        case "sleep":  setMode("sleep"); device.sendEvent(name:"speed", value:"sleep"); return   // unconditional (deferred — setMode has no success bool); "sleep" divergence noted above
+        case "auto":   setMode("auto");  device.sendEvent(name:"speed", value:"auto");  return   // unconditional (deferred — setMode has no success bool)
         default:
             logWarn "setSpeed: invalid speed '${s}' -- must be one of: off, low, medium, high, sleep, auto, on; ignoring"
             return
@@ -348,7 +389,9 @@ def setLevel(val){
     pct = Math.max(0, Math.min(100, pct))
     if (pct == 0) { off(); return }
     Integer lvl = (pct <= 33) ? 1 : (pct <= 66 ? 2 : 3)
-    device.sendEvent(name:"level", value: pct)
+    // No pre-emit of `level` here: setFanSpeed emits speed + level (at the band ceiling) in its
+    // success branch, so `level` updates only on a CONFIRMED write and settles directly on the
+    // banded value — no 50->66 visible flip, and no level reported when the cloud write fails.
     setFanSpeed(lvl)
 }
 
@@ -510,7 +553,7 @@ def applyStatus(status){
     } else {
         switch (rawMode) {
             case "manual": if (fanSpeedRaw != null) device.sendEvent(name:"speed", value: speedNameFor(fanSpeedRaw)); break
-            case "sleep":  device.sendEvent(name:"speed", value:"sleep"); break
+            case "sleep":  device.sendEvent(name:"speed", value:"sleep"); break   // V2 Air: "sleep" is a valid supportedFanSpeeds value (diverges from Vital's speed:"on")
             default:       device.sendEvent(name:"speed", value:"auto");  break
         }
     }

@@ -57,7 +57,7 @@ from lint_rules._helpers import make_finding_for_path, is_library_file, included
 # `switch` is the same dead-capability class as dead airQuality.
 CAPABILITY_CONTRACT = {
     "AirQuality":                  {"commands": [],                                  "attributes": ["airQuality"]},
-    "FanControl":                  {"commands": ["setSpeed"],                        "attributes": ["speed", "supportedFanSpeeds"]},
+    "FanControl":                  {"commands": ["setSpeed", "cycleSpeed"],          "attributes": ["speed", "supportedFanSpeeds"]},
     "SwitchLevel":                 {"commands": ["setLevel"],                        "attributes": ["level"]},
     "Switch":                      {"commands": ["on", "off"],                       "attributes": ["switch"]},
     "Refresh":                     {"commands": ["refresh"],                         "attributes": []},

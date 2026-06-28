@@ -512,7 +512,9 @@ pyvesync class: `VeSyncAirSprout` (inherits `VeSyncAirBaseV2` → `VeSyncAirBypa
 | temperature | °F | Ambient temperature from onboard sensor (if present in response) |
 | info | HTML | Tile summary |
 
-Commands: `setMode` (auto/sleep — manual mode use `setFanSpeed`/`setSpeed` instead), `setFanSpeed` (1-3; also establishes manual mode), `setSpeed` (FanControl enum: off/low/medium/high/sleep/auto/on — low/medium/high map to fan levels 1/2/3; sleep/auto delegate to `setMode`), `setLevel` (SwitchLevel 0-100 → fan level 1/2/3; 0 turns off; auto-on from off), `setDisplay`, `setChildLock`, `setNightlightMode` (on/off/dim), `toggle`.
+Commands: `setMode` (auto/sleep — manual mode use `setFanSpeed`/`setSpeed` instead), `setFanSpeed` (1-3; also establishes manual mode), `setSpeed` (FanControl enum: off/low/medium/high/sleep/auto/on — low/medium/high map to fan levels 1/2/3; sleep/auto delegate to `setMode`), `cycleSpeed` (FanControl; advances 1→2→3→1, auto-on from off), `setLevel` (SwitchLevel 0-100 → fan level 1/2/3; 0 turns off; auto-on from off), `setDisplay`, `setChildLock`, `setNightlightMode` (on/off/dim), `toggle`.
+
+> Note: `on` is accepted as a `setSpeed` command value (and appears in `supportedFanSpeeds`); the `speed` attribute itself normally reads only `off`/`low`/`medium`/`high`/`sleep`/`auto`, though `on` can appear briefly as a placeholder if `setSpeed('on')` is called before any speed is known, reconciling to the real speed on the next poll.
 
 ### EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) *— v2.3 preview*
 
@@ -553,7 +555,9 @@ pyvesync class: `VeSyncAirBaseV2` — same base class as Vital 200S and Sprout A
 | ventAngle | number | Vent/fan rotation angle from `fanRotateAngle` response field (**passive read only** — no write path in pyvesync; exact unit TBD) |
 | info | HTML | Tile summary |
 
-Commands: `setMode` (auto/sleep/manual/turbo), `setFanSpeed` (1-3; also establishes manual mode), `setSpeed` (FanControl enum: off/low/medium/high/sleep/auto/on — low/medium/high map to fan levels 1/2/3; sleep/auto delegate to `setMode`; turbo is not a speed value, use `setMode("turbo")`), `setLevel` (SwitchLevel 0-100 → fan level 1/2/3; 0 turns off; auto-on from off), `setDisplay`, `setChildLock`, `setLightDetection` (on/off), `setTimer` (seconds + on/off action; 0 cancels), `cancelTimer`, `resetFilter`, `toggle`. (No `setVentAngle` — no write path in pyvesync. No `setNightlightMode` — NIGHTLIGHT feature flag absent.)
+Commands: `setMode` (auto/sleep/manual/turbo), `setFanSpeed` (1-3; also establishes manual mode), `setSpeed` (FanControl enum: off/low/medium/high/sleep/auto/on — low/medium/high map to fan levels 1/2/3; sleep/auto delegate to `setMode`; turbo is not a speed value, use `setMode("turbo")`), `cycleSpeed` (FanControl; advances 1→2→3→1, auto-on from off), `setLevel` (SwitchLevel 0-100 → fan level 1/2/3; 0 turns off; auto-on from off), `setDisplay`, `setChildLock`, `setLightDetection` (on/off), `setTimer` (seconds + on/off action; 0 cancels), `cancelTimer`, `resetFilter`, `toggle`. (No `setVentAngle` — no write path in pyvesync. No `setNightlightMode` — NIGHTLIGHT feature flag absent.)
+
+> Note: `on` is accepted as a `setSpeed` command value (and appears in `supportedFanSpeeds`); the `speed` attribute itself normally reads only `off`/`low`/`medium`/`high`/`sleep`/`auto` (turbo reports as `high`), though `on` can appear briefly as a placeholder if `setSpeed('on')` is called before any speed is known, reconciling to the real speed on the next poll.
 
 ### Tower Fan (LTF-F422S) *— v2.1 preview*
 

@@ -1277,18 +1277,18 @@ class LevoitEverestAirSpec extends HubitatSpec {
         testParent.allRequests.find { it.method == "setLevel" && it.data.manualSpeedLevel == 3 } != null
     }
 
-    def "FanControl: initialize() publishes supportedFanSpeeds picker list (RULE47)"() {
+    def "FanControl: initialize() publishes supportedFanSpeeds picker list exactly (RULE47, NIT3)"() {
         // NON-VACUITY: reverting the initialize() emit makes supportedFanSpeeds null, RED.
+        // Exact-list equality (not `contains`) also catches a dropped off/on or a leaked turbo
+        // in the picker — a `contains` check would pass on a wrong list as long as the probed
+        // tokens are present.
         when:
         driver.initialize()
 
         then:
         def v = lastEventValue("supportedFanSpeeds")
         v != null
-        v.contains("low")
-        v.contains("high")
-        v.contains("sleep")
-        v.contains("auto")
+        new groovy.json.JsonSlurper().parseText(v as String) == ["off","low","medium","high","sleep","auto","on"]
     }
 
     @Unroll
@@ -1423,5 +1423,204 @@ class LevoitEverestAirSpec extends HubitatSpec {
         "off"   | "off"
         "sleep" | "sleep"
         "auto"  | "auto"
+    }
+
+    // -------------------------------------------------------------------------
+    // FanControl: cycleSpeed (v2.10) — required by the FanControl capability
+    // alongside setSpeed. Advances 1 -> 2 -> 3 -> 1 via the shared setFanSpeed path.
+    // Was absent pre-fix → a dashboard/RM cycleSpeed threw MissingMethodException.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "FanControl: cycleSpeed advances fan level #from -> #to (wraps 3 -> 1)"() {
+        // NON-VACUITY: reverting the wrap math (or routing around setFanSpeed) makes the
+        // manualSpeedLevel write wrong/absent, RED.
+        given: "device on, lastFanSpeed = #from"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.lastFanSpeed = from
+        testParent.allRequests.clear()
+
+        when:
+        driver.cycleSpeed()
+
+        then: "a single setLevel (fan-speed) cloud write at the next level"
+        def call = testParent.allRequests.find { it.method == "setLevel" }
+        call != null
+        call.data.manualSpeedLevel == to
+
+        where:
+        from | to
+        1    | 2
+        2    | 3
+        3    | 1
+    }
+
+    def "FanControl: cycleSpeed with null state.lastFanSpeed cycles to level 1"() {
+        given: "device on, no lastFanSpeed seeded"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.remove("lastFanSpeed")
+        testParent.allRequests.clear()
+
+        when:
+        driver.cycleSpeed()
+
+        then:
+        def call = testParent.allRequests.find { it.method == "setLevel" }
+        call != null
+        call.data.manualSpeedLevel == 1
+    }
+
+    def "BP24-A: cycleSpeed from off-state turns the device on then sets a speed"() {
+        // NON-VACUITY: cycleSpeed's ensureSwitchOn (and setFanSpeed's) is the auto-on; deleting it
+        // makes the setSwitch powerSwitch=1 assertion go RED.
+        given: "device off, flags clear, lastFanSpeed = 1"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        state.lastFanSpeed = 1
+        testParent.allRequests.clear()
+
+        when:
+        driver.cycleSpeed()
+
+        then: "on() fired AND a fan-speed write was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+        testParent.allRequests.find { it.method == "setLevel" } != null
+    }
+
+    // -------------------------------------------------------------------------
+    // NIT1: setSpeed('on') with no prior fan speed emits the valid ENUM 'on'
+    // (not null) so the FanControl tile is not left stale. NON-VACUITY: reverting
+    // to the `if (state.lastFanSpeed) ...` form leaves speed unset here, RED.
+    // -------------------------------------------------------------------------
+
+    def "NIT1: setSpeed('on') with null lastFanSpeed emits speed='on'"() {
+        given: "device off so on() runs, no lastFanSpeed seeded"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("lastFanSpeed")
+        testParent.allRequests.clear()
+
+        when:
+        driver.setSpeed("on")
+
+        then:
+        lastEventValue("speed") == "on"
+    }
+
+    def "setSpeed('on') with a prior fan speed emits that named speed"() {
+        given: "device off, lastFanSpeed = 2 (medium)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.lastFanSpeed = 2
+        testParent.allRequests.clear()
+
+        when:
+        driver.setSpeed("on")
+
+        then:
+        lastEventValue("speed") == "medium"
+    }
+
+    // -------------------------------------------------------------------------
+    // NIT2: the off edge clears the SwitchLevel/FanControl tiles optimistically
+    // (level=0, speed='off') so a dimmer/fan tile does not lag one poll behind.
+    // NON-VACUITY: removing the off() level:0/speed:"off" emits leaves the tiles
+    // at their retained value, RED.
+    // -------------------------------------------------------------------------
+
+    def "NIT2: setLevel(0) emits level=0 and speed='off' on the off edge"() {
+        given: "device on with a running level"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testDevice.events.add([name: "level", value: 100])
+        testParent.allRequests.clear()
+
+        when:
+        driver.setLevel(0)
+
+        then: "off() fired and the dimmer/fan tiles read 0/off immediately"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 } != null
+        lastEventValue("level") == 0
+        lastEventValue("speed") == "off"
+    }
+
+    def "NIT2: off() directly emits level=0 and speed='off'"() {
+        given: "device on with a running level"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testDevice.events.add([name: "level", value: 66])
+
+        when:
+        driver.off()
+
+        then:
+        lastEventValue("switch") == "off"
+        lastEventValue("level")  == 0
+        lastEventValue("speed")  == "off"
+    }
+
+    // -------------------------------------------------------------------------
+    // FAILED-WRITE guard (adversarial): the GATED command paths (off -> off(), and
+    // low/medium/high + setLevel -> setFanSpeed) must NOT advance speed/level when the
+    // cloud write fails (inner code -1 -> httpOk false). DISCRIMINATING: moving a gated
+    // emit back outside its if(ok)/httpOk block changes the sentinel, RED. (on/sleep/auto
+    // emit unconditionally by an explicit v2.11 deferral — not gated here, so no guard.)
+    // -------------------------------------------------------------------------
+
+    def "FAILED-WRITE: setSpeed('off') does not emit speed/level when the power-off write fails"() {
+        given: "device on, sentinel speed+level, next write rigged to fail"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testDevice.events.add([name: "speed",  value: "high"])  // sentinel
+        testDevice.events.add([name: "level",  value: 99])      // sentinel
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+        testParent.allRequests.clear()
+
+        when:
+        driver.setSpeed("off")
+
+        then: "off() failed -> off mirrors NOT emitted; sentinels unchanged"
+        lastEventValue("speed") == "high"
+        lastEventValue("level") == 99
+    }
+
+    def "FAILED-WRITE: setLevel(50) does not emit speed/level when the fan write fails"() {
+        given: "device on, sentinel speed+level, next write rigged to fail"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testDevice.events.add([name: "speed",  value: "low"])   // sentinel
+        testDevice.events.add([name: "level",  value: 99])      // sentinel
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+        testParent.allRequests.clear()
+
+        when:
+        driver.setLevel(50)
+
+        then: "setFanSpeed's if(ok) gates the emit; no pre-emit of level either -> sentinels unchanged"
+        lastEventValue("level") == 99
+        lastEventValue("speed") == "low"
+    }
+
+    def "FAILED-WRITE: off() does not emit speed='off'/level=0 when the power-off write fails"() {
+        // Direct regression proof for off()'s success-gating: the speed:"off"+level:0 mirrors live
+        // inside off()'s if(httpOk) success branch. Moving them outside it makes the sentinels
+        // change -> RED. (setSpeed('off') delegates here; this asserts the off() method itself.)
+        given: "device on, sentinel speed+level, the setSwitch(powerSwitch=0) write rigged to fail"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        testDevice.events.add([name: "speed",  value: "high"])  // sentinel
+        testDevice.events.add([name: "level",  value: 99])      // sentinel
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+        testParent.allRequests.clear()
+
+        when:
+        driver.off()
+
+        then: "the off-edge mirrors were NOT emitted; sentinels unchanged"
+        lastEventValue("speed") == "high"
+        lastEventValue("level") == 99
     }
 }
