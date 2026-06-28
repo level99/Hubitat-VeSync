@@ -85,6 +85,12 @@
  *  Project:    https://github.com/level99/Hubitat-VeSync
  *
  *  History:
+ *    2026-06-28: v2.10 Added standard FanControl (setSpeed enum) + SwitchLevel (setLevel)
+ *                      capabilities so fan speed/level drive from dashboard tiles, Rule Machine,
+ *                      and voice (Alexa/Google/HomeKit). setSpeed/setLevel resolve to a 1-3 speed
+ *                      and route through the existing setFanSpeed cloud-write path (single dedup
+ *                      slot; sleep/auto delegate to setMode). Existing setFanSpeed(1-3) + fanSpeed
+ *                      attribute preserved (BP9). Emits speed/supportedFanSpeeds/level (RULE47).
  *    2026-05-03: v2.5  Added setTimer/cancelTimer commands. Cookie-cutter port from Tower Fan
  *                      timer pattern (Phase 5b-hardened with requireNotNull + dead-?:0 removed).
  *                      pyvesync VeSyncAirBaseV2 set_timer/clear_timer parity.
@@ -113,6 +119,8 @@ metadata {
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
+        capability "FanControl"                     // provides speed + supportedFanSpeeds attrs + setSpeed command (emitted in applyStatus/initialize)
+        capability "SwitchLevel"                    // provides level attr + setLevel command (emitted in applyStatus)
         capability "AirQuality"                     // provides the standard airQuality attribute (emitted in applyStatus)
         capability "Sensor"
         capability "Actuator"
@@ -139,6 +147,10 @@ metadata {
         // in this codebase with turbo mode. The enum constraint lists all 4 modes.
         command "setMode",             [[name:"Mode*", type:"ENUM", constraints:["auto","sleep","manual","turbo"]]]
         command "setFanSpeed",         [[name:"Speed*", type:"NUMBER", description:"1-3"]]
+        // FanControl standard command — ENUM override so dashboards show a picker. low/medium/high
+        // map to fan levels 1/2/3; off/on map to off()/on(); sleep/auto delegate to setMode.
+        // (turbo stays a setMode value, not a fan speed — per pyvesync device_map.py.)
+        command "setSpeed",            [[name:"Speed*", type:"ENUM", constraints:["off","low","medium","high","sleep","auto","on"]]]
         command "setDisplay",          [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         command "setChildLock",        [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         // LIGHT_DETECT: same endpoint as Vital 200S — setLightDetection {lightDetectionSwitch: int}
@@ -177,7 +189,14 @@ def updated(){
     }
 }
 def uninstalled(){ logDebug "Uninstalled" }
-def initialize(){ logDebug "Initializing" }
+def initialize(){
+    logDebug "Initializing"
+    // FanControl: publish the static speed enum once so dashboard fan-tiles and integrations
+    // populate their speed picker. EverestAir hardware exposes 3 manual levels (low/medium/high);
+    // sleep/auto delegate to setMode. on/off included per the standard FanControl enum.
+    device.sendEvent(name:"supportedFanSpeeds",
+        value: groovy.json.JsonOutput.toJson(["off","low","medium","high","sleep","auto","on"]))
+}
 
 // ---------- Power ----------
 // VeSyncAirBaseV2 toggle_switch: {powerSwitch: int, switchIdx: 0}
@@ -304,12 +323,76 @@ def setFanSpeed(speed){
         state.mode = "manual"
         device.sendEvent(name:"fanSpeed", value: spd)
         device.sendEvent(name:"mode",     value: "manual")
+        // Optimistic update of the standard FanControl/SwitchLevel attrs so dashboard/voice tiles
+        // reflect the command immediately (not only after the next parent poll). Uses the SAME
+        // fan-level -> speed/level mapping as applyStatus, so there is no flip on reconcile. Covers
+        // every fan-level write path: setFanSpeed, setSpeed(low/medium/high), and setLevel.
+        device.sendEvent(name:"speed", value: speedNameFor(spd))
+        device.sendEvent(name:"level", value: speedToLevel(spd))
         logInfo "Fan speed: ${spd}, mode: manual"
     } else {
         clearDuplicateWrite("fanSpeed")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Fan speed write failed: ${spd}", [method:"setLevel"])
     }
     return ok   // A1-delegation: setMode("manual") observes this to clear its "mode" slot on failure
+}
+
+// ---------- FanControl: setSpeed (enum) ----------
+// Standard Hubitat FanControl command. Resolves the enum to EverestAir's 3 manual speed levels
+// (low/medium/high -> 1/2/3) and routes through the SINGLE shared setFanSpeed cloud-write path,
+// which owns the "fanSpeed" BP30 dedup slot + failure-clear. No NEW dedup slot is introduced here,
+// so RULE49/RULE50 stay satisfied and a storm of identical setSpeed calls coalesces via setFanSpeed.
+// off/on -> off()/on(); sleep/auto delegate to setMode (workMode values, not fan-speed levels per
+// pyvesync device_map.py). turbo is intentionally NOT a speed value (it is a setMode-only mode).
+// BP24: an invalid value is rejected BEFORE any auto-on/delegation (validate-before-on) — so a
+// malformed speed never wakes an off device or drifts to a real speed.
+def setSpeed(speed){
+    logDebug "setSpeed(${speed})"
+    if (!requireNonEmptyEnum(speed, "setSpeed")) return
+    String s = (speed as String).trim().toLowerCase()
+    // low/medium/high route through setFanSpeed, which now emits the standard speed/level attrs
+    // optimistically. off/on/sleep/auto don't touch a fan level, so emit their optimistic `speed`
+    // here so the FanControl tile reflects the command immediately (poll reconciles either way).
+    switch (s) {
+        case "off":    off();            device.sendEvent(name:"speed", value:"off");   return
+        case "on":     on();             if (state.lastFanSpeed) device.sendEvent(name:"speed", value: speedNameFor(state.lastFanSpeed)); return
+        case "low":    setFanSpeed(1);   return
+        case "medium": setFanSpeed(2);   return
+        case "high":   setFanSpeed(3);   return
+        case "sleep":  setMode("sleep"); device.sendEvent(name:"speed", value:"sleep"); return
+        case "auto":   setMode("auto");  device.sendEvent(name:"speed", value:"auto");  return
+        default:
+            logWarn "setSpeed: invalid speed '${s}' -- must be one of: off, low, medium, high, sleep, auto, on; ignoring"
+            return
+    }
+}
+
+// ---------- SwitchLevel: setLevel ----------
+// Standard Hubitat SwitchLevel command. Maps 0-100 to EverestAir's 3 fan-speed bands and routes
+// through the SINGLE shared setFanSpeed cloud-write path (no new dedup slot — see setSpeed).
+// BP28: parseLevelOrNull distinguishes an explicit 0 (-> off) from non-numeric garbage (-> ignore,
+// device unchanged). setLevel(N>0) auto-ons via setFanSpeed's ensureSwitchOn (BP23 SwitchLevel convention).
+def setLevel(val){
+    logDebug "setLevel(${val})"
+    Integer pct = parseLevelOrNull(val)
+    if (pct == null) { logWarn "setLevel: ignoring non-numeric value '${val}'"; return }
+    pct = Math.max(0, Math.min(100, pct))
+    if (pct == 0) { off(); return }
+    Integer lvl = (pct <= 33) ? 1 : (pct <= 66 ? 2 : 3)
+    device.sendEvent(name:"level", value: pct)
+    setFanSpeed(lvl)
+}
+
+// 2-arg SwitchLevel overload (BP1) — VeSync has no hardware fade; the duration arg is ignored.
+def setLevel(val, duration){ setLevel(val) }
+
+// FanControl/SwitchLevel display helpers — map the 1-3 fan level to the standard `speed` enum
+// name and a representative 0-100 `level` band (band ceilings, so setLevel(33/66/100) round-trip).
+private String speedNameFor(lvl){
+    switch (lvl as Integer) { case 1: return "low"; case 2: return "medium"; case 3: return "high"; default: return "low" }
+}
+private Integer speedToLevel(lvl){
+    switch (lvl as Integer) { case 1: return 33; case 2: return 66; case 3: return 100; default: return 33 }
 }
 
 // ---------- Display ----------
@@ -522,6 +605,24 @@ def applyStatus(status){
     if (fanSpeedRaw != null) {
         device.sendEvent(name:"fanSpeed", value: fanSpeedRaw)
         if (fanSpeedRaw > 0) state.lastFanSpeed = fanSpeedRaw
+    }
+
+    // ---- FanControl speed (enum) + SwitchLevel level — standard-capability mirrors of fanSpeed ----
+    // speed: BP6 power-gated by the !powerOn branch — "off" while the device is off, else the named
+    // manual speed (or the mode for auto/sleep/turbo). level: mirrors the (already-clamped) fan level,
+    // so it reads 0 while off (BP6) and a 0-100 band when running — consistent with fanSpeed.
+    if (!powerOn) {
+        device.sendEvent(name:"speed", value:"off")
+    } else {
+        switch (rawMode) {
+            case "manual": if (fanSpeedRaw != null) device.sendEvent(name:"speed", value: speedNameFor(fanSpeedRaw)); break
+            case "sleep":  device.sendEvent(name:"speed", value:"sleep"); break
+            case "turbo":  device.sendEvent(name:"speed", value:"high");  break
+            default:       device.sendEvent(name:"speed", value:"auto");  break
+        }
+    }
+    if (fanSpeedRaw != null) {
+        device.sendEvent(name:"level", value: (fanSpeedRaw > 0 ? speedToLevel(fanSpeedRaw) : 0))
     }
 
     // ---- Air quality sensors ----

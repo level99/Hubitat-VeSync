@@ -1088,4 +1088,340 @@ class LevoitEverestAirSpec extends HubitatSpec {
         where:
         badInput << ["", "abc"]
     }
+
+    // -------------------------------------------------------------------------
+    // FanControl (setSpeed enum) + SwitchLevel (setLevel) — v2.10 capability add.
+    // setSpeed/setLevel resolve to a 1-3 speed and route through the SINGLE shared
+    // setFanSpeed cloud-write path (one "fanSpeed" dedup slot). sleep/auto delegate
+    // to setMode; off/on -> off()/on(); turbo is NOT a fan speed (setMode only).
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "FanControl: setSpeed('#input') maps to setLevel manualSpeedLevel=#level (via setFanSpeed)"() {
+        // NON-VACUITY: reverting setSpeed (or its low/medium/high -> setFanSpeed routing) makes
+        // the setLevel cloud call absent / wrong, so manualSpeedLevel assertion goes RED.
+        given: "device already on so ensureSwitchOn is a no-op"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setSpeed(input)
+
+        then: "a single setLevel (fan-speed) cloud write with the mapped manualSpeedLevel"
+        def call = testParent.allRequests.find { it.method == "setLevel" }
+        call != null
+        call.data.manualSpeedLevel == level
+        call.data.levelType == "wind"
+
+        where:
+        input    | level
+        "low"    | 1
+        "medium" | 2
+        "high"   | 3
+    }
+
+    @Unroll
+    def "FanControl: setSpeed('#input') delegates to setMode (setPurifierMode workMode='#input'), no fan write"() {
+        given: "device on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setSpeed(input)
+
+        then: "setPurifierMode with the mode, and NO setLevel fan-speed write"
+        def call = testParent.allRequests.find { it.method == "setPurifierMode" }
+        call != null
+        call.data.workMode == input
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+
+        where:
+        input << ["sleep", "auto"]
+    }
+
+    def "FanControl: setSpeed('off') turns the device off (no fan write, no auto-on)"() {
+        given: "device on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setSpeed("off")
+
+        then: "setSwitch powerSwitch=0 sent; no fan-speed write; no power-on"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 } != null
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
+
+    def "FanControl: setSpeed('turbo') is rejected (turbo is a mode, not a fan speed) — no cloud call"() {
+        given: "device off, so a wrongful auto-on would also be observable"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+
+        when:
+        driver.setSpeed("turbo")
+
+        then: "no fan write, no mode write, no auto-on (validate-before-on)"
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+        testParent.allRequests.findAll { it.method == "setPurifierMode" }.isEmpty()
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } == null
+    }
+
+    def "FanControl: setSpeed(null) is rejected with a warning, no cloud call (BP18)"() {
+        when:
+        driver.setSpeed(null)
+
+        then:
+        noExceptionThrown()
+        testParent.allRequests.isEmpty()
+        testLog.warns.any { it.contains("setSpeed") && it.contains("null") }
+    }
+
+    def "BP24: setSpeed('low') from off-state turns the device on then sets the speed"() {
+        // NON-VACUITY: setFanSpeed's ensureSwitchOn is the auto-on; if setSpeed stops routing
+        // through setFanSpeed, the setSwitch powerSwitch=1 assertion goes RED.
+        given: "device off, flags clear"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        testParent.allRequests.clear()
+
+        when:
+        driver.setSpeed("low")
+
+        then: "on() fired AND the fan-speed write was sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+        testParent.allRequests.find { it.method == "setLevel" && it.data.manualSpeedLevel == 1 } != null
+    }
+
+    @Unroll
+    def "SwitchLevel: setLevel(#pct) maps to fan level #lvl and reconciles level to band #banded"() {
+        // NON-VACUITY: reverting setLevel (or its band math) breaks the manualSpeedLevel mapping,
+        // going RED. The final `level` reconciles to the banded value (setFanSpeed's optimistic
+        // emit, same mapping as applyStatus) — so the dashboard slider does not flip again at poll.
+        given: "device on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(pct)
+
+        then: "the banded fan-speed write sent, and level settled on the banded value"
+        lastEventValue("level") == banded
+        def call = testParent.allRequests.find { it.method == "setLevel" }
+        call != null
+        call.data.manualSpeedLevel == lvl
+
+        where:
+        pct | lvl | banded
+        1   | 1   | 33
+        33  | 1   | 33
+        34  | 2   | 66
+        66  | 2   | 66
+        67  | 3   | 100
+        100 | 3   | 100
+    }
+
+    def "SwitchLevel: setLevel(0) turns the device off (no fan write)"() {
+        given: "device on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(0)
+
+        then: "off() sent; no fan-speed write"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 } != null
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
+
+    def "SwitchLevel: setLevel('abc') is ignored (BP28 — non-numeric != 0), device unchanged"() {
+        given: "device on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel("abc")
+
+        then: "no off(), no fan write — left as-is with a warning"
+        noExceptionThrown()
+        testParent.allRequests.findAll { it.method == "setSwitch" }.isEmpty()
+        testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
+
+    def "BP24: setLevel(50) from off-state turns the device on"() {
+        given: "device off"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "off"])
+        state.remove("turningOn")
+        testParent.allRequests.clear()
+
+        when:
+        driver.setLevel(50)
+
+        then: "on() fired AND the banded fan-speed write sent"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+        testParent.allRequests.find { it.method == "setLevel" && it.data.manualSpeedLevel == 2 } != null
+    }
+
+    def "setLevel(val, duration) 2-arg overload delegates to setLevel(val) (BP1)"() {
+        given: "device on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(67, 5)
+
+        then: "same banded write as the 1-arg form (duration ignored)"
+        noExceptionThrown()
+        testParent.allRequests.find { it.method == "setLevel" && it.data.manualSpeedLevel == 3 } != null
+    }
+
+    def "FanControl: initialize() publishes supportedFanSpeeds picker list (RULE47)"() {
+        // NON-VACUITY: reverting the initialize() emit makes supportedFanSpeeds null, RED.
+        when:
+        driver.initialize()
+
+        then:
+        def v = lastEventValue("supportedFanSpeeds")
+        v != null
+        v.contains("low")
+        v.contains("high")
+        v.contains("sleep")
+        v.contains("auto")
+    }
+
+    @Unroll
+    def "applyStatus emits speed='#expectedSpeed' for mode=#mode (on) — FanControl mirror"() {
+        // NON-VACUITY: reverting the speed emit block makes speed null/stale, RED.
+        given:
+        def status = [code: 0, result: [powerSwitch: 1, workMode: mode, fanSpeedLevel: 2,
+                                        manualSpeedLevel: 2, childLockSwitch: 0, AQLevel: 1,
+                                        PM25: 5, screenState: 1, fanRotateAngle: 0]]
+        when:
+        driver.applyStatus(status)
+
+        then:
+        lastEventValue("speed") == expectedSpeed
+
+        where:
+        mode     | expectedSpeed
+        "manual" | "medium"     // fanSpeedLevel 2 -> "medium"
+        "auto"   | "auto"
+        "sleep"  | "sleep"
+        "turbo"  | "high"
+    }
+
+    def "applyStatus emits level mirroring active fan level (on)"() {
+        given: "device on, fan level 3"
+        def status = [code: 0, result: [powerSwitch: 1, workMode: "manual", fanSpeedLevel: 3,
+                                        manualSpeedLevel: 3, childLockSwitch: 0, AQLevel: 1,
+                                        PM25: 5, screenState: 1, fanRotateAngle: 0]]
+        when:
+        driver.applyStatus(status)
+
+        then:
+        lastEventValue("level") == 100
+    }
+
+    def "BP6: applyStatus emits speed='off' and level=0 when device off with retained manualSpeedLevel"() {
+        // NON-VACUITY for level: fanSpeedLevel ABSENT + retained manualSpeedLevel=3; only clampOffLevel
+        // forces fanSpeedRaw -> 0 -> level 0. Reverting clampOffLevel makes level=100, RED.
+        // NON-VACUITY for speed: the !powerOn branch forces "off"; reverting it reports the mode speed.
+        given: "device off, fanSpeedLevel absent, retained manualSpeedLevel=3"
+        def status = [code: 0, result: [powerSwitch: 0, workMode: "manual", manualSpeedLevel: 3,
+                                        childLockSwitch: 0, AQLevel: 1, PM25: 5, screenState: 0,
+                                        fanRotateAngle: 0]]
+        when:
+        driver.applyStatus(status)
+
+        then:
+        lastEventValue("switch") == "off"
+        lastEventValue("speed")  == "off"
+        lastEventValue("level")  == 0
+    }
+
+    def "BP30: a burst of identical setSpeed('low') coalesces via the shared fanSpeed dedup slot"() {
+        // NON-VACUITY: setSpeed routes through setFanSpeed, which dedups on the "fanSpeed" slot.
+        // Two identical setSpeed('low') within the window => ONE cloud write. Reverting setFanSpeed's
+        // dedup (or routing setSpeed around it) makes this 2 writes, RED.
+        given: "device on, flags clear so dedup is active (not bypassed by an in-flight power-on)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        state.remove("turningOn")
+        state.remove("powerOnPending")
+        testParent.allRequests.clear()
+
+        when: "two identical setSpeed calls in a burst"
+        driver.setSpeed("low")
+        driver.setSpeed("low")
+
+        then: "only ONE setLevel cloud write (the 2nd is deduped)"
+        testParent.allRequests.findAll { it.method == "setLevel" }.size() == 1
+    }
+
+    // -------------------------------------------------------------------------
+    // Optimistic emit of the standard FanControl/SwitchLevel attrs on the COMMAND
+    // path (no applyStatus call) so dashboard/voice tiles reflect the command
+    // immediately. NON-VACUITY: reverting the setFanSpeed/setSpeed optimistic emits
+    // makes these go RED (speed/level stay null or un-reconciled).
+    // -------------------------------------------------------------------------
+
+    def "optimistic: setSpeed('low') emits speed/level immediately (no poll)"() {
+        given: "device on so the fan write succeeds"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setSpeed("low")
+
+        then: "standard attrs update from the command path alone"
+        lastEventValue("speed") == "low"
+        lastEventValue("level") == 33
+    }
+
+    def "optimistic: setLevel(50) reconciles level to the band and emits speed immediately (no poll)"() {
+        given: "device on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(50)
+
+        then: "setLevel emits 50, then setFanSpeed's optimistic emit reconciles to band 66 + medium"
+        lastEventValue("level") == 66
+        lastEventValue("speed") == "medium"
+    }
+
+    def "optimistic: setFanSpeed(3) (legacy command) also updates speed/level"() {
+        given: "device on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setFanSpeed(3)
+
+        then:
+        lastEventValue("speed") == "high"
+        lastEventValue("level") == 100
+    }
+
+    @Unroll
+    def "optimistic: setSpeed('#input') emits speed='#expected' immediately"() {
+        given: "device on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setSpeed(input)
+
+        then:
+        lastEventValue("speed") == expected
+
+        where:
+        input   | expected
+        "off"   | "off"
+        "sleep" | "sleep"
+        "auto"  | "auto"
+    }
 }

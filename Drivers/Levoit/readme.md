@@ -485,14 +485,17 @@ pyvesync class: `VeSyncAirSprout` (inherits `VeSyncAirBaseV2` → `VeSyncAirBypa
 - Manual mode is established via `setLevel` (fan speed) — **NOT** `setPurifierMode {workMode:"manual"}`. pyvesync `VeSyncAirBaseV2.set_mode()` delegates `manual` to `set_fan_speed(1)`. Calling `setPurifierMode` with `workMode:"manual"` returns inner code -1.
 - Fan speed range: **1-3** (Sprout hardware). Different from Vital 200S (1-4) and Core 600S (1-5).
 - Nightlight uses `setNightLight {night_light: "on"|"off"|"dim"|"auto"}` string enum via inherited `VeSyncAirBypass.set_nightlight_mode()`. This is **completely different** from humidifier nightlight (`setLightStatus`).
-- Mode `"turbo"` is hardware-supported (listed in pyvesync `PurifierModes` for this class).
+- Modes: `auto`, `manual`, `sleep` only — pyvesync `VeSyncAirSprout` lists `SLEEP/MANUAL/AUTO` (no `turbo`; turbo is an EverestAir-only mode).
 - Full AQ sensor suite: AQLevel (1-4), PM2.5, PM1.0, PM10, VOC, CO2 (where available in response).
 
 | event | Values | Description |
 | --- | --- | --- |
 | switch | on, off | Power state |
-| mode | auto, manual, sleep, turbo, pet | Current mode |
+| mode | auto, manual, sleep | Current mode |
 | fanSpeed | 0-3 | Active fan speed (0 when device is off; 255 sentinel mapped to 0) |
+| speed | off, low, medium, high, sleep, auto | Standard FanControl attribute — named mirror of `fanSpeed`/mode ("off" when device off; low/medium/high for fan levels 1/2/3; "sleep"/"auto" reflect mode) |
+| supportedFanSpeeds | JSON list | Standard FanControl attribute — the fan-speed picker options (published once at init) |
+| level | 0-100 | Standard SwitchLevel attribute — 0-100 band mirroring the active fan level (0 when off; 33/66/100 for fan levels 1/2/3) |
 | airQualityIndex | 1-4 | Levoit categorical AQ index (1=excellent, 4=very bad) |
 | airQuality | 0-500 | Standard AirQuality-capability attribute: a US-AQI computed from PM2.5 (same formula as the Core 300S/400S/600S purifiers). Numeric — bind it for the AirQuality dashboard tile / numeric Rule Machine air-quality conditions. |
 | pm25 | µg/m³ | Real-time PM2.5 reading |
@@ -509,7 +512,7 @@ pyvesync class: `VeSyncAirSprout` (inherits `VeSyncAirBaseV2` → `VeSyncAirBypa
 | temperature | °F | Ambient temperature from onboard sensor (if present in response) |
 | info | HTML | Tile summary |
 
-Commands: `setMode` (auto/sleep/turbo/pet — manual mode use `setFanSpeed` instead), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setNightlightMode` (on/off/dim), `toggle`.
+Commands: `setMode` (auto/sleep — manual mode use `setFanSpeed`/`setSpeed` instead), `setFanSpeed` (1-3; also establishes manual mode), `setSpeed` (FanControl enum: off/low/medium/high/sleep/auto/on — low/medium/high map to fan levels 1/2/3; sleep/auto delegate to `setMode`), `setLevel` (SwitchLevel 0-100 → fan level 1/2/3; 0 turns off; auto-on from off), `setDisplay`, `setChildLock`, `setNightlightMode` (on/off/dim), `toggle`.
 
 ### EverestAir Air Purifier (LAP-EL551S-WUS/-WEU/-AEUR/-AUS) *— v2.3 preview*
 
@@ -532,6 +535,9 @@ pyvesync class: `VeSyncAirBaseV2` — same base class as Vital 200S and Sprout A
 | switch | on, off | Power state |
 | mode | auto, sleep, manual, turbo | Current mode (`"turbo"` is first new mode value in this codebase) |
 | fanSpeed | 0-3 | Active fan speed (0 when device is off; 255 sentinel mapped to 0) |
+| speed | off, low, medium, high, sleep, auto | Standard FanControl attribute — named mirror of `fanSpeed`/mode ("off" when device off; low/medium/high for fan levels 1/2/3; "sleep"/"auto" reflect mode; turbo reports as "high") |
+| supportedFanSpeeds | JSON list | Standard FanControl attribute — the fan-speed picker options (published once at init) |
+| level | 0-100 | Standard SwitchLevel attribute — 0-100 band mirroring the active fan level (0 when off; 33/66/100 for fan levels 1/2/3) |
 | airQualityIndex | 1-4 | Levoit categorical AQ index (1=excellent, 4=very bad) |
 | airQuality | 0-500 | Standard AirQuality-capability attribute: a US-AQI computed from PM2.5 (same formula as the Core 300S/400S/600S purifiers). Numeric — bind it for the AirQuality dashboard tile / numeric Rule Machine air-quality conditions. |
 | pm25 | µg/m³ | Real-time PM2.5 reading |
@@ -547,7 +553,7 @@ pyvesync class: `VeSyncAirBaseV2` — same base class as Vital 200S and Sprout A
 | ventAngle | number | Vent/fan rotation angle from `fanRotateAngle` response field (**passive read only** — no write path in pyvesync; exact unit TBD) |
 | info | HTML | Tile summary |
 
-Commands: `setMode` (auto/sleep/manual/turbo), `setFanSpeed` (1-3; also establishes manual mode), `setDisplay`, `setChildLock`, `setLightDetection` (on/off), `setTimer` (seconds + on/off action; 0 cancels), `cancelTimer`, `resetFilter`, `toggle`. (No `setVentAngle` — no write path in pyvesync. No `setNightlightMode` — NIGHTLIGHT feature flag absent.)
+Commands: `setMode` (auto/sleep/manual/turbo), `setFanSpeed` (1-3; also establishes manual mode), `setSpeed` (FanControl enum: off/low/medium/high/sleep/auto/on — low/medium/high map to fan levels 1/2/3; sleep/auto delegate to `setMode`; turbo is not a speed value, use `setMode("turbo")`), `setLevel` (SwitchLevel 0-100 → fan level 1/2/3; 0 turns off; auto-on from off), `setDisplay`, `setChildLock`, `setLightDetection` (on/off), `setTimer` (seconds + on/off action; 0 cancels), `cancelTimer`, `resetFilter`, `toggle`. (No `setVentAngle` — no write path in pyvesync. No `setNightlightMode` — NIGHTLIGHT feature flag absent.)
 
 ### Tower Fan (LTF-F422S) *— v2.1 preview*
 
