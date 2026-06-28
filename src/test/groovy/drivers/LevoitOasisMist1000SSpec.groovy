@@ -613,7 +613,7 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Nightlight write-path: toggle vs brightness split (BLOCKING #1 fix)
+    // Nightlight write-path: toggle vs brightness split (separate on/off toggle from brightness write)
     //
     // pyvesync uses TWO distinct API methods:
     //   toggle_nightlight()         → setNightLightStatus {nightLightSwitch: int}

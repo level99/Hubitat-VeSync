@@ -214,9 +214,9 @@ def update(status, nightLight)
 
     // New v2.3 fields: child_lock, display, timer_remain
     if (status.result?.child_lock != null)
-        device.sendEvent(name: "childLock", value: status.result.child_lock ? "on" : "off")
+        device.sendEvent(name: "childLock", value: asBool(status.result.child_lock) ? "on" : "off")   // A2: robust 0/1/bool/"false" coercion
     if (status.result?.display != null)
-        device.sendEvent(name: "display", value: status.result.display ? "on" : "off")
+        device.sendEvent(name: "display", value: asBool(status.result.display) ? "on" : "off")         // A2: robust coercion
     if (status.result?.extension?.timer_remain != null)
         device.sendEvent(name: "timerRemain", value: status.result.extension.timer_remain as Integer)
 

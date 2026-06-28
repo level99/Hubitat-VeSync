@@ -181,6 +181,7 @@ def _collect_per_file_rules():
         recordError_key_style,
         capability_coherence,
         bp30_single_threaded,
+        bp30_dedup_after_delegation,
     )
     rules = []
     for module in [
@@ -203,6 +204,7 @@ def _collect_per_file_rules():
         recordError_key_style,
         capability_coherence,
         bp30_single_threaded,
+        bp30_dedup_after_delegation,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

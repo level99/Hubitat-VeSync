@@ -130,9 +130,9 @@ def update(status, nightLight)
 
     // New v2.3 fields: child_lock, display, timer, pm25, airQualityIndex
     if (status.result?.child_lock != null)
-        handleEvent("childLock", status.result.child_lock ? "on" : "off")
+        handleEvent("childLock", asBool(status.result.child_lock) ? "on" : "off")   // A2: robust 0/1/bool/"false" coercion
     if (status.result?.display != null)
-        handleEvent("display", status.result.display ? "on" : "off")
+        handleEvent("display", asBool(status.result.display) ? "on" : "off")         // A2: robust coercion
     if (status.result?.extension?.timer_remain != null)
         handleEvent("timerRemain", status.result.extension.timer_remain as Integer)
     if (status.result?.air_quality_value != null)

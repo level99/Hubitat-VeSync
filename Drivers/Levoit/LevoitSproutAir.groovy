@@ -173,7 +173,7 @@ def on(){
     try {
         def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
         if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-        else { logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+        else { clearPowerOnWindow(); logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
     } finally {
         state.remove('turningOn')
     }
@@ -220,17 +220,19 @@ def setMode(mode){
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setPurifierMode"]); return }
     ensureSwitchOn()
-    if (m == "manual") {
-        // Manual established by setting fan speed (same as pyvesync VeSyncAirBaseV2.set_mode(MANUAL))
-        setFanSpeed(state.lastFanSpeed ?: 1)
-        return
-    }
-    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
-    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
-    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
-    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    // BP30 Layer 3 (A1): dedup BEFORE the manual delegation so the "mode" slot reflects the NEW
+    // effective mode even when manual delegates to setFanSpeed — otherwise auto->manual->auto within
+    // the window would falsely suppress the 3rd write (slot stale at "auto"). The turningOn/
+    // powerOnPending guard keeps an in-flight power-on's establishment write from being suppressed.
     if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
         logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return false
+    }
+    if (m == "manual") {
+        // Manual established by setting fan speed (same as pyvesync VeSyncAirBaseV2.set_mode(MANUAL)).
+        // A1-delegation: the "mode" slot is already recorded; if the delegated setFanSpeed FAILS,
+        // clear it so a same-value setMode("manual") retry is not falsely suppressed.
+        if (!setFanSpeed(state.lastFanSpeed ?: 1)) clearDuplicateWrite("mode")
         return
     }
     def resp = hubBypass("setPurifierMode", [workMode: m], "setPurifierMode(${m})")
@@ -239,6 +241,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed: ${m}", [method:"setPurifierMode"])
     }
 }
@@ -261,18 +264,21 @@ def setFanSpeed(speed){
     // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
     if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("fanSpeed", spd)) {
         logDebug "setFanSpeed: identical fanSpeed write within dedup window (storm duplicate); skipping"
-        return
+        return false
     }
     def resp = hubBypass("setLevel", [levelIdx: 0, manualSpeedLevel: spd, levelType: "wind"], "setLevel(wind,${spd})")
-    if (httpOk(resp)) {
+    boolean ok = httpOk(resp)
+    if (ok) {
         state.lastFanSpeed = spd
         state.mode = "manual"
         device.sendEvent(name:"fanSpeed", value: spd)
         device.sendEvent(name:"mode",     value: "manual")
         logInfo "Fan speed: ${spd}, mode: manual"
     } else {
+        clearDuplicateWrite("fanSpeed")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Fan speed write failed: ${spd}", [method:"setLevel"])
     }
+    return ok   // A1-delegation: setMode("manual") observes this to clear its "mode" slot on failure
 }
 
 // ---------- Display ----------
@@ -415,14 +421,19 @@ def applyStatus(status){
     // ---- Air quality sensors ----
     if (r.AQLevel != null) device.sendEvent(name:"airQualityIndex", value: r.AQLevel as Integer)
     if (r.PM25 != null) {
-        device.sendEvent(name:"pm25", value: r.PM25 as Integer)
+        Integer pm = r.PM25 as Integer
+        device.sendEvent(name:"pm25", value: pm)
         // Standard AirQuality-capability attribute: a US-AQI (0-500) derived from PM2.5 via the
         // shared EPA breakpoint ladder (LevoitChildBase.usAqiFromPm25), so this matches the Core
         // purifiers' airQuality semantics exactly. airQualityIndex remains the Levoit 1-4
-        // categorical level; the custom `aqi` attribute (Levoit's own index, r.AQI) is unchanged
-        // below. Emitted only when PM2.5 is present (mirrors Core).
-        def usAqi = usAqiFromPm25(r.PM25)
-        if (usAqi != null) device.sendEvent(name:"airQuality", value: usAqi)
+        // categorical level; the custom `aqi` attribute (Levoit's own index, r.AQI) is unchanged below.
+        // E4: emit the derived airQuality only on a PM2.5 CHANGE (mirrors CoreAQPurifierLib's
+        // state.prevPM gate) — avoids a redundant airQuality event every poll when PM is steady.
+        if (state.prevPM == null || state.prevPM != pm) {
+            state.prevPM = pm
+            def usAqi = usAqiFromPm25(pm)
+            if (usAqi != null) device.sendEvent(name:"airQuality", value: usAqi)
+        }
     }
     if (r.PM1  != null)  device.sendEvent(name:"pm1",   value: r.PM1   as Integer)
     if (r.PM10 != null)  device.sendEvent(name:"pm10",  value: r.PM10  as Integer)

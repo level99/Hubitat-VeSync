@@ -119,14 +119,22 @@ boolean beginPowerOnWindow() {
     }
     state.powerOnPending = true
     state.powerOnWindowAt = nowMs
+    // B3: cancel any prior safety timer before arming a fresh one so timers cannot stack
+    // (e.g. when the elapsed-time check reopens a window whose runInMillis is still pending).
+    unschedule("clearPowerOnWindow")
     runInMillis(POWER_ON_WINDOW_MS, "clearPowerOnWindow")
     return true
 }
 
 // BP30: close the async power-on window. Invoked by the runInMillis safety timer
-// (handler resolved as a string literal) and synchronously by off(). Idempotent —
-// safe to call when no window is open.
+// (handler resolved as a string literal), synchronously by off(), AND by a FAILED on()
+// (B2 — so a power-on write failure does not hold the window open for the full
+// POWER_ON_WINDOW_MS and suppress an immediate retry). Idempotent — safe to call when no
+// window is open.
 void clearPowerOnWindow() {
+    // B3: cancel the pending safety timer so a later off->on cannot inherit an orphan timer
+    // that closes the next window early. Harmless when called BY the timer itself (already fired).
+    unschedule("clearPowerOnWindow")
     state.remove("powerOnPending")
     state.remove("powerOnWindowAt")
 }
@@ -159,6 +167,22 @@ boolean isDuplicateWrite(String slot, value) {
     state[valField] = (value as String)
     state[atField] = nowMs
     return false
+}
+
+// BP30 Layer 3 (B1): clear a dedup slot so a FAILED write does not suppress an immediate
+// same-value retry. isDuplicateWrite records the slot on-proceed (so the slot reflects the
+// NEW effective value even on A1's early-return-delegation paths, where the actual cloud write
+// happens in a delegated setter). When THIS site's cloud write then FAILS, call this from the
+// write-failure branch to undo the record — restoring the pre-write state so the retry is not
+// falsely deduped. Identical SUCCESSFUL writes still coalesce (success path does NOT clear).
+void clearDuplicateWrite(String slot) {
+    // String (not GString) keys — must match isDuplicateWrite's String valField/atField exactly,
+    // or state.remove() with a GString key would fail to match the String-keyed entry and the
+    // slot would NOT clear (GString and String with equal content are distinct Map keys).
+    String valField = "dupWriteVal_${slot}"
+    String atField  = "dupWriteAt_${slot}"
+    state.remove(valField)
+    state.remove(atField)
 }
 
 // BP18 null-guard helper: log a WARN and signal the caller to skip further

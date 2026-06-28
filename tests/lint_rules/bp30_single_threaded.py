@@ -74,11 +74,16 @@ def check_rule48_single_threaded(path, raw_lines, cleaned_lines, raw_text, confi
     if path.name in OUT_OF_SCOPE_BASENAMES:
         return findings
 
+    # D1: match against the COMMENT-STRIPPED source so a commented-out `// singleThreaded: true`
+    # (or a commented `// #include level99.LevoitChildBase`) does NOT satisfy the rule. The driver
+    # must REALLY declare it in live code, not in a comment.
+    cleaned_text = '\n'.join(cleaned_lines)
+
     # Class membership test: only cloud-talking child drivers (those including the base lib).
-    if not CHILDBASE_INCLUDE_RE.search(raw_text):
+    if not CHILDBASE_INCLUDE_RE.search(cleaned_text):
         return findings
 
-    if SINGLE_THREADED_TRUE_RE.search(raw_text):
+    if SINGLE_THREADED_TRUE_RE.search(cleaned_text):
         return findings
 
     file_rel = str(path.relative_to(rel_base)).replace('\\', '/')

@@ -190,7 +190,7 @@ def setMode(mode){
     // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
     if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
         logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
-        return
+        return false
     }
     // Map user-facing "auto" to wire value "humidity" (VeSyncLV600S class convention)
     // This is the INVERSE of A602S where "humidity" is a firmware-variant fallback.
@@ -202,6 +202,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed: ${m} (wire: ${wireMode})", [method:"setHumidityMode"])
     }
 }

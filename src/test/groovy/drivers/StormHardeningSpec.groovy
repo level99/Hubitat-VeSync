@@ -44,6 +44,23 @@ class StormHardeningSpec extends HubitatSpec {
         }.size()
     }
 
+    def "a failed on() clears the power-on window so an immediate retry FIRES (BP30 B2)"() {
+        given: "device off; window clear"
+        testDevice.sendEvent(name: "switch", value: "off")
+        state.remove("powerOnPending"); state.remove("powerOnWindowAt"); state.remove("turningOn")
+
+        when: "the first on() gets a FAILED power-on response (handlePower false -> clearPowerOnWindow)"
+        testParent.cannedResponse = support.TestParent.httpErrorResponse(500)
+        driver.on()
+        testParent.allRequests.clear()
+
+        and: "an immediate retry (default-OK) is attempted within the same instant (now() fixed)"
+        driver.on()
+
+        then: "the retry FIRED a fresh power-on — a failed on() does NOT hold the window for 4s"
+        setSwitchOnCount() == 1
+    }
+
     def "a storm of on() commands fires exactly ONE power sequence (BP30 Layer 2)"() {
         given: "device is off and no power-on window is open"
         testDevice.sendEvent(name: "switch", value: "off")

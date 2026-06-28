@@ -54,11 +54,20 @@ DRIVER_DIR_FRAGMENT = "Drivers/Levoit/"
 _NOON_MARKER_RE = re.compile(r'^\s*//\s*BP24:\s*NO-ON\b', re.IGNORECASE)
 
 # A method definition opening a brace on the same line.
-_METHOD_DEF_RE = re.compile(r'^\s*def\s+(\w+)\s*\([^)]*\)\s*\{', re.MULTILINE)
+# D2: match `def` AND a typed return (void/boolean/Integer/<Type>/...), not just `def` — a
+# NO-ON setter written `void setX(y){` or `boolean setX(y){` previously escaped the rule.
+# The explicit return-type allowlist (vs a generic `\w+`) avoids mis-reading a statement like
+# `return foo()` as a method header; the preceding-NO-ON-marker gate is the primary FP guard.
+_METHOD_DEF_RE = re.compile(
+    r'^\s*(?:def|void|boolean|Boolean|Integer|int|String|Long|long|Float|Double|'
+    r'BigDecimal|Object|Map|List)\s+(\w+)\s*\([^)]*\)\s*\{',
+    re.MULTILINE,
+)
 
 # Body-content predicates.
 _HUBBYPASS_RE = re.compile(r'\bhubBypass\s*\(')
-_HTTPOK_CHECK_RE = re.compile(r'\bif\s*\(\s*httpOk\s*\(\s*resp\s*\)\s*\)')
+# D2: accept any variable name passed to httpOk(...), not just the hardcoded `resp`.
+_HTTPOK_CHECK_RE = re.compile(r'\bif\s*\(\s*httpOk\s*\(\s*\w+\s*\)\s*\)')
 _REPORT_WRITE_FAILURE_RE = re.compile(r'\breportWriteFailure\s*\(')
 
 

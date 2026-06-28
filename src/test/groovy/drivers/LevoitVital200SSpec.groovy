@@ -888,7 +888,7 @@ class LevoitVital200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Cross-driver consistency (v2.10 / #258): the remaining Vital NO-ON preference
+    // Cross-driver consistency: the remaining Vital NO-ON preference
     // setters — setAutoPreference + setRoomSize — now report write failures via
     // reportWriteFailure, matching setChildLock/setDisplay. Both route to the same
     // setAutoPreference cloud method. Both-ways: deleting the new else branch makes
@@ -942,7 +942,7 @@ class LevoitVital200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // BP29 class-completion (#258 follow-up): the LAST remaining Vital NO-ON setter —
+    // BP29 class-completion: the LAST remaining Vital NO-ON setter —
     // setLightDetection (V200S-only) — previously had `if (httpOk(resp))` with NO else
     // at all, silently swallowing a genuine cloud failure AND a device-off rejection.
     // The BP29 catalog had explicitly left it out ("never spammed"), but that predates
@@ -1031,7 +1031,7 @@ class LevoitVital200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Cross-driver consistency (v2.10 / #258 class-wide): the remaining Vital NO-ON
+    // Cross-driver consistency (class-wide): the remaining Vital NO-ON
     // action/scheduling setters — resetFilter, setTimer, cancelTimer — now report
     // write failures via reportWriteFailure, matching the EverestAir precedent.
     // Preconditions: setTimer needs a positive value (n<=0 routes to cancelTimer and

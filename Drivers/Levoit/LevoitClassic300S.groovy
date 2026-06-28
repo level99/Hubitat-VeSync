@@ -120,7 +120,7 @@ def setMode(mode){
     // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
     if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
         logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
-        return
+        return false
     }
     // Classic 300S uses {mode: <value>}, NOT {workMode: <value>} (Superior 6000S difference)
     def resp = hubBypass("setHumidityMode", [mode: m], "setHumidityMode(${m})")
@@ -129,6 +129,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }

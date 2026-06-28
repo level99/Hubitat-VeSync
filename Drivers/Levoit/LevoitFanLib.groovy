@@ -131,7 +131,7 @@ def on() {
             state.lastSwitchSet = "on"
             device.sendEvent(name:"switch", value:"on")
         } else {
-            logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"])
+            clearPowerOnWindow(); logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"])
         }
     } finally {
         state.remove('turningOn')
@@ -260,6 +260,7 @@ private boolean sendLevel(Integer level) {
         logInfo "Speed: L${level} (${enumVal})"
         return true
     } else {
+        clearDuplicateWrite("fanLevel")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Speed write failed for level ${level}", [method:"setLevel"])
         return false
     }

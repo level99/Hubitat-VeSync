@@ -191,12 +191,12 @@ def setMode(mode){
     // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
     if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
         logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
-        return
+        return false
     }
     if (m == "auto") {
         // Multi-firmware try-canonical-then-fallback with cache (same as LV600S -- PR #505 risk)
         String preferred = (state.firmwareVariant == "alt") ? "humidity" : "auto"
-        sendModeRequest(preferred, "auto", false)
+        if (!sendModeRequest(preferred, "auto", false)) clearDuplicateWrite("mode")   // A1-delegation: failed mode-delegate must not block retry
     } else {
         // manual has no known firmware variant issue -- send directly
         def resp = hubBypass("setHumidityMode", [mode: m], "setHumidityMode(${m})")
@@ -205,6 +205,7 @@ def setMode(mode){
             device.sendEvent(name:"mode", value: m)
             logInfo "Mode: ${m}"
         } else {
+            clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
             reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
         }
     }
@@ -214,7 +215,7 @@ def setMode(mode){
 // payloadValue -- the 'mode' field value being sent to the device API ("auto" or "humidity").
 // userMode     -- the canonical user-facing mode string to emit if successful ("auto").
 // isRetry      -- true when this is the alternate-payload retry (prevents infinite recursion).
-private void sendModeRequest(String payloadValue, String userMode, boolean isRetry){
+private boolean sendModeRequest(String payloadValue, String userMode, boolean isRetry){
     def resp = hubBypass("setHumidityMode", [mode: payloadValue], "setHumidityMode(${payloadValue})")
     def innerCode = resp?.data?.result?.code
     boolean ok = (resp?.status in [200,201,204]) && (innerCode == null || innerCode == 0)
@@ -227,14 +228,16 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
         state.mode = userMode
         device.sendEvent(name:"mode", value: userMode)
         logInfo "Mode: ${userMode}"
+        return true
     } else if (!isRetry) {
         // Canonical payload rejected -- try alternate once
         String alternate = (payloadValue == "auto") ? "humidity" : "auto"
         logDebug "setMode(${userMode}): payload '${payloadValue}' rejected (inner code: ${innerCode}); trying alternate firmware variant '${alternate}'"
-        sendModeRequest(alternate, userMode, true)
+        return sendModeRequest(alternate, userMode, true)
     } else {
         // Both variants rejected
         reportWriteError("Mode '${userMode}' rejected by both payload variants ('auto' and 'humidity', inner code: ${innerCode}). Check device connectivity or report via GitHub issue.", [method:"setHumidityMode"])
+        return false
     }
 }
 

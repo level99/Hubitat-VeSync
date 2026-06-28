@@ -95,22 +95,29 @@ def on() {
     if (!beginPowerOnWindow()) { logDebug "Power-on already in flight (BP30 storm guard); skipping redundant burst"; return }
     state.turningOn = true
     try {
-        handlePower(true)
-        logInfo "Power on"
-        handleEvent("switch", "on")
+        if (handlePower(true)) {
+            logInfo "Power on"
+            handleEvent("switch", "on")
 
-        if (state.speed != null) {
-            setSpeed(state.speed)
-        }
-        else {
-            setSpeed("low")
-        }
+            if (state.speed != null) {
+                setSpeed(state.speed)
+            }
+            else {
+                setSpeed("low")
+            }
 
-        if (state.mode != null) {
-            setMode(state.mode)
-        }
-        else {
-            update()
+            if (state.mode != null) {
+                setMode(state.mode)
+            }
+            else {
+                update()
+            }
+        } else {
+            // B2: a FAILED power-on must not hold the BP30 window open for POWER_ON_WINDOW_MS and
+            // suppress an immediate retry; clear it so the next on() fires a fresh sequence. Also
+            // stops the burst from running speed/mode writes into a device that never powered on.
+            clearPowerOnWindow()
+            reportWriteError("Failed to turn on device", [method:"on"])
         }
     } finally {
         state.remove('turningOn')
@@ -316,26 +323,28 @@ def setSpeed(speed) {
     // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
     if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("speed", s)) {
         logDebug "setSpeed: identical speed write within dedup window (storm duplicate); skipping"
-        return
+        return false
     }
     if (supportsAutoMode() && s == "auto") {
-        setMode(s)
+        // A1-delegation: this branch delegated to setMode after recording the "speed" slot; if the
+        // delegated mode write FAILS, clear "speed" so a same-value retry is not falsely suppressed.
+        if (!setMode(s)) clearDuplicateWrite("speed")
         state.speed = s
         handleEvent("speed", s)
     }
     else if (s == "sleep") {
-        setMode(s)
+        if (!setMode(s)) clearDuplicateWrite("speed")   // A1-delegation: failed mode-delegate must not block speed retry
         handleEvent("speed", "on")
     }
     else if (state.mode == "manual") {
-        handleSpeed(s)
+        if (!handleSpeed(s)) clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
         state.speed = s
         handleEvent("speed", s)
         logInfo "Speed: ${s}"
     }
     else if (state.mode == "sleep") {
         setMode("manual")
-        handleSpeed(s)
+        if (!handleSpeed(s)) clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
         state.speed = s
         handleEvent("speed", s)
         logInfo "Speed: ${s}"
@@ -351,7 +360,7 @@ def setSpeed(speed) {
             state.mode = "manual"
             handleEvent("mode", "manual")
         }
-        handleSpeed(s)
+        if (!handleSpeed(s)) clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
         state.speed = s
         handleEvent("speed", s)
         logInfo "Speed: ${s}"
@@ -381,7 +390,7 @@ def setMode(mode) {
     // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
     if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
         logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
-        return
+        return false
     }
 
     // Only commit state + emit events when the cloud accepted the mode change. Previously
@@ -408,8 +417,10 @@ def setMode(mode) {
                 break;
         }
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed: ${m}", [method:"setMode"])
     }
+    return ok   // A1-delegation: callers (Core.setSpeed auto/sleep) observe this to clear their own slot on failure
 }
 
 // Bucket B5 (#142 Phase 2e): table-driven speed cycle. The cycle order is the

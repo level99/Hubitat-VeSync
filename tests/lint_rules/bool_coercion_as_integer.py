@@ -71,8 +71,12 @@ AS_INTEGER_EQ1_RE = re.compile(r'as\s+Integer\s*\)\s*==\s*1\b')
 # Part 1: a line that ASSIGNS a cast-to-Integer to a variable, with NO `== 1` on that line
 # (tail `as Integer`, optionally followed by a trailing comment we already stripped). The
 # leading type (`Integer`/`int`/`def`) is optional. Capture the assigned variable name.
+# D3: broaden the leading-type token — a typed decl with ANY type (e.g. `Long x = ... as Integer`)
+# previously evaded the assign-form because the optional type only allowed Integer/int/def, so
+# `Long` was mis-read as the variable name and the `= ...` then failed to match.
 ASSIGN_AS_INTEGER_RE = re.compile(
-    r'^\s*(?:Integer|int|def)?\s*(\w+)\s*=\s*.*\bas\s+Integer\s*$'
+    r'^\s*(?:Integer|int|def|Long|long|Boolean|boolean|Object|Number|BigDecimal|'
+    r'Double|double|Float|float|String|var)?\s*(\w+)\s*=\s*.*\bas\s+Integer\s*$'
 )
 # Part 2: that captured variable later compared `== 1` (bare or as a ternary test). The
 # `== 1` (NOT `> 0` / `>= N` / `< N` / used in arithmetic) is the discriminator that
@@ -85,8 +89,11 @@ SPLIT_WINDOW = 3
 
 
 def _strip_line_comments(text: str) -> str:
-    # Remove // line comments so a comment that mentions the idiom (e.g. a docstring
-    # describing the pre-fix form) does not trip the rule.
+    # Remove // line comments AND same-line /* ... */ block comments so a comment that mentions
+    # the idiom (e.g. a docstring describing the pre-fix `as Integer) == 1` form) does not trip
+    # the rule. D3: the prior version stripped only `//`, so a single-line block comment
+    # containing the idiom produced a false positive.
+    text = re.sub(r'/\*.*?\*/', '', text)
     return re.sub(r'//[^\n]*', '', text)
 
 

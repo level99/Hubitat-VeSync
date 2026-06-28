@@ -391,6 +391,55 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // clearDuplicateWrite (BP30 B1) — a FAILED write must not suppress the retry.
+    // NON-VACUITY: without clearDuplicateWrite the 3rd call below stays a duplicate (true).
+    // -------------------------------------------------------------------------
+
+    def "clearDuplicateWrite clears a recorded slot so an immediate same-value retry FIRES (BP30 B1)"() {
+        given: "a write was recorded (proceeded), and an identical one within the window is a dup"
+        state.remove("dupWriteVal_mode"); state.remove("dupWriteAt_mode")
+        assert driver.isDuplicateWrite("mode", "auto") == false   // 1st: records, proceeds
+        assert driver.isDuplicateWrite("mode", "auto") == true    // 2nd: within window -> dup
+
+        when: "the cloud write failed, so the failure branch clears the slot"
+        driver.clearDuplicateWrite("mode")
+
+        then: "the same value now FIRES (not falsely suppressed) — a failed write is retryable"
+        driver.isDuplicateWrite("mode", "auto") == false
+    }
+
+    // -------------------------------------------------------------------------
+    // beginPowerOnWindow / clearPowerOnWindow unschedule (BP30 B3) — the safety timer must
+    // be cancelled so an on->off->on sequence cannot leave an orphan timer that closes the
+    // next window early. NON-VACUITY: without the unschedule() the recorded list is empty -> RED.
+    // -------------------------------------------------------------------------
+
+    def "clearPowerOnWindow cancels the pending safety timer (BP30 B3)"() {
+        given:
+        List unscheduled = []
+        driver.metaClass.unschedule = { Object[] args -> unscheduled << (args ? args[0] : null) }
+
+        when:
+        driver.clearPowerOnWindow()
+
+        then: "the clearPowerOnWindow safety timer is unscheduled (no orphan to close the next window early)"
+        unscheduled.contains("clearPowerOnWindow")
+    }
+
+    def "beginPowerOnWindow unschedules any prior timer before arming a fresh one (BP30 B3)"() {
+        given:
+        state.remove("powerOnPending"); state.remove("powerOnWindowAt")
+        List unscheduled = []
+        driver.metaClass.unschedule = { Object[] args -> unscheduled << (args ? args[0] : null) }
+
+        when:
+        driver.beginPowerOnWindow()
+
+        then:
+        unscheduled.contains("clearPowerOnWindow")
+    }
+
+    // -------------------------------------------------------------------------
     // requireNotNull (BP18)
     // -------------------------------------------------------------------------
 

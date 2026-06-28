@@ -3516,6 +3516,39 @@ class TestRule45BoolCoercionAsInteger:
         }
     """)
 
+    # D3 MUST-CATCH: a typed declaration with a NON-Integer type (`Long x = ... as Integer`)
+    # then `x == 1` — the prior assign regex only allowed Integer/int/def as the leading type,
+    # so `Long` was mis-read as the var name and the form escaped.
+    BAD_TYPED_DECL_SPLIT = textwrap.dedent("""\
+        def applyStatus(status) {
+            Long lifted = status.result.waterTankLifted as Integer
+            boolean removed = lifted == 1
+        }
+    """)
+
+    # D3 MUST-NOT-CATCH: a single-line /* block comment */ mentioning the idiom — block
+    # comments must be stripped before matching (the prior version stripped only `//`).
+    GOOD_BLOCK_COMMENT_MENTION = textwrap.dedent("""\
+        def applyStatus(status) {
+            /* legacy form was (r.powerSwitch as Integer) == 1 -- replaced by asBool() */
+            boolean powerOn = asBool(status.result.powerSwitch)
+        }
+    """)
+
+    def test_typed_decl_split_fails(self):
+        # D3
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_TYPED_DECL_SPLIT)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for typed-decl split form `Long x = ... as Integer; x == 1`, got: {findings}"
+        )
+
+    def test_block_comment_mention_passes(self):
+        # D3
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_BLOCK_COMMENT_MENTION)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"A /* block comment */ mentioning the idiom must not flag RULE45, got: {findings}"
+        )
+
     def test_bare_form_fails(self):
         findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_BARE)
         assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
@@ -3872,6 +3905,21 @@ class TestRule48SingleThreaded:
         }
     """)
 
+    # D1: singleThreaded:true present ONLY in a comment must NOT satisfy the rule (must-catch).
+    COMMENTED_ONLY = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+        #include level99.LevoitChildBase
+
+        metadata {
+            definition(
+                // singleThreaded: true,   // TODO: actually enable this
+                name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson",
+                version: "2.9") {
+                capability "Switch"
+            }
+        }
+    """)
+
     # singleThreaded:false is treated as MISSING the invariant.
     EXPLICIT_FALSE = textwrap.dedent("""\
         #include level99.LevoitChildBase
@@ -3921,6 +3969,13 @@ class TestRule48SingleThreaded:
         rule_ids_found = [f['rule_id'] for f in findings]
         assert "RULE48_missing_single_threaded" in rule_ids_found
 
+    def test_commented_only_fails(self):
+        # D1: a commented-out `// singleThreaded: true` must NOT satisfy the rule.
+        findings = run_rule(check_rule48_single_threaded, self.COMMENTED_ONLY, "LevoitVital200S")
+        rule_ids_found = [f['rule_id'] for f in findings]
+        assert "RULE48_missing_single_threaded" in rule_ids_found
+        assert all(f['severity'] == 'FAIL' for f in findings)
+
     def test_non_cloud_driver_out_of_scope(self):
         # No LevoitChildBase include — not a child cloud driver — must NOT be flagged.
         findings = run_rule(check_rule48_single_threaded, self.NO_CHILDBASE, "VeSyncIntegration")
@@ -3950,6 +4005,90 @@ class TestRule48SingleThreaded:
             rel_base=REPO_ROOT,
         )
         assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# RULE49 — BP30 A1: isDuplicateWrite must precede an early-return delegation
+# ---------------------------------------------------------------------------
+
+class TestRule49DedupAfterDelegation:
+    """RULE49 (BP30 A1, E1): a set* method whose isDuplicateWrite is preceded by a
+    delegation-to-another-setter + return must FAIL (the slot would be recorded too late).
+    """
+
+    from lint_rules.bp30_dedup_after_delegation import (
+        check_rule49_dedup_after_delegation as _rule,
+    )
+
+    # MUST-CATCH: the pre-fix EverestAir shape — manual branch delegates to setFanSpeed and
+    # returns BEFORE the isDuplicateWrite("mode", m) call.
+    BAD_DELEGATION_BEFORE_DEDUP = textwrap.dedent("""\
+        def setMode(mode){
+            if (!requireNonEmptyEnum(mode, "setMode")) return
+            String m = (mode as String).trim().toLowerCase()
+            ensureSwitchOn()
+            if (m == "manual") {
+                setFanSpeed(state.lastFanSpeed ?: 1)
+                return
+            }
+            if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) return
+            def resp = hubBypass("setPurifierMode", [workMode: m], "x")
+        }
+    """)
+
+    # MUST-NOT-CATCH: the fixed shape — isDuplicateWrite AHEAD of the manual delegation.
+    GOOD_DEDUP_BEFORE_DELEGATION = textwrap.dedent("""\
+        def setMode(mode){
+            if (!requireNonEmptyEnum(mode, "setMode")) return
+            String m = (mode as String).trim().toLowerCase()
+            ensureSwitchOn()
+            if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) return
+            if (m == "manual") {
+                setFanSpeed(state.lastFanSpeed ?: 1)
+                return
+            }
+            def resp = hubBypass("setPurifierMode", [workMode: m], "x")
+        }
+    """)
+
+    # MUST-NOT-CATCH: a deduped setter whose only pre-dedup returns are VALIDATION guards
+    # (preceded by requireX/logError, NOT a setX( delegation).
+    GOOD_VALIDATION_ONLY_RETURNS = textwrap.dedent("""\
+        def setMode(mode){
+            if (!requireNonEmptyEnum(mode, "setMode")) return
+            String m = (mode as String).trim().toLowerCase()
+            if (!(m in ["auto","sleep"])) { logError "bad"; return }
+            ensureSwitchOn()
+            if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) return
+            def resp = hubBypass("setHumidityMode", [workMode: m], "x")
+        }
+    """)
+
+    # MUST-NOT-CATCH: a non-deduped setter (no isDuplicateWrite) is out of scope entirely.
+    GOOD_NO_DEDUP = textwrap.dedent("""\
+        def setMode(mode){
+            ensureSwitchOn()
+            if (mode == "manual") { setFanSpeed(1); return }
+            def resp = hubBypass("setPurifierMode", [workMode: mode], "x")
+        }
+    """)
+
+    def test_delegation_before_dedup_fails(self):
+        findings = run_rule(TestRule49DedupAfterDelegation._rule, self.BAD_DELEGATION_BEFORE_DEDUP, "LevoitEverestAir")
+        assert any(f['rule_id'] == 'RULE49_dedup_after_delegation' for f in findings), findings
+        assert all(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE49_dedup_after_delegation')
+
+    def test_dedup_before_delegation_passes(self):
+        findings = run_rule(TestRule49DedupAfterDelegation._rule, self.GOOD_DEDUP_BEFORE_DELEGATION, "LevoitEverestAir")
+        assert not any(f['rule_id'] == 'RULE49_dedup_after_delegation' for f in findings), findings
+
+    def test_validation_only_returns_passes(self):
+        findings = run_rule(TestRule49DedupAfterDelegation._rule, self.GOOD_VALIDATION_ONLY_RETURNS, "LevoitSuperior6000S")
+        assert not any(f['rule_id'] == 'RULE49_dedup_after_delegation' for f in findings), findings
+
+    def test_non_deduped_setter_out_of_scope(self):
+        findings = run_rule(TestRule49DedupAfterDelegation._rule, self.GOOD_NO_DEDUP, "LevoitEverestAir")
+        assert not any(f['rule_id'] == 'RULE49_dedup_after_delegation' for f in findings), findings
 
 
 # ---------------------------------------------------------------------------
@@ -4439,6 +4578,55 @@ class TestRule38ProcessTokenScrub:
             config={},
             rel_base=REPO_ROOT,
         )
+
+    # -----------------------------------------------------------------------
+    # C2 — this-fork process-LABEL shapes (the v2.10 C1 forms). Narrow by design;
+    # bare `#<digits>` is intentionally NOT caught (it would FP on FIX #N / GAP #N /
+    # Bug Pattern #N / Task #N / HA finding #N / pyvesync issue #N).
+    # -----------------------------------------------------------------------
+
+    def test_c2_catches_follow_up_form(self):
+        assert self._run_groovy("// BP29 class-completion (#258 follow-up): the last NO-ON setter")
+        assert self._run_py("# class-completion (#258 follow-up): the last setter")
+
+    def test_c2_catches_lesson_form(self):
+        assert self._run_groovy("// (#4 lesson: the else branch lives in the SHARED lib)")
+
+    def test_c2_catches_classwide_form(self):
+        assert self._run_groovy("// Cross-driver consistency (#258 class-wide): resetFilter / setTimer")
+
+    def test_c2_catches_blocking_form(self):
+        assert self._run_groovy("// BLOCKING #4: detectRealParent false-negative")
+
+    def test_c2_catches_version_slash_issue_form(self):
+        assert self._run_groovy("// Cross-driver consistency (v2.10 / #258): the remaining setters")
+
+    def test_c2_does_not_catch_bug_pattern(self):
+        # legit catalog reference — must NOT be flagged
+        assert not self._run_groovy("// Bug Pattern #4 — setLevel uses V2-API field names")
+
+    def test_c2_does_not_catch_fix_n_enumeration(self):
+        # internal rule-doc enumeration (FIX #N / GAP #N) — must NOT be flagged
+        assert not self._run_py("# FIX #3 -- per-emit check, not method-level")
+
+    def test_c2_bare_hash_digit_in_python_caught(self):
+        # C2 (a): a bare hash-digits ref in a .py comment with no internal-doc/external prefix
+        # IS a this-fork issue ref -> caught.
+        assert self._run_py("# closes the parser gap, see #258")
+
+    def test_c2_bare_hash_digit_groovy_out_of_scope(self):
+        # bare-hash-digits is the PYTHON variant only; a Groovy driver/spec comment is untouched.
+        assert not self._run_groovy("// regression guards for angular maxima, ref 249")
+
+    def test_c2_bare_hash_digit_internal_doc_not_caught(self):
+        # Bug Pattern / FIX / GAP / Task prefixes suppress the bare-hash-digits match (internal-doc).
+        assert not self._run_py("# Bug Pattern #142 -- a catalog ref, not a this-fork issue")
+        assert not self._run_py("# FIX #3 and GAP #4 -- internal rule-doc enumeration")
+        assert not self._run_py("# Task #142 -- left for the broader Spock-spec sweep TODO")
+
+    def test_c2_does_not_catch_external_provenance_issue(self):
+        # `pyvesync issue #296` stays suppressed (external provenance)
+        assert not self._run_py("# Confirmed: pyvesync issue #296; minHumidityLevel 40")
 
     # -----------------------------------------------------------------------
     # Must-catch: Tier forms
@@ -8918,6 +9106,23 @@ class TestRule46NoOnWriteFeedback:
         findings = self._run(src)
         assert any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
             f"Expected RULE46 for dash-variant NO-ON marker, got: {findings}"
+        )
+
+    def test_catches_void_method_form(self):
+        """D2: a NO-ON setter declared `void setX(y){` (typed return, not `def`) with a bare
+        `if (httpOk(other))` (non-`resp` variable) and no else MUST flag — the prior regex
+        only matched `def` + a hardcoded `resp`, so the void/typed form escaped."""
+        src = textwrap.dedent("""\
+            // BP24: NO-ON — configures a device preference; powering on is not implied.
+            void setChildLock(onOff) {
+                String canon = canonOnOff((onOff as String).trim().toLowerCase())
+                def r = hubBypass("setChildLock", [childLockSwitch: canon == "on" ? 1 : 0], "setChildLock")
+                if (httpOk(r)) device.sendEvent(name:"childLock", value: canon)
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Expected RULE46 for void-method NO-ON setter with no else, got: {findings}"
         )
 
     # -----------------------------------------------------------------------

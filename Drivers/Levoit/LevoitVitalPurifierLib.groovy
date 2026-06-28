@@ -110,6 +110,7 @@ def on() {
             // Now attempt speed/mode configuration (these may fail but device is already on)
             runInMillis(500, "configureOnState")
         } else {
+            clearPowerOnWindow()   // B2: failed power-on is retryable immediately (don't hold the window)
             reportWriteError("Failed to turn on device", [method:"on"])
         }
     } finally {
@@ -243,30 +244,34 @@ def setSpeed(spd) {
     // BP25: normalize to lowercase so Rule Machine "OFF"/"SLEEP" route correctly.
     String s = (spd as String).trim().toLowerCase()
     if (s == "off") return off()
-    if (s == "sleep") { setMode("sleep"); device.sendEvent(name:"speed", value:"on"); return }
 
     // Reject unknown speed values BEFORE ensureSwitchOn() and before any cloud write.
     // Without this, an unrecognized value (e.g. "turbo") falls through to mapSpeedToInteger,
     // which defaults unknown input to the "low" band (default: return 2) -- silently widening
     // garbage to a real speed AND auto-powering the device on. setMode already rejects invalid
     // modes; mirror that here so a malformed FanControl/Rule Machine speed does not turn the
-    // device on. (BP24-class: reject-before-auto-on.)
+    // device on. (BP24-class: reject-before-auto-on.) "sleep" is a valid speed value (delegates to setMode).
     List validSpeeds = ["low", "medium", "high", "max"]
-    if (!(s in validSpeeds)) {
+    if (!(s == "sleep" || s in validSpeeds)) {
         logWarn "setSpeed: invalid speed '${s}' -- must be one of: ${(validSpeeds + ['sleep','off']).join(', ')}; ignoring"
         return
     }
 
     ensureSwitchOn()
 
-    // BP30 Layer 3: drop an identical speed write issued within the storm dedup window. An
-    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
-    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
-    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    // BP30 Layer 3 (A1): dedup BEFORE the sleep early-return so the "speed" slot reflects the NEW
+    // effective speed even when sleep delegates to setMode — otherwise low->sleep->low within the
+    // window would falsely suppress the 3rd write (slot stale at "low"). The turningOn/powerOnPending
+    // guard keeps an in-flight power-on's establishment write from being suppressed. (Matches the
+    // setMode reference, which dedups before its manual branch.)
     if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("speed", s)) {
         logDebug "setSpeed: identical speed write within dedup window (storm duplicate); skipping"
-        return
+        return false
     }
+
+    // A1-delegation: the "speed" slot is already recorded; if the delegated setMode("sleep") FAILS,
+    // clear it so a same-value setSpeed("sleep") retry is not falsely suppressed.
+    if (s == "sleep") { if (!setMode("sleep")) clearDuplicateWrite("speed"); device.sendEvent(name:"speed", value:"on"); return }
 
     // setLevel establishes manual mode + speed atomically; no setMode("manual") pre-call needed (V2 quirk)
     def lvl = mapSpeedToInteger(s)
@@ -278,6 +283,8 @@ def setSpeed(spd) {
         device.sendEvent(name:"mode", value: "manual")
         device.sendEvent(name:"petMode", value: "off")
         logInfo "Speed: ${s}"
+    } else {
+        clearDuplicateWrite("speed")   // B1: failed write must not suppress an immediate retry
     }
 }
 
@@ -343,6 +350,7 @@ def setMode(mode) {
         else device.sendEvent(name: "speed", value: "auto")
         logInfo "Mode: ${m}"
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed for ${m}", [method:"setMode"])
     }
     return ok

@@ -829,10 +829,10 @@ class LevoitVital100SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Cross-driver consistency (v2.10 / #258): setAutoPreference + setRoomSize NO-ON
-    // preference-setter write-fail feedback, exercised through the Vital100S include
-    // (#4 lesson: the else { reportWriteFailure(...) } lives in the SHARED lib — guard
-    // both consumers). Vital200S has the parallel pair.
+    // Cross-driver consistency: setAutoPreference + setRoomSize NO-ON preference-setter
+    // write-fail feedback, exercised through the Vital100S include. The
+    // else { reportWriteFailure(...) } branch lives in the SHARED lib, so both consumers
+    // (Vital100S + Vital200S) must be guarded. Vital200S has the parallel pair.
     // -------------------------------------------------------------------------
 
     @Unroll
@@ -882,9 +882,9 @@ class LevoitVital100SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Cross-driver consistency (v2.10 / #258 class-wide): resetFilter / setTimer /
-    // cancelTimer NO-ON action-setter write-fail feedback, exercised through the
-    // Vital100S include (shared lib — guard both consumers). Vital200S has the parallel.
+    // Cross-driver consistency (class-wide): resetFilter / setTimer / cancelTimer NO-ON
+    // action-setter write-fail feedback, exercised through the Vital100S include
+    // (shared lib — guard both consumers). Vital200S has the parallel.
     // Preconditions: setTimer needs a positive value; cancelTimer needs state.timerId.
     // -------------------------------------------------------------------------
 
