@@ -272,20 +272,15 @@ private void updateAQIandFilter(String val, filter) {
         state.prevPM = pm;
         state.prevFilter = filter;
 
-        if      (pm <  12.1) aqi = convertRange(pm,   0.0,  12.0,   0,  50);
-        else if (pm <  35.5) aqi = convertRange(pm,  12.1,  35.4,  51, 100);
-        else if (pm <  55.5) aqi = convertRange(pm,  35.5,  55.4, 101, 150);
-        else if (pm < 150.5) aqi = convertRange(pm,  55.5, 150.4, 151, 200);
-        else if (pm < 250.5) aqi = convertRange(pm, 150.5, 250.4, 201, 300);
-        else if (pm < 350.5) aqi = convertRange(pm, 250.5, 350.4, 301, 400);
-        else                 aqi = convertRange(pm, 350.5, 500.4, 401, 500);
+        // US-AQI from PM2.5 via the shared EPA breakpoint ladder (LevoitChildBase.usAqiFromPm25).
+        // Extracted from the former inline ladder here so EverestAir + Sprout Air emit the SAME
+        // airQuality US-AQI semantics; output is byte-identical to the prior convertRange ladder.
+        aqi = usAqiFromPm25(pm);
 
         handleEvent("aqi", aqi);
-        // Adds a conventional `airQuality` NUMBER (US-AQI) attribute for Rule Machine / dashboard
-        // ergonomics. The AirQuality capability's required attribute (`airQualityIndex`) is emitted
-        // by the per-driver applyStatus before this method is called; this adds `airQuality` as
-        // additive convenience under the conventional name, not a capability-contract fix.
-        // airQualityIndex and aqi are unchanged — backward-compatible.
+        // `airQuality` is the conventional US-AQI (0-500) NUMBER for Rule Machine / dashboard /
+        // voice. The AirQuality capability's `airQualityIndex` (Levoit 1-4 categorical level) is
+        // emitted by the per-driver applyStatus before this method runs; aqi == airQuality here.
         handleEvent("airQuality", aqi);
 
         String danger;

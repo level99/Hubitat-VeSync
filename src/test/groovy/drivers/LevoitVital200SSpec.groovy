@@ -36,6 +36,22 @@ class LevoitVital200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // FanControl coherence (v2.10): supportedFanSpeeds published once on initialize()
+    // (Vital line emits a uniform list from LevoitVitalPurifierLib). NON-VACUITY:
+    // removing the emit from the Vital lib's initialize() makes this RED.
+    // -------------------------------------------------------------------------
+
+    def "initialize() emits supportedFanSpeeds matching the Vital setSpeed enum"() {
+        when:
+        driver.initialize()
+
+        then: "supportedFanSpeeds emitted as a JSON list of the Vital line's speeds"
+        def raw = lastEventValue("supportedFanSpeeds")
+        raw != null
+        new groovy.json.JsonSlurper().parseText(raw as String) == ["off", "sleep", "low", "medium", "high", "max"]
+    }
+
+    // -------------------------------------------------------------------------
     // Bug Pattern #1: 2-arg update signature
     // -------------------------------------------------------------------------
 

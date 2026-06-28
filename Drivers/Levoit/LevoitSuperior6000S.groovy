@@ -68,6 +68,10 @@ metadata {
     {
         capability "Switch"
         capability "SwitchLevel"                    // mist level 1-9 mapped to 0-100
+        // Sup6000S exposes mist as SwitchLevel (0-100) for dashboard-dimmer + voice "% mist" control;
+        // sibling humidifiers (Classic 200/300S, Dual 200S, LV600S, OasisMist 1000/450S, Sprout) keep
+        // mist on the discrete setMistLevel command and do NOT declare SwitchLevel — intentional: this
+        // model's continuous mist scale fits a 0-100 dimmer surface, the others' do not.
         capability "RelativeHumidityMeasurement"    // current ambient humidity
         capability "TemperatureMeasurement"         // ambient temp from device sensor
         capability "Actuator"

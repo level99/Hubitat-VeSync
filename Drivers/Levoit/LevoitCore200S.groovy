@@ -121,6 +121,11 @@ private boolean supportsAutoMode() { false }
 // mapIntegerStringToSpeed helpers (Bucket B1, #142 Phase 2c).
 private Map getSpeedBands() { [1:"low", 2:"medium", 3:"high"] }
 
+// Per-driver FanControl speed enum (no sleep/auto/max on the 200S). Emitted once by the
+// lib's initialize() as the standard supportedFanSpeeds attribute. Must match the setSpeed
+// command's ENUM constraints above.
+private String supportedFanSpeedsJson() { groovy.json.JsonOutput.toJson(["off","low","medium","high"]) }
+
 // logDebug, logError, logInfo, logDebugOff, ensureDebugWatchdog, ensureSwitchOn
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 // installed, uninstalled, initialize, updated, on, off, toggle, setDisplay, handlePower,

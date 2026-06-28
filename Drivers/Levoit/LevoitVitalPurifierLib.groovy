@@ -72,6 +72,10 @@ def uninstalled() {
 
 def initialize() {
     logDebug "Initializing"
+    // FanControl: publish the static speed enum once so dashboard fan-tiles and
+    // integrations can populate their speed picker. Uniform across Vital 100S/200S.
+    device.sendEvent(name:"supportedFanSpeeds",
+        value: groovy.json.JsonOutput.toJson(["off","sleep","low","medium","high","max"]))
 }
 
 // ---- Power ----

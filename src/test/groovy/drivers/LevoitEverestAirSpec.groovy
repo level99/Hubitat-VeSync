@@ -245,6 +245,45 @@ class LevoitEverestAirSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // AirQuality capability coherence (v2.10): the standard `airQuality` attribute
+    // must be EMITTED as a US-AQI (0-500) DERIVED FROM PM2.5 via the shared
+    // LevoitChildBase.usAqiFromPm25 helper — same semantics as the Core purifiers.
+    // (Was declared-but-dead — only the Levoit 1-4 airQualityIndex was emitted.)
+    // NON-VACUITY: deleting the `device.sendEvent(name:"airQuality", ...)` line in
+    // applyStatus makes airQuality null and these assertions go RED.
+    // Expected value: PM2.5=40 -> EPA band 35.5-55.4 -> US-AQI 112 (computed via the ladder).
+    // -------------------------------------------------------------------------
+
+    def "applyStatus emits airQuality as a US-AQI derived from PM2.5 (dead-capability fix, v2.10)"() {
+        given: "a response carrying PM2.5=40 (US-AQI 112) and a separate AQLevel=3"
+        def status = [code: 0, result: [powerSwitch: 1, workMode: "auto", fanSpeedLevel: 2,
+                                        manualSpeedLevel: 2, childLockSwitch: 0, AQLevel: 3,
+                                        PM25: 40, screenState: 1, fanRotateAngle: 0]]
+
+        when:
+        driver.applyStatus(status)
+
+        then: "airQuality is the PM2.5-derived US-AQI (NOT the 1-4 AQLevel), matching the Core line"
+        lastEventValue("airQuality") != null
+        (lastEventValue("airQuality") as BigDecimal) == 112
+
+        and: "airQualityIndex remains the Levoit 1-4 categorical level (separate attribute)"
+        lastEventValue("airQualityIndex") == 3
+    }
+
+    def "applyStatus emits no airQuality event when PM2.5 absent from response"() {
+        given: "response without PM25 (airQuality is gated on PM2.5, like the Core line)"
+        def status = [code: 0, result: [powerSwitch: 1, workMode: "auto", fanSpeedLevel: 2,
+                                        manualSpeedLevel: 2, childLockSwitch: 0, AQLevel: 3,
+                                        screenState: 1, fanRotateAngle: 0]]
+        when:
+        driver.applyStatus(status)
+
+        then:
+        testDevice.events.findAll { it.name == "airQuality" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
     // TURBO mode — first-of-kind in this codebase
     // -------------------------------------------------------------------------
 

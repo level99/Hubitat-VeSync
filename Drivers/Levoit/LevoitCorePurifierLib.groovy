@@ -55,6 +55,11 @@ def uninstalled() {
 
 def initialize() {
 	logDebug "initializing"
+	// FanControl: publish the static speed enum once so dashboard fan-tiles and
+	// integrations can populate their speed picker. The Core line's supported speed
+	// set differs per model (200S has no sleep/auto/max; 400S/600S add max), so each
+	// driver supplies its own list via supportedFanSpeedsJson().
+	device.sendEvent(name:"supportedFanSpeeds", value: supportedFanSpeedsJson())
 }
 
 // Bucket A3 (#142 Phase 2a): byte-identical lifecycle across all 4 Core drivers.

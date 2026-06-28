@@ -179,6 +179,7 @@ def _collect_per_file_rules():
         device_shorthand_leak,
         malformed_capability,
         recordError_key_style,
+        capability_coherence,
     )
     rules = []
     for module in [
@@ -199,6 +200,7 @@ def _collect_per_file_rules():
         device_shorthand_leak,
         malformed_capability,
         recordError_key_style,
+        capability_coherence,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

@@ -37,6 +37,23 @@ class LevoitCore200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // FanControl coherence (v2.10): supportedFanSpeeds published once on initialize()
+    // so dashboard fan-tiles can populate their speed picker. The Core 200S list is
+    // model-specific (no sleep/auto/max). NON-VACUITY: removing the emit from the
+    // lib's initialize() (or the per-driver supportedFanSpeedsJson) makes this RED.
+    // -------------------------------------------------------------------------
+
+    def "initialize() emits supportedFanSpeeds matching the Core 200S setSpeed enum"() {
+        when:
+        driver.initialize()
+
+        then: "supportedFanSpeeds emitted as a JSON list of the 200S's speeds"
+        def raw = lastEventValue("supportedFanSpeeds")
+        raw != null
+        new groovy.json.JsonSlurper().parseText(raw as String) == ["off", "low", "medium", "high"]
+    }
+
+    // -------------------------------------------------------------------------
     // Bug Pattern #1: 2-arg update signature
     // -------------------------------------------------------------------------
 

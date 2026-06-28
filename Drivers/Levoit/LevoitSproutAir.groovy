@@ -97,7 +97,7 @@ metadata {
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
-        capability "AirQuality"                     // airQualityIndex attribute
+        capability "AirQuality"                     // provides the standard airQuality attribute (emitted in applyStatus)
         capability "RelativeHumidityMeasurement"    // humidity attribute
         capability "TemperatureMeasurement"         // temperature attribute
         capability "Sensor"
@@ -106,6 +106,7 @@ metadata {
 
         attribute "mode",             "string"      // auto | sleep | manual
         attribute "fanSpeed",         "number"      // 0-3 (0 = inactive when off)
+        attribute "airQuality",       "number"      // standard AirQuality cap: US-AQI 0-500 (from PM2.5)
         attribute "airQualityIndex",  "number"      // 1-4 categorical (Levoit AQ level)
         attribute "pm25",             "number"      // PM2.5 µg/m³
         attribute "pm1",              "number"      // PM1.0 µg/m³
@@ -390,10 +391,17 @@ def applyStatus(status){
     }
 
     // ---- Air quality sensors ----
-    if (r.AQLevel != null) {
-        device.sendEvent(name:"airQualityIndex", value: r.AQLevel as Integer)
+    if (r.AQLevel != null) device.sendEvent(name:"airQualityIndex", value: r.AQLevel as Integer)
+    if (r.PM25 != null) {
+        device.sendEvent(name:"pm25", value: r.PM25 as Integer)
+        // Standard AirQuality-capability attribute: a US-AQI (0-500) derived from PM2.5 via the
+        // shared EPA breakpoint ladder (LevoitChildBase.usAqiFromPm25), so this matches the Core
+        // purifiers' airQuality semantics exactly. airQualityIndex remains the Levoit 1-4
+        // categorical level; the custom `aqi` attribute (Levoit's own index, r.AQI) is unchanged
+        // below. Emitted only when PM2.5 is present (mirrors Core).
+        def usAqi = usAqiFromPm25(r.PM25)
+        if (usAqi != null) device.sendEvent(name:"airQuality", value: usAqi)
     }
-    if (r.PM25 != null)  device.sendEvent(name:"pm25",  value: r.PM25  as Integer)
     if (r.PM1  != null)  device.sendEvent(name:"pm1",   value: r.PM1   as Integer)
     if (r.PM10 != null)  device.sendEvent(name:"pm10",  value: r.PM10  as Integer)
     if (r.AQI  != null)  device.sendEvent(name:"aqi",   value: r.AQI   as Integer)

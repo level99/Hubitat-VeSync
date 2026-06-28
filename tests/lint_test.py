@@ -8909,3 +8909,293 @@ class TestRule46NoOnWriteFeedback:
         assert not any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
             f"NO-ON marker must not leak onto a later unrelated method, got: {findings}"
         )
+
+
+# ---------------------------------------------------------------------------
+# RULE47 — capability coherence (declared capability must have required cmd/attr)
+# ---------------------------------------------------------------------------
+
+from lint_rules.capability_coherence import check_rule47_capability_coherence
+
+
+class TestRule47CapabilityCoherence:
+    """
+    RULE47: a declared `capability "X"` must have its required command(s) present
+    and its required attribute(s) emitted in the driver's EFFECTIVE source (driver
+    body + every #include'd library).
+
+    Non-vacuity contracts:
+      - must-catch tests FAIL if the rule predicate is disabled or narrowed (the
+        rule returns [] and the `any(...)` assertion fails).
+      - must-not-catch tests FAIL if the rule over-fires on a coherent driver, on a
+        lib-provided command/attribute (proves include resolution), or on a call
+        site mistaken for a definition.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    @staticmethod
+    def _run(src: str) -> list:
+        """Invoke RULE47 against src as a .groovy driver file via the shared run_rule helper."""
+        return run_rule(check_rule47_capability_coherence, src, fname="TestDriver.groovy")
+
+    # -----------------------------------------------------------------------
+    # Must-catch
+    # -----------------------------------------------------------------------
+
+    def test_catches_airquality_declared_but_only_airqualityindex_emitted(self):
+        """
+        The EverestAir-pre-fix shape: capability "AirQuality" declared, but only a
+        custom airQualityIndex is emitted -- the standard airQuality attribute is
+        never emitted. Must WARN (dead-capability).
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test AQ", namespace: "test", author: "t") {
+                    capability "AirQuality"
+                    capability "Sensor"
+                }
+            }
+            def applyStatus(status) {
+                def r = status.result
+                if (r.AQLevel != null) device.sendEvent(name:"airQualityIndex", value: r.AQLevel as Integer)
+            }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        assert rule_findings, f"Expected RULE47 for declared-but-unemitted airQuality, got: {findings}"
+        assert any('airQuality' in f['title'] and 'AirQuality' in f['title'] for f in rule_findings), (
+            f"RULE47 must name the airQuality attribute, got: {rule_findings}"
+        )
+        assert all(f['severity'] == 'WARN' for f in rule_findings), (
+            f"missing-attribute RULE47 finding must be WARN (gates under --strict), got: {rule_findings}"
+        )
+
+    def test_catches_fancontrol_without_supportedfanspeeds(self):
+        """
+        A FanControl driver that emits speed but never emits supportedFanSpeeds must
+        WARN -- the missing-supportedFanSpeeds class.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Fan", namespace: "test", author: "t") {
+                    capability "FanControl"
+                    command "setSpeed", [[name:"Speed*", type:"ENUM", constraints:["low","high"]]]
+                }
+            }
+            def applyStatus(status) {
+                device.sendEvent(name:"speed", value:"low")
+            }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        assert rule_findings, f"Expected RULE47 for FanControl missing supportedFanSpeeds, got: {findings}"
+        assert any('supportedFanSpeeds' in f['title'] for f in rule_findings), (
+            f"RULE47 must name the supportedFanSpeeds attribute, got: {rule_findings}"
+        )
+        assert all(f['severity'] == 'WARN' for f in rule_findings if 'supportedFanSpeeds' in f['title']), (
+            f"missing supportedFanSpeeds must be WARN, got: {rule_findings}"
+        )
+
+    def test_catches_missing_required_command_as_fail(self):
+        """
+        A driver declaring SwitchLevel without a setLevel command (and no def setLevel,
+        no lib providing it) must FAIL -- a hard command-contract break.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test SL", namespace: "test", author: "t") {
+                    capability "SwitchLevel"
+                }
+            }
+            def applyStatus(status) {
+                device.sendEvent(name:"level", value: 50)
+            }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        assert rule_findings, f"Expected RULE47 for SwitchLevel missing setLevel command, got: {findings}"
+        cmd_findings = [f for f in rule_findings if 'setLevel' in f['title']]
+        assert cmd_findings, f"RULE47 must name the missing setLevel command, got: {rule_findings}"
+        assert all(f['severity'] == 'FAIL' for f in cmd_findings), (
+            f"missing-command RULE47 finding must be FAIL (hard contract break), got: {cmd_findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch
+    # -----------------------------------------------------------------------
+
+    def test_lib_provided_commands_pass_via_include_resolution(self):
+        """
+        A driver declaring Switch + Refresh whose on()/off()/refresh() AND the emitted
+        `switch` attribute are provided by an #include'd library (real LevoitFanLib) must
+        NOT flag -- proves the rule resolves #include directives and scans lib source. The
+        driver body itself has no def on/off/refresh and no switch emit.
+
+        FS DEPENDENCY: this fixture reads the real Drivers/Levoit/LevoitFanLib.groovy from
+        disk at test time (via the rule's included_lib_texts resolution against the fake
+        path's parent dir). If that lib file moves or stops providing on/off/refresh +
+        switch, this test will break -- by design, since it exercises real include resolution.
+        """
+        src = textwrap.dedent("""\
+            #include level99.LevoitFan
+            metadata {
+                definition (name: "Test Include", namespace: "test", author: "t") {
+                    capability "Switch"
+                    capability "Refresh"
+                    capability "Actuator"
+                }
+            }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        assert not rule_findings, (
+            f"Lib-provided on/off/refresh (via #include) must not flag RULE47 -- "
+            f"include resolution failed, got: {rule_findings}"
+        )
+
+    def test_coherent_airquality_driver_passes(self):
+        """
+        A coherent AirQuality driver that emits the standard airQuality attribute (the
+        Core600S / post-fix EverestAir shape) must NOT flag.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test AQ OK", namespace: "test", author: "t") {
+                    capability "AirQuality"
+                    capability "Sensor"
+                }
+            }
+            def applyStatus(status) {
+                def r = status.result
+                if (r.AQLevel != null) {
+                    device.sendEvent(name:"airQualityIndex", value: r.AQLevel as Integer)
+                    device.sendEvent(name:"airQuality", value: r.AQLevel as Integer)
+                }
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
+            f"Coherent AirQuality driver (emits airQuality) must not flag RULE47, got: {findings}"
+        )
+
+    def test_handleEvent_emit_satisfies_attribute(self):
+        """
+        An attribute emitted via handleEvent("X", ...) (the Core lib idiom) satisfies
+        the contract -- must NOT flag. Mirrors how the Core AQ trio emits.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test HE", namespace: "test", author: "t") {
+                    capability "AirQuality"
+                }
+            }
+            def applyStatus(status) {
+                handleEvent("airQuality", 2)
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
+            f"handleEvent-emitted airQuality must satisfy the contract, got: {findings}"
+        )
+
+    def test_catches_switch_declared_but_switch_attr_never_emitted(self):
+        """
+        Switch contract: a driver declaring `capability "Switch"` with on()/off() defined
+        but that never emits the `switch` attribute must WARN. The `switch` attribute is
+        NOT platform-auto-emitted (paid-Flash ship-gate finding). Same dead-capability class.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Switch", namespace: "test", author: "t") {
+                    capability "Switch"
+                }
+            }
+            def on()  { hubBypass("setSwitch", [powerSwitch: 1], "on") }
+            def off() { hubBypass("setSwitch", [powerSwitch: 0], "off") }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        assert any('switch' in f['title'] and f['severity'] == 'WARN' for f in rule_findings), (
+            f"Switch declared but `switch` attr never emitted must WARN, got: {rule_findings}"
+        )
+
+    def test_switch_attr_emitted_satisfies_switch_contract(self):
+        """
+        A Switch driver with on()/off() AND a `switch` sendEvent must NOT flag — proves the
+        new Switch-attr requirement doesn't false-positive on the normal (emitting) shape.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Switch OK", namespace: "test", author: "t") {
+                    capability "Switch"
+                }
+            }
+            def on()  { device.sendEvent(name:"switch", value:"on") }
+            def off() { device.sendEvent(name:"switch", value:"off") }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
+            f"Switch driver that emits `switch` must not flag RULE47, got: {findings}"
+        )
+
+    def test_call_site_not_mistaken_for_command_definition(self):
+        """
+        A bare call to a command name elsewhere (e.g. `setLevel(50)` inside another
+        method) must NOT satisfy the command requirement -- only a real definition or a
+        `command "..."` declaration does. Here SwitchLevel is declared, setLevel is only
+        CALLED, never defined -> must still FAIL on the missing command.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Call", namespace: "test", author: "t") {
+                    capability "SwitchLevel"
+                }
+            }
+            def someOther() {
+                setLevel(50)
+                return setLevel(60)
+            }
+            def applyStatus(status) {
+                device.sendEvent(name:"level", value: 50)
+            }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        assert any('setLevel' in f['title'] and f['severity'] == 'FAIL' for f in rule_findings), (
+            f"A bare setLevel() call must NOT satisfy the command contract; expected FAIL, got: {rule_findings}"
+        )
+
+    def test_void_method_definition_satisfies_command(self):
+        """
+        A `void` (not `def`) method definition satisfies the command contract -- the
+        Notification Tile shape (`void deviceNotification(...)`, `void push()`,
+        `void configure()`). Must NOT flag.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Void", namespace: "test", author: "t") {
+                    capability "Notification"
+                    capability "Momentary"
+                    capability "Configuration"
+                }
+            }
+            void deviceNotification(notification) { logDebug "n" }
+            void push() { configure() }
+            void configure() { logDebug "c" }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
+            f"void-typed command definitions must satisfy the contract, got: {findings}"
+        )
+
+    def test_library_file_skipped(self):
+        """A library file (library() block, no definition()) must be skipped entirely."""
+        src = textwrap.dedent("""\
+            library(name: "TestLib", namespace: "level99", author: "t", description: "d")
+            def on() { logDebug "on" }
+        """)
+        findings = run_rule(check_rule47_capability_coherence, src, fname="TestLib.groovy")
+        assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
+            f"Library files must be skipped by RULE47, got: {findings}"
+        )

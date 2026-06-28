@@ -114,6 +114,47 @@ class LevoitSproutAirSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // AirQuality capability coherence (v2.10): the standard `airQuality` attribute
+    // must be EMITTED as a US-AQI (0-500) DERIVED FROM PM2.5 via the shared
+    // LevoitChildBase.usAqiFromPm25 helper — same semantics as the Core purifiers.
+    // (Was declared-but-dead — only the 1-4 airQualityIndex + custom aqi were emitted.)
+    // NON-VACUITY: deleting the airQuality sendEvent in applyStatus makes airQuality
+    // null and these assertions go RED.
+    // Expected value: PM2.5=18 -> EPA band 12.1-35.4 -> US-AQI 63 (computed via the ladder).
+    // -------------------------------------------------------------------------
+
+    def "applyStatus emits airQuality as a US-AQI derived from PM2.5 (dead-capability fix, v2.10)"() {
+        given: "a response carrying PM2.5=18 (US-AQI 63), AQLevel=2, and the custom AQI=60"
+        def status = [code: 0, result: [powerSwitch: 1, workMode: "auto", fanSpeedLevel: 1,
+                                        manualSpeedLevel: 1, childLockSwitch: 0, AQLevel: 2,
+                                        PM25: 18, PM1: 10, PM10: 22, AQI: 60,
+                                        screenSwitch: 1, screenState: 1]]
+
+        when:
+        driver.applyStatus(status)
+
+        then: "airQuality is the PM2.5-derived US-AQI (NOT AQLevel, NOT the custom aqi), matching Core"
+        lastEventValue("airQuality") != null
+        (lastEventValue("airQuality") as BigDecimal) == 63
+
+        and: "airQualityIndex (1-4 level) and the custom aqi (Levoit index) are unchanged"
+        lastEventValue("airQualityIndex") == 2
+        lastEventValue("aqi") == 60
+    }
+
+    def "applyStatus emits no airQuality event when PM2.5 absent from response"() {
+        given: "response without PM25 (airQuality is gated on PM2.5, like the Core line)"
+        def status = [code: 0, result: [powerSwitch: 1, workMode: "auto", fanSpeedLevel: 1,
+                                        manualSpeedLevel: 1, childLockSwitch: 0, AQLevel: 2,
+                                        AQI: 60, screenSwitch: 1, screenState: 1]]
+        when:
+        driver.applyStatus(status)
+
+        then:
+        testDevice.events.findAll { it.name == "airQuality" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
     // Bug Pattern #6: fan speed 0 when device off (fanSpeedLevel=255 maps to 0)
     // -------------------------------------------------------------------------
 

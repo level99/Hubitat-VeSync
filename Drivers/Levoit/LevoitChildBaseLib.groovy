@@ -215,6 +215,41 @@ Integer parseLevelOrNull(raw) {
     }
 }
 
+// Single source of truth for converting a PM2.5 reading (micrograms/m3) to a US-AQI
+// (0-500) via the EPA breakpoint ladder. Shared so every AirQuality-capability driver
+// emits the SAME `airQuality` semantics: the Core purifiers, EverestAir, and Sprout Air
+// all report airQuality as this US-AQI, NOT a vendor categorical level. (airQualityIndex
+// stays the Levoit 1-4 categorical level, a separate attribute.)
+//
+// Returns a BigDecimal whole number (same type/value the Core line emitted from its
+// previous inline ladder, so Core's emitted aqi/airQuality are byte-identical). Returns
+// null if pm is null or non-numeric — callers gate their emit on a non-null result,
+// matching Core's "emit only when PM present" behavior. The linear-interpolation math
+// mirrors LevoitCoreAQPurifierLib.convertRange exactly, including the toFloat().round()
+// integer rounding (BigDecimal.round is unreliable on the Hubitat sandbox).
+BigDecimal usAqiFromPm25(pm) {
+    if (pm == null) return null
+    BigDecimal p
+    try {
+        p = (pm instanceof BigDecimal) ? pm : new BigDecimal(pm.toString().trim())
+    } catch (ignored) {
+        return null
+    }
+    BigDecimal inMin, inMax, outMin, outMax
+    if      (p <  12.1) { inMin =   0.0; inMax =  12.0; outMin =   0; outMax =  50 }
+    else if (p <  35.5) { inMin =  12.1; inMax =  35.4; outMin =  51; outMax = 100 }
+    else if (p <  55.5) { inMin =  35.5; inMax =  55.4; outMin = 101; outMax = 150 }
+    else if (p < 150.5) { inMin =  55.5; inMax = 150.4; outMin = 151; outMax = 200 }
+    else if (p < 250.5) { inMin = 150.5; inMax = 250.4; outMin = 201; outMax = 300 }
+    else if (p < 350.5) { inMin = 250.5; inMax = 350.4; outMin = 301; outMax = 400 }
+    else                { inMin = 350.5; inMax = 500.4; outMin = 401; outMax = 500 }
+    // Restrain input to the band (mirrors convertRange).
+    if (p < inMin) p = inMin
+    else if (p > inMax) p = inMax
+    BigDecimal v = ((p - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin
+    return v.toFloat().round().toBigDecimal()
+}
+
 // BP6 off-clamp: the single source of truth for "a level the device reports while
 // powered OFF should display as 0, not the retained last-set value." VeSync keeps
 // mist_virtual_level / warm_level / mistLevel etc. at their last-set value when the

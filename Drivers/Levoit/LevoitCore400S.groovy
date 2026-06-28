@@ -127,6 +127,10 @@ private boolean supportsAutoMode() { true }
 // mapIntegerStringToSpeed helpers (Bucket B1, #142 Phase 2c).
 private Map getSpeedBands() { [1:"low", 2:"medium", 3:"high", 4:"max"] }
 
+// Per-driver FanControl speed enum. Emitted once by the lib's initialize() as the standard
+// supportedFanSpeeds attribute. Must match the setSpeed command's ENUM constraints above.
+private String supportedFanSpeedsJson() { groovy.json.JsonOutput.toJson(["off","sleep","auto","low","medium","high","max"]) }
+
 // Auto-preference modes for Core 400S. MUST match the setAutoMode command-constraint enum above.
 // Consumed by the lib's setAutoMode to reject invalid input before waking an off device (BP24).
 private List getAutoModes() { ["default", "quiet", "efficient"] }

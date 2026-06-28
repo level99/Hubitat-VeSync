@@ -41,6 +41,24 @@ class LevoitTowerFanSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // FanControl coherence (v2.10): supportedFanSpeeds published once on initialize()
+    // (fan line emits a uniform list from LevoitFanLib, mirroring levelToFanControlEnum's
+    // output buckets). NON-VACUITY: removing the emit from the Fan lib's initialize()
+    // makes this RED.
+    // -------------------------------------------------------------------------
+
+    def "initialize() emits supportedFanSpeeds matching the fan FanControl buckets"() {
+        when:
+        driver.initialize()
+
+        then: "supportedFanSpeeds emitted as a JSON list of the fan's FanControl enum buckets"
+        def raw = lastEventValue("supportedFanSpeeds")
+        raw != null
+        new groovy.json.JsonSlurper().parseText(raw as String) ==
+            ["off", "low", "medium-low", "medium", "medium-high", "high"]
+    }
+
+    // -------------------------------------------------------------------------
     // Bug Pattern #1: 3-signature update() methods
     // -------------------------------------------------------------------------
 

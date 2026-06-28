@@ -99,6 +99,11 @@ def uninstalled() {
 
 def initialize() {
     logDebug "Initializing"
+    // FanControl: publish the static speed enum once so dashboard fan-tiles and
+    // integrations can populate their speed picker. The 1-12 raw fan level maps to
+    // these FanControl buckets via levelToFanControlEnum(); list its output set.
+    device.sendEvent(name:"supportedFanSpeeds",
+        value: groovy.json.JsonOutput.toJson(["off","low","medium-low","medium","medium-high","high"]))
 }
 
 // ---- Refresh ----
