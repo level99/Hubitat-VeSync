@@ -147,6 +147,9 @@ def setNightLight(mode)
 				result = true
 			}
 		}
+    // B1: a FAILED write must not suppress an immediate identical retry — clear the dedup slot
+    // so the same value fires again (result is synchronously real here; the closure already ran).
+    if (!result) clearDuplicateWrite("nightLight")
     return result
 }
 

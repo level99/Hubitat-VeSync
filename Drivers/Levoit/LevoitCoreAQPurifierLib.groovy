@@ -37,7 +37,7 @@ library(
 //             consumes it to reject invalid input BEFORE waking an off device (BP24 invariant).
 //   PROVIDES: update() (0-arg self-fetch), update(status, nightLight) (2-arg poll dispatcher),
 //             setAutoMode(mode), setAutoMode(mode, roomSize), handleAutoMode(mode),
-//             handleAutoMode(mode, size), updateAQIandFilter(String, filter), convertRange(...)
+//             handleAutoMode(mode, size), updateAQIandFilter(String, filter)
 
 // Bucket A5 (#142 Phase 2b-amended): byte-identical 0-arg self-fetch across 300S/400S/600S.
 // Issues getPurifierStatus bypassV2 request, validates the response envelope, and
@@ -318,22 +318,4 @@ private void updateAQIandFilter(String val, filter) {
         handleEvent("info", html)
         handleEvent("filter", filter)
     }
-}
-
-private BigDecimal convertRange(BigDecimal val, BigDecimal inMin, BigDecimal inMax, BigDecimal outMin, BigDecimal outMax, Boolean returnInt = true) {
-  // Let make sure ranges are correct
-  assert (inMin <= inMax);
-  assert (outMin <= outMax);
-
-  // Restrain input value
-  if (val < inMin) val = inMin;
-  else if (val > inMax) val = inMax;
-
-  val = ((val - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin;
-  if (returnInt) {
-    // If integer is required we use the Float round because the BigDecimal one is not supported/not working on Hubitat
-    val = val.toFloat().round().toBigDecimal();
-  }
-
-  return (val);
 }

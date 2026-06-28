@@ -281,4 +281,22 @@ class StormHardeningLightSpec extends HubitatSpec {
         then: "both fire — only identical repeats are suppressed"
         nightLightWriteCount() == 2
     }
+
+    def "a FAILED setNightLight clears the slot so an identical retry FIRES (BP30 B1, nightLight)"() {
+        given:
+        state.remove("dupWriteVal_nightLight")
+        state.remove("dupWriteAt_nightLight")
+        testParent.allRequests.clear()
+
+        when: "the first setNightLight('on') gets a FAILED response (checkHttpResponse false)"
+        testParent.cannedResponse = support.TestParent.httpErrorResponse(500)
+        driver.setNightLight("on")   // records nightLight='on', write fails -> must clearDuplicateWrite
+        testParent.allRequests.clear()
+
+        and: "an immediate identical retry (default-OK)"
+        driver.setNightLight("on")
+
+        then: "the retry FIRED — the failed write cleared the dedup slot (not falsely suppressed)"
+        nightLightWriteCount() == 1
+    }
 }

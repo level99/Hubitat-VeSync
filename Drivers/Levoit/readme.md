@@ -127,6 +127,7 @@ The parent **VeSync Integration** has one event attribute: `heartbeat` (`syncing
 | info | HTML | Dashboard-tile-friendly summary |
 | switch | on, off | Power state |
 | speed | off, low, medium, high | Fan speed |
+| supportedFanSpeeds | JSON list | FanControl capability: JSON list of the speeds this model supports, published once on `initialize()` so the dashboard fan-speed picker populates. |
 
 Commands: `setDisplay`, `setSpeed`, `setMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`, `update` (refresh).
 
@@ -153,6 +154,7 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 | info | HTML | Tile summary |
 | switch | on, off | Power |
 | speed | off, sleep, low, medium, high | Fan speed |
+| supportedFanSpeeds | JSON list | FanControl capability: JSON list of the speeds this model supports, published once on `initialize()` so the dashboard fan-speed picker populates. |
 
 Commands: `setDisplay`, `setSpeed`, `setMode`, `setAutoMode`, `setChildLock`, `setTimer` (seconds), `cancelTimer`, `resetFilter`, `toggle`, `update` (refresh).
 
@@ -160,7 +162,7 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 
 **Timer units:** `setTimer` accepts seconds for Core line (matches the Levoit V1 API). The Vital line's `setTimer` accepts minutes — be aware if you have both device families.
 
-**`airQuality` attribute type differs by family:** on Core 300S/400S/600S the `airQuality` attribute is a **number** (US AQI, 0–500). On Vital 100S/200S and the Generic driver it is a **string** (a categorical label such as "good" or "poor"). A Rule Machine condition or dashboard binding that compares `airQuality` numerically (e.g., `airQuality > 100`) will work correctly on Core devices but will not behave as expected on Vital or Generic devices — and vice versa for string comparisons. Do not copy automations that reference `airQuality` across the Core ↔ Vital boundary without updating the comparison type.
+**`airQuality` attribute type differs by family:** on Core 300S/400S/600S, EverestAir, and Sprout Air the `airQuality` attribute is a **number** (US AQI, 0–500). On Vital 100S/200S and the Generic driver it is a **string** (a categorical label such as "good" or "poor"). A Rule Machine condition or dashboard binding that compares `airQuality` numerically (e.g., `airQuality > 100`) will work correctly on Core devices but will not behave as expected on Vital or Generic devices — and vice versa for string comparisons. Do not copy automations that reference `airQuality` across the Core ↔ Vital boundary without updating the comparison type.
 
 ### Core 400S
 
@@ -186,6 +188,7 @@ Note: in the VeSync mobile app, the child-lock feature is labeled "Display Lock"
 | --- | --- | --- |
 | switch | on, off | Power |
 | speed | off, sleep, low, medium, high, max | Fan speed (off when device is off) |
+| supportedFanSpeeds | JSON list | FanControl capability: JSON list of the speeds this model supports, published once on `initialize()` so the dashboard fan-speed picker populates. |
 | mode | manual, auto, sleep, pet | Current mode |
 | petMode | on, off | True if mode is "pet" |
 | filter | 0-100 | Filter life (%) |
@@ -212,6 +215,7 @@ Same V2 platform as Vital 200S. Differs in one capability: **no light-detection*
 | --- | --- | --- |
 | switch | on, off | Power |
 | speed | off, sleep, low, medium, high, max | Fan speed (off when device is off) |
+| supportedFanSpeeds | JSON list | FanControl capability: JSON list of the speeds this model supports, published once on `initialize()` so the dashboard fan-speed picker populates. |
 | mode | manual, auto, sleep, pet | Current mode |
 | petMode | on, off | True if mode is "pet" |
 | filter | 0-100 | Filter life (%) |
@@ -490,6 +494,7 @@ pyvesync class: `VeSyncAirSprout` (inherits `VeSyncAirBaseV2` → `VeSyncAirBypa
 | mode | auto, manual, sleep, turbo, pet | Current mode |
 | fanSpeed | 0-3 | Active fan speed (0 when device is off; 255 sentinel mapped to 0) |
 | airQualityIndex | 1-4 | Levoit categorical AQ index (1=excellent, 4=very bad) |
+| airQuality | 0-500 | Standard AirQuality-capability attribute: a US-AQI computed from PM2.5 (same formula as the Core 300S/400S/600S purifiers). Numeric — bind it for the AirQuality dashboard tile / numeric Rule Machine air-quality conditions. |
 | pm25 | µg/m³ | Real-time PM2.5 reading |
 | pm1 | µg/m³ | Real-time PM1.0 reading (if present in response) |
 | pm10 | µg/m³ | Real-time PM10 reading (if present in response) |
@@ -528,6 +533,7 @@ pyvesync class: `VeSyncAirBaseV2` — same base class as Vital 200S and Sprout A
 | mode | auto, sleep, manual, turbo | Current mode (`"turbo"` is first new mode value in this codebase) |
 | fanSpeed | 0-3 | Active fan speed (0 when device is off; 255 sentinel mapped to 0) |
 | airQualityIndex | 1-4 | Levoit categorical AQ index (1=excellent, 4=very bad) |
+| airQuality | 0-500 | Standard AirQuality-capability attribute: a US-AQI computed from PM2.5 (same formula as the Core 300S/400S/600S purifiers). Numeric — bind it for the AirQuality dashboard tile / numeric Rule Machine air-quality conditions. |
 | pm25 | µg/m³ | Real-time PM2.5 reading |
 | pm1 | µg/m³ | Real-time PM1.0 reading (if present in response) |
 | pm10 | µg/m³ | Real-time PM10 reading (if present in response) |
@@ -551,6 +557,7 @@ First fan device supported by this fork. Mode `sleep` maps to API literal `advan
 | --- | --- | --- |
 | switch | on, off | Power |
 | speed | 1-12 | Fan speed (off when device is off) |
+| supportedFanSpeeds | JSON list | FanControl capability: JSON list of the speeds this model supports, published once on `initialize()` so the dashboard fan-speed picker populates. |
 | level | 0-100 | SwitchLevel mapping (1-12 mapped to %) |
 | mode | normal, turbo, auto, sleep | Current mode |
 | oscillation | on, off | Single-axis oscillation state |
@@ -575,6 +582,7 @@ Covers LPF-R432S-AEU, LPF-R432S-AUS, and LPF-R432S-AUK (UK market variant, v2.3)
 | --- | --- | --- |
 | switch | on, off | Power |
 | speed | 1-12 | Fan speed (off when device is off) |
+| supportedFanSpeeds | JSON list | FanControl capability: JSON list of the speeds this model supports, published once on `initialize()` so the dashboard fan-speed picker populates. |
 | level | 0-100 | SwitchLevel mapping (1-12 mapped to %) |
 | mode | normal, turbo, eco, sleep | Current mode |
 | horizontalOscillation | on, off | Horizontal oscillation toggle |

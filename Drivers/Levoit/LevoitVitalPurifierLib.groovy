@@ -271,6 +271,7 @@ def setSpeed(spd) {
 
     // A1-delegation: the "speed" slot is already recorded; if the delegated setMode("sleep") FAILS,
     // clear it so a same-value setSpeed("sleep") retry is not falsely suppressed.
+    // B1 fail-safe: the delegated setter's false can mean a genuine failure OR its own dedup-suppress; clearing the outer slot on either is harmless (inner write stays deduped -> no extra cloud write).
     if (s == "sleep") { if (!setMode("sleep")) clearDuplicateWrite("speed"); device.sendEvent(name:"speed", value:"on"); return }
 
     // setLevel establishes manual mode + speed atomically; no setMode("manual") pre-call needed (V2 quirk)

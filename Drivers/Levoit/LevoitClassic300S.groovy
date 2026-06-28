@@ -147,6 +147,7 @@ def setMode(mode){
 //     reduce range to 1-3.
 // setVirtualLevel payload: {id: 0, level: N, type: 'mist'}
 // NOTE: field names id/level/type -- NOT levelIdx/virtualLevel/levelType (Superior 6000S)
+// BP30: setMistLevel is a SwitchLevel setpoint, intentionally NOT dedup-gated (see Superior6000S waiver).
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return

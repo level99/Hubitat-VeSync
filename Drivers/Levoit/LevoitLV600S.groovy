@@ -179,6 +179,7 @@ def setMode(mode){
     if (m == "auto") {
         // Multi-firmware try-canonical-then-fallback with cache
         String preferred = (state.firmwareVariant == "alt") ? "humidity" : "auto"
+        // B1 fail-safe: the delegated setter's false can mean a genuine failure OR its own dedup-suppress; clearing the outer slot on either is harmless (inner write stays deduped -> no extra cloud write).
         if (!sendModeRequest(preferred, "auto", false)) clearDuplicateWrite("mode")   // A1-delegation: failed mode-delegate must not block retry
     } else {
         // sleep and manual have no known firmware variant issue -- send directly
@@ -230,6 +231,7 @@ private boolean sendModeRequest(String payloadValue, String userMode, boolean is
 //   Payload: {id:0, level:N, type:'mist'} -- same as Classic 300S and OasisMist 450S.
 //   NOT levelIdx/virtualLevel/levelType (Superior 6000S style).
 // setVirtualLevel payload: {id: 0, level: N, type: 'mist'}
+// BP30: setMistLevel is a SwitchLevel setpoint, intentionally NOT dedup-gated (see Superior6000S waiver).
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return

@@ -4092,6 +4092,76 @@ class TestRule49DedupAfterDelegation:
 
 
 # ---------------------------------------------------------------------------
+# RULE50 — B1 completeness: isDuplicateWrite must be paired with clearDuplicateWrite
+# ---------------------------------------------------------------------------
+
+class TestRule50DedupClearOnFailure:
+    """RULE50 (B1-completeness): a method that records a dedup slot via isDuplicateWrite must also
+    clear it (clearDuplicateWrite) on the write-failure path, else a failed write suppresses an
+    identical retry for the dedup window. Must-catch = the verbatim pre-fix setNightLight shape.
+    """
+
+    from lint_rules.bp30_dedup_clear_on_failure import (
+        check_rule50_dedup_clear_on_failure as _rule,
+    )
+
+    # MUST-CATCH: the verbatim PRE-FIX setNightLight shape — isDuplicateWrite, NO clearDuplicateWrite.
+    BAD_NO_CLEAR = textwrap.dedent("""\
+        def setNightLight(mode) {
+            String m = (mode as String).trim().toLowerCase()
+            if (isDuplicateWrite("nightLight", m)) {
+                logDebug "setNightLight(${m}): storm duplicate; skipping"
+                return false
+            }
+            def result = false
+            parent.sendBypassRequest(device, [data:[night_light:m], method:"setNightLight"]) { resp ->
+                if (checkHttpResponse("setNightLight", resp)) { result = true }
+            }
+            return result
+        }
+    """)
+
+    # MUST-NOT-CATCH: the FIXED shape — clearDuplicateWrite on the failure path.
+    GOOD_WITH_CLEAR = textwrap.dedent("""\
+        def setNightLight(mode) {
+            String m = (mode as String).trim().toLowerCase()
+            if (isDuplicateWrite("nightLight", m)) {
+                logDebug "setNightLight(${m}): storm duplicate; skipping"
+                return false
+            }
+            def result = false
+            parent.sendBypassRequest(device, [data:[night_light:m], method:"setNightLight"]) { resp ->
+                if (checkHttpResponse("setNightLight", resp)) { result = true }
+            }
+            if (!result) clearDuplicateWrite("nightLight")
+            return result
+        }
+    """)
+
+    # MUST-NOT-CATCH: a setter with no dedup at all is out of scope.
+    GOOD_NO_DEDUP = textwrap.dedent("""\
+        def setDisplay(onOff) {
+            String v = (onOff as String).trim().toLowerCase()
+            def resp = hubBypass("setDisplay", [screenSwitch: v == "on" ? 1 : 0], "setDisplay")
+            if (httpOk(resp)) device.sendEvent(name:"display", value: v)
+        }
+    """)
+
+    def test_no_clear_fails(self):
+        findings = run_rule(TestRule50DedupClearOnFailure._rule, self.BAD_NO_CLEAR, "LevoitCore200S Light")
+        assert any(f['rule_id'] == 'RULE50_dedup_clear_on_failure' for f in findings), findings
+        assert all(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE50_dedup_clear_on_failure')
+
+    def test_with_clear_passes(self):
+        findings = run_rule(TestRule50DedupClearOnFailure._rule, self.GOOD_WITH_CLEAR, "LevoitCore200S Light")
+        assert not any(f['rule_id'] == 'RULE50_dedup_clear_on_failure' for f in findings), findings
+
+    def test_no_dedup_out_of_scope(self):
+        findings = run_rule(TestRule50DedupClearOnFailure._rule, self.GOOD_NO_DEDUP, "LevoitEverestAir")
+        assert not any(f['rule_id'] == 'RULE50_dedup_clear_on_failure' for f in findings), findings
+
+
+# ---------------------------------------------------------------------------
 # Rule 30 — Direct log.X calls in driver body
 # ---------------------------------------------------------------------------
 

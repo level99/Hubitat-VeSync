@@ -197,6 +197,7 @@ def setMode(mode){
 //   Same range as Classic 300S. (Dual 200S has a different 1-2 range -- different class.)
 // setVirtualLevel payload: {id: 0, level: N, type: 'mist'}
 // NOTE: field names id/level/type -- NOT levelIdx/virtualLevel/levelType (Superior 6000S / LV600S Hub Connect)
+// BP30: setMistLevel is a SwitchLevel setpoint, intentionally NOT dedup-gated (see Superior6000S waiver).
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return

@@ -249,6 +249,9 @@ private boolean sendLevel(Integer level) {
     // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
     if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("fanLevel", level)) {
         logDebug "sendLevel: identical fanLevel write within dedup window (storm duplicate); skipping"
+        // dedup-suppress: write handled (already at target). Private helper whose callers discard
+        // the return — so it deliberately returns true ("at target"), NOT the public-setter
+        // false=did-nothing convention the other dedup-skips use.
         return true
     }
     def resp = hubBypass("setLevel", [levelIdx: 0, levelType: "wind", manualSpeedLevel: level], "setLevel{levelIdx,levelType,manualSpeedLevel=${level}}")

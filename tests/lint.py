@@ -182,6 +182,7 @@ def _collect_per_file_rules():
         capability_coherence,
         bp30_single_threaded,
         bp30_dedup_after_delegation,
+        bp30_dedup_clear_on_failure,
     )
     rules = []
     for module in [
@@ -205,6 +206,7 @@ def _collect_per_file_rules():
         capability_coherence,
         bp30_single_threaded,
         bp30_dedup_after_delegation,
+        bp30_dedup_clear_on_failure,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

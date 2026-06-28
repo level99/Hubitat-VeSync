@@ -328,11 +328,13 @@ def setSpeed(speed) {
     if (supportsAutoMode() && s == "auto") {
         // A1-delegation: this branch delegated to setMode after recording the "speed" slot; if the
         // delegated mode write FAILS, clear "speed" so a same-value retry is not falsely suppressed.
+        // B1 fail-safe: the delegated setter's false can mean a genuine failure OR its own dedup-suppress; clearing the outer slot on either is harmless (inner write stays deduped -> no extra cloud write).
         if (!setMode(s)) clearDuplicateWrite("speed")
         state.speed = s
         handleEvent("speed", s)
     }
     else if (s == "sleep") {
+        // B1 fail-safe: the delegated setter's false can mean a genuine failure OR its own dedup-suppress; clearing the outer slot on either is harmless (inner write stays deduped -> no extra cloud write).
         if (!setMode(s)) clearDuplicateWrite("speed")   // A1-delegation: failed mode-delegate must not block speed retry
         handleEvent("speed", "on")
     }

@@ -262,6 +262,7 @@ def setMode(mode){
         // Manual established by setting fan speed (same as pyvesync VeSyncAirBaseV2.set_mode(MANUAL)).
         // A1-delegation: the "mode" slot is already recorded; if the delegated setFanSpeed FAILS,
         // clear it so a same-value setMode("manual") retry is not falsely suppressed.
+        // B1 fail-safe: the delegated setter's false can mean a genuine failure OR its own dedup-suppress; clearing the outer slot on either is harmless (inner write stays deduped -> no extra cloud write).
         if (!setFanSpeed(state.lastFanSpeed ?: 1)) clearDuplicateWrite("mode")
         return
     }
