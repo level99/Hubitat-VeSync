@@ -93,6 +93,7 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit LV600S Hub Connect Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
@@ -183,6 +184,14 @@ def setMode(mode){
         return
     }
     ensureSwitchOn()
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return
+    }
     // Map user-facing "auto" to wire value "humidity" (VeSyncLV600S class convention)
     // This is the INVERSE of A602S where "humidity" is a firmware-variant fallback.
     // For A603S, "humidity" IS the canonical auto-mode wire value per device_map.py.

@@ -112,6 +112,9 @@ def refresh() {
 def on(){
     logDebug "on()"
     if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    // BP30: async-window storm guard — collapse a burst of overlapping on() commands into ONE
+    // effective power sequence. Returns false while a power-on is already in flight.
+    if (!beginPowerOnWindow()) { logDebug "Power-on already in flight (BP30 storm guard); skipping redundant burst"; return }
     state.turningOn = true
     try {
         Map payload = powerPayload(true)
@@ -129,6 +132,8 @@ def off(){
     if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
     state.turningOff = true
     try {
+        // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence.
+        clearPowerOnWindow()
         Map payload = powerPayload(false)
         def resp = hubBypass("setSwitch", payload, "setSwitch(${payload})")
         if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }

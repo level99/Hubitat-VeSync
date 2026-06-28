@@ -180,6 +180,7 @@ def _collect_per_file_rules():
         malformed_capability,
         recordError_key_style,
         capability_coherence,
+        bp30_single_threaded,
     )
     rules = []
     for module in [
@@ -201,6 +202,7 @@ def _collect_per_file_rules():
         malformed_capability,
         recordError_key_style,
         capability_coherence,
+        bp30_single_threaded,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

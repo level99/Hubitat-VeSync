@@ -90,6 +90,9 @@ def on() {
     logDebug "on()"
 
     if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    // BP30: async-window storm guard — collapse a burst of overlapping on() commands into
+    // ONE effective power+speed+mode sequence. Returns false while a power-on is in flight.
+    if (!beginPowerOnWindow()) { logDebug "Power-on already in flight (BP30 storm guard); skipping redundant burst"; return }
     state.turningOn = true
     try {
         handlePower(true)
@@ -124,6 +127,8 @@ def off() {
     if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
     state.turningOff = true
     try {
+        // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence.
+        clearPowerOnWindow()
         handlePower(false)
         logInfo "Power off"
         handleEvent("switch", "off")
@@ -305,6 +310,14 @@ def setSpeed(speed) {
         return
     }
     ensureSwitchOn()                                                             // BP24-B auto-on (after short-circuit)
+    // BP30 Layer 3: drop an identical speed write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("speed", s)) {
+        logDebug "setSpeed: identical speed write within dedup window (storm duplicate); skipping"
+        return
+    }
     if (supportsAutoMode() && s == "auto") {
         setMode(s)
         state.speed = s
@@ -361,6 +374,15 @@ def setMode(mode) {
         return false
     }
     ensureSwitchOn()                                                             // BP24-B auto-on (after rejection checks)
+
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return
+    }
 
     // Only commit state + emit events when the cloud accepted the mode change. Previously
     // state.mode + the mode/speed events were set unconditionally, creating a state-vs-reality

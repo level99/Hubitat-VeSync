@@ -51,6 +51,7 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Vital 200S Air Purifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",

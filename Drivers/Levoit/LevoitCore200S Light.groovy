@@ -48,6 +48,7 @@ SOFTWARE.
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Core200S Air Purifier Light",
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
@@ -123,6 +124,15 @@ def setNightLight(mode)
     // BP25: normalize to lowercase so Rule Machine "ON"/"OFF"/"DIM" routes correctly.
     // API expects literal "on"/"off"/"dim" string in night_light field.
     String m = (mode as String).trim().toLowerCase()
+
+    // BP30 Layer 3: drop an identical night-light write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted state stays correctable (see isDuplicateWrite).
+    // No turningOn/powerOnPending exclusion here: setNightLight is a single idempotent write with no
+    // multi-step power-on establishment sequence, so there is no establishment write to protect (L2 N/A).
+    if (isDuplicateWrite("nightLight", m)) {
+        logDebug "setNightLight: identical night-light write within dedup window (storm duplicate); skipping"
+        return false
+    }
 
     def result = false
 

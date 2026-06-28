@@ -79,6 +79,7 @@ from lint_rules.bp16_watchdog_call_site import check_rule25_bp16_watchdog_call_s
 from lint_rules.groovy_javadoc_terminator import check_rule26_javadoc_terminator
 from lint_rules.bp18_null_guard import check_rule27_bp18_null_guard
 from lint_rules.captureDiagnostics_presence import check_rule28_capturediagnostics_presence
+from lint_rules.bp30_single_threaded import check_rule48_single_threaded
 from lint_rules.library_no_top_block_comment import check_rule29_library_no_top_block_comment
 from lint_rules.direct_log_calls import check_rule30_direct_log_in_driver
 from lint_rules.bp24_state_switch_dead_branch import check_rule31_state_switch_dead_branch
@@ -3822,6 +3823,125 @@ class TestRule28CaptureDiagnosticsPresence:
         raw_lines = src.splitlines()
         _, cleaned_lines = clean_source(src)
         findings = check_rule28_capturediagnostics_presence(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+        assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# RULE48 — BP30 singleThreaded presence check
+# ---------------------------------------------------------------------------
+
+class TestRule48SingleThreaded:
+    """RULE48 (Bug Pattern #30 Layer 1): every child cloud driver (one that
+    #includes level99.LevoitChildBase) must declare singleThreaded: true in its
+    definition() block. Libraries, the parent app, and the virtual test parent are
+    out of scope by construction.
+    """
+
+    GOOD = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+        #include level99.LevoitChildBase
+
+        metadata {
+            definition(
+                singleThreaded: true,
+                name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson",
+                version: "2.9") {
+                capability "Switch"
+            }
+        }
+    """)
+
+    # Missing singleThreaded entirely — the must-catch case.
+    MISSING = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+        #include level99.LevoitChildBase
+
+        metadata {
+            definition(
+                name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson",
+                version: "2.9") {
+                capability "Switch"
+            }
+        }
+    """)
+
+    # singleThreaded:false is treated as MISSING the invariant.
+    EXPLICIT_FALSE = textwrap.dedent("""\
+        #include level99.LevoitChildBase
+
+        metadata {
+            definition(
+                singleThreaded: false,
+                name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson") {
+                capability "Switch"
+            }
+        }
+    """)
+
+    # No LevoitChildBase include => not a child cloud driver => out of scope (e.g. parent app).
+    NO_CHILDBASE = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+
+        metadata {
+            definition(name: "Some Non-Cloud Driver", namespace: "NiklasGustafsson") {
+                capability "Actuator"
+            }
+        }
+    """)
+
+    # Library file (library() block) — skipped regardless of content.
+    LIBRARY_FILE = textwrap.dedent("""\
+        #include level99.LevoitChildBase
+        library(
+            name: "LevoitCorePurifier",
+            namespace: "level99"
+        )
+        def on() { }
+    """)
+
+    def test_good_driver_passes(self):
+        findings = run_rule(check_rule48_single_threaded, self.GOOD, "LevoitVital200S")
+        assert findings == []
+
+    def test_missing_single_threaded_fails(self):
+        findings = run_rule(check_rule48_single_threaded, self.MISSING, "LevoitVital200S")
+        rule_ids_found = [f['rule_id'] for f in findings]
+        assert "RULE48_missing_single_threaded" in rule_ids_found
+        assert all(f['severity'] == 'FAIL' for f in findings)
+
+    def test_explicit_false_fails(self):
+        findings = run_rule(check_rule48_single_threaded, self.EXPLICIT_FALSE, "LevoitCore200S")
+        rule_ids_found = [f['rule_id'] for f in findings]
+        assert "RULE48_missing_single_threaded" in rule_ids_found
+
+    def test_non_cloud_driver_out_of_scope(self):
+        # No LevoitChildBase include — not a child cloud driver — must NOT be flagged.
+        findings = run_rule(check_rule48_single_threaded, self.NO_CHILDBASE, "VeSyncIntegration")
+        assert findings == []
+
+    def test_library_file_out_of_scope(self):
+        findings = run_rule(check_rule48_single_threaded, self.LIBRARY_FILE, "LevoitCorePurifierLib")
+        assert findings == []
+
+    def test_virtual_parent_out_of_scope(self):
+        # VeSyncIntegrationVirtual is explicitly out of scope even without singleThreaded.
+        findings = run_rule(check_rule48_single_threaded, self.MISSING, "VeSyncIntegrationVirtual")
+        assert findings == []
+
+    def test_not_checked_for_non_groovy(self):
+        path = REPO_ROOT / "tests" / "lint_test.py"
+        from lint_rules.groovy_lite import clean_source
+        src = "#include level99.LevoitChildBase\n"
+        raw_lines = src.splitlines()
+        _, cleaned_lines = clean_source(src)
+        findings = check_rule48_single_threaded(
             path=path,
             raw_lines=raw_lines,
             cleaned_lines=cleaned_lines,

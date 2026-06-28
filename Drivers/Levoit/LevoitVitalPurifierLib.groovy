@@ -89,6 +89,15 @@ def on() {
         return
     }
 
+    // BP30: async-window storm guard — collapse a burst of overlapping on() commands into
+    // ONE effective power+mode sequence. Spans the runInMillis(500, configureOnState) async
+    // leg below (state.turningOn clears synchronously before configureOnState runs, so it
+    // alone cannot catch a storm). Returns false while a power-on is already in flight.
+    if (!beginPowerOnWindow()) {
+        logDebug "Power-on already in flight (BP30 storm guard); skipping redundant burst"
+        return
+    }
+
     state.turningOn = true
     try {
         if (handlePower(true)) {
@@ -151,6 +160,8 @@ def off() {
 
     state.turningOff = true
     try {
+        // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence.
+        clearPowerOnWindow()
         if (handlePower(false)) {
             logInfo "Power off"
             state.lastSwitchSet = "off"
@@ -248,6 +259,15 @@ def setSpeed(spd) {
 
     ensureSwitchOn()
 
+    // BP30 Layer 3: drop an identical speed write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("speed", s)) {
+        logDebug "setSpeed: identical speed write within dedup window (storm duplicate); skipping"
+        return
+    }
+
     // setLevel establishes manual mode + speed atomically; no setMode("manual") pre-call needed (V2 quirk)
     def lvl = mapSpeedToInteger(s)
     def ok = setSpeedLevel(lvl)
@@ -293,6 +313,15 @@ def setMode(mode) {
     }
 
     ensureSwitchOn()
+
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return false
+    }
 
     boolean ok = false
     if (m == "manual") {

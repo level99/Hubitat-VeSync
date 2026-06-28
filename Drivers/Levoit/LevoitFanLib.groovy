@@ -120,6 +120,9 @@ def on() {
     logDebug "on()"
     // state.turningOn prevents BP23 re-entrance: setLevel(N) -> on() -> (internal speed call) -> setLevel()
     if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    // BP30: async-window storm guard — collapse a burst of overlapping on() commands into ONE
+    // effective power sequence. Returns false while a power-on is already in flight.
+    if (!beginPowerOnWindow()) { logDebug "Power-on already in flight (BP30 storm guard); skipping redundant burst"; return }
     state.turningOn = true
     try {
         def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(power=1)")
@@ -141,6 +144,8 @@ def off() {
     if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
     state.turningOff = true
     try {
+        // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence.
+        clearPowerOnWindow()
         def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(power=0)")
         if (httpOk(resp)) {
             logInfo "Power off"
@@ -237,6 +242,14 @@ private boolean sendLevel(Integer level) {
         logError "sendLevel: invalid level ${level} -- must be 1-12"
         recordError("sendLevel: invalid level ${level}", [method:"setLevel"])
         return false
+    }
+    // BP30 Layer 3: drop an identical fanLevel write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("fanLevel", level)) {
+        logDebug "sendLevel: identical fanLevel write within dedup window (storm duplicate); skipping"
+        return true
     }
     def resp = hubBypass("setLevel", [levelIdx: 0, levelType: "wind", manualSpeedLevel: level], "setLevel{levelIdx,levelType,manualSpeedLevel=${level}}")
     if (httpOk(resp)) {

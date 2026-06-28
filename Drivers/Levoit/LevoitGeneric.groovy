@@ -49,6 +49,7 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Generic Device",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
@@ -101,6 +102,9 @@ def initialize(){ logDebug "Initializing" }
 
 def on(){
     logDebug "on()"
+    // BP30: async-window storm guard — collapse a burst of overlapping on() commands into ONE
+    // effective power sequence. Returns false while a power-on is already in flight.
+    if (!beginPowerOnWindow()) { logDebug "Power-on already in flight (BP30 storm guard); skipping redundant burst"; return }
     // Try modern V2 payload first (setSwitch + switchIdx).
     // Only fall back to V1 setPower when inner code is exactly -1, which signals the device
     // rejected this method variant (try the other envelope). Do NOT fall back on rate-limit
@@ -126,6 +130,8 @@ def on(){
 
 def off(){
     logDebug "off()"
+    // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence.
+    clearPowerOnWindow()
     def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(power=0)")
     if (httpOk(resp)) {
         logInfo "Power off"

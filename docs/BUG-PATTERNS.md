@@ -1,4 +1,4 @@
-# Bug-Pattern Catalog (BP1–BP29)
+# Bug-Pattern Catalog (BP1–BP30)
 
 This file is the **single source of truth** for the fork's bug-pattern catalog — the numbered set of recurring defect shapes accumulated from the v2.0 community-fork debugging and every release cycle since. Each pattern documents a real bug that was found and fixed, its symptom, root cause, canonical fix (with verbatim code where load-bearing), fix scope, lint-rule enforcement, and regression coverage.
 
@@ -926,6 +926,63 @@ VeSync rejects a bypassV2 write with inner result code `11005000` (= `BYPASS_DEV
 
 ---
 
+## BP30 — command-storm non-determinism: overlapping async power-on bursts collide
+
+**Fix scope:** class-wide — every child cloud driver/lib `on()`/`off()` power path AND every `setMode`/`setSpeed`/`setSpeedLevel`/`setFanSpeed` redundant-write entry point, across all device families (Core/Vital/Fan/Humidifier purifiers + EverestAir + SproutAir).
+
+**Symptom:** A purifier (or fan/humidifier) hit by multiple overlapping commands within a few hundred ms thrashes instead of settling. Real-world incident (Core 200S "Willow Noise", prod logs): 3 `on()` invocations inside a 360 ms window produced — all within 0.36 s — 3× "Power on", 4× "Speed: high", and **4× "Mode write failed: manual"** (ERROR). A dependent night-light child commanded `setLevel(100)` 32 ms before the parent's switch flipped on did NOT actually light for ~20 minutes: it was starved because the parent purifier was being repeatedly power-cycled/mode-thrashed and never settled on the VeSync cloud.
+
+**Root cause (four compounding facts):**
+1. `on()` fires several async cloud writes back-to-back (Core: `handlePower`→`handleSpeed`→`setMode`; Vital: `handlePower` then `runInMillis(500, configureOnState)`) and returns immediately — none waits for the cloud to confirm.
+2. The failing write is the mode/speed assertion: when a second `setPurifierMode`/`setLevel` collides with a still-in-flight power-on, the cloud returns non-success and the driver logs "...write failed".
+3. The existing `state.turningOn` re-entrance guard is set at entry and cleared in `finally` **synchronously** — i.e. BEFORE any async response returns. It catches true re-entrancy (on→setSpeed→on within ONE call stack) but NOT N separate `on()` invocations arriving as a storm.
+4. Every child cloud driver was `singleThreaded: false` (Hubitat default), so those invocations run genuinely CONCURRENTLY on separate threads, racing any state-based guard.
+
+**Canonical fix — three layers (all required; each is unsound without the one below it):**
+
+- **Layer 1 — `singleThreaded: true` in every child cloud driver's `definition()`.** Serializes command + async-callback execution so the storm-guard state reads/writes are race-free. Without it, Layers 2 & 3 race. Added to all 21 cloud drivers (Core 200S/300S/400S/600S + Core 200S Light, Vital 100S/200S, Tower/Pedestal Fan, all humidifiers, EverestAir, SproutAir, Superior 6000S, LevoitGeneric). NOT the parent app (VeSyncIntegration is an app, not a driver) and NOT VeSyncIntegrationVirtual (already declares it).
+
+- **Layer 2 — async-window idempotency guard on `on()`.** `singleThreaded` alone does NOT stop the re-fire: `state.turningOn` clears synchronously at the end of each `on()` body, so a serialized storm still runs each `on()` fully. The guard (shared `beginPowerOnWindow()` / `clearPowerOnWindow()` in `LevoitChildBase`) sets a flag synchronously at the start of the power-on sequence and clears it ONLY when the window times out — bounded TWO ways so a dropped cloud callback can NEVER wedge the device in a can't-turn-on state: a `runInMillis(POWER_ON_WINDOW_MS, "clearPowerOnWindow")` safety timer (string-literal handler form per Hubitat sandbox binding) AND a belt-and-suspenders `now() - openedAt` elapsed check. While the flag is set, a subsequent `on()` becomes a no-op (skips the full power+speed+mode burst). `off()` calls `clearPowerOnWindow()` so a deliberate off→on is never blocked. **Invariant: a storm of N `on()` within the async window produces exactly ONE effective power+mode sequence, and the guard cannot leave the device stuck off.**
+
+```groovy
+@groovy.transform.Field static final Integer POWER_ON_WINDOW_MS = 4000
+
+boolean beginPowerOnWindow() {
+    Long nowMs = now()
+    Long openedAt = (state.powerOnWindowAt ?: 0L) as Long
+    if (state.powerOnPending && (nowMs - openedAt) < POWER_ON_WINDOW_MS) return false
+    state.powerOnPending = true
+    state.powerOnWindowAt = nowMs
+    runInMillis(POWER_ON_WINDOW_MS, "clearPowerOnWindow")
+    return true
+}
+void clearPowerOnWindow() { state.remove("powerOnPending"); state.remove("powerOnWindowAt") }
+```
+`on()` adds — after the existing `state.turningOn` re-entrance check — `if (!beginPowerOnWindow()) { logDebug "...storm guard..."; return }`. `off()` calls `clearPowerOnWindow()` inside its body.
+
+- **Layer 3 — time-windowed duplicate-write suppression on `setMode`/`setSpeed`/`setFanSpeed`/fan `sendLevel`/nightlight `setNightLight`.** Drops a cloud write ONLY when an identical one (same command + same value) was issued within `DUP_WRITE_WINDOW_MS` (2 s) — i.e. a storm duplicate. **It is NOT an equality gate against the cached attribute.** An equality gate (`skip if device.currentValue("mode") == requested`) would silently no-op a LEGITIMATE correction whenever Hubitat's cached state has DRIFTED from the real device/cloud state (physical button press, VeSync app, Alexa routine, or a prior silently-failed write): if cached mode is "manual" but the device is really "sleep", an equality gate refuses every `setMode("manual")` retry and strands the user until the next poll. The shared helper `isDuplicateWrite(slot, value)` (in `LevoitChildBase`) tracks the most recent write per `slot` via `state.dupWriteVal_<slot>` + `state.dupWriteAt_<slot>` and `now()` — it never reads `currentValue`, so it is immune to cached-attribute drift by construction. An identical re-request OUTSIDE the window ALWAYS writes, so a drifted cloud state is always correctable from Hubitat; poll reconciliation (`applyStatus`/`refresh` updating the attribute from real cloud state) is the drift backstop. The dedup is additionally gated by `!state.turningOn && !state.powerOnPending` so an in-flight power-on's establishment writes are NEVER suppressed — without it, an identical write issued just before an on()-storm (e.g. user sets "auto", turns off, storms on) could dedup the on()-burst's establishment `setMode("auto")`, leaving the mode un-asserted on the cloud after power-on. `turningOn` covers the Core synchronous burst; `powerOnPending` covers Vital's `configureOnState` (which runs after `turningOn` clears but while the power-on window is still open). The ONE site without this exclusion is the Core 200S Light nightlight child (`setNightLight`, `"nightLight"` slot): it is a single idempotent cloud write with no multi-step power-on establishment sequence, so there is no establishment write to protect — it gets L1 + L3 only (L2 is N/A — there is no power-on burst to coalesce). Layers 1 + 2 are the primary determinism fix; Layer 3 backstops DIRECT setMode/setSpeed/setNightLight bursts. (The pre-existing `setDisplay`/`setChildLock` equality C3 gates are left unchanged — those are far less drift-prone and out of scope.)
+
+```groovy
+@groovy.transform.Field static final Integer DUP_WRITE_WINDOW_MS = 2000
+
+boolean isDuplicateWrite(String slot, value) {
+    String valField = "dupWriteVal_${slot}"; String atField = "dupWriteAt_${slot}"
+    Long nowMs = now(); Long lastAt = (state[atField] ?: 0L) as Long
+    if (state[valField] == (value as String) && (nowMs - lastAt) < DUP_WRITE_WINDOW_MS) return true
+    state[valField] = (value as String); state[atField] = nowMs
+    return false
+}
+```
+`setMode` adds — after `ensureSwitchOn()` — `if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) { logDebug "..."; return }`. The window-elapsed re-fire (drift-correction) AND the power-on-establishment-not-suppressed property are both asserted in the Spock coverage.
+
+**Lint enforcement (closed mechanism):** RULE48 (`tests/lint_rules/bp30_single_threaded.py`) FAILs any child cloud driver — defined by the authoritative predicate "`.groovy` under `Drivers/Levoit/`, not a `library()` file, `#include`s `level99.LevoitChildBase`, not the virtual test parent" — that does not declare `singleThreaded: true`. The predicate is membership-based (the ChildBase include is the cloud-write signal), not a hardcoded file list, so any future cloud driver is covered automatically. Must-catch (missing / `singleThreaded:false`) + must-not-catch (present, library file, non-ChildBase driver, virtual parent, non-groovy) fixtures in `tests/lint_test.py::TestRule48SingleThreaded`.
+
+**Regression coverage:** `LevoitChildBaseLibSpec` BP30 block unit-tests `beginPowerOnWindow`/`clearPowerOnWindow` (open / suppress-within-window / reopen) AND `isDuplicateWrite` BOTH ways — an identical write within the window is suppressed (returns true) AND an identical write after the window has elapsed fires (returns false), the anti-wedge / drift-correction-always-possible property. A storm-scenario spec (`StormHardeningSpec`) drives N rapid `on()` on a from-off Core/Vital child and asserts (a) exactly ONE power sequence reaches the parent, (b) no spurious "...write failed", (c) the guard auto-clears — `off()` then `on()` fires a fresh sequence — plus a Layer-3 leg: N rapid identical `setMode`/`setSpeed` within the window collapse to ONE cloud write, and the same value after the window elapses writes again. The both-ways proof reverts each layer to confirm the guard goes RED.
+
+**Shipped:** v2.10.
+
+---
+
 ## Note on numbering
 
-BP1 through BP29 are all present and consecutive; there is no BP30. The numbering matches the lint-rule filenames (`bp24_*`, `bp25_case_sensitivity.py`, `bp26_unsafe_int_coercion.py`, `bp28_level_off_ambiguity.py`, etc.) and the Spock spec names, which are the authoritative source: BP24 = auto-on-from-off, BP25 = C3 gate case-sensitivity, BP26 = unsafe integer coercion (`safeIntArg`).
+BP1 through BP30 are all present and consecutive. The numbering matches the lint-rule filenames (`bp24_*`, `bp25_case_sensitivity.py`, `bp26_unsafe_int_coercion.py`, `bp28_level_off_ambiguity.py`, `bp30_single_threaded.py`, etc.) and the Spock spec names, which are the authoritative source: BP24 = auto-on-from-off, BP25 = C3 gate case-sensitivity, BP26 = unsafe integer coercion (`safeIntArg`), BP30 = command-storm non-determinism (`singleThreaded` + async power-on window guard).

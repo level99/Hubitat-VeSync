@@ -71,6 +71,7 @@ SOFTWARE.
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Core200S Air Purifier",
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",

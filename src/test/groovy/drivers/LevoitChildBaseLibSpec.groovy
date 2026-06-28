@@ -299,6 +299,98 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // beginPowerOnWindow / clearPowerOnWindow (BP30 Layer 2)
+    // now() is fixed in-harness, so two begin calls see the window still open;
+    // runInMillis is a no-op, so the safety timer never auto-fires — clearing is
+    // exercised directly. NON-VACUITY: a begin() that always returned true (no
+    // suppression) makes the second assertion RED; a clear() that did not remove
+    // powerOnPending makes the reopen assertion RED.
+    // -------------------------------------------------------------------------
+
+    def "beginPowerOnWindow opens the window on first call and suppresses within it (BP30)"() {
+        given:
+        state.remove("powerOnPending")
+        state.remove("powerOnWindowAt")
+
+        expect: "first call opens the window and returns true"
+        driver.beginPowerOnWindow() == true
+        state.powerOnPending == true
+
+        and: "a second call within the window returns false (storm suppressed)"
+        driver.beginPowerOnWindow() == false
+    }
+
+    def "clearPowerOnWindow reopens the window for the next power-on (BP30)"() {
+        given: "a window is open"
+        driver.beginPowerOnWindow()
+
+        when:
+        driver.clearPowerOnWindow()
+
+        then: "state is cleared and a subsequent begin re-opens"
+        state.powerOnPending == null
+        state.powerOnWindowAt == null
+        driver.beginPowerOnWindow() == true
+    }
+
+    // -------------------------------------------------------------------------
+    // isDuplicateWrite (BP30 Layer 3) — time-windowed dedup, NOT a cached-attribute
+    // equality gate. now() is fixed in-harness, so two calls at the "same instant"
+    // are within the window; the after-window leg backdates state.dupWriteAt_* directly.
+    // -------------------------------------------------------------------------
+
+    def "isDuplicateWrite suppresses an identical write within the dedup window (BP30 Layer 3)"() {
+        given:
+        state.remove("dupWriteVal_mode"); state.remove("dupWriteAt_mode")
+
+        expect: "first write proceeds (and is recorded)"
+        driver.isDuplicateWrite("mode", "auto") == false
+
+        and: "an identical write within the window is a storm duplicate"
+        driver.isDuplicateWrite("mode", "auto") == true
+    }
+
+    def "isDuplicateWrite ALWAYS fires an identical write after the window elapses (BP30 anti-wedge)"() {
+        given: "a prior identical write recorded well outside the dedup window"
+        // now() is fixed at 1745000000000L in-harness; backdate the last-write timestamp >2s.
+        state.dupWriteVal_mode = "auto"
+        state.dupWriteAt_mode = 1745000000000L - 5000L
+
+        expect: "the same value writes again — a drifted cloud state stays correctable from Hubitat"
+        driver.isDuplicateWrite("mode", "auto") == false
+    }
+
+    def "isDuplicateWrite tracks slots independently so mode and speed do not evict each other (BP30)"() {
+        given:
+        state.remove("dupWriteVal_mode"); state.remove("dupWriteAt_mode")
+        state.remove("dupWriteVal_speed"); state.remove("dupWriteAt_speed")
+
+        expect: "first write of each slot proceeds; the interleaved other-slot write does not reset it"
+        driver.isDuplicateWrite("mode", "auto") == false
+        driver.isDuplicateWrite("speed", "high") == false
+        driver.isDuplicateWrite("mode", "auto") == true
+        driver.isDuplicateWrite("speed", "high") == true
+    }
+
+    def "isDuplicateWrite suppresses an identical nightLight write within the window (BP30 Layer 3, nightLight slot)"() {
+        given:
+        state.remove("dupWriteVal_nightLight"); state.remove("dupWriteAt_nightLight")
+
+        expect: "first night-light write proceeds, an identical one within the window is a storm duplicate"
+        driver.isDuplicateWrite("nightLight", "on") == false
+        driver.isDuplicateWrite("nightLight", "on") == true
+    }
+
+    def "isDuplicateWrite fires an identical nightLight write after the window elapses (BP30 anti-wedge, nightLight slot)"() {
+        given: "a prior identical night-light write recorded outside the dedup window"
+        state.dupWriteVal_nightLight = "on"
+        state.dupWriteAt_nightLight = 1745000000000L - 5000L   // 5s ago, > DUP_WRITE_WINDOW_MS (2s)
+
+        expect: "the same value writes again — drift stays correctable from Hubitat"
+        driver.isDuplicateWrite("nightLight", "on") == false
+    }
+
+    // -------------------------------------------------------------------------
     // requireNotNull (BP18)
     // -------------------------------------------------------------------------
 

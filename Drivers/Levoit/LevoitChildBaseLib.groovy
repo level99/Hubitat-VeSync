@@ -28,6 +28,22 @@ library(
 @groovy.transform.Field
 static final Integer BYPASS_DEVICE_IS_OFF = 11005000  // pyvesync utils/errors.py: device powered OFF (expected, not a fault)
 
+// BP30: upper bound (ms) on the async power-on storm window. A burst of overlapping
+// on() commands inside this window collapses to ONE effective power+mode sequence; the
+// window auto-closes after this many ms so a dropped cloud callback can never wedge the
+// device permanently off. 4s comfortably spans the Vital configureOnState runInMillis(500)
+// async leg plus cloud round-trip, while staying short enough that a genuine off->on a few
+// seconds later is never blocked (off() also clears the window immediately).
+@groovy.transform.Field
+static final Integer POWER_ON_WINDOW_MS = 4000
+
+// BP30 Layer 3: dedup window (ms) for identical mode/speed writes. Short by design — long
+// enough to absorb a command burst (the observed storm was ~360 ms), short enough that an
+// out-of-band "set it back" correction is only ever delayed by at most this much. NOT the
+// power-on window (that one spans the slower async power-on leg); kept separate on purpose.
+@groovy.transform.Field
+static final Integer DUP_WRITE_WINDOW_MS = 2000
+
 def logInfo(msg)   { if (settings?.descriptionTextEnable) log.info  msg }
 def logDebug(msg)  { if (settings?.debugOutput)           log.debug msg }
 def logError(msg)  { log.error msg }
@@ -71,6 +87,78 @@ private void ensureDebugWatchdog() {
 //   }
 void ensureSwitchOn() {
     if (!state.turningOn && device.currentValue("switch") != "on") on()
+}
+
+// BP30 async-window power-on storm guard. A burst of overlapping on() commands
+// (Rule Machine double-fire, dashboard taps, automations all firing within a few
+// hundred ms) would otherwise EACH issue the full power+speed+mode cloud sequence,
+// colliding in flight and producing "...write failed" errors plus a device that never
+// settles (the real-world incident: 3 on() in 360ms -> 4 "Mode write failed: manual",
+// and a dependent nightlight child starved for ~20 min). This guard collapses a storm
+// into ONE effective sequence.
+//
+// beginPowerOnWindow() opens the window synchronously and returns:
+//   true  -> caller is the first on() in the window; proceed with the full sequence
+//   false -> a power-on is already in flight; caller must no-op (skip the burst)
+//
+// The window is bounded TWO ways so it can never wedge the device in a can't-turn-on
+// state: (1) a runInMillis safety timer fires clearPowerOnWindow() after
+// POWER_ON_WINDOW_MS (string-literal handler form per Hubitat sandbox binding); and
+// (2) a belt-and-suspenders elapsed-time check reopens the window if that timer was
+// ever lost across the async boundary. off() also calls clearPowerOnWindow() so a
+// deliberate off -> on sequence is never blocked.
+//
+// This is the determinism layer; it is only sound BECAUSE the driver declares
+// singleThreaded:true (BP30 Layer 1) — that serializes command + async-callback
+// execution so these state reads/writes are race-free.
+boolean beginPowerOnWindow() {
+    Long nowMs = now()
+    Long openedAt = (state.powerOnWindowAt ?: 0L) as Long
+    if (state.powerOnPending && (nowMs - openedAt) < POWER_ON_WINDOW_MS) {
+        return false
+    }
+    state.powerOnPending = true
+    state.powerOnWindowAt = nowMs
+    runInMillis(POWER_ON_WINDOW_MS, "clearPowerOnWindow")
+    return true
+}
+
+// BP30: close the async power-on window. Invoked by the runInMillis safety timer
+// (handler resolved as a string literal) and synchronously by off(). Idempotent —
+// safe to call when no window is open.
+void clearPowerOnWindow() {
+    state.remove("powerOnPending")
+    state.remove("powerOnWindowAt")
+}
+
+// BP30 Layer 3: time-windowed duplicate-write suppression for mode/speed setters. Returns
+// true (caller should SKIP the cloud write) ONLY when an identical write — same `slot`
+// (e.g. "mode" / "speed" / "fanSpeed") AND same `value` — was issued within
+// DUP_WRITE_WINDOW_MS. That is the storm-duplicate case (the same command re-fired in a burst).
+//
+// An identical re-request OUTSIDE the window ALWAYS returns false (caller writes). This is the
+// load-bearing anti-wedge property: it must remain possible to CORRECT a drifted cloud/device
+// state from Hubitat. Hubitat's cached attribute can diverge from reality (physical button,
+// VeSync app, Alexa routine, or a prior silently-failed write); an equality gate against the
+// cached attribute would refuse every "set it back" retry and strand the user until the next
+// poll. Time-scoping (not state-equality) drops ONLY burst duplicates. Poll reconciliation
+// (applyStatus / refresh updating the attribute from real cloud state) is the drift backstop.
+//
+// Deliberately keyed on recent WRITES, never on device.currentValue(...) — so it is immune to
+// cached-attribute drift by construction. Per-`slot` tracking (separate state fields per command
+// type) so a mode write and a speed write never evict each other's dedup record. Records THIS
+// write as the most recent on a non-suppressed (false) result.
+boolean isDuplicateWrite(String slot, value) {
+    String valField = "dupWriteVal_${slot}"
+    String atField  = "dupWriteAt_${slot}"
+    Long nowMs = now()
+    Long lastAt = (state[atField] ?: 0L) as Long
+    if (state[valField] == (value as String) && (nowMs - lastAt) < DUP_WRITE_WINDOW_MS) {
+        return true
+    }
+    state[valField] = (value as String)
+    state[atField] = nowMs
+    return false
 }
 
 // BP18 null-guard helper: log a WARN and signal the caller to skip further

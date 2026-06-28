@@ -104,6 +104,7 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit EverestAir Air Purifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
@@ -188,6 +189,9 @@ def on(){
     // on() itself only issues setSwitch, so without this flag a setter that auto-ons would re-enter
     // on() before the first call completes. state.turningOn matches humidifier drivers (e.g. Sup6000S).
     if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    // BP30: async-window storm guard — collapse a burst of overlapping on() commands into ONE
+    // effective power sequence. Returns false while a power-on is already in flight.
+    if (!beginPowerOnWindow()) { logDebug "Power-on already in flight (BP30 storm guard); skipping redundant burst"; return }
     state.turningOn = true
     try {
         def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(powerSwitch=1)")
@@ -204,6 +208,8 @@ def off(){
     if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
     state.turningOff = true
     try {
+        // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence.
+        clearPowerOnWindow()
         def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(powerSwitch=0)")
         if (httpOk(resp)) { state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off"); logInfo "Power off" }
         else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
@@ -249,6 +255,14 @@ def setMode(mode){
         setFanSpeed(state.lastFanSpeed ?: 1)
         return
     }
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return
+    }
     def resp = hubBypass("setPurifierMode", [workMode: m], "setPurifierMode(${m})")
     if (httpOk(resp)) {
         state.mode = m
@@ -271,6 +285,14 @@ def setFanSpeed(speed){
     // BP24-B: auto-on from off-state. on() re-entrance guard (state.turningOn) prevents recursion
     // when setMode("manual") delegates here and on() calls setFanSpeed internally.
     ensureSwitchOn()
+    // BP30 Layer 3: drop an identical fanSpeed write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("fanSpeed", spd)) {
+        logDebug "setFanSpeed: identical fanSpeed write within dedup window (storm duplicate); skipping"
+        return
+    }
     def resp = hubBypass("setLevel", [levelIdx: 0, manualSpeedLevel: spd, levelType: "wind"], "setLevel(wind,${spd})")
     if (httpOk(resp)) {
         state.lastFanSpeed = spd
