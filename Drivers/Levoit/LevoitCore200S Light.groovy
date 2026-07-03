@@ -61,6 +61,7 @@ metadata {
 
             command "setNightLight", [[name:"Night Light*", type: "ENUM", description: "Display", constraints: ["on", "off", "dim"] ] ]
 
+            attribute "mode",            "string"        // on | dim | off  (Night light mode)
             attribute "diagnostics",     "string"
             command "captureDiagnostics"
         }
@@ -214,6 +215,11 @@ def update(status) {
     state.mode = mode
 
     sendLevelEvent(mode)
+    // `mode` is a declared attribute, so the platform drops same-value events
+    // (isStateChange:false) — that declaration is what stopped the once-a-minute
+    // event-log churn on this night-light child. Emit unconditionally, matching every
+    // sibling driver (Core/Vital/Fan/humidifiers all emit their `mode` this way and
+    // rely on the platform's same-value dedup).
     device.sendEvent(name: "mode", value: mode)
 
     return result

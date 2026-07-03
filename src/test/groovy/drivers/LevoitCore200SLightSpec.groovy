@@ -311,4 +311,22 @@ class LevoitCore200SLightSpec extends HubitatSpec {
         req != null
         req.data.night_light == "off"
     }
+
+    // -------------------------------------------------------------------------
+    // `mode` reflects the cloud night_light value and is a DECLARED attribute — the
+    // platform drops same-value emits (isStateChange:false), which is the churn fix
+    // (the declaration, not any driver-side gate). update() emits unconditionally,
+    // matching every sibling driver.
+    // -------------------------------------------------------------------------
+
+    def "update(status) emits the mode reflecting night_light"() {
+        given:
+        settings.descriptionTextEnable = true
+
+        when: "a status update arrives with a night_light value"
+        driver.update([result: [night_light: "dim"], code: 0])
+
+        then: "a mode event was emitted reflecting night_light"
+        eventEmitted("mode", "dim")
+    }
 }
