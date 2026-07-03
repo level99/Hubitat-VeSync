@@ -304,8 +304,9 @@ def setTimer(seconds, action="off"){
     logDebug "setTimer(${secs}s, action=${act})"
     def resp = hubBypass("setTimer", [action: act, total: secs], "setTimer(${secs}s,${act})")
     if (httpOk(resp)) {
-        // Capture timer ID from response so cancelTimer can reference it
-        def tid = resp?.data?.result?.result?.id ?: resp?.data?.result?.id
+        // Capture timer ID from response so cancelTimer can reference it.
+        // Type-guard: a non-JSON body makes resp.data a String; the .result read would throw.
+        def tid = (resp?.data instanceof Map) ? (resp.data.result?.result?.id ?: resp.data.result?.id) : null
         if (tid != null) {
             state.timerId = tid
         } else {

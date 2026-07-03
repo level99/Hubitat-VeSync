@@ -450,7 +450,8 @@ def setTimer(minutes) {
     ]
     def resp = hubBypass("addTimerV2", data, "addTimerV2(${n}min)")
     if (httpOk(resp)) {
-        def tid = resp?.data?.result?.id
+        // Type-guard: a non-JSON body makes resp.data a String; the .result read would throw.
+        def tid = (resp?.data instanceof Map) ? resp.data.result?.id : null
         if (tid != null) state.timerId = tid
         logInfo "Timer set: power off in ${n} minutes (id=${tid})"
     } else {

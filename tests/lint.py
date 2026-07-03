@@ -183,6 +183,7 @@ def _collect_per_file_rules():
         bp30_single_threaded,
         bp30_dedup_after_delegation,
         bp30_dedup_clear_on_failure,
+        result_map_guard,
     )
     rules = []
     for module in [
@@ -207,6 +208,7 @@ def _collect_per_file_rules():
         bp30_single_threaded,
         bp30_dedup_after_delegation,
         bp30_dedup_clear_on_failure,
+        result_map_guard,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

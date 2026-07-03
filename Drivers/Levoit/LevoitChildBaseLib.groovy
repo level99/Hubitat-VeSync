@@ -511,7 +511,17 @@ private boolean httpOk(resp) {
     if (!resp) return false
     def st = resp.status as Integer
     if (st in [200,201,204]) {
-        def inner = resp?.data?.result?.code
+        // Type-guard before the .result read: on a non-JSON body (a CDN/gateway HTTP 200
+        // with an HTML interstitial, or a proxy error page) resp.data is a non-null String.
+        // A bare resp?.data?.result?.code would then do a property access on a String and
+        // throw MissingPropertyException, aborting the caller's command with a raw sandbox
+        // stack trace. A non-Map body is not a valid success -> return false (mirrors the
+        // hubBypass / isDeviceOffResp instanceof-Map guards elsewhere in this lib).
+        if (!(resp.data instanceof Map)) {
+            logDebug "HTTP ${st} with non-Map body (${resp.data?.getClass()?.simpleName}); treating as failure"
+            return false
+        }
+        def inner = resp.data.result?.code
         if (inner == null || inner == 0) return true
         // BP29: device-off (inner 11005000) is an EXPECTED rejection, not a fault. httpOk()
         // simply returns false; the caller's failure branch decides how to report it.

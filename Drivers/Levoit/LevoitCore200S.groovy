@@ -149,7 +149,10 @@ def update() {
             ]) { resp ->
 			if (checkHttpResponse("update", resp))
 			{
-                def status = resp.data.result
+                // Type-guard: a non-JSON error body makes resp.data a String, and the bare
+                // resp.data.result read would throw MissingPropertyException. Non-Map -> null
+                // -> the status == null branch reports a clean failure (no stack-trace crash).
+                def status = (resp?.data instanceof Map) ? resp.data.result : null
                 if (status == null) {
                     logError "No status returned from getPurifierStatus: ${resp.msg}"
                     recordError("No status returned from getPurifierStatus", [method:"update"])

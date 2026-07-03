@@ -543,7 +543,8 @@ def setTimer(seconds) {
                 "source": "APP"
             ]) { resp ->
         if (checkHttpResponse("setTimer", resp)) {
-            def tid = resp?.data?.result?.id
+            // Type-guard: a non-JSON body makes resp.data a String; the .result read would throw.
+            def tid = (resp?.data instanceof Map) ? resp.data.result?.id : null
             if (tid != null) state.timerId = tid
             logInfo "Timer set: power off in ${secs}s (id=${tid})"
             result = true

@@ -218,8 +218,12 @@ def setMode(mode){
 // isRetry      -- true when this is the alternate-payload retry (prevents infinite recursion).
 private boolean sendModeRequest(String payloadValue, String userMode, boolean isRetry){
     def resp = hubBypass("setHumidityMode", [mode: payloadValue], "setHumidityMode(${payloadValue})")
-    def innerCode = resp?.data?.result?.code
-    boolean ok = (resp?.status in [200,201,204]) && (innerCode == null || innerCode == 0)
+    // Type-guard before the .result read: a non-JSON error body makes resp.data a String, and
+    // resp?.data?.result?.code would then throw MissingPropertyException. A non-Map body is not
+    // a success -> bodyIsMap gates ok to false (clean retry/fail, never a raw stack-trace crash).
+    boolean bodyIsMap = resp?.data instanceof Map
+    def innerCode = bodyIsMap ? resp.data.result?.code : null
+    boolean ok = bodyIsMap && (resp?.status in [200,201,204]) && (innerCode == null || innerCode == 0)
     if (ok) {
         String detectedVariant = (payloadValue == "auto") ? "std" : "alt"
         if (state.firmwareVariant != detectedVariant) {

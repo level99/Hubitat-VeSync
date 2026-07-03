@@ -924,6 +924,32 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         (hist["test-device-001"] ?: []).size() == 1
     }
 
+    // v2.10 cluster 1 (result.code crash class): httpOk reads resp.data.result.code
+    // ONLY on a 2xx status. The dangerous vector is therefore HTTP 200 with a NON-JSON
+    // String body (a CDN/gateway HTML interstitial, a proxy error page). Pre-fix, the bare
+    // `resp?.data?.result?.code` did a property access on the String and threw
+    // MissingPropertyException INSIDE httpOk, aborting the caller's command with a raw
+    // sandbox stack trace. Post-fix, the `!(resp.data instanceof Map)` guard returns false
+    // (a non-JSON body is not a valid success), so the caller takes its clean failure branch.
+    //
+    // DISCRIMINATION: reverting to `def inner = resp?.data?.result?.code` makes the
+    // `boolean ok = driver.httpOk(...)` line throw -> the notThrown block goes RED.
+    // (Orchestrator owns the both-ways proof.)
+    def "httpOk: HTTP 200 with a non-JSON String body returns false and does NOT throw (v2.10 result.code crash class)"() {
+        given:
+        settings.debugOutput = true
+
+        when: "httpOk is handed a 200 whose body is a raw HTML String, not a Map"
+        boolean ok
+        ok = driver.httpOk([status: 200, data: "<html><body>200 but not JSON</body></html>"])
+
+        then: "no MissingPropertyException from the .result read on a String"
+        notThrown(Exception)
+
+        and: "a non-Map body is not a valid success"
+        ok == false
+    }
+
     // LOAD-BEARING leak-regression spec (the exact QA-flagged BLOCKING):
     // A device-off rejection on one command must NOT suppress a later, unrelated
     // genuine error that hits logError/recordError with NO intervening httpOk.

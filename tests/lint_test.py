@@ -80,6 +80,7 @@ from lint_rules.groovy_javadoc_terminator import check_rule26_javadoc_terminator
 from lint_rules.bp18_null_guard import check_rule27_bp18_null_guard
 from lint_rules.captureDiagnostics_presence import check_rule28_capturediagnostics_presence
 from lint_rules.bp30_single_threaded import check_rule48_single_threaded
+from lint_rules.result_map_guard import check_rule51_result_map_guard
 from lint_rules.library_no_top_block_comment import check_rule29_library_no_top_block_comment
 from lint_rules.direct_log_calls import check_rule30_direct_log_in_driver
 from lint_rules.bp24_state_switch_dead_branch import check_rule31_state_switch_dead_branch
@@ -9640,4 +9641,158 @@ class TestRule47CapabilityCoherence:
         findings = run_rule(check_rule47_capability_coherence, src, fname="TestLib.groovy")
         assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
             f"Library files must be skipped by RULE47, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE51 — result-Map guard (v2.10 cluster 1: result.code crash class)
+# ---------------------------------------------------------------------------
+
+class TestRule51ResultMapGuard:
+    """
+    RULE51: a `<recv>.data.result` read in a child driver method must be guarded
+    by a `<recv>.data instanceof Map` check in the same method. A non-JSON gateway
+    error body (HTML/proxy page with a 2xx) leaves resp.data a String; the `?.`
+    operator guards null but not wrong-type, so the read throws
+    MissingPropertyException and aborts the command.
+    """
+
+    # MUST-CATCH: unguarded `.result?.code` read (the httpOk / sendModeRequest shape).
+    BAD_UNGUARDED = textwrap.dedent("""\
+        private boolean sendModeRequest(String v){
+            def resp = hubBypass("setHumidityMode", [mode: v], "m")
+            def innerCode = resp?.data?.result?.code
+            return innerCode == 0
+        }
+    """)
+
+    # MUST-CATCH: unguarded `.result` read inside a sendBypassRequest closure.
+    BAD_UNGUARDED_CLOSURE = textwrap.dedent("""\
+        def update(){
+            parent.sendBypassRequest(device, [:]) { resp ->
+                def status = resp.data.result
+                if (status == null) logError "none"
+            }
+        }
+    """)
+
+    # MUST-CATCH: unguarded `.result?.id` timer read.
+    BAD_UNGUARDED_TID = textwrap.dedent("""\
+        def setTimer(Integer n){
+            def resp = hubBypass("addTimerV2", [:], "t")
+            if (httpOk(resp)) {
+                def tid = resp?.data?.result?.id
+                if (tid != null) state.timerId = tid
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: same-line instanceof-Map guard (the canonical fix shape).
+    GOOD_SAME_LINE = textwrap.dedent("""\
+        private boolean sendModeRequest(String v){
+            def resp = hubBypass("setHumidityMode", [mode: v], "m")
+            boolean bodyIsMap = resp?.data instanceof Map
+            def innerCode = bodyIsMap ? resp.data.result?.code : null
+            return bodyIsMap && innerCode == 0
+        }
+    """)
+
+    # MUST-NOT-CATCH: early-return instanceof-Map guard (the httpOk fix shape).
+    GOOD_EARLY_RETURN = textwrap.dedent("""\
+        private boolean httpOk(resp){
+            if (!resp) return false
+            if (!(resp.data instanceof Map)) return false
+            def inner = resp.data.result?.code
+            return inner == null || inner == 0
+        }
+    """)
+
+    # MUST-NOT-CATCH: ternary site-guard (the tid fix shape).
+    GOOD_TERNARY = textwrap.dedent("""\
+        def setTimer(Integer n){
+            def resp = hubBypass("addTimerV2", [:], "t")
+            if (httpOk(resp)) {
+                def tid = (resp?.data instanceof Map) ? resp.data.result?.id : null
+                if (tid != null) state.timerId = tid
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: `.data.result` appears only in a comment and a string literal.
+    GOOD_COMMENT_STRING = textwrap.dedent("""\
+        private boolean f(x){
+            // a bare resp?.data?.result?.code would throw
+            def s = "resp.data.result"
+            return true
+        }
+    """)
+
+    def test_unguarded_result_code_fails(self):
+        findings = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED)
+        assert any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Expected RULE51 for unguarded resp?.data?.result?.code, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE51_result_map_guard'), (
+            f"RULE51 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_unguarded_closure_result_fails(self):
+        findings = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED_CLOSURE)
+        assert any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Expected RULE51 for unguarded resp.data.result in closure, got: {findings}"
+        )
+
+    def test_unguarded_tid_fails(self):
+        findings = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED_TID)
+        assert any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Expected RULE51 for unguarded resp?.data?.result?.id, got: {findings}"
+        )
+
+    def test_same_line_guard_passes(self):
+        findings = run_rule(check_rule51_result_map_guard, self.GOOD_SAME_LINE)
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Same-line instanceof-Map guard must not flag RULE51, got: {findings}"
+        )
+
+    def test_early_return_guard_passes(self):
+        findings = run_rule(check_rule51_result_map_guard, self.GOOD_EARLY_RETURN)
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Early-return instanceof-Map guard must not flag RULE51, got: {findings}"
+        )
+
+    def test_ternary_site_guard_passes(self):
+        findings = run_rule(check_rule51_result_map_guard, self.GOOD_TERNARY)
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Ternary site-guard must not flag RULE51, got: {findings}"
+        )
+
+    def test_comment_and_string_not_flagged(self):
+        findings = run_rule(check_rule51_result_map_guard, self.GOOD_COMMENT_STRING)
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f".data.result in a comment/string literal must not flag RULE51, got: {findings}"
+        )
+
+    def test_parent_files_excluded(self):
+        """The parent app-driver + virtual parent are a separate cluster — excluded by name."""
+        findings = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED, fname="VeSyncIntegration.groovy")
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"VeSyncIntegration.groovy must be excluded from RULE51, got: {findings}"
+        )
+        findings2 = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED, fname="VeSyncIntegrationVirtual.groovy")
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings2), (
+            f"VeSyncIntegrationVirtual.groovy must be excluded from RULE51, got: {findings2}"
+        )
+
+    def test_exemption_suppresses_finding(self):
+        path = make_fake_path("TestDriver.groovy")
+        file_rel = str(path.relative_to(REPO_ROOT)).replace('\\', '/')
+        config = {
+            'result_map_guard_exemptions': [
+                {'file': file_rel, 'method': 'sendModeRequest', 'rationale': 'test exemption'}
+            ]
+        }
+        findings = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED, config=config)
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Exempted method must not flag RULE51, got: {findings}"
         )

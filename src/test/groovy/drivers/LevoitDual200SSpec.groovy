@@ -542,6 +542,36 @@ class LevoitDual200SSpec extends HubitatSpec {
         !eventEmitted("mode", "auto")
     }
 
+    // v2.10 cluster 1 (result.code crash class): sendModeRequest reads
+    // resp?.data?.result?.code directly (not behind httpOk). On a non-JSON gateway
+    // error body (HTTP 200 with a raw HTML String, not a Map), the pre-fix bare read
+    // did a property access on the String and threw MissingPropertyException, aborting
+    // setMode() with a raw sandbox stack trace. Post-fix, `bodyIsMap = resp?.data
+    // instanceof Map` gates the read and forces ok=false, so setMode reports a clean
+    // failure (no crash, no spurious mode event).
+    //
+    // DISCRIMINATION: reverting to `def innerCode = resp?.data?.result?.code` +
+    // unguarded `ok` makes setMode throw on the String body -> the notThrown block goes
+    // RED. (Orchestrator owns the both-ways proof.)
+    def "setMode('auto') with a non-JSON String body does NOT throw and emits no mode event (v2.10 result.code crash class)"() {
+        given: "device is on so BP24-B ensureSwitchOn() no-ops; both mode requests get a String body"
+        testDevice.events.add([name: "switch", value: "on"])
+        settings.descriptionTextEnable = false
+        testParent.requestResponses = [
+            [status: 200, data: "<html><body>200 but not JSON</body></html>"],
+            [status: 200, data: "<html><body>200 but not JSON</body></html>"]
+        ]
+
+        when:
+        driver.setMode("auto")
+
+        then: "the .result read on the String body did not throw"
+        notThrown(Exception)
+
+        and: "no spurious success -> no mode event emitted"
+        !eventEmitted("mode", "auto")
+    }
+
     def "updated() clears state.firmwareVariant so firmware updates are re-detected"() {
         given:
         state.firmwareVariant = "alt"

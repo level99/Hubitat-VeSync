@@ -203,9 +203,11 @@ def update(){
         applyStatus(resp2?.data)
         return
     }
-    // Both failed or returned no device fields; still call applyStatus so compat is updated
-    if (resp?.data) applyStatus(resp?.data)
-    else if (resp2?.data) applyStatus(resp2?.data)
+    // Both failed or returned no device fields; still call applyStatus so compat is updated.
+    // Guard instanceof Map (matching hasDeviceFields): a non-JSON error body makes resp.data a
+    // non-null String, and applyStatus -> peelEnvelope(Map response) would throw on a String arg.
+    if (resp?.data instanceof Map) applyStatus(resp?.data)
+    else if (resp2?.data instanceof Map) applyStatus(resp2?.data)
     else { logError "No status data returned from either getPurifierStatus or getHumidifierStatus"; recordError("No status data returned from either status method", [method:"getPurifierStatus"]) }
 }
 
@@ -494,7 +496,9 @@ private boolean shouldFallback(resp){
     if (!resp) return false
     def st = resp?.status as Integer
     if (!(st in [200, 201, 204])) return false
-    def inner = resp?.data?.result?.code
+    // Type-guard: a non-JSON error body makes resp.data a String; resp?.data?.result?.code
+    // would then throw. Non-Map body -> null -> not the -1 fallback signal (clean, no crash).
+    def inner = (resp?.data instanceof Map) ? resp.data.result?.code : null
     return (inner as Integer) == -1
 }
 
