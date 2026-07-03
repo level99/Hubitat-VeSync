@@ -214,15 +214,16 @@ These rules came out of the v2.2 / v2.2.1 release cycles where the orchestrator 
 
 ### TMI rules for outbound text
 
-When drafting commit messages, release notes, PR bodies, or community-forum posts, omit by default:
+When drafting commit messages, release notes, PR bodies, or community-forum posts, scrub the privacy item first, then omit the rest by default:
 
+- **Install-specific proper nouns — HARD scrub (privacy, not just noise).** Never put a user's device *labels* (user-assigned device names), room names, people's names, hub names, or LAN IPs into a **commit message**, PR body, release note, or forum post. All of these are outbound public text — a commit message leaks into permanent public history the moment it's pushed — so an install-specific name there is a PII leak, not a style nit. Replace with the device's *model* name or a neutral generic: e.g. "the Core 200S nightlight child", "the affected purifier", "a night-light device", "in production", "post-deploy". This covers **commit messages** explicitly (the rest of this section historically read as release-notes-only, which is how a device label once reached a pushed commit). Unlike the noise-reduction items below, scrub this even when the specific name would aid clarity — clarity is not worth the leak.
 - **References to the maintainer's hub or production environment** ("the maintainer's hub", "production hub", "post-deploy on dev1064"). Replace with neutral phrasing ("post-deploy", "in production") or drop entirely.
 - **Pipeline-process detail** (number of dev/QA/tester rounds, agent dispatches, "QA APPROVE'd through 3 rounds", model choices). The audience reads diffs and CHANGELOG, not pipeline state.
 - **Implementation jargon users won't recognize** in HPM popups / community posts (`MissingPropertyException`, `sanitize()` routing, helper-extraction patterns, lint rule numbers, exception class FQNs). Reword to symptom-and-fix in plain language.
 - **HPM upgrade boilerplate** in `levoitManifest.json releaseNotes`: `"Existing v<prev> users upgrade in place via HPM; no device re-pairing required."` is understood by HPM users and adds noise. Skip unless the release has a NON-trivial migration step (v2.0's Vital 200S / Superior 6000S Device Type re-pick is the bar — that's worth keeping).
 - **Hardware-specific test details** in user-facing release notes ("verified on Vital 200S 1847 + Superior 6000S 1848 deploys"). Generalize to "Live-verified on hub post-deploy" or drop.
 
-Self-check before showing draft for approval: would dropping this line confuse a future user reading the CHANGELOG / release notes a year from now? If no, drop it.
+Self-check before showing draft for approval: (1) **scrub every install-specific proper noun** (device labels, room/person names, hub names, IPs) to a neutral or model term IN THE DRAFTING STEP — do not lean on the human preview to catch a name; the preview is a backstop, not the filter. (2) Would dropping a remaining line confuse a future user reading the CHANGELOG / release notes a year from now? If no, drop it.
 
 ### TaskCreate discipline for multi-fix releases
 
