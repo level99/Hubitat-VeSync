@@ -140,6 +140,30 @@ class LevoitSproutAirSpec extends HubitatSpec {
         noExceptionThrown()
     }
 
+    def "applyStatus converts temperature to °C on a Celsius hub (°F passthrough on a Fahrenheit hub)"() {
+        // API returns F × 10; the emit must honor location.temperatureScale (wrong on °C hubs / EU-AUS
+        // SKUs). 717 -> 71.7°F -> 22.1°C. Pre-fix emitted the raw 71.7 with a hardcoded °F unit.
+        given: "hub configured for Celsius"
+        driver.metaClass.getLocation = { -> [temperatureScale: "C"] as Object }
+
+        when:
+        driver.applyStatus([code: 0, result: [powerSwitch: 1, workMode: "manual", fanSpeedLevel: 1, temperature: 717]])
+
+        then: "temperature is converted to °C (22.1) with unit °C"
+        def ev = testDevice.events.reverse().find { it.name == "temperature" }
+        Math.abs((ev.value as Double) - 22.1d) < 0.05d
+        ev.unit == "°C"
+
+        when: "hub configured for Fahrenheit"
+        driver.metaClass.getLocation = { -> [temperatureScale: "F"] as Object }
+        driver.applyStatus([code: 0, result: [powerSwitch: 1, workMode: "manual", fanSpeedLevel: 1, temperature: 717]])
+
+        then: "temperature passes through as °F (71.7) with unit °F"
+        def ev2 = testDevice.events.reverse().find { it.name == "temperature" }
+        Math.abs((ev2.value as Double) - 71.7d) < 0.05d
+        ev2.unit == "°F"
+    }
+
     // -------------------------------------------------------------------------
     // AirQuality capability coherence (v2.10): the standard `airQuality` attribute
     // must be EMITTED as a US-AQI (0-500) DERIVED FROM PM2.5 via the shared

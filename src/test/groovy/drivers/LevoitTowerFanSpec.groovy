@@ -636,6 +636,33 @@ class LevoitTowerFanSpec extends HubitatSpec {
         tempVal != 717
     }
 
+    def "applyStatus converts temperature to °C on a Celsius hub (°F passthrough on a Fahrenheit hub)"() {
+        // API returns F × 10; the emit must honor location.temperatureScale (wrong on °C hubs / EU-AUS
+        // SKUs). 717 -> 71.7°F -> (71.7-32)*5/9 = 22.1°C. Pre-fix emitted the raw 71.7 with unit °F.
+        given: "hub configured for Celsius"
+        driver.metaClass.getLocation = { -> [temperatureScale: "C"] as Object }
+        def fixture = loadYamlFixture("LTF-F422S.yaml")
+        def deviceData = fixture.responses.device_on_normal_speed5 as Map
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "temperature is converted to °C (22.1) and the unit is °C"
+        def ev = testDevice.events.reverse().find { it.name == "temperature" }
+        Math.abs((ev.value as Double) - 22.1d) < 0.05d
+        ev.unit == "°C"
+
+        when: "hub configured for Fahrenheit"
+        driver.metaClass.getLocation = { -> [temperatureScale: "F"] as Object }
+        driver.applyStatus(status)
+
+        then: "temperature passes through as °F (71.7) with unit °F"
+        def ev2 = testDevice.events.reverse().find { it.name == "temperature" }
+        Math.abs((ev2.value as Double) - 71.7d) < 0.05d
+        ev2.unit == "°F"
+    }
+
     def "applyStatus with temperature=850 emits 85.0°F (HA finding #1)"() {
         given: "fixture with temperature=850"
         def fixture = loadYamlFixture("LTF-F422S.yaml")
