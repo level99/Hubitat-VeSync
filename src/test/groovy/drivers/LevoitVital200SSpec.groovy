@@ -128,6 +128,69 @@ class LevoitVital200SSpec extends HubitatSpec {
         lastEventValue("pm25") == 3
     }
 
+    def "applyStatus mirrors the fan level to the SwitchLevel level attribute, agreeing with the speed attribute"() {
+        // Previously applyStatus never emitted `level`, so the dimmer tile drifted from the real fan
+        // level after mode changes / external adjustments. It now mirrors the fan level each poll.
+        // applyStatus derives sp from fanSpeedLevel — the SAME source as the speed attribute — so level
+        // and speed always agree. The fixture's device_on_manual_speed2 has fanSpeedLevel:1; override to
+        // 2 so the level is an unambiguous mid-band value.
+        given: "a manual-mode status at fan speed level 2"
+        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def deviceData = (fixture.responses.device_on_manual_speed2 as Map) + [fanSpeedLevel: 2]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "level mirrors the fan level (band 2 -> 50%) AND agrees with the speed attribute (band 2 -> 'low')"
+        lastEventValue("level") == 50
+        lastEventValue("speed") == "low"
+    }
+
+    def "applyStatus syncs state.lastSwitchSet so toggle honors an external power change"() {
+        given: "stale lastSwitchSet 'on'; the poll now reports the device off (external change)"
+        state.lastSwitchSet = "on"
+        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def deviceData = (fixture.responses.device_on_manual_speed2 as Map) + [powerSwitch: 0]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "switch reads off AND the toggle mirror is synced off"
+        lastEventValue("switch") == "off"
+        state.lastSwitchSet == "off"
+    }
+
+    def "setLevel emits the speed attribute on success (was updated only by setSpeed/setMode)"() {
+        // setLevel updated state.speed + mode/petMode but never emitted the FanControl `speed` event,
+        // so the named-speed tile lagged the slider until the next poll. It now emits on success.
+        given: "device already on so setLevel proceeds without an on() side-trip"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(50)
+
+        then: "the fan-speed tile is updated immediately (level 50 -> band 3 'medium')"
+        lastEventValue("speed") == "medium"
+    }
+
+    def "setLevel emits the BANDED level so command and poll agree (no raw-pct 30->50 snap)"() {
+        // A 4-speed device has only discrete levels; applyStatus mirrors speedToLevel(sp). setLevel must
+        // emit the same banded value, not the raw requested pct — else setLevel(30) showed 30 then the
+        // next poll snapped it to 50. Discriminating: pre-fix (raw pct) level==30.
+        given: "device already on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel(30) maps to fan band 2"
+        driver.setLevel(30)
+
+        then: "level is the banded value (band 2 -> 50%), identical to what a poll at speed 2 emits"
+        lastEventValue("level") == 50
+    }
+
     def "applyStatus handles null status gracefully without throwing"() {
         when: "applyStatus is called with null"
         driver.applyStatus(null)

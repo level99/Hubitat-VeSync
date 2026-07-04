@@ -289,7 +289,7 @@ private void updateAQIandFilter(String val, filter) {
         String danger;
         String color;
 
-        if      (aqi <  51) { danger = "Good";                           color = "7e0023"; }
+        if      (aqi <  51) { danger = "Good";                           color = "00e400"; }
         else if (aqi < 101) { danger = "Moderate";                       color = "fff300"; }
         else if (aqi < 151) { danger = "Unhealthy for Sensitive Groups"; color = "f18b00"; }
         else if (aqi < 201) { danger = "Unhealthy";                      color = "e53210"; }

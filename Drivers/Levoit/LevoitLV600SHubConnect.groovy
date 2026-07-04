@@ -315,7 +315,7 @@ def applyStatus(status){
     // This is the V2-class response convention: powerSwitch: int.
     def pwRaw = r.powerSwitch
     boolean powerOn = asBool(pwRaw)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    emitSwitchState(powerOn)
 
     // ---- Humidity ----
     if (r.humidity != null) device.sendEvent(name:"humidity", value: r.humidity as Integer)

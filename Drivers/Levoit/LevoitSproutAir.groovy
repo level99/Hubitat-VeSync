@@ -520,7 +520,7 @@ def applyStatus(status){
     // ---- Power ----
     def powerRaw = r.powerSwitch
     boolean powerOn = asBool(powerRaw)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    emitSwitchState(powerOn)
 
     // ---- Mode ----
     // workMode wire values: 'auto', 'manual', 'sleep' — direct mapping (PurifierModes).
@@ -617,11 +617,21 @@ def applyStatus(status){
     def nl = r?.nightlight
     if (nl instanceof Map) {
         def nlSwitchRaw = nl.nightLightSwitch
-        if (nlSwitchRaw != null) {
+        def nlBrightRaw = nl.brightness
+        // nightlightOn is a TRI-STATE enum ("on"/"off"/"dim") set by setNightlightMode. The response
+        // only carries the boolean nightLightSwitch + a brightness, so map the boolean alone would
+        // clobber a "dim" back to "on" every poll. Reconstruct the tri-state: off when the light is
+        // off, dim when it is on at reduced brightness, on at full brightness.
+        if (nlSwitchRaw != null || nlBrightRaw != null) {
             boolean nlOn = asBool(nlSwitchRaw)
-            device.sendEvent(name:"nightlightOn", value: nlOn ? "on" : "off")
+            Integer nlBright = (nlBrightRaw != null) ? (nlBrightRaw as Integer) : null
+            String nlMode
+            if (!nlOn || nlBright == 0)             nlMode = "off"
+            else if (nlBright != null && nlBright < 100) nlMode = "dim"
+            else                                    nlMode = "on"
+            device.sendEvent(name:"nightlightOn", value: nlMode)
         }
-        if (nl.brightness != null) device.sendEvent(name:"nightlightBrightness", value: nl.brightness as Integer)
+        if (nlBrightRaw != null) device.sendEvent(name:"nightlightBrightness", value: nlBrightRaw as Integer)
     }
 
     // ---- Info HTML (local variables only — avoids device.currentValue race; BP#7) ----

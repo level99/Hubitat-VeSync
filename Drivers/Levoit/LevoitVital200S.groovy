@@ -141,7 +141,7 @@ def applyStatus(status) {
     logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     def powerOn = r.powerSwitch == 1
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    emitSwitchState(powerOn)
 
     // Filter
     if (r.filterLifePercent != null) {
@@ -179,6 +179,9 @@ def applyStatus(status) {
             default:       device.sendEvent(name:"speed", value:"auto"); break
         }
     }
+    // SwitchLevel `level` mirror of the current fan level (0 while off) — kept in sync every poll so
+    // the dimmer tile does not drift from the real device level, which setLevel() alone previously owned.
+    device.sendEvent(name:"level", value: powerOn ? speedToLevel(sp) : 0)
 
     // AQ — compute label locally so we can also use it in the info HTML below (avoids race with sendEvent)
     String localAQ = null

@@ -115,6 +115,23 @@ class LevoitEverestAirSpec extends HubitatSpec {
         noExceptionThrown()
     }
 
+    def "applyStatus syncs state.lastSwitchSet so toggle honors an external power change"() {
+        // toggle() prefers state.lastSwitchSet (read-after-write mirror). A device turned off
+        // externally (VeSync app / physical button / Alexa) is seen only by the poll; without
+        // syncing the mirror on poll, toggle() keeps preferring the stale "on" and inverts the wrong
+        // way. Discriminating: pre-fix (raw ternary emit) state.lastSwitchSet stays "on".
+        given: "state.lastSwitchSet is a stale 'on' from a prior local write; device now off externally"
+        state.lastSwitchSet = "on"
+        def status = [code: 0, result: [powerSwitch: 0, workMode: "manual", fanSpeedLevel: 255]]
+
+        when: "a poll reflects the external off"
+        driver.applyStatus(status)
+
+        then: "the switch attribute reads off AND the toggle mirror is synced off"
+        lastEventValue("switch") == "off"
+        state.lastSwitchSet == "off"
+    }
+
     def "applyStatus handles double-wrapped response defensively (Bug Pattern #3)"() {
         given:
         def deviceData = [powerSwitch: 1, workMode: "turbo", fanSpeedLevel: 3,

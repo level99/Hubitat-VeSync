@@ -186,6 +186,7 @@ def _collect_per_file_rules():
         result_map_guard,
         private_scheduled_handler,
         power_write_reporter,
+        switch_toggle_sync,
     )
     rules = []
     for module in [
@@ -213,6 +214,7 @@ def _collect_per_file_rules():
         result_map_guard,
         private_scheduled_handler,
         power_write_reporter,
+        switch_toggle_sync,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

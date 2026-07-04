@@ -83,6 +83,7 @@ from lint_rules.bp30_single_threaded import check_rule48_single_threaded
 from lint_rules.result_map_guard import check_rule51_result_map_guard
 from lint_rules.private_scheduled_handler import check_rule52_private_scheduled_handler
 from lint_rules.power_write_reporter import check_rule53_power_write_reporter
+from lint_rules.switch_toggle_sync import check_rule54_switch_toggle_sync
 from lint_rules.library_no_top_block_comment import check_rule29_library_no_top_block_comment
 from lint_rules.direct_log_calls import check_rule30_direct_log_in_driver
 from lint_rules.bp24_state_switch_dead_branch import check_rule31_state_switch_dead_branch
@@ -10036,4 +10037,110 @@ class TestRule53PowerWriteReporter:
         findings = run_rule(check_rule53_power_write_reporter, self.GOOD_UPDATE_READ_FAIL, "LevoitEverestAir.groovy")
         assert not any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
             f"A raw recordError in update() read-failure must not flag RULE53, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE54 — switch/toggle sync (v2.10 cluster 4: toggle inverts wrong after external change)
+# ---------------------------------------------------------------------------
+
+class TestRule54SwitchToggleSync:
+    """
+    RULE54: a driver whose toggle() prefers state.lastSwitchSet must emit the poll switch
+    attribute via emitSwitchState() (which syncs the mirror), not a raw ternary sendEvent —
+    else an external power change seen only by the poll leaves a stale mirror that makes
+    toggle() invert the wrong way.
+    """
+
+    # MUST-CATCH: own toggle-mirror read + raw ternary poll switch-emit.
+    BAD_OWN = textwrap.dedent("""\
+        def toggle(){
+            String current = state.lastSwitchSet ?: device.currentValue("switch")
+            current == "on" ? off() : on()
+        }
+        def applyStatus(status){
+            def powerOn = status.powerSwitch == 1
+            device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+        }
+    """)
+
+    # MUST-CATCH via include-resolution: the toggle-mirror read lives in the real
+    # LevoitHumidifierLib (#include level99.LevoitHumidifier), and this driver body still
+    # raw-emits the ternary switch. Exercises the include-scope predicate against a real lib.
+    BAD_VIA_INCLUDE = textwrap.dedent("""\
+        #include level99.LevoitHumidifier
+        def applyStatus(status){
+            def powerOn = status.powerSwitch == 1
+            device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+        }
+    """)
+
+    # MUST-NOT-CATCH: the fix — emitSwitchState() (emits + syncs the mirror).
+    GOOD_HELPER = textwrap.dedent("""\
+        def toggle(){
+            String current = state.lastSwitchSet ?: device.currentValue("switch")
+            current == "on" ? off() : on()
+        }
+        def applyStatus(status){
+            def powerOn = status.powerSwitch == 1
+            emitSwitchState(powerOn)
+        }
+    """)
+
+    # MUST-NOT-CATCH: raw ternary emit but NO lastSwitchSet mirror in scope (Core200S/Generic
+    # shape — toggle uses currentValue directly, so there is nothing to keep in sync).
+    GOOD_NON_TOGGLE = textwrap.dedent("""\
+        def toggle(){
+            device.currentValue("switch") == "on" ? off() : on()
+        }
+        def applyStatus(status){
+            def powerOn = status.powerSwitch == 1
+            device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+        }
+    """)
+
+    # MUST-NOT-CATCH: the write-path literal emit (value:"on") is not the ternary poll shape.
+    GOOD_LITERAL_WRITE = textwrap.dedent("""\
+        def on(){
+            state.lastSwitchSet = "on"
+            device.sendEvent(name:"switch", value:"on")
+        }
+        def toggle(){
+            String current = state.lastSwitchSet ?: device.currentValue("switch")
+            current == "on" ? off() : on()
+        }
+    """)
+
+    def test_own_toggle_raw_emit_fails(self):
+        findings = run_rule(check_rule54_switch_toggle_sync, self.BAD_OWN, "LevoitEverestAir.groovy")
+        assert any(f['rule_id'] == 'RULE54_switch_toggle_sync' for f in findings), (
+            f"Expected RULE54 for raw ternary emit in a lastSwitchSet-toggle driver, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE54_switch_toggle_sync'), (
+            f"RULE54 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_include_resolved_toggle_raw_emit_fails(self):
+        findings = run_rule(check_rule54_switch_toggle_sync, self.BAD_VIA_INCLUDE, "LevoitClassic200S.groovy")
+        assert any(f['rule_id'] == 'RULE54_switch_toggle_sync' for f in findings), (
+            f"Expected RULE54 when the toggle-mirror read is in an #include'd lib, got: {findings}"
+        )
+
+    def test_emitswitchstate_passes(self):
+        findings = run_rule(check_rule54_switch_toggle_sync, self.GOOD_HELPER, "LevoitEverestAir.groovy")
+        assert not any(f['rule_id'] == 'RULE54_switch_toggle_sync' for f in findings), (
+            f"emitSwitchState() poll-emit must not flag RULE54, got: {findings}"
+        )
+
+    def test_non_toggle_raw_emit_passes(self):
+        findings = run_rule(check_rule54_switch_toggle_sync, self.GOOD_NON_TOGGLE, "LevoitGeneric.groovy")
+        assert not any(f['rule_id'] == 'RULE54_switch_toggle_sync' for f in findings), (
+            f"A raw ternary emit with no lastSwitchSet mirror must not flag RULE54, got: {findings}"
+        )
+
+    def test_literal_write_emit_passes(self):
+        findings = run_rule(check_rule54_switch_toggle_sync, self.GOOD_LITERAL_WRITE, "LevoitEverestAir.groovy")
+        assert not any(f['rule_id'] == 'RULE54_switch_toggle_sync' for f in findings), (
+            f"The write-path literal switch emit must not flag RULE54, got: {findings}"
         )

@@ -142,6 +142,20 @@ class LevoitCore200SLightSpec extends HubitatSpec {
         req.data.night_light == "dim"
     }
 
+    def "setNightLight emits the mode attribute on success (was stale until next poll)"() {
+        // The command path emitted level + switch via sendLevelEvent but not the `mode` attribute,
+        // so mode lagged the actual night-light state until the next poll. It now emits immediately.
+        given:
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setNightLight("dim")
+
+        then: "mode reflects the new night-light mode right away"
+        lastEventValue("mode") == "dim"
+        state.mode == "dim"
+    }
+
     def "on() delegates to setNightLight('on')"() {
         given:
         settings.descriptionTextEnable = false

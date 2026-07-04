@@ -327,7 +327,7 @@ def applyStatus(status){
     // 1000S response: powerSwitch (int 0|1) NOT `enabled` (bool).
     def powerRaw = r.powerSwitch
     boolean powerOn = asBool(powerRaw)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    emitSwitchState(powerOn)
 
     // ---- Humidity ----
     if (r.humidity != null) device.sendEvent(name:"humidity", value: r.humidity as Integer)

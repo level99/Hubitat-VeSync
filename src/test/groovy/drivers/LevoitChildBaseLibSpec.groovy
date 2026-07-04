@@ -1129,6 +1129,28 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         driver.networkOutageKnown() == false
     }
 
+    def "emitSwitchState emits the switch attribute AND syncs state.lastSwitchSet"() {
+        // toggle() prefers state.lastSwitchSet over the switch attribute (read-after-write mirror).
+        // emitSwitchState is the poll-emit helper: it must ALSO update state.lastSwitchSet so an
+        // external power change seen only by the poll is honored by the next toggle().
+        given: "a stale lastSwitchSet from a prior local write"
+        state.lastSwitchSet = "on"
+
+        when: "a poll reflects the device now off"
+        driver.emitSwitchState(false)
+
+        then: "the switch attribute is emitted off AND the mirror is synced off"
+        lastEventValue("switch") == "off"
+        state.lastSwitchSet == "off"
+
+        when: "a later poll reflects on"
+        driver.emitSwitchState(true)
+
+        then: "both the attribute and the mirror reflect on"
+        lastEventValue("switch") == "on"
+        state.lastSwitchSet == "on"
+    }
+
     // -------------------------------------------------------------------------
     // asBool — total, never-throwing boolean coercion (replaces the ~69 throw-prone
     // `(x instanceof Boolean) ? x : ((x as Integer) == 1)` sites). Number==1 semantics

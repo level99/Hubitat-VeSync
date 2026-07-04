@@ -100,6 +100,45 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         noExceptionThrown()
     }
 
+    def "applyStatus reports a non-zero SwitchLevel for mist level 1 (0 would read as OFF while misting)"() {
+        // percentFromLevel(1) returned 0, so a device actively misting at its lowest level emitted
+        // level=0 — which conventionally means OFF and contradicts switch=on. It now floors at 1%.
+        given: "device on, misting at the lowest set level (virtualLevel 1)"
+        def status = v2StatusEnvelope([powerSwitch: 1, workMode: "manual", humidity: 50, virtualLevel: 1, mistLevel: 1])
+
+        when:
+        driver.applyStatus(status)
+
+        then: "level is a non-zero active percent, not 0"
+        (lastEventValue("level") as Integer) >= 1
+    }
+
+    def "percentFromLevel/levelFromPercent still round-trip for every mist level 1-9"() {
+        // The level-1 floor (max(1, ...)) must not break the level<->percent inverse. Every mist
+        // level must map to a percent that maps back to the same level, and level 1 must be non-zero.
+        expect:
+        (1..9).each { lvl ->
+            int pct = driver.percentFromLevel(lvl as Integer)
+            assert pct > 0, "level ${lvl} produced percent 0 (would read as OFF)"
+            assert driver.levelFromPercent(pct) == lvl, "round-trip broke: level ${lvl} -> ${pct}% -> ${driver.levelFromPercent(pct)}"
+        }
+    }
+
+    def "applyStatus syncs state.lastSwitchSet so toggle honors an external power change"() {
+        // Superior 6000S's toggle() (via LevoitHumidifier lib) prefers state.lastSwitchSet. The poll
+        // must sync it, else an external off is shadowed by a stale "on" mirror and toggle inverts wrong.
+        given: "stale lastSwitchSet 'on'; device now off externally"
+        state.lastSwitchSet = "on"
+        def status = v2StatusEnvelope([powerSwitch: 0, workMode: "manual", humidity: 50])
+
+        when:
+        driver.applyStatus(status)
+
+        then: "switch reads off AND the toggle mirror is synced off"
+        lastEventValue("switch") == "off"
+        state.lastSwitchSet == "off"
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #8: dryingMode enum 0/1/2 → off/active/complete (NOT boolean)
     // -------------------------------------------------------------------------

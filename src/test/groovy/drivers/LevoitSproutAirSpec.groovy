@@ -97,6 +97,33 @@ class LevoitSproutAirSpec extends HubitatSpec {
         noExceptionThrown()
     }
 
+    def "applyStatus preserves nightlight 'dim' (reduced brightness while on) — does not clobber to 'on'"() {
+        // nightlightOn is tri-state (on/off/dim). The response only carries the boolean nightLightSwitch
+        // + a brightness, so reading the boolean alone snapped a "dim" back to "on" every poll. The
+        // read now reconstructs dim from a reduced brightness while the light is on. Each poll needs its
+        // own when/then (a bare applyStatus in an and: block is evaluated as a boolean assertion).
+        when: "device on; nightlight on at reduced brightness (dim)"
+        driver.applyStatus([code: 0, result: [powerSwitch: 1, workMode: "manual", fanSpeedLevel: 1,
+                            nightlight: [nightLightSwitch: true, brightness: 50]]])
+
+        then: "nightlightOn reads 'dim', not 'on'"
+        lastEventValue("nightlightOn") == "dim"
+
+        when: "nightlight on at full brightness"
+        driver.applyStatus([code: 0, result: [powerSwitch: 1, workMode: "manual", fanSpeedLevel: 1,
+                            nightlight: [nightLightSwitch: true, brightness: 100]]])
+
+        then: "reads 'on'"
+        lastEventValue("nightlightOn") == "on"
+
+        when: "nightlight switched off"
+        driver.applyStatus([code: 0, result: [powerSwitch: 1, workMode: "manual", fanSpeedLevel: 1,
+                            nightlight: [nightLightSwitch: false, brightness: 0]]])
+
+        then: "reads 'off'"
+        lastEventValue("nightlightOn") == "off"
+    }
+
     def "applyStatus handles double-wrapped response defensively (Bug Pattern #3)"() {
         given:
         def deviceData = [powerSwitch: 1, workMode: "sleep", fanSpeedLevel: 1, manualSpeedLevel: 1,
@@ -510,7 +537,10 @@ class LevoitSproutAirSpec extends HubitatSpec {
     // PurifierNightlight: nightLightSwitch=bool, brightness=int
     // -------------------------------------------------------------------------
 
-    def "applyStatus parses nightlight sub-object (bool nightLightSwitch) when present"() {
+    def "applyStatus parses nightlight sub-object (bool nightLightSwitch + brightness) when present"() {
+        // This fixture has nightLightSwitch=true at brightness 60 (reduced). Under the tri-state
+        // contract (full=on, reduced-while-on=dim, switch-off=off), a light on below full brightness
+        // reads 'dim'. The full-on ('on', brightness 100) case is covered by the tri-state spec above.
         given:
         def fixture = loadYamlFixture("LAP-B851S-WUS.yaml")
         def deviceData = fixture.responses.device_nightlight_on as Map
@@ -519,7 +549,7 @@ class LevoitSproutAirSpec extends HubitatSpec {
         driver.applyStatus([code: 0, result: deviceData])
 
         then:
-        lastEventValue("nightlightOn")         == "on"
+        lastEventValue("nightlightOn")         == "dim"
         lastEventValue("nightlightBrightness") == 60
     }
 

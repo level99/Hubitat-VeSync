@@ -392,7 +392,7 @@ private void noteOscillationOffState() {
 private Map applyFanCommonHead(Map r) {
     // ---- Power ----
     boolean powerOn = asBool(r.powerSwitch)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    emitSwitchState(powerOn)
 
     // ---- Fan speed ----
     // Prefer fanSpeedLevel (currently active) over manualSpeedLevel (last-set)

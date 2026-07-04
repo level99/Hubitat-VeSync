@@ -626,7 +626,7 @@ def applyStatus(status){
     // ---- Power ----
     def powerRaw = r.powerSwitch
     boolean powerOn = asBool(powerRaw)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    emitSwitchState(powerOn)
 
     // ---- Mode ----
     // workMode wire values: 'auto', 'manual', 'sleep', 'turbo' (PurifierModes constants).

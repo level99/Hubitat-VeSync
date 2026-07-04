@@ -88,6 +88,40 @@ class LevoitVital100SSpec extends HubitatSpec {
         lastEventValue("pm25") == 3
     }
 
+    def "applyStatus mirrors the fan level to the SwitchLevel level attribute, agreeing with the speed attribute"() {
+        // Previously applyStatus never emitted `level`, so the dimmer tile drifted from the real fan
+        // level. It now mirrors the fan level each poll (matching Vital 200S / EverestAir / Sprout Air).
+        // applyStatus derives sp from fanSpeedLevel — the SAME source as the speed attribute — so level
+        // and speed always agree. The fixture's device_on_manual_speed2 has fanSpeedLevel:1; override to
+        // 2 so the level is an unambiguous mid-band value.
+        given: "a manual-mode status at fan speed level 2"
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
+        def deviceData = (fixture.responses.device_on_manual_speed2 as Map) + [fanSpeedLevel: 2]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "level mirrors the fan level (band 2 -> 50%) AND agrees with the speed attribute (band 2 -> 'low')"
+        lastEventValue("level") == 50
+        lastEventValue("speed") == "low"
+    }
+
+    def "applyStatus syncs state.lastSwitchSet so toggle honors an external power change"() {
+        given: "stale lastSwitchSet 'on'; the poll now reports the device off (external change)"
+        state.lastSwitchSet = "on"
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
+        def deviceData = (fixture.responses.device_on_manual_speed2 as Map) + [powerSwitch: 0]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "switch reads off AND the toggle mirror is synced off"
+        lastEventValue("switch") == "off"
+        state.lastSwitchSet == "off"
+    }
+
     def "applyStatus envelope peel handles double-wrapped responses (Bug Pattern #3)"() {
         // LevoitVital100S.groovy has a defensive while-loop peel matching LevoitVital200S.groovy.
         // This test passes a double-wrapped envelope (humidifier shape applied to purifier data)

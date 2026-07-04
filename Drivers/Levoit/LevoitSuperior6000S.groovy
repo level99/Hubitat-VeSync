@@ -299,7 +299,7 @@ def applyStatus(status){
 
     // Power
     def powerOn = asBool(r.powerSwitch)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    emitSwitchState(powerOn)
 
     // Current ambient humidity
     if (r.humidity != null) device.sendEvent(name:"humidity", value: r.humidity as Integer)
@@ -428,7 +428,10 @@ def applyStatus(status){
 private int percentFromLevel(Integer lvl){
     if (lvl == null || lvl < 1) return 0
     if (lvl >= 9) return 100
-    return Math.round((lvl - 1) * (100.0 / 8.0)) as int
+    // Level 1 is the lowest ACTIVE mist level, not "off": (lvl-1)*12.5 gave level 1 -> 0%, and 0%
+    // conventionally means OFF in SwitchLevel — contradicting switch=on while the device mists at L1.
+    // Floor an active level at 1% so a running L1 never emits level 0.
+    return Math.max(1, Math.round((lvl - 1) * (100.0 / 8.0)) as int)
 }
 
 private int levelFromPercent(Integer pct){

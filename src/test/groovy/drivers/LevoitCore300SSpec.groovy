@@ -274,6 +274,21 @@ class LevoitCore300SSpec extends HubitatSpec {
         pm25Events.last().value == 3
     }
 
+    def "update() with good air quality emits the green aqiColor, not the Hazardous maroon"() {
+        // The "Good" AQI band was mistakenly assigned the same dark maroon (7e0023) as "Hazardous".
+        // It is now EPA green (00e400) so a healthy reading is not alarming on a dashboard.
+        given:
+        settings.descriptionTextEnable = true
+        def fixture = loadYamlFixture("Core300S.yaml")
+        def status = fixture.responses.device_on_manual_speed1 as Map   // air_quality_value: 3 -> US-AQI "Good"
+
+        when:
+        driver.update(status, null)
+
+        then: "the Good-band swatch is green"
+        lastEventValue("aqiColor") == "00e400"
+    }
+
     def "update() parses air_quality into airQualityIndex attribute"() {
         given:
         settings.descriptionTextEnable = true

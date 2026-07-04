@@ -276,7 +276,7 @@ def applyStatus(status){
     // Classic 200S response uses `enabled` (boolean), same as other VeSyncHumid200300S class devices
     def enabledRaw = r.enabled
     boolean powerOn = asBool(enabledRaw)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    emitSwitchState(powerOn)
 
     // ---- Humidity ----
     if (r.humidity != null) device.sendEvent(name:"humidity", value: r.humidity as Integer)

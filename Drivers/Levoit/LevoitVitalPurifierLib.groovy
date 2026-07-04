@@ -225,13 +225,19 @@ def setLevel(val) {
     else if (pct < 40) lvl=2
     else if (pct < 60) lvl=3
     else lvl=4
-    sendEvent(name:"level", value: pct)
     def ok = setSpeedLevel(lvl)
     if (ok) {
         // setLevel establishes manual mode + speed atomically (V2 quirk); emit mode events here.
         // Also write state.speed so configureOnState() replay path re-applies the correct named speed.
         state.speed = mapIntegerToSpeed(lvl)
         state.mode = "manual"
+        // Emit the BANDED level (speedToLevel(lvl)) — NOT the raw requested pct — so the command and
+        // the poll agree: a 4-speed device only has discrete levels, and applyStatus mirrors the same
+        // speedToLevel(sp). Emitting the raw pct here made setLevel(30) show 30 then snap to 50 on the
+        // next poll. Emit the FanControl `speed` mirror too — setSpeed()/setMode("manual") both emit
+        // speed on success, but setLevel() left it stale. Gated on the write succeeding (matches speed).
+        device.sendEvent(name:"level", value: speedToLevel(lvl))
+        device.sendEvent(name:"speed", value: state.speed)
         device.sendEvent(name:"mode", value: "manual")
         device.sendEvent(name:"petMode", value: "off")
         logInfo "Level: ${pct}% (fan level ${lvl})"
@@ -555,5 +561,18 @@ def mapIntegerToSpeed(n) {
         case 4: return "high"
         case 255: return "off"
         default: return "low"
+    }
+}
+
+// Map a manual fan level (1-4) to a 0-100 SwitchLevel percent for the `level` mirror emitted
+// by applyStatus (Vital 100S/200S). Mirrors the EverestAir speedToLevel convention for a banded
+// fan so the dimmer tile reflects the real device level every poll instead of only after setLevel().
+Integer speedToLevel(lvl) {
+    switch (lvl as Integer) {
+        case 1: return 25
+        case 2: return 50
+        case 3: return 75
+        case 4: return 100
+        default: return 25
     }
 }

@@ -325,7 +325,7 @@ def applyStatus(status){
     // Same humidifier shape as Classic 300S, LV600S, OasisMist 450S (all VeSyncHumid200300S)
     def enabledRaw = r.enabled
     boolean powerOn = asBool(enabledRaw)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    emitSwitchState(powerOn)
 
     // ---- Humidity ----
     if (r.humidity != null) device.sendEvent(name:"humidity", value: r.humidity as Integer)

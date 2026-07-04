@@ -628,3 +628,16 @@ def reportWriteError(String tag, Map ctx = [:]) {
     logError tag
     recordError(tag, ctx)
 }
+
+// Emit the `switch` attribute from a poll/status parse AND keep state.lastSwitchSet in sync.
+// toggle() prefers state.lastSwitchSet over device.currentValue("switch") as a synchronous
+// read-after-write mirror (currentValue is not updated synchronously right after sendEvent within a
+// rapid toggle sequence). on()/off() set it on the write path; a poll switch-emit MUST also update it
+// here, otherwise an EXTERNAL power change (VeSync app / physical button / Alexa) seen only by the poll
+// leaves a stale lastSwitchSet shadowing the fresh switch attribute forever — so toggle() would keep
+// inverting the wrong way after any out-of-band on/off. Enforced by RULE54.
+void emitSwitchState(powerOn) {
+    String v = powerOn ? "on" : "off"
+    device.sendEvent(name:"switch", value: v)
+    state.lastSwitchSet = v
+}

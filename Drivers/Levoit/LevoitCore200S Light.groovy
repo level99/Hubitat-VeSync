@@ -144,6 +144,11 @@ def setNightLight(mode)
 			if (checkHttpResponse("setNightLight", resp))
 			{
                 sendLevelEvent(m)
+                // Emit the `mode` attribute on the command path too — the poll path (update(status))
+                // already sets state.mode + emits mode, but a setNightLight() command left mode stale
+                // until the next poll (unlike the level/switch mirrors emitted via sendLevelEvent).
+                state.mode = m
+                device.sendEvent(name: "mode", value: m)
                 logInfo "Night light: ${m}"
 				result = true
 			}
