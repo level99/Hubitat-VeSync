@@ -143,6 +143,6 @@ private List getAutoModes() { ["default", "quiet", "eco", "efficient"] }
 // checkHttpResponse, setLevel(value, duration), setLevel(value), cycleSpeed, mapSpeedToInteger,
 // mapIntegerToSpeed, mapIntegerStringToSpeed, setSpeed, setMode, handleEvent
 // are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
-// update, update(status, nightLight), setAutoMode, handleAutoMode, updateAQIandFilter,
-// convertRange are provided by #include level99.LevoitCoreAQPurifier (LevoitCoreAQPurifierLib.groovy).
+// update, update(status, nightLight), setAutoMode, handleAutoMode, updateAQIandFilter
+// are provided by #include level99.LevoitCoreAQPurifier (LevoitCoreAQPurifierLib.groovy).
 

@@ -590,16 +590,9 @@ def applyStatus(status){
     // ---- Temperature (divided by 10) ----
     if (r.temperature != null) {
         Integer tempRaw = r.temperature as Integer
-        if (tempRaw != 0) {
-            // API gives F × 10. Convert to the hub's configured scale (°C hubs / EU-AUS SKUs).
-            double tempF = tempRaw / 10.0
-            if (location?.temperatureScale == "C") {
-                double tempC = (tempF - 32) * 5.0 / 9.0
-                device.sendEvent(name:"temperature", value: Math.round(tempC * 10) / 10.0, unit: "°C")
-            } else {
-                device.sendEvent(name:"temperature", value: Math.round(tempF * 10) / 10.0, unit: "°F")
-            }
-        }
+        // API gives F × 10; emitTemperature (LevoitChildBase) converts to the hub scale.
+        // Skip 0 raw (sensor absent / not yet warmed up).
+        if (tempRaw != 0) emitTemperature(tempRaw)
     }
 
     // ---- Display ----
@@ -633,11 +626,19 @@ def applyStatus(status){
             Integer nlBright = (nlBrightRaw != null) ? (nlBrightRaw as Integer) : null
             String nlMode
             if (!nlOn || nlBright == 0)             nlMode = "off"
+            // NOTE: the dim-vs-on boundary (brightness < 100 => "dim") is INFERRED and
+            // hardware-unconfirmed — pending live/A2 confirmation. Do not tighten it here.
             else if (nlBright != null && nlBright < 100) nlMode = "dim"
             else                                    nlMode = "on"
             device.sendEvent(name:"nightlightOn", value: nlMode)
+            // Brightness: report 0 when the light is off so the dashboard never shows an
+            // "off" nightlight with a stale positive brightness (VeSync retains the last
+            // brightness across an off). Emit the reported value otherwise.
+            if (nlBrightRaw != null) {
+                Integer reportBright = (nlMode == "off") ? 0 : (nlBrightRaw as Integer)
+                device.sendEvent(name:"nightlightBrightness", value: reportBright)
+            }
         }
-        if (nlBrightRaw != null) device.sendEvent(name:"nightlightBrightness", value: nlBrightRaw as Integer)
     }
 
     // ---- Info HTML (local variables only — avoids device.currentValue race; BP#7) ----

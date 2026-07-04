@@ -85,6 +85,7 @@ from lint_rules.private_scheduled_handler import check_rule52_private_scheduled_
 from lint_rules.power_write_reporter import check_rule53_power_write_reporter
 from lint_rules.switch_toggle_sync import check_rule54_switch_toggle_sync
 from lint_rules.bare_bool_flag_eq import check_rule55_bare_bool_flag_eq
+from lint_rules.temperature_scale_emit import check_rule56_temperature_scale_emit
 from lint_rules.library_no_top_block_comment import check_rule29_library_no_top_block_comment
 from lint_rules.direct_log_calls import check_rule30_direct_log_in_driver
 from lint_rules.bp24_state_switch_dead_branch import check_rule31_state_switch_dead_branch
@@ -3540,6 +3541,30 @@ class TestRule45BoolCoercionAsInteger:
         }
     """)
 
+    # MUST-NOT-CATCH: a MULTI-LINE /* ... */ comment mentioning the idiom. The prior naive
+    # per-line stripper used a single-line `/\\*.*?\\*/` regex, so a `/*` that opened a block
+    # without a closing `*/` on the same line left the idiom line unstripped -> false positive.
+    # The harness cleaned_lines strips block comments across line boundaries, so this passes.
+    GOOD_MULTILINE_BLOCK_COMMENT_MENTION = textwrap.dedent("""\
+        def applyStatus(status) {
+            /*
+             * Legacy form was (r.powerSwitch as Integer) == 1 which threw on a
+             * non-numeric String; replaced by the shared asBool() helper below.
+             */
+            boolean powerOn = asBool(status.result.powerSwitch)
+        }
+    """)
+
+    # MUST-CATCH: a real violation preceded on the same line by a `//` INSIDE a string
+    # literal. The prior naive stripper (`re.sub('//[^\\n]*', '', line)`) chopped from the
+    # in-string `//` to end of line, deleting the real `(x as Integer) == 1` after it ->
+    # false negative. The string-literal-aware cleaned_lines keeps the coercion visible.
+    BAD_SLASH_IN_STRING_THEN_VIOLATION = textwrap.dedent("""\
+        def applyStatus(status) {
+            def note = "see //docs"; boolean powerOn = (status.result.powerSwitch as Integer) == 1
+        }
+    """)
+
     def test_typed_decl_split_fails(self):
         # D3
         findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_TYPED_DECL_SPLIT)
@@ -3552,6 +3577,23 @@ class TestRule45BoolCoercionAsInteger:
         findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_BLOCK_COMMENT_MENTION)
         assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
             f"A /* block comment */ mentioning the idiom must not flag RULE45, got: {findings}"
+        )
+
+    def test_multiline_block_comment_mention_passes(self):
+        findings = run_rule(
+            TestRule45BoolCoercionAsInteger._rule, self.GOOD_MULTILINE_BLOCK_COMMENT_MENTION
+        )
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"A MULTI-LINE /* ... */ comment mentioning the idiom must not flag RULE45, got: {findings}"
+        )
+
+    def test_slash_in_string_then_violation_fails(self):
+        findings = run_rule(
+            TestRule45BoolCoercionAsInteger._rule, self.BAD_SLASH_IN_STRING_THEN_VIOLATION
+        )
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"A real `(x as Integer) == 1` after a `//` inside a string literal must flag "
+            f"RULE45 (the coercion is code, not a comment), got: {findings}"
         )
 
     def test_bare_form_fails(self):
@@ -10203,3 +10245,137 @@ class TestRule55BareBoolFlagEq:
         # A flag token inside a plain (non-interpolated) log-string literal is not code.
         findings = run_rule(check_rule55_bare_bool_flag_eq, 'logDebug "the powerSwitch == 1 branch ran"\n')
         assert not any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+
+
+class TestRule56TemperatureScaleEmit:
+    """
+    RULE56: the `temperature` attribute must be emitted only through the shared
+    emitTemperature() helper (LevoitChildBaseLib). An inline sendEvent that hardcodes a
+    Fahrenheit unit (`unit:"°F"`) is the C5 hardcoded-scale bug class — flagged. The
+    helper's own definition file is exempt (it IS the sanctioned emitter); an
+    emitTemperature() call, a non-temperature sendEvent, and a commented-out inline emit
+    must NOT flag.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    _RULE_ID = 'RULE56_temperature_scale_emit'
+
+    # MUST-CATCH: the inline hardcoded-°F block (the C5 shape) — both °C and °F branches;
+    # keying on the °F branch flags it exactly once.
+    BAD_INLINE_F = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            if (r.temperature != null) {
+                double tempF = (r.temperature as Integer) / 10.0
+                if (location?.temperatureScale == "C") {
+                    double tempC = (tempF - 32) * 5.0 / 9.0
+                    device.sendEvent(name:"temperature", value: Math.round(tempC * 10) / 10.0, unit:"°C")
+                } else {
+                    device.sendEvent(name:"temperature", value: Math.round(tempF * 10) / 10.0, unit:"°F")
+                }
+            }
+        }
+    """)
+
+    # MUST-CATCH: the same bug expressed with a `\\u00B0F` escape unit literal — still an
+    # inline hardcoded-Fahrenheit emit bypassing the helper.
+    BAD_INLINE_ESCAPE = textwrap.dedent("""\
+        def applyStatus(status) {
+            device.sendEvent(name:"temperature", value: 68.3, unit:"\\u00B0F")
+        }
+    """)
+
+    # MUST-NOT-CATCH: the sanctioned emitTemperature() call — no temperature sendEvent here.
+    GOOD_HELPER_CALL = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            if (r.temperature != null) emitTemperature(r.temperature as Integer)
+        }
+    """)
+
+    # MUST-NOT-CATCH: the helper's OWN definition (lives in LevoitChildBaseLib.groovy, the
+    # one file allowed to carry the temperature sendEvent).
+    GOOD_HELPER_DEFINITION = textwrap.dedent("""\
+        void emitTemperature(rawTempTimesTen) {
+            double tempF = (rawTempTimesTen as Integer) / 10.0
+            if (location?.temperatureScale == "C") {
+                double tempC = (tempF - 32) * 5.0 / 9.0
+                device.sendEvent(name:"temperature", value: Math.round(tempC * 10) / 10.0, unit:"°C")
+            } else {
+                device.sendEvent(name:"temperature", value: Math.round(tempF * 10) / 10.0, unit:"°F")
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: a non-temperature sendEvent (even with a °F unit) is out of scope.
+    GOOD_NON_TEMPERATURE_EMIT = textwrap.dedent("""\
+        def applyStatus(status) {
+            device.sendEvent(name:"heatingSetpoint", value: 70, unit:"°F")
+        }
+    """)
+
+    # MUST-NOT-CATCH: a commented-out inline emit (comment-stripped before matching).
+    GOOD_COMMENTED_OUT = textwrap.dedent("""\
+        def applyStatus(status) {
+            // legacy: device.sendEvent(name:"temperature", value: 68.3, unit:"°F")
+            emitTemperature(683)
+        }
+    """)
+
+    def test_inline_fahrenheit_emit_fails(self):
+        findings = run_rule(check_rule56_temperature_scale_emit, self.BAD_INLINE_F)
+        assert any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"Expected RULE56 for inline hardcoded-°F temperature emit, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == self._RULE_ID), (
+            f"RULE56 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+        # Exactly one finding — keying on the °F branch flags an inline block once.
+        assert sum(1 for f in findings if f['rule_id'] == self._RULE_ID) == 1, (
+            f"Expected exactly one RULE56 finding per inline block, got: {findings}"
+        )
+
+    def test_inline_escape_unit_emit_fails(self):
+        findings = run_rule(check_rule56_temperature_scale_emit, self.BAD_INLINE_ESCAPE)
+        assert any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"Expected RULE56 for inline °F emit using a \\u00B0 escape unit, got: {findings}"
+        )
+
+    def test_helper_call_passes(self):
+        findings = run_rule(check_rule56_temperature_scale_emit, self.GOOD_HELPER_CALL)
+        assert not any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"emitTemperature() call must not flag RULE56, got: {findings}"
+        )
+
+    def test_helper_definition_file_exempt(self):
+        findings = run_rule(
+            check_rule56_temperature_scale_emit,
+            self.GOOD_HELPER_DEFINITION,
+            fname="LevoitChildBaseLib.groovy",
+        )
+        assert not any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"The helper's own definition file (LevoitChildBaseLib) must be exempt, got: {findings}"
+        )
+
+    def test_helper_definition_flags_elsewhere(self):
+        # Non-vacuity of the file exemption: the SAME helper body in a NON-helper file
+        # (a driver that hand-inlined the emit) DOES flag — proving the pass is the file
+        # exemption, not that the body is inherently unmatched.
+        findings = run_rule(check_rule56_temperature_scale_emit, self.GOOD_HELPER_DEFINITION)
+        assert any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"The inline emit body in a driver file (not the helper) must flag RULE56, got: {findings}"
+        )
+
+    def test_non_temperature_emit_passes(self):
+        findings = run_rule(check_rule56_temperature_scale_emit, self.GOOD_NON_TEMPERATURE_EMIT)
+        assert not any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"A non-temperature sendEvent must not flag RULE56, got: {findings}"
+        )
+
+    def test_commented_out_emit_passes(self):
+        findings = run_rule(check_rule56_temperature_scale_emit, self.GOOD_COMMENTED_OUT)
+        assert not any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"A commented-out inline emit must not flag RULE56, got: {findings}"
+        )

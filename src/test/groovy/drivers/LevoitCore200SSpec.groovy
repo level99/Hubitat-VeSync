@@ -759,10 +759,10 @@ class LevoitCore200SSpec extends HubitatSpec {
         // setSpeed("high") must:
         //   1. auto-on (ensureSwitchOn fires before the mode dispatch),
         //   2. RECOVER by calling setMode("manual") and applying the speed — NOT warn+drop.
-        //      The Tier-24 form (warn+drop) was adversarially proven to turn the device on
+        //      The earlier warn+drop form was proven to turn the device on
         //      but discard the requested speed: user sees device powered but wrong speed.
         // Pre-fix: else { logWarn "cannot apply speed"; return } — speed was lost.
-        // Post-fix (Tier-25): else { setMode("manual"); handleSpeed(s); ... } — speed applied.
+        // Post-fix: else { setMode("manual"); handleSpeed(s); ... } — speed applied.
         //
         // Distinct from BP18 spec: that spec passes null as the *argument*;
         // this spec passes a valid speed string but leaves *state.mode* null.

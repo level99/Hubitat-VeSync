@@ -289,4 +289,22 @@ class NotificationTileSpec extends HubitatSpec {
         then: "no NPE — the comparison defaults the null msgLimit to 5"
         noExceptionThrown()
     }
+
+    def "updated() does not throw when state.lastLimit is null in the message-limit comparison"() {
+        given: "state.lastLimit null (first run / fresh install); msgLimit set to isolate lastLimit"
+        settings.descriptionTextEnable = false
+        settings.msgLimit = 5
+        // Non-null msgCount skips the v1->v2 conversion block so we reach the shrink comparison
+        // directly. state.lastLimit is null (never set) — the LEFT operand's bare
+        // state?.lastLimit.toInteger() NPEs there (`?.` guards the state map, not the null
+        // lastLimit field), which is exactly the (state?.lastLimit ?: 5) guard's job.
+        state.msgCount = 1
+        state.remove("lastLimit")
+
+        when:
+        driver.updated()
+
+        then: "no NPE — the comparison defaults the null lastLimit to 5"
+        noExceptionThrown()
+    }
 }

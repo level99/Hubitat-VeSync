@@ -307,16 +307,9 @@ def applyStatus(status){
     // Target humidity (auto setpoint)
     if (r.targetHumidity != null) device.sendEvent(name:"targetHumidity", value: r.targetHumidity as Integer)
 
-    // Temperature: API gives F × 10 (e.g. 683 → 68.3°F). Round to 1 decimal via Math.round.
-    if (r.temperature != null) {
-        double tempF = (r.temperature as Integer) / 10.0
-        if (location?.temperatureScale == "C") {
-            double tempC = (tempF - 32) * 5.0 / 9.0
-            device.sendEvent(name:"temperature", value: Math.round(tempC * 10) / 10.0, unit:"°C")
-        } else {
-            device.sendEvent(name:"temperature", value: Math.round(tempF * 10) / 10.0, unit:"°F")
-        }
-    }
+    // Temperature: API gives F × 10 (e.g. 683 → 68.3°F). emitTemperature (LevoitChildBase)
+    // rounds to 1 decimal and converts to the hub's configured scale.
+    if (r.temperature != null) emitTemperature(r.temperature as Integer)
 
     // Mode — reverse-map autoPro -> auto for user-friendly reporting
     String workMode = (r.workMode ?: "manual") as String

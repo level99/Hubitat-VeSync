@@ -589,6 +589,23 @@ class LevoitSproutAirSpec extends HubitatSpec {
         lastEventValue("nightlightOn") == "off"
     }
 
+    def "applyStatus off nightlight with retained brightness reports nightlightBrightness 0 (not stale positive)"() {
+        // VeSync retains the last brightness across an off, so the response can carry a positive
+        // brightness while nightLightSwitch=false. The off nightlight must report brightness 0 —
+        // a stale positive would contradict the "off" state on the dashboard. Non-vacuous: the
+        // fixture has brightness 50 while the switch is off; pre-fix this emitted 50.
+        given:
+        def status = [code: 0, result: [powerSwitch: 1, workMode: "auto", fanSpeedLevel: 1,
+                                        manualSpeedLevel: 1, childLockSwitch: 0, AQLevel: 1, PM25: 5,
+                                        screenState: 1, nightlight: [nightLightSwitch: false, brightness: 50]]]
+        when:
+        driver.applyStatus(status)
+
+        then:
+        lastEventValue("nightlightOn") == "off"
+        lastEventValue("nightlightBrightness") == 0
+    }
+
     def "applyStatus emits no nightlightOn event when nightlight key absent"() {
         given: "response without nightlight sub-object"
         def status = [code: 0, result: [powerSwitch: 1, workMode: "auto", fanSpeedLevel: 1,

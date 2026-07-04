@@ -133,7 +133,10 @@ metadata {
 		// Null-guard (BP12/BP18): the updateSetting above is not visible within this same
 		// execution, so settings.msgLimit is still null on a device Type-changed to this driver.
 		// The comparison eagerly evaluates the right side, so default to 5 to avoid null.toInteger().
-		if (state?.lastLimit.toInteger()>(settings.msgLimit ?: 5).toInteger())
+		// Both operands must default to 5 before .toInteger(): `?.` guards a null state map but
+		// NOT a null state.lastLimit (first run / Type-change), so a bare state?.lastLimit.toInteger()
+		// still NPEs — mirror the right-side ?: 5 guard on the left.
+		if ((state?.lastLimit ?: 5).toInteger()>(settings.msgLimit ?: 5).toInteger())
 			{
 			wkTile=device.currentValue("last5")
 			msgFilled=state.msgCount.toInteger()

@@ -365,16 +365,9 @@ def applyStatus(status){
     // Null/0 temperature is common when sensor is not present or not yet warmed up.
     if (r.temperature != null) {
         Integer tempRaw = r.temperature as Integer
-        if (tempRaw != 0) {
-            // API gives F × 10. Convert to the hub's configured scale (°C hubs / EU-AUS SKUs).
-            double tempF = tempRaw / 10.0
-            if (location?.temperatureScale == "C") {
-                double tempC = (tempF - 32) * 5.0 / 9.0
-                device.sendEvent(name:"temperature", value: Math.round(tempC * 10) / 10.0, unit: "°C")
-            } else {
-                device.sendEvent(name:"temperature", value: Math.round(tempF * 10) / 10.0, unit: "°F")
-            }
-        }
+        // API gives F × 10; emitTemperature (LevoitChildBase) converts to the hub scale.
+        // Skip 0 raw (sensor absent / not yet warmed up).
+        if (tempRaw != 0) emitTemperature(tempRaw)
     }
 
     // ---- Target humidity ----

@@ -973,8 +973,8 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
 
     // -------------------------------------------------------------------------
     // Test 11b: v1_humidifier RGB nightlight — LUH-O451S-WEU (OasisMist 450S EU variant)
-    // Exercises the RGB-nightlight setLightStatus op (driver-side extension per pyvesync
-    // PR #502, absent from upstream YAML; reachable via virtual_parent_extensions.json).
+    // Exercises the RGB-nightlight setLightStatus op (driver-side extension per
+    // pyvesync PR #502, absent from upstream YAML; reachable via virtual_parent_extensions.json).
     // The WEU fixture maps to deviceType LUH-O451S-WEU so the driver's runtime RGB gate
     // engages on a real hub; here we verify the parent-side key-set validation + the
     // rgbNightLight sub-object in the canned getHumidifierStatus response.

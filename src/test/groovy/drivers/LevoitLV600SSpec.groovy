@@ -22,7 +22,7 @@ import spock.lang.Unroll
  *                   -- setMode("auto") with cached "alt": goes direct to "humidity" without retry
  *                   -- updated() clears state.firmwareVariant so firmware updates are re-detected
  *   Mode read-path  -- "auto"/"autoPro"/"humidity" all normalize to user-facing "auto"
- *   PR #505 check   -- mode payload uses 'mode' field key (not 'workMode')
+ *   pyvesync PR #505 check -- mode payload uses 'mode' field key (not 'workMode')
  *   Target humidity -- setHumidity(55) produces setTargetHumidity with {target_humidity:55}
  *   Display field   -- 'display' key first; fallback to 'indicator_light_switch'
  *   No night-light  -- driver declares no setNightLight command, no night_light_brightness parsing
@@ -627,7 +627,7 @@ class LevoitLV600SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Mode write-path: multi-firmware try-canonical-then-fallback-with-cache (PR #505)
+    // Mode write-path: multi-firmware try-canonical-then-fallback-with-cache (pyvesync PR #505)
     // -------------------------------------------------------------------------
 
     def "setMode('auto') canonical-accept: first attempt uses 'auto' payload, cached as 'std'"() {
@@ -759,7 +759,7 @@ class LevoitLV600SSpec extends HubitatSpec {
     // Mode read-path normalization: "auto"/"autoPro"/"humidity" all map to user-facing "auto"
     // -------------------------------------------------------------------------
 
-    def "applyStatus mode='humidity' (EU firmware per PR #505) normalized to user-facing 'auto'"() {
+    def "applyStatus mode='humidity' (EU firmware per pyvesync PR #505) normalized to user-facing 'auto'"() {
         given:
         settings.descriptionTextEnable = false
         // Simulate LUH-A602S-WEU reporting mode='humidity' (its auto-mode alias)

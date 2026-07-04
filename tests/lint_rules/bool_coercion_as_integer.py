@@ -88,15 +88,6 @@ def _var_eq1_re(var: str) -> "re.Pattern":
 SPLIT_WINDOW = 3
 
 
-def _strip_line_comments(text: str) -> str:
-    # Remove // line comments AND same-line /* ... */ block comments so a comment that mentions
-    # the idiom (e.g. a docstring describing the pre-fix `as Integer) == 1` form) does not trip
-    # the rule. D3: the prior version stripped only `//`, so a single-line block comment
-    # containing the idiom produced a false positive.
-    text = re.sub(r'/\*.*?\*/', '', text)
-    return re.sub(r'//[^\n]*', '', text)
-
-
 def _build_exemption_set(config: dict) -> set:
     exemptions = set()
     entries = config.get('bool_coercion_as_integer_exemptions', [])
@@ -132,8 +123,13 @@ def check_rule45_bool_coercion_as_integer(
     file_rel = str(path.relative_to(rel_base)).replace('\\', '/')
     exemption_set = _build_exemption_set(config)
 
-    # Pre-strip comments per line once; reuse for both passes.
-    clean_lines = [_strip_line_comments(rl) for rl in raw_lines]
+    # Use the harness's comment-aware cleaned_lines (block comments stripped with line
+    # count preserved, // line comments stripped in a string-literal-aware pass). This is
+    # the same source every sibling rule consumes; it correctly handles a multi-line
+    # /* ... */ comment mentioning the idiom (no false positive) and a `//` inside a string
+    # literal followed by a real coercion (no false negative) — both of which the prior
+    # per-line naive stripper got wrong.
+    clean_lines = cleaned_lines
 
     # Lines already flagged (avoid double-reporting if a single line somehow matches both).
     flagged_lines = set()

@@ -384,6 +384,29 @@ def clampOffLevel(v, boolean powerOn) {
     return (!powerOn && v instanceof Number && v > 0) ? 0 : v
 }
 
+// Single source of truth for emitting the `temperature` attribute from a VeSync
+// "F × 10" reading (e.g. 683 -> 68.3°F). Converts to the hub's configured scale
+// (°F by default; °C on °C hubs / EU-AUS SKUs) and sendEvent's the rounded value
+// with the matching unit. Every TemperatureMeasurement driver routes through here
+// so temperature semantics are identical fork-wide (RULE56 flags any inline
+// temperature emit that bypasses this helper — the hardcoded-°F C5 bug class).
+//
+// The caller supplies the raw F×10 value and OWNS the presence/zero guard: a null
+// or 0 raw reading is an uninitialized/absent sensor and must not be emitted, so
+// each caller wraps this in its existing `r.temperature != null` / `raw != 0` /
+// `raw > 0` guard. Centralizing the emit here collapses the four hand-inlined
+// temperature blocks (and their four ° unit literals) to a single site, which is
+// the whole point of RULE56 — one sanctioned degree-sign emit, not four.
+void emitTemperature(rawTempTimesTen) {
+    double tempF = (rawTempTimesTen as Integer) / 10.0
+    if (location?.temperatureScale == "C") {
+        double tempC = (tempF - 32) * 5.0 / 9.0
+        device.sendEvent(name:"temperature", value: Math.round(tempC * 10) / 10.0, unit:"°C")
+    } else {
+        device.sendEvent(name:"temperature", value: Math.round(tempF * 10) / 10.0, unit:"°F")
+    }
+}
+
 // Total, never-throwing boolean coercion for VeSync flag fields (enabled, water_lacks,
 // display, child_lock, warm_enabled, etc.) that may arrive as Boolean, Number (0/1), or
 // (defensively) a String. Single source of truth — replaces the hand-inlined

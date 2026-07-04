@@ -443,16 +443,9 @@ private Integer applyFanMuteDisplay(Map r) {
 private void applyFanTemperature(Map r) {
     if (r.temperature != null) {
         Integer rawTemp = r.temperature as Integer
-        if (rawTemp > 0) {
-            // API gives F × 10. Convert to the hub's configured scale (°C hubs / EU-AUS SKUs).
-            double tempF = rawTemp / 10.0
-            if (location?.temperatureScale == "C") {
-                double tempC = (tempF - 32) * 5.0 / 9.0
-                device.sendEvent(name:"temperature", value: Math.round(tempC * 10) / 10.0, unit:"°C")
-            } else {
-                device.sendEvent(name:"temperature", value: Math.round(tempF * 10) / 10.0, unit:"°F")
-            }
-        }
+        // API gives F × 10; emitTemperature (LevoitChildBase) converts to the hub scale.
+        // Skip 0 raw (uninitialized field).
+        if (rawTemp > 0) emitTemperature(rawTemp)
     }
 }
 

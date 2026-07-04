@@ -188,6 +188,7 @@ def _collect_per_file_rules():
         power_write_reporter,
         switch_toggle_sync,
         bare_bool_flag_eq,
+        temperature_scale_emit,
     )
     rules = []
     for module in [
@@ -217,6 +218,7 @@ def _collect_per_file_rules():
         power_write_reporter,
         switch_toggle_sync,
         bare_bool_flag_eq,
+        temperature_scale_emit,
     ]:
         rules.extend(module.ALL_RULES)
     return rules
