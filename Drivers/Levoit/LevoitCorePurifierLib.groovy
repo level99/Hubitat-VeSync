@@ -366,9 +366,13 @@ def setSpeed(speed) {
         // setPurifierMode that would clobber a concurrently-dispatched setMode command.
         // on() will call setMode(state.mode) or update() after this setSpeed returns.
         if (!state.turningOn) {
-            handleMode("manual")
-            state.mode = "manual"
-            handleEvent("mode", "manual")
+            // Commit state + emit only when the cloud accepted the mode establishment — same gate
+            // as setMode. A bare handleMode here optimistically reported manual mode even when the
+            // write failed; on failure leave state untouched and let the next poll reconcile.
+            if (handleMode("manual")) {
+                state.mode = "manual"
+                handleEvent("mode", "manual")
+            }
         }
         if (!handleSpeed(s)) clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
         state.speed = s

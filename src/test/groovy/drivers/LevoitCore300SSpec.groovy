@@ -920,6 +920,50 @@ class LevoitCore300SSpec extends HubitatSpec {
         !testLog.warns.any { it.contains("cannot apply speed") }
     }
 
+    def "setSpeed recovery does NOT commit manual mode when the mode write is rejected (BP29 gate)"() {
+        // The setSpeed unknown/null-state.mode recovery establishes manual mode. It must commit
+        // state.mode + emit the mode event ONLY when the cloud accepted the write -- the same gate
+        // setMode uses. Pre-fix a bare handleMode reported manual mode even when the write failed,
+        // leaving state.mode contradicting a device still in its prior mode.
+        given: "device on, state.mode null (recovery path), and the mode write will be rejected"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        // state.mode intentionally unset -> recovery branch. Reject every cloud write this call
+        // (queue drains per request) so the setPurifierMode / handleMode is rejected regardless of
+        // request order (ensureSwitchOn may issue its own setSwitch first).
+        // Core-line checkHttpResponse gates on HTTP status only, so an HTTP 500 (not an inner -1)
+        // is what makes handleMode return false here.
+        testParent.requestResponses = [TestParent.httpErrorResponse(500), TestParent.httpErrorResponse(500),
+                                       TestParent.httpErrorResponse(500), TestParent.httpErrorResponse(500)]
+
+        when:
+        driver.setSpeed("high")
+
+        then: "the mode write was attempted"
+        testParent.allRequests.find { it.method == "setPurifierMode" } != null
+
+        and: "state.mode was NOT optimistically committed to manual (the write failed)"
+        state.mode != "manual"
+
+        and: "no mode='manual' event was emitted"
+        !testDevice.events.any { it.name == "mode" && it.value == "manual" }
+    }
+
+    def "setSpeed recovery DOES commit manual mode when the mode write succeeds (both-ways twin)"() {
+        given: "device on, state.mode null, all writes succeed (default OK response)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setSpeed("high")
+
+        then: "state.mode committed to manual (cloud accepted the mode establishment)"
+        state.mode == "manual"
+
+        and: "a mode='manual' event was emitted"
+        testDevice.events.any { it.name == "mode" && it.value == "manual" }
+    }
+
     def "re-entrancy guard: setSpeed from on() does not issue setPurifierMode (Core 300S)"() {
         // Regression guard for the `if (!state.turningOn) { handleMode("manual"); ... }`
         // wrapper in setSpeed's recover-else branch.
