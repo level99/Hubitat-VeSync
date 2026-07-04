@@ -126,6 +126,37 @@ class LevoitCore300SSpec extends HubitatSpec {
         lastEventValue("speed") == "auto"
     }
 
+    def "auto_mode is not re-emitted every poll when the device reports no auto preference"() {
+        given: "a device whose auto_preference is absent, so auto_mode resolves to null"
+        settings.descriptionTextEnable = true
+        def fixture = loadYamlFixture("Core300S.yaml")
+        def status = fixture.responses.device_on_manual_speed2 as Map
+        status.result.configuration.auto_preference = null
+
+        when: "two consecutive polls with a null auto_mode"
+        driver.update(status, null)
+        driver.update(status, null)
+
+        then: "the null auto_mode is never emitted -- a null steady state stays silent"
+        testDevice.events.count { it.name == "auto_mode" } == 0
+    }
+
+    def "auto_mode still emits the first real value and genuine changes, but not a steady repeat"() {
+        given:
+        settings.descriptionTextEnable = true
+        def fixture = loadYamlFixture("Core300S.yaml")
+        def efficient = fixture.responses.device_on_auto_mode as Map      // auto_preference.type = efficient
+        def dflt      = fixture.responses.device_on_manual_speed2 as Map  // auto_preference.type = default
+
+        when: "first real value, then an identical repeat, then a change"
+        driver.update(efficient, null)   // null -> efficient : emit
+        driver.update(efficient, null)   // efficient -> efficient : no emit
+        driver.update(dflt, null)        // efficient -> default : emit
+
+        then: "emitted for the first value and the change only"
+        testDevice.events.findAll { it.name == "auto_mode" }.collect { it.value } == ["efficient", "default"]
+    }
+
     def "update() with device_off emits switch=off"() {
         given:
         settings.descriptionTextEnable = true

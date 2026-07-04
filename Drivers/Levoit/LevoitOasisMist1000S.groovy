@@ -273,7 +273,12 @@ def setNightlight(onOff, brightness = null){
     if (!isNightlightVariant()) return
     // BP25: normalize to lowercase before all comparisons.
     String nl = (onOff as String).trim().toLowerCase()
-    if (brightness == null) {
+    // BP28: a non-numeric brightness ("abc", a blank Rule Machine slot) must NOT invert an
+    // explicit on/off into an OFF write. parseLevelOrNull returns null for non-numeric/empty
+    // input, which routes to the on/off toggle path (honoring onOff); a genuinely-numeric value
+    // (including an explicit 0) takes the brightness path below, where 0 still means off.
+    Integer br = (brightness == null) ? null : parseLevelOrNull(brightness)
+    if (br == null) {
         // Pure on/off toggle -- use setNightLightStatus (pyvesync toggle_nightlight path)
         Integer nlSwitch = (canonOnOff(nl) == "on") ? 1 : 0
         def resp = hubBypass("setNightLightStatus", [nightLightSwitch: nlSwitch], "setNightLightStatus(${nl})")
@@ -287,7 +292,7 @@ def setNightlight(onOff, brightness = null){
         }
     } else {
         // Brightness control -- use setLightStatus (pyvesync set_nightlight_brightness path)
-        Integer br = Math.max(0, Math.min(100, safeIntArg(brightness, 0)))   // BP26: safeIntArg handles non-numeric RM input ("abc", "", "5.7")
+        br = Math.max(0, Math.min(100, br))
         if (nl == "off") br = 0
         Integer nlSwitch = (br > 0) ? 1 : 0
         def resp = hubBypass("setLightStatus", [brightness: br, nightLightSwitch: nlSwitch], "setLightStatus(brightness=${br})")

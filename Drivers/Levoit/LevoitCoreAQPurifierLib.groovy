@@ -102,7 +102,12 @@ def update(status, nightLight)
     handleEvent("switch", enabled ? "on" : "off")
     if (state.mode == null || mode != state.mode)
         handleEvent("mode",   status.result.mode)
-    if (state.auto_mode == null || auto_mode != state.auto_mode)
+    // auto_preference.type is absent (null) on devices/modes without an auto preference, so a
+    // `state.auto_mode == null` first-emit clause (as the mode gate above uses, where mode is
+    // always non-null) would never latch off here — it would re-emit a null auto_mode every
+    // poll. Gate on an actual change only: both-null is equal, so the null steady state stays
+    // silent while the first real value and genuine changes still emit.
+    if (auto_mode != state.auto_mode)
         handleEvent("auto_mode", auto_mode)
 
     // state.mode must be set BEFORE switch evaluates — see Core 200S line 336/355 for canonical ordering
