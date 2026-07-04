@@ -353,6 +353,52 @@ class LevoitEverestAirSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // Cluster 3 (v2.10): on()/off() power-write failures now route through
+    // reportWriteError so they participate in the BP22 child-side network-outage
+    // dedup instead of a bare logError + recordError. Discriminating both-ways:
+    //   - known outage  => a single DEBUG, no ERROR, no diagnostics record.
+    //     Pre-fix (raw logError "Power on failed" + recordError) this goes RED —
+    //     the write-fail branch logged an ERROR despite the known outage.
+    //   - no outage     => genuine failure still surfaces as ERROR (proves the fix
+    //     did not simply silence the branch).
+    // -------------------------------------------------------------------------
+
+    def "on() power-write failure during a known outage is DEBUG-suppressed, not ERROR/recorded (BP22 — cluster 3)"() {
+        given: "parent reports a known outage; cloud returns an inner -1 (genuine write failure)"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = true   // logDebug is debugOutput-gated; enable so the suppression DEBUG is captured
+        testParent.networkUnreachable = true
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+
+        when:
+        driver.on()
+
+        then: "the setSwitch power-on write was attempted"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 1 } != null
+
+        and: "the failure is DEBUG-suppressed (BP22), not ERROR spam"
+        testLog.debugs.any { it.contains("Power on failed") && it.contains("BP22") }
+        !testLog.errors.any { it.contains("Power on failed") }
+
+        and: "no diagnostics ring-buffer record was written (recordError skipped)"
+        (state.errorHistory == null) || (state.errorHistory.isEmpty())
+    }
+
+    def "on() power-write failure with NO outage still logs ERROR (BP22 negative / both-ways — cluster 3)"() {
+        given: "no outage; cloud returns an inner -1 (genuine write failure)"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        testParent.networkUnreachable = false
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+
+        when:
+        driver.on()
+
+        then: "the genuine failure surfaces as an ERROR (not suppressed)"
+        testLog.errors.any { it.contains("Power on failed") }
+    }
+
+    // -------------------------------------------------------------------------
     // Mode write-path: setPurifierMode {workMode: str}
     // -------------------------------------------------------------------------
 

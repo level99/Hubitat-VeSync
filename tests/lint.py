@@ -185,6 +185,7 @@ def _collect_per_file_rules():
         bp30_dedup_clear_on_failure,
         result_map_guard,
         private_scheduled_handler,
+        power_write_reporter,
     )
     rules = []
     for module in [
@@ -211,6 +212,7 @@ def _collect_per_file_rules():
         bp30_dedup_clear_on_failure,
         result_map_guard,
         private_scheduled_handler,
+        power_write_reporter,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

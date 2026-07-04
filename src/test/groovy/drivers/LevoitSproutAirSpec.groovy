@@ -320,6 +320,31 @@ class LevoitSproutAirSpec extends HubitatSpec {
         call.data.switchIdx   == 0
     }
 
+    // Cluster 3 (v2.10): off()'s power-write failure now routes through reportWriteError
+    // so it participates in the BP22 child-side network-outage dedup. Discriminating:
+    // pre-fix (raw logError "Power off failed" + recordError) this goes RED — the branch
+    // logged an ERROR despite the known outage.
+    def "off() power-write failure during a known outage is DEBUG-suppressed, not ERROR/recorded (BP22 — cluster 3)"() {
+        given: "parent reports a known outage; cloud returns an inner -1 (genuine write failure)"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = true   // logDebug is debugOutput-gated
+        testParent.networkUnreachable = true
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+
+        when:
+        driver.off()
+
+        then: "the setSwitch power-off write was attempted"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.powerSwitch == 0 } != null
+
+        and: "the failure is DEBUG-suppressed (BP22), not ERROR spam"
+        testLog.debugs.any { it.contains("Power off failed") && it.contains("BP22") }
+        !testLog.errors.any { it.contains("Power off failed") }
+
+        and: "no diagnostics ring-buffer record was written (recordError skipped)"
+        (state.errorHistory == null) || (state.errorHistory.isEmpty())
+    }
+
     // -------------------------------------------------------------------------
     // Mode write-path: setPurifierMode {workMode: str}
     // -------------------------------------------------------------------------

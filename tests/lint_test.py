@@ -82,6 +82,7 @@ from lint_rules.captureDiagnostics_presence import check_rule28_capturediagnosti
 from lint_rules.bp30_single_threaded import check_rule48_single_threaded
 from lint_rules.result_map_guard import check_rule51_result_map_guard
 from lint_rules.private_scheduled_handler import check_rule52_private_scheduled_handler
+from lint_rules.power_write_reporter import check_rule53_power_write_reporter
 from lint_rules.library_no_top_block_comment import check_rule29_library_no_top_block_comment
 from lint_rules.direct_log_calls import check_rule30_direct_log_in_driver
 from lint_rules.bp24_state_switch_dead_branch import check_rule31_state_switch_dead_branch
@@ -9929,4 +9930,110 @@ class TestRule52PrivateScheduledHandler:
                             self.GOOD_PRIVATE_FIELD, "VeSyncIntegration.groovy")
         assert not any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
             f"A private FIELD (not a method decl) must not flag RULE52, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE53 — power-write reporter (v2.10 cluster 3: on/off bypass BP22 dedup)
+# ---------------------------------------------------------------------------
+
+class TestRule53PowerWriteReporter:
+    """
+    RULE53: a power-write failure in on()/off() must route through reportWriteError
+    (or reportWriteFailure), not a raw logError + recordError — otherwise it bypasses
+    the BP22 child-side network-outage dedup and spams an ERROR + a diagnostics record
+    per device per retry during an outage.
+    """
+
+    # MUST-CATCH: on() with a raw recordError in the write-fail branch.
+    BAD_ON_RAW = textwrap.dedent("""\
+        def on(){
+            def resp = hubBypass("setSwitch", [powerSwitch: 1], "on")
+            if (httpOk(resp)) { device.sendEvent(name:"switch", value:"on") }
+            else { clearPowerOnWindow(); logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+        }
+    """)
+
+    # MUST-CATCH: off() with a raw recordError in the write-fail branch.
+    BAD_OFF_RAW = textwrap.dedent("""\
+        def off(){
+            def resp = hubBypass("setSwitch", [powerSwitch: 0], "off")
+            if (httpOk(resp)) { device.sendEvent(name:"switch", value:"off") }
+            else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+        }
+    """)
+
+    # MUST-NOT-CATCH: on() routed through reportWriteError (the fix).
+    GOOD_ON_REPORTWRITEERROR = textwrap.dedent("""\
+        def on(){
+            def resp = hubBypass("setSwitch", [powerSwitch: 1], "on")
+            if (httpOk(resp)) { device.sendEvent(name:"switch", value:"on") }
+            else { clearPowerOnWindow(); reportWriteError("Power on failed", [method:"setSwitch"]) }
+        }
+    """)
+
+    # MUST-NOT-CATCH: off() routed through reportWriteFailure (resp-in-scope variant).
+    GOOD_OFF_REPORTWRITEFAILURE = textwrap.dedent("""\
+        def off(){
+            def resp = hubBypass("setSwitch", [powerSwitch: 0], "off")
+            if (httpOk(resp)) { device.sendEvent(name:"switch", value:"off") }
+            else reportWriteFailure("Power off failed", resp, [method:"setSwitch"])
+        }
+    """)
+
+    # MUST-NOT-CATCH: a raw recordError in a NON-power method (setMode validation) is
+    # out of this rule's scope — validation branches correctly use raw logError+recordError.
+    GOOD_SETMODE_VALIDATION = textwrap.dedent("""\
+        def setMode(mode){
+            String m = (mode as String)?.toLowerCase()
+            if (!(m in ["auto","sleep"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setMode"]); return }
+            doSetMode(m)
+        }
+    """)
+
+    # MUST-NOT-CATCH: update() read-failure "No status returned" is not a power write.
+    GOOD_UPDATE_READ_FAIL = textwrap.dedent("""\
+        def update(status){
+            if (!status?.result) { logError "No status returned"; recordError("No status returned", [method:"update"]) }
+        }
+    """)
+
+    def test_on_raw_recorderror_fails(self):
+        findings = run_rule(check_rule53_power_write_reporter, self.BAD_ON_RAW, "LevoitEverestAir.groovy")
+        assert any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
+            f"Expected RULE53 for raw recordError in on(), got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE53_power_write_reporter'), (
+            f"RULE53 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_off_raw_recorderror_fails(self):
+        findings = run_rule(check_rule53_power_write_reporter, self.BAD_OFF_RAW, "LevoitFanLib.groovy")
+        assert any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
+            f"Expected RULE53 for raw recordError in off(), got: {findings}"
+        )
+
+    def test_on_reportwriteerror_passes(self):
+        findings = run_rule(check_rule53_power_write_reporter, self.GOOD_ON_REPORTWRITEERROR, "LevoitEverestAir.groovy")
+        assert not any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
+            f"on() using reportWriteError must not flag RULE53, got: {findings}"
+        )
+
+    def test_off_reportwritefailure_passes(self):
+        findings = run_rule(check_rule53_power_write_reporter, self.GOOD_OFF_REPORTWRITEFAILURE, "LevoitEverestAir.groovy")
+        assert not any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
+            f"off() using reportWriteFailure must not flag RULE53, got: {findings}"
+        )
+
+    def test_setmode_validation_not_flagged(self):
+        findings = run_rule(check_rule53_power_write_reporter, self.GOOD_SETMODE_VALIDATION, "LevoitEverestAir.groovy")
+        assert not any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
+            f"A raw recordError in a non-power method (setMode validation) must not flag RULE53, got: {findings}"
+        )
+
+    def test_update_read_fail_not_flagged(self):
+        findings = run_rule(check_rule53_power_write_reporter, self.GOOD_UPDATE_READ_FAIL, "LevoitEverestAir.groovy")
+        assert not any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
+            f"A raw recordError in update() read-failure must not flag RULE53, got: {findings}"
         )

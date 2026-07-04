@@ -131,7 +131,7 @@ def on() {
             state.lastSwitchSet = "on"
             device.sendEvent(name:"switch", value:"on")
         } else {
-            clearPowerOnWindow(); logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"])
+            clearPowerOnWindow(); reportWriteError("Power on failed", [method:"setSwitch"])
         }
     } finally {
         state.remove('turningOn')
@@ -152,7 +152,7 @@ def off() {
             state.lastSwitchSet = "off"
             device.sendEvent(name:"switch", value:"off")
         } else {
-            logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"])
+            reportWriteError("Power off failed", [method:"setSwitch"])
         }
     } finally {
         state.remove('turningOff')

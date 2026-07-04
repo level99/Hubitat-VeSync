@@ -196,7 +196,7 @@ def on(){
         // fire a spurious intermediate speed (stale lastFanSpeed) on every off->fan-write before the
         // real target lands. The optimistic speed mirror is emitted by the caller (setSpeed case "on").
         if (httpOk(resp)) { state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on"); logInfo "Power on" }
-        else { clearPowerOnWindow(); logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+        else { clearPowerOnWindow(); reportWriteError("Power on failed", [method:"setSwitch"]) }
     } finally {
         state.remove('turningOn')
     }
@@ -225,7 +225,7 @@ def off(){
             device.sendEvent(name:"level", value: 0)
             logInfo "Power off"
         }
-        else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+        else { reportWriteError("Power off failed", [method:"setSwitch"]) }
     } finally {
         state.remove('turningOff')
     }

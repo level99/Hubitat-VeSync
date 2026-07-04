@@ -122,11 +122,11 @@ def on(){
             device.sendEvent(name:"switch", value:"on")
         } else {
             clearPowerOnWindow()   // B2: failed power-on is retryable immediately (don't hold the window)
-            logError "Power on failed (setSwitch returned -1; setPower also failed)"; recordError("Power on failed (V1 fallback also failed)", [method:"setPower"])
+            reportWriteError("Power on failed (setSwitch returned -1; setPower V1 fallback also failed)", [method:"setPower"])
         }
     } else {
         clearPowerOnWindow()   // B2: failed power-on is retryable immediately (don't hold the window)
-        logError "Power on failed (setSwitch returned non-fallback error; see debug log)"; recordError("Power on failed (non-fallback error)", [method:"setSwitch"])
+        reportWriteError("Power on failed (setSwitch returned non-fallback error; see debug log)", [method:"setSwitch"])
     }
 }
 
@@ -145,10 +145,10 @@ def off(){
             logInfo "Power off (V1 fallback)"
             device.sendEvent(name:"switch", value:"off")
         } else {
-            logError "Power off failed (setSwitch returned -1; setPower also failed)"; recordError("Power off failed (V1 fallback also failed)", [method:"setPower"])
+            reportWriteError("Power off failed (setSwitch returned -1; setPower V1 fallback also failed)", [method:"setPower"])
         }
     } else {
-        logError "Power off failed (setSwitch returned non-fallback error; see debug log)"; recordError("Power off failed (non-fallback error)", [method:"setSwitch"])
+        reportWriteError("Power off failed (setSwitch returned non-fallback error; see debug log)", [method:"setSwitch"])
     }
 }
 

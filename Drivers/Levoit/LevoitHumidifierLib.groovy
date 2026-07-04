@@ -120,7 +120,7 @@ def on(){
         Map payload = powerPayload(true)
         def resp = hubBypass("setSwitch", payload, "setSwitch(${payload})")
         if (httpOk(resp)) { logInfo "Power on"; state.lastSwitchSet = "on"; device.sendEvent(name:"switch", value:"on") }
-        else { clearPowerOnWindow(); logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+        else { clearPowerOnWindow(); reportWriteError("Power on failed", [method:"setSwitch"]) }
     } finally {
         state.remove('turningOn')
     }
@@ -137,7 +137,7 @@ def off(){
         Map payload = powerPayload(false)
         def resp = hubBypass("setSwitch", payload, "setSwitch(${payload})")
         if (httpOk(resp)) { logInfo "Power off"; state.lastSwitchSet = "off"; device.sendEvent(name:"switch", value:"off") }
-        else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+        else { reportWriteError("Power off failed", [method:"setSwitch"]) }
     } finally {
         state.remove('turningOff')
     }
