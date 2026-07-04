@@ -541,7 +541,7 @@ private boolean httpOk(resp) {
         // stack trace. A non-Map body is not a valid success -> return false (mirrors the
         // hubBypass / isDeviceOffResp instanceof-Map guards elsewhere in this lib).
         if (!(resp.data instanceof Map)) {
-            logDebug "HTTP ${st} with non-Map body (${resp.data?.getClass()?.simpleName}); treating as failure"
+            logDebug "HTTP ${st} with non-Map body (${resp.data instanceof String ? 'String' : 'non-Map'}); treating as failure"
             return false
         }
         def inner = resp.data.result?.code

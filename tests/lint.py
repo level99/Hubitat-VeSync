@@ -189,6 +189,7 @@ def _collect_per_file_rules():
         switch_toggle_sync,
         bare_bool_flag_eq,
         temperature_scale_emit,
+        sandbox_forbidden_calls,
     )
     rules = []
     for module in [
@@ -219,6 +220,7 @@ def _collect_per_file_rules():
         switch_toggle_sync,
         bare_bool_flag_eq,
         temperature_scale_emit,
+        sandbox_forbidden_calls,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

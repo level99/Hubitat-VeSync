@@ -86,6 +86,7 @@ from lint_rules.power_write_reporter import check_rule53_power_write_reporter
 from lint_rules.switch_toggle_sync import check_rule54_switch_toggle_sync
 from lint_rules.bare_bool_flag_eq import check_rule55_bare_bool_flag_eq
 from lint_rules.temperature_scale_emit import check_rule56_temperature_scale_emit
+from lint_rules.sandbox_forbidden_calls import check_rule57_sandbox_forbidden_calls
 from lint_rules.library_no_top_block_comment import check_rule29_library_no_top_block_comment
 from lint_rules.direct_log_calls import check_rule30_direct_log_in_driver
 from lint_rules.bp24_state_switch_dead_branch import check_rule31_state_switch_dead_branch
@@ -10378,4 +10379,216 @@ class TestRule56TemperatureScaleEmit:
         findings = run_rule(check_rule56_temperature_scale_emit, self.GOOD_COMMENTED_OUT)
         assert not any(f['rule_id'] == self._RULE_ID for f in findings), (
             f"A commented-out inline emit must not flag RULE56, got: {findings}"
+        )
+
+
+class TestRule57SandboxForbiddenCalls:
+    """
+    RULE57: Hubitat-Groovy-sandbox-forbidden method calls / constructs must not
+    ship — they fail to COMPILE on the hub (and take down every driver that
+    #includes an offending library), and the Spock harness does not catch them.
+
+    MUST-CATCH: getClass() (the confirmed outage call, incl. the historical
+    `resp.data?.getClass()?.simpleName` shape), .execute(), bare System./Runtime./
+    Thread., GroovyShell, ClassLoader, .newInstance(, Eval.
+
+    MUST-NOT-CATCH: e.metaClass.respondsTo(...) (sandbox-legal; used in the parent
+    driver), a bare .simpleName without getClass(), instanceof checks, ordinary
+    method calls, and any forbidden token inside a comment or a string literal.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    _RULE_ID = 'RULE57_sandbox_forbidden_call'
+
+    # MUST-CATCH: the exact historical shape that caused the outage.
+    BAD_GETCLASS_HISTORICAL = textwrap.dedent("""\
+        def httpOk(resp) {
+            if (!(resp.data instanceof Map)) {
+                logDebug "non-Map body ${resp.data?.getClass()?.simpleName}"
+                return false
+            }
+            return true
+        }
+    """)
+
+    BAD_EXECUTE = textwrap.dedent("""\
+        def doThing() {
+            "id".execute()
+        }
+    """)
+
+    BAD_SYSTEM = textwrap.dedent("""\
+        def doThing() {
+            System.exit(0)
+        }
+    """)
+
+    BAD_RUNTIME = textwrap.dedent("""\
+        def doThing() {
+            def r = Runtime.getRuntime()
+        }
+    """)
+
+    BAD_THREAD = textwrap.dedent("""\
+        def doThing() {
+            Thread.sleep(100)
+        }
+    """)
+
+    BAD_GROOVYSHELL = textwrap.dedent("""\
+        def doThing() {
+            def sh = new GroovyShell()
+        }
+    """)
+
+    BAD_CLASSLOADER = textwrap.dedent("""\
+        def doThing() {
+            def cl = this.class.classLoader as ClassLoader
+        }
+    """)
+
+    BAD_NEWINSTANCE = textwrap.dedent("""\
+        def doThing() {
+            def o = SomeType.newInstance()
+        }
+    """)
+
+    BAD_EVAL = textwrap.dedent("""\
+        def doThing() {
+            Eval.me("1 + 1")
+        }
+    """)
+
+    # MUST-NOT-CATCH: metaClass.respondsTo is sandbox-legal (parent uses it 3x).
+    GOOD_METACLASS_RESPONDSTO = textwrap.dedent("""\
+        def handle(e) {
+            if (e.metaClass.respondsTo(e, 'getResponse')) {
+                return e.getResponse()
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: the actual fixed line — instanceof ternary, .simpleName absent.
+    GOOD_INSTANCEOF_TERNARY = textwrap.dedent("""\
+        def httpOk(resp) {
+            if (!(resp.data instanceof Map)) {
+                logDebug "non-Map body (${resp.data instanceof String ? 'String' : 'non-Map'})"
+                return false
+            }
+            return true
+        }
+    """)
+
+    # MUST-NOT-CATCH: a bare .simpleName on a non-getClass() expression.
+    GOOD_BARE_SIMPLENAME = textwrap.dedent("""\
+        def label(t) {
+            return t.simpleName
+        }
+    """)
+
+    # MUST-NOT-CATCH: forbidden tokens inside a comment and a string literal.
+    GOOD_TOKENS_IN_COMMENT_AND_STRING = textwrap.dedent("""\
+        def doThing() {
+            // avoid getClass() and System.exit and Thread.sleep in real code
+            logDebug "never call getClass() or Runtime.getRuntime() here"
+        }
+    """)
+
+    def _fail_ids(self, findings):
+        return [f for f in findings if f['rule_id'] == self._RULE_ID]
+
+    def test_getclass_historical_shape_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_GETCLASS_HISTORICAL)
+        hits = self._fail_ids(findings)
+        assert hits, (
+            f"Expected RULE57 on the historical resp.data?.getClass()?.simpleName shape, "
+            f"got: {findings}"
+        )
+        assert all(f['severity'] == 'FAIL' for f in hits), (
+            f"RULE57 must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_execute_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_EXECUTE)
+        assert self._fail_ids(findings), f"Expected RULE57 for .execute(), got: {findings}"
+
+    def test_system_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_SYSTEM)
+        assert self._fail_ids(findings), f"Expected RULE57 for System., got: {findings}"
+
+    def test_runtime_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_RUNTIME)
+        assert self._fail_ids(findings), f"Expected RULE57 for Runtime., got: {findings}"
+
+    def test_thread_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_THREAD)
+        assert self._fail_ids(findings), f"Expected RULE57 for Thread., got: {findings}"
+
+    def test_groovyshell_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_GROOVYSHELL)
+        assert self._fail_ids(findings), f"Expected RULE57 for GroovyShell, got: {findings}"
+
+    def test_classloader_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_CLASSLOADER)
+        assert self._fail_ids(findings), f"Expected RULE57 for ClassLoader, got: {findings}"
+
+    def test_newinstance_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_NEWINSTANCE)
+        assert self._fail_ids(findings), f"Expected RULE57 for .newInstance(, got: {findings}"
+
+    def test_eval_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_EVAL)
+        assert self._fail_ids(findings), f"Expected RULE57 for Eval., got: {findings}"
+
+    def test_metaclass_respondsto_passes(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.GOOD_METACLASS_RESPONDSTO)
+        assert not self._fail_ids(findings), (
+            f"e.metaClass.respondsTo(...) is sandbox-legal and must NOT flag RULE57, got: {findings}"
+        )
+
+    def test_instanceof_ternary_passes(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.GOOD_INSTANCEOF_TERNARY)
+        assert not self._fail_ids(findings), (
+            f"The fixed instanceof-ternary line must NOT flag RULE57, got: {findings}"
+        )
+
+    def test_bare_simplename_passes(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.GOOD_BARE_SIMPLENAME)
+        assert not self._fail_ids(findings), (
+            f"A bare .simpleName (no getClass()) must NOT flag RULE57, got: {findings}"
+        )
+
+    def test_tokens_in_comment_and_string_pass(self):
+        findings = run_rule(
+            check_rule57_sandbox_forbidden_calls, self.GOOD_TOKENS_IN_COMMENT_AND_STRING
+        )
+        assert not self._fail_ids(findings), (
+            f"Forbidden tokens inside a comment or string literal must NOT flag RULE57, got: {findings}"
+        )
+
+    def test_non_driver_file_excluded(self):
+        # RULE57 scope is Drivers/Levoit/ .groovy only.
+        findings = run_rule(
+            check_rule57_sandbox_forbidden_calls,
+            self.BAD_GETCLASS_HISTORICAL,
+            fname="notes.md",
+        )
+        assert not self._fail_ids(findings), (
+            f"RULE57 must not scan non-Drivers/Levoit files, got: {findings}"
+        )
+
+    def test_exemption_suppresses_finding(self):
+        config = {
+            'sandbox_forbidden_calls_exemptions': [{
+                'file': 'Drivers/Levoit/TestDriver.groovy',
+                'construct': 'getClass()',
+                'rationale': 'test exemption',
+            }]
+        }
+        findings = run_rule(
+            check_rule57_sandbox_forbidden_calls, self.BAD_GETCLASS_HISTORICAL, config=config
+        )
+        assert not self._fail_ids(findings), (
+            f"A matching exemption must suppress the RULE57 finding, got: {findings}"
         )
