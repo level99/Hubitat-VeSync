@@ -136,10 +136,18 @@ def off() {
     try {
         // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence.
         clearPowerOnWindow()
-        handlePower(false)
-        logInfo "Power off"
-        handleEvent("switch", "off")
-        handleEvent("speed", "off")
+        // BP29: gate the optimistic switch/speed emit on the power-off write actually succeeding.
+        // A bare handlePower(false) previously reported the device OFF (and speed off) even when the
+        // write failed — leaving the driver's state contradicting a device that was still ON, with no
+        // failure surfaced. Mirrors on()'s handlePower(true) gate and the sibling off() convention
+        // (Vital/EverestAir/Fan/Humidifier all gate their power-off write).
+        if (handlePower(false)) {
+            logInfo "Power off"
+            handleEvent("switch", "off")
+            handleEvent("speed", "off")
+        } else {
+            reportWriteError("Failed to turn off device", [method:"off"])
+        }
     } finally {
         state.remove('turningOff')
     }

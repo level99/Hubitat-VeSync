@@ -561,6 +561,58 @@ class LevoitCore200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP29 (cluster 3b): off() must gate its optimistic switch/speed emit on the
+    // power-off write succeeding. Pre-fix, off() called handlePower(false) BARE then
+    // emitted switch:off + speed:off unconditionally — so a FAILED power-off reported
+    // the device OFF (while it was still ON) and surfaced no failure. Discriminating:
+    // on a failed write the pre-fix code emits switch:off (the `!= "off"` assertions go
+    // RED) and logs no "Failed to turn off device" (the error assertion goes RED).
+    // -------------------------------------------------------------------------
+
+    def "off() with a FAILED power-off write does NOT report switch off and surfaces the failure (BP29 — cluster 3b)"() {
+        given: "device on; the power-off write fails (HTTP 500 -> handlePower(false) returns false)"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.speed = "medium"
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.cannedResponse = TestParent.httpErrorResponse(500)
+
+        when:
+        driver.off()
+
+        then: "the power-off write was attempted"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == false } != null
+
+        and: "switch is NOT optimistically reported off (the device may still be on)"
+        lastEventValue("switch") != "off"
+
+        and: "speed is NOT optimistically reported off either"
+        lastEventValue("speed") != "off"
+
+        and: "the failure is surfaced via reportWriteError, not silently swallowed"
+        testLog.errors.any { it.contains("Failed to turn off device") }
+    }
+
+    def "off() with a SUCCESSFUL power-off write reports switch off + speed off, no failure (BP29 both-ways twin — cluster 3b)"() {
+        given: "device on; the power-off write succeeds (default OK response)"
+        settings.descriptionTextEnable = false
+        state.speed = "medium"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.off()
+
+        then: "switch is reported off"
+        lastEventValue("switch") == "off"
+
+        and: "speed is reported off"
+        lastEventValue("speed") == "off"
+
+        and: "no power-off failure was surfaced"
+        !testLog.errors.any { it.contains("Failed to turn off device") }
+    }
+
+    // -------------------------------------------------------------------------
     // C3: state-change gate — setChildLock and setDisplay (retroactive fix via lib)
     // -------------------------------------------------------------------------
 
