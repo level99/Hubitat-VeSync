@@ -542,7 +542,7 @@ class LevoitDual200SSpec extends HubitatSpec {
         !eventEmitted("mode", "auto")
     }
 
-    // v2.10 cluster 1 (result.code crash class): sendModeRequest reads
+    // result.code non-Map crash class: sendModeRequest reads
     // resp?.data?.result?.code directly (not behind httpOk). On a non-JSON gateway
     // error body (HTTP 200 with a raw HTML String, not a Map), the pre-fix bare read
     // did a property access on the String and threw MissingPropertyException, aborting

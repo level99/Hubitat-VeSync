@@ -3,7 +3,7 @@ result_map_guard.py — RULE51: flag a ``<resp>.data.result`` read in a child dr
 command path that is NOT preceded/guarded by a ``<resp>.data instanceof Map`` check
 in the same method.
 
-Bug class (v2.10 cluster 1 — "result.code crash class"):
+Bug class ("result.code crash class"):
 
 The VeSync gateway/CDN can return a non-JSON body (an HTML error page, a proxy
 error) with an HTTP 200/2xx status. Hubitat's ``httpPost`` then leaves ``resp.data``
@@ -29,8 +29,8 @@ Detection scope:
     ``VeSyncIntegration.groovy`` and the virtual test parent
     ``VeSyncIntegrationVirtual.groovy`` are the parent-side auth/discovery
     response subsystem (a separate reachability cluster) and are out of scope
-    for this rule by design — they are excluded by name. Rationale (audited
-    v2.10 cluster 2): every ``.data.result`` / ``.data.code`` read in the parent
+    for this rule by design — they are excluded by name. Rationale (audited):
+    every ``.data.result`` / ``.data.code`` read in the parent
     is already inside a try/catch that catches the MissingPropertyException a
     non-Map body would throw and degrades gracefully (logs + returns false,
     retried next cycle) rather than aborting a command — ``login`` stages and

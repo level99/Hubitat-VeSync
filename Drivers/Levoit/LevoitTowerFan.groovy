@@ -279,7 +279,7 @@ def setOscillation(onOff){
 
 // CROSS-CHECK [pyvesync VeSyncTowerFan._set_fan_state + device_map.py LTF-F422S sleep_preferences]:
 //   setSleepPreference was attempted in v2.4 but deferred to v2.5+ after Pedestal Fan live
-//   verification (device 1132, 2026-05-01) found both flat {sleepPreferenceType} and nested
+//   verification (live hardware, 2026-05-01) found both flat {sleepPreferenceType} and nested
 //   {sleepPreference: {...}} payloads rejected with inner 11000000. Both fan families share the
 //   same sleepPreference API shape — applying the same deferral. The sleepPreferenceType
 //   READ-ONLY attribute stays declared (populated on poll). Resolution path: mitmproxy capture.

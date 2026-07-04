@@ -561,7 +561,7 @@ class LevoitCore200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // BP29 (cluster 3b): off() must gate its optimistic switch/speed emit on the
+    // BP29: off() must gate its optimistic switch/speed emit on the
     // power-off write succeeding. Pre-fix, off() called handlePower(false) BARE then
     // emitted switch:off + speed:off unconditionally — so a FAILED power-off reported
     // the device OFF (while it was still ON) and surfaced no failure. Discriminating:
@@ -569,7 +569,7 @@ class LevoitCore200SSpec extends HubitatSpec {
     // RED) and logs no "Failed to turn off device" (the error assertion goes RED).
     // -------------------------------------------------------------------------
 
-    def "off() with a FAILED power-off write does NOT report switch off and surfaces the failure (BP29 — cluster 3b)"() {
+    def "off() with a FAILED power-off write does NOT report switch off and surfaces the failure (BP29)"() {
         given: "device on; the power-off write fails (HTTP 500 -> handlePower(false) returns false)"
         settings.descriptionTextEnable = false
         settings.debugOutput = false
@@ -593,7 +593,7 @@ class LevoitCore200SSpec extends HubitatSpec {
         testLog.errors.any { it.contains("Failed to turn off device") }
     }
 
-    def "off() with a SUCCESSFUL power-off write reports switch off + speed off, no failure (BP29 both-ways twin — cluster 3b)"() {
+    def "off() with a SUCCESSFUL power-off write reports switch off + speed off, no failure (BP29 both-ways twin)"() {
         given: "device on; the power-off write succeeds (default OK response)"
         settings.descriptionTextEnable = false
         state.speed = "medium"

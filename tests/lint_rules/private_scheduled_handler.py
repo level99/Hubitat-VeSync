@@ -3,7 +3,7 @@ private_scheduled_handler.py — RULE52: flag a `private` method that is named a
 the string-literal handler argument of a ``runIn`` / ``runInMillis`` / ``schedule``
 call in the SAME file.
 
-Bug class (v2.10 cluster 2 — "private scheduled handler is unreachable"):
+Bug class ("private scheduled handler is unreachable"):
 
 Hubitat's scheduler stores a handler as a String name and later invokes it by
 name through the Groovy MetaObject Protocol (dynamic dispatch on the device/app

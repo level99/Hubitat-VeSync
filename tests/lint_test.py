@@ -9649,7 +9649,7 @@ class TestRule47CapabilityCoherence:
 
 
 # ---------------------------------------------------------------------------
-# RULE51 — result-Map guard (v2.10 cluster 1: result.code crash class)
+# RULE51 — result-Map guard (result.code crash class)
 # ---------------------------------------------------------------------------
 
 class TestRule51ResultMapGuard:
@@ -9803,7 +9803,7 @@ class TestRule51ResultMapGuard:
 
 
 # ---------------------------------------------------------------------------
-# RULE52 — private scheduled handler (v2.10 cluster 2: unreachable runIn target)
+# RULE52 — private scheduled handler (unreachable runIn target)
 # ---------------------------------------------------------------------------
 
 class TestRule52PrivateScheduledHandler:
@@ -9936,7 +9936,7 @@ class TestRule52PrivateScheduledHandler:
 
 
 # ---------------------------------------------------------------------------
-# RULE53 — power-write reporter (v2.10 cluster 3: on/off bypass BP22 dedup)
+# RULE53 — power-write reporter (on/off bypass BP22 dedup)
 # ---------------------------------------------------------------------------
 
 class TestRule53PowerWriteReporter:
@@ -10042,7 +10042,7 @@ class TestRule53PowerWriteReporter:
 
 
 # ---------------------------------------------------------------------------
-# RULE54 — switch/toggle sync (v2.10 cluster 4: toggle inverts wrong after external change)
+# RULE54 — switch/toggle sync (toggle inverts wrong after external change)
 # ---------------------------------------------------------------------------
 
 class TestRule54SwitchToggleSync:

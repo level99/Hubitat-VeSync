@@ -39,6 +39,11 @@ jobs:
         run: PYTHONIOENCODING=utf-8 uv run --python 3.12 --with pytest --with pyyaml -m pytest tests/lint_test.py -q
         # Catches rule-logic regressions: must-catch and must-not-catch fixtures for every rule
 
+      - name: Run outbound-text hygiene guard
+        run: PYTHONIOENCODING=utf-8 uv run --python 3.12 --with pytest -m pytest tests/test_no_process_pii_leak.py -q
+        # Gates the Spock specs (which lint.py cannot scan) against process-token ("cluster N")
+        # and install-device-id ("device 1132") leaks re-entering shipped source.
+
       - name: Run BP24 classification verifier
         run: uv run --python 3.12 tests/check_bp24_classification.py
         # Exits nonzero if any on/off setter is missing its BP24 classification comment

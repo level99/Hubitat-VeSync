@@ -924,7 +924,7 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         (hist["test-device-001"] ?: []).size() == 1
     }
 
-    // v2.10 cluster 1 (result.code crash class): httpOk reads resp.data.result.code
+    // result.code non-Map crash class: httpOk reads resp.data.result.code
     // ONLY on a 2xx status. The dangerous vector is therefore HTTP 200 with a NON-JSON
     // String body (a CDN/gateway HTML interstitial, a proxy error page). Pre-fix, the bare
     // `resp?.data?.result?.code` did a property access on the String and threw

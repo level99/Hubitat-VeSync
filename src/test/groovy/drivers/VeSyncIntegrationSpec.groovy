@@ -2708,9 +2708,9 @@ class VeSyncIntegrationSpec extends HubitatSpec {
                 result: [
                     code: 0,
                     list: [
-                        [deviceType: "LAP-V102S-WUS", deviceName: "Meadow Noise",
+                        [deviceType: "LAP-V102S-WUS", deviceName: "Test Purifier A",
                          cid: "cid-v100s-1", configModule: "cm-v100s-1", uuid: "uuid-v100s-1", macID: "AA:BB:CC:DD:EE:01"],
-                        [deviceType: "LAP-V102S-WUS", deviceName: "Willow Noise",
+                        [deviceType: "LAP-V102S-WUS", deviceName: "Test Purifier B",
                          cid: "cid-v100s-2", configModule: "cm-v100s-2", uuid: "uuid-v100s-2", macID: "AA:BB:CC:DD:EE:02"]
                     ],
                     total: 2
@@ -2732,8 +2732,8 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         }
         missingDriverLogs.size() == 1
 
-        and: "the INFO log references the first device by label (Meadow Noise -- first miss wins)"
-        missingDriverLogs[0].contains("Meadow Noise")
+        and: "the INFO log references the first device by label (Test Purifier A -- first miss wins)"
+        missingDriverLogs[0].contains("Test Purifier A")
 
         and: "state.warnedMissingDrivers is cleaned up after getDevices() completes"
         !state.containsKey('warnedMissingDrivers')
@@ -3139,7 +3139,7 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         driver.metaClass.httpPost = { Map params, Closure callback ->
             callback(getDevicesWithDevice([
                 deviceType  : "Core200S",
-                deviceName  : "Living Room Purifier",
+                deviceName  : "Test Purifier C",
                 cid         : "fresh-cid-200S",
                 configModule: "FRESH-configModule-200S",
                 uuid        : "FRESH-uuid-200S",

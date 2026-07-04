@@ -370,7 +370,7 @@ class LevoitEverestAirSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Cluster 3 (v2.10): on()/off() power-write failures now route through
+    // on()/off() power-write failures now route through
     // reportWriteError so they participate in the BP22 child-side network-outage
     // dedup instead of a bare logError + recordError. Discriminating both-ways:
     //   - known outage  => a single DEBUG, no ERROR, no diagnostics record.
@@ -380,7 +380,7 @@ class LevoitEverestAirSpec extends HubitatSpec {
     //     did not simply silence the branch).
     // -------------------------------------------------------------------------
 
-    def "on() power-write failure during a known outage is DEBUG-suppressed, not ERROR/recorded (BP22 — cluster 3)"() {
+    def "on() power-write failure during a known outage is DEBUG-suppressed, not ERROR/recorded (BP22)"() {
         given: "parent reports a known outage; cloud returns an inner -1 (genuine write failure)"
         settings.descriptionTextEnable = false
         settings.debugOutput = true   // logDebug is debugOutput-gated; enable so the suppression DEBUG is captured
@@ -401,7 +401,7 @@ class LevoitEverestAirSpec extends HubitatSpec {
         (state.errorHistory == null) || (state.errorHistory.isEmpty())
     }
 
-    def "on() power-write failure with NO outage still logs ERROR (BP22 negative / both-ways — cluster 3)"() {
+    def "on() power-write failure with NO outage still logs ERROR (BP22 negative / both-ways)"() {
         given: "no outage; cloud returns an inner -1 (genuine write failure)"
         settings.descriptionTextEnable = false
         settings.debugOutput = false

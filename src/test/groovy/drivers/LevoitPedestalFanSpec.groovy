@@ -25,10 +25,10 @@ import support.TestParent
  *   Temperature /10 — fixture has temperature:750; emitted temperature event = 75.0. Edge: 0 -> no event
  *   Oscillation toggles — setHorizontalOscillation/setVerticalOscillation produce correct payloads
  *   Oscillation ranges  — setHorizontalRange/setVerticalRange produce correct payloads with state:1
- *   setChildLock        — v2.4 addition: setChildLock with {childLock:1|0} (iter #1; Sister-Switch REFUTED on device 1132); read attr from fixture
- *   setTimer/cancelTimer — DEFERRED to v2.5+: both payload guesses refuted on device 1132 (HTTP 200, inner -1)
- *   runOscillationCalibration / setSleepPreference / setLevelMemory — DEFERRED to v2.5+ (refuted on device 1132)
- *   setHighTemperatureThreshold / setHighTemperatureReminder — DEFERRED to v2.5+ (refuted on device 1132)
+ *   setChildLock        — v2.4 addition: setChildLock with {childLock:1|0} (iter #1; Sister-Switch REFUTED on live hardware); read attr from fixture
+ *   setTimer/cancelTimer — DEFERRED to v2.5+: both payload guesses refuted on live hardware (HTTP 200, inner -1)
+ *   runOscillationCalibration / setSleepPreference / setLevelMemory — DEFERRED to v2.5+ (refuted on live hardware)
+ *   setHighTemperatureThreshold / setHighTemperatureReminder — DEFERRED to v2.5+ (refuted on live hardware)
  *   NIT 1 toggle pattern — state.lastSwitchSet populated/unset paths
  *   sleepPreferenceType + oscillation coordinate/range nested fields — read from response
  */

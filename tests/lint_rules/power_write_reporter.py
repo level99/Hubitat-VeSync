@@ -3,7 +3,7 @@ power_write_reporter.py — RULE53: flag a raw ``recordError(...)`` call inside 
 ``on()`` / ``off()`` power method body — it must route through the blessed
 ``reportWriteError`` / ``reportWriteFailure`` helper instead.
 
-Bug class (v2.10 cluster 3 — "power-write failure bypasses BP22 outage dedup"):
+Bug class ("power-write failure bypasses BP22 outage dedup"):
 
 The Switch power methods ``on()`` and ``off()`` report a failed power write with a
 bare ``logError(...) + recordError(...)`` pair. That bypasses the BP22 v2.9
