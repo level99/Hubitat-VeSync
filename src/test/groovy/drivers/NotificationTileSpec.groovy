@@ -195,4 +195,98 @@ class NotificationTileSpec extends HubitatSpec {
         then:
         state.msgCount == 1
     }
+
+    // -------------------------------------------------------------------------
+    // BP18/BP12 null-guards for a device Type-changed to this driver
+    // (installed()/configure() never fire on a Type change, and pref defaults are
+    // not committed until the first Save — so sdfPref / last5 / msgLimit are null).
+    // -------------------------------------------------------------------------
+
+    def "deviceNotification does not throw when sdfPref is null (uses the default format)"() {
+        given: "sdfPref null (Type-changed, never Saved) — new SimpleDateFormat(null) would NPE"
+        settings.descriptionTextEnable = false
+        settings.sdfPref = null
+        // In real Hubitat, device.updateSetting is not visible within the same execution
+        // (Bug Pattern #12), so the driver's `if(sdfPref == null) updateSetting(...)` line
+        // does NOT un-null sdfPref before the SimpleDateFormat call — that is exactly the
+        // condition the `fmt = sdfPref ?: default` guard exists for. The harness otherwise
+        // reflects updateSetting synchronously, which would mask the null; override it here
+        // to record-only (deferred), so sdfPref stays null through the format call.
+        def updates = testDevice.settingsUpdates
+        testDevice.metaClass.updateSetting = { String n, Map a -> updates << [name: n, type: a.type, value: a.value] }
+
+        when:
+        driver.deviceNotification("Hello")
+
+        then: "no NPE; the message is recorded (a formatted timestamp is appended via the default format)"
+        noExceptionThrown()
+        (lastEventValue("last5") as String).contains("Hello")
+    }
+
+    def "deviceNotification does not throw and produces well-formed tile HTML when last5 is null (Type-changed device)"() {
+        given: "no last5 attribute (currentValue returns null) and no msgCount"
+        settings.descriptionTextEnable = false
+        settings.sdfPref = "None"
+        testDevice.events.clear()
+        state.remove("msgCount")
+
+        when:
+        driver.deviceNotification("First message")
+
+        then: "no NPE; the tile HTML is well-formed and contains the message"
+        noExceptionThrown()
+        def last5 = lastEventValue("last5") as String
+        last5 != null
+        last5.startsWith('<span class="last5">')
+        last5.endsWith('</span>')
+        last5.contains("First message")
+    }
+
+    def "updated() does not throw when last5 is null (Type-changed conversion path)"() {
+        given: "no last5 attribute and no msgCount (triggers the v1->v2 conversion block)"
+        settings.descriptionTextEnable = false
+        testDevice.events.clear()
+        state.remove("msgCount")
+
+        when:
+        driver.updated()
+
+        then: "no NPE — the null last5 routes to the empty-tile branch"
+        noExceptionThrown()
+    }
+
+    def "deviceNotification does not throw when msgLimit is null (Type-changed device)"() {
+        given: "msgLimit null (never Saved) — settings.msgLimit.toInteger() would NPE"
+        settings.descriptionTextEnable = false
+        settings.sdfPref = "None"
+        settings.msgLimit = null
+
+        when:
+        driver.deviceNotification("Hello")
+
+        then: "no NPE; the limit defaults to 5 and the message is recorded"
+        noExceptionThrown()
+        (lastEventValue("last5") as String).contains("Hello")
+    }
+
+    def "updated() does not throw when msgLimit is null in the message-limit comparison"() {
+        given: "msgLimit null; the limit-shrink comparison eagerly evaluates settings.msgLimit"
+        settings.descriptionTextEnable = false
+        settings.msgLimit = null
+        // Non-null msgCount skips the conversion block so we reach the shrink comparison directly;
+        // a set lastLimit keeps the left side of the comparison non-null, isolating msgLimit as the
+        // only null operand. Model BP12: the updateSetting default-write is not visible this
+        // execution, so settings.msgLimit stays null through the comparison (harness would otherwise
+        // reflect it synchronously and mask the NPE).
+        state.msgCount = 1
+        state.lastLimit = 5
+        def updates = testDevice.settingsUpdates
+        testDevice.metaClass.updateSetting = { String n, Map a -> updates << [name: n, type: a.type, value: a.value] }
+
+        when:
+        driver.updated()
+
+        then: "no NPE — the comparison defaults the null msgLimit to 5"
+        noExceptionThrown()
+    }
 }

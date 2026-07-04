@@ -99,8 +99,10 @@ metadata {
 		if (state?.msgCount == null)
 			{
 			state.lastLimit=5
-			wkTile=device.currentValue("last5")
-			int x = wkTile.lastIndexOf('</span>');	
+			// Null-guard: a device Type-changed to this driver never ran installed()/configure(),
+			// so last5 can be null. Default to "" so the empty-tile branch (below) runs instead of NPE.
+			wkTile=device.currentValue("last5") ?: ""
+			int x = wkTile.lastIndexOf('</span>');
 			if (x>0)										//if there is anything in tile, adjust for v2.0.0
 				{
 				msgFilled=5
@@ -127,14 +129,17 @@ metadata {
 			}
 
         if(msgLimit == null) device.updateSetting("msgLimit",[value:5,type:"number"])
-	// V2.0.3 When new msgLimit less than prior(state) msgLimit adjust message and state values	
-		if (state?.lastLimit.toInteger()>settings.msgLimit.toInteger())
+	// V2.0.3 When new msgLimit less than prior(state) msgLimit adjust message and state values
+		// Null-guard (BP12/BP18): the updateSetting above is not visible within this same
+		// execution, so settings.msgLimit is still null on a device Type-changed to this driver.
+		// The comparison eagerly evaluates the right side, so default to 5 to avoid null.toInteger().
+		if (state?.lastLimit.toInteger()>(settings.msgLimit ?: 5).toInteger())
 			{
 			wkTile=device.currentValue("last5")
 			msgFilled=state.msgCount.toInteger()
 			logDebug "Shinking tile count lastLimit ${state.lastLimit} newLimit ${settings.msgLimit} msgCount ${msgFilled}"
 			int i = wkTile.lastIndexOf('<br />');
-			while (i != -1 && msgFilled > settings.msgLimit.toInteger())
+			while (i != -1 && msgFilled > (settings.msgLimit ?: 5).toInteger())
 				{
 				wkTile = wkTile.substring(0, i) + '</span>';
 				msgFilled--
@@ -179,8 +184,12 @@ void deviceNotification(notification){
     }
 	dateNow = new Date()
     if(sdfPref == null) device.updateSetting("sdfPref",[value:"ddMMMyyyy HH:mm",type:"enum"])
-    if(sdfPref != "None") {
-        SimpleDateFormat sdf = new SimpleDateFormat(sdfPref)
+    // updateSetting above is NOT visible to sdfPref within this same execution, so read a local
+    // defaulted value — a null sdfPref would otherwise reach new SimpleDateFormat(null) and NPE
+    // (e.g. a device Type-changed to this driver, never Saved).
+    def fmt = sdfPref ?: "ddMMMyyyy HH:mm"
+    if(fmt != "None") {
+        SimpleDateFormat sdf = new SimpleDateFormat(fmt)
 	    if (leadingDate)
 			notification = sdf.format(dateNow) + " " + notification
 		else
@@ -194,14 +203,19 @@ void deviceNotification(notification){
 
 	//	insert new message at beginning	of last5 string
 		msgFilled = state.msgCount.toInteger()
+		// Null-guard: last5 can be null on a device Type-changed to this driver (installed()/configure()
+		// never fired). Default to the empty tile template so .replace produces well-formed HTML.
+		def cur = device.currentValue("last5") ?: '<span class="last5"></span>'
 		if (msgFilled>0)
-			wkTile=device.currentValue("last5").replace('<span class="last5">','<span class="last5">' + notification + '<br />')
+			wkTile=cur.replace('<span class="last5">','<span class="last5">' + notification + '<br />')
 		else
-			wkTile=device.currentValue("last5").replace('<span class="last5">','<span class="last5">' + notification)
+			wkTile=cur.replace('<span class="last5">','<span class="last5">' + notification)
 
 	//	when msg count exceeds limit, purge last message
 		logDebug "deviceNotification2 msgFilled: ${msgFilled} msgLimit: ${settings.msgLimit}"
-		if (msgFilled < settings.msgLimit.toInteger())
+		// Null-guard (BP12/BP18): settings.msgLimit is null on a device Type-changed to this driver
+		// (never Saved), so .toInteger() would NPE. Default to 5 (the pref's defaultValue).
+		if (msgFilled < (settings.msgLimit ?: 5).toInteger())
 			msgFilled++
 		else
 			{
