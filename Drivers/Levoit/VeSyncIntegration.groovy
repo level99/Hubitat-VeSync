@@ -1825,7 +1825,13 @@ private Boolean isLevoitClimateDevice(String code) {
     return false
 }
 
-private Boolean getDevices() {
+// NOT private: getDevices is invoked as a string-literal handler via
+// runIn(2, "getDevices") by the BP17 poll-health self-heal. Hubitat's scheduler
+// resolves handler names through the Groovy MOP, which cannot reach a `private`
+// method (private compiles to INVOKESPECIAL, outside the MOP — the same reason
+// login() is non-private for test mocking). A private target here would make the
+// self-heal Resync silently never fire. Enforced by RULE52.
+Boolean getDevices() {
     return retryableHttp("getDevices", 3) {
         def params = [
             uri: "https://${getApiHost()}/cloud/v1/deviceManaged/devices",
@@ -2650,7 +2656,28 @@ private Boolean getDevices() {
             processResponse(resp)
         }
 
-        httpPost(params, effectiveClosure)
+        try {
+            httpPost(params, effectiveClosure)
+        } catch (Exception e) {
+            // BP13: httpPost throws on non-2xx, so a genuine HTTP 401 never reaches
+            // effectiveClosure. Route a synthetic 401 through the SAME effectiveClosure to
+            // trigger re-auth-and-retry.
+            // Non-401 handling is INTENTIONALLY DIFFERENT from sendBypassRequest's (do NOT
+            // unify them): here we RE-THROW, because this block runs inside
+            // retryableHttp("getDevices", 3), whose catch needs the exception to drive its
+            // connection-pool retry + error logging. sendBypassRequest is NOT
+            // retryableHttp-wrapped, so it instead routes non-401 through its own BP22
+            // network-suppression path. Each is correct for its own caller context.
+            Integer thrownStatus = null
+            if (!state.reAuthInProgress && e.metaClass.respondsTo(e, 'getResponse')) {
+                try { thrownStatus = e.getResponse()?.status as Integer } catch (ignored) { }
+            }
+            if (thrownStatus == 401) {
+                effectiveClosure([status: 401, data: null])
+            } else {
+                throw e
+            }
+        }
         return resultHolder[0]
     }
 }
@@ -2854,6 +2881,28 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
         return false
     }
     catch (Exception e) {
+        // BP13: Hubitat's httpPost THROWS HttpResponseException on a non-2xx status,
+        // so a genuine transport-level HTTP 401 never reaches effectiveClosure (which
+        // only runs on 2xx). Detect the 401 here and feed a synthetic 401 response into
+        // the SAME effectiveClosure, so the existing re-auth-and-retry-once path runs
+        // (no duplicated auth logic). The retry itself is guarded by the effectiveClosure's
+        // state.reAuthInProgress flag; wrap the call so a retry-throw can't escape.
+        // Only 401 triggers this — any other thrown status falls through to the normal
+        // network/error handling unchanged.
+        if (!state.reAuthInProgress && e.metaClass.respondsTo(e, 'getResponse')) {
+            Integer thrownStatus = null
+            try { thrownStatus = e.getResponse()?.status as Integer } catch (ignored) { }
+            if (thrownStatus == 401) {
+                try {
+                    effectiveClosure([status: 401, data: null])
+                    return true
+                } catch (reauthEx) {
+                    logError "sendBypassRequest: re-auth retry after HTTP 401 failed: ${reauthEx}"
+                    recordError("sendBypassRequest: re-auth retry after HTTP 401 failed", [method:"sendBypassRequest"])
+                    return false
+                }
+            }
+        }
         // BP22: distinguish network-layer errors from other failures.
         // Network errors during an outage flood logs with one ERROR per child per poll cycle.
         // Apply tiered suppression: one-time WARN on first error; DEBUG-only while outage continues.
@@ -2864,6 +2913,12 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
                 // Seed the current epoch-hour bucket so emitNetworkWarnIfDue() does not re-fire
                 // this same hour — the first-fire WARN is emitted right here.
                 state.lastNetworkWarnHourBucket = (ts / 3600000L) as long
+                // Seed the current 5-min probe bucket too (mirrors the recovery-clear which
+                // resets BOTH buckets). The failing call that JUST set the outage effectively
+                // consumed this bucket's probe slot, so the next recovery probe should wait for
+                // the next 5-min bucket rather than letting another same-cycle child fire an
+                // immediate (guaranteed-to-fail) probe.
+                state.lastNetworkProbeBucket = (ts / 300000L) as long
                 logWarn "BP22: VeSync API unreachable — ${e.class.simpleName}: ${e.message}. Suppressing further per-poll errors until recovery; will re-surface hourly while down."
             } else {
                 logDebug "BP22: still unreachable (${e.class.simpleName})"

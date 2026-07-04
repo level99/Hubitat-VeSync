@@ -81,6 +81,7 @@ from lint_rules.bp18_null_guard import check_rule27_bp18_null_guard
 from lint_rules.captureDiagnostics_presence import check_rule28_capturediagnostics_presence
 from lint_rules.bp30_single_threaded import check_rule48_single_threaded
 from lint_rules.result_map_guard import check_rule51_result_map_guard
+from lint_rules.private_scheduled_handler import check_rule52_private_scheduled_handler
 from lint_rules.library_no_top_block_comment import check_rule29_library_no_top_block_comment
 from lint_rules.direct_log_calls import check_rule30_direct_log_in_driver
 from lint_rules.bp24_state_switch_dead_branch import check_rule31_state_switch_dead_branch
@@ -9795,4 +9796,137 @@ class TestRule51ResultMapGuard:
         findings = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED, config=config)
         assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
             f"Exempted method must not flag RULE51, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE52 — private scheduled handler (v2.10 cluster 2: unreachable runIn target)
+# ---------------------------------------------------------------------------
+
+class TestRule52PrivateScheduledHandler:
+    """
+    RULE52: a `private` method used as a string-literal runIn/runInMillis/schedule
+    handler in the same file will never fire — Hubitat's scheduler invokes handlers
+    by name via the Groovy MOP, which cannot reach a `private` (INVOKESPECIAL) method.
+    """
+
+    # MUST-CATCH: private method scheduled via runIn (the getDevices BP17 self-heal shape).
+    BAD_PRIVATE_RUNIN = textwrap.dedent("""\
+        private Boolean getDevices() {
+            return doFetch()
+        }
+        def ensurePollHealth() {
+            runIn(2, "getDevices")
+        }
+    """)
+
+    # MUST-CATCH: private method scheduled via schedule() (cron poll shape).
+    BAD_PRIVATE_SCHEDULE = textwrap.dedent("""\
+        private setupPoll() {
+            schedule(cron, "runPoll")
+        }
+        private void runPoll() {
+            updateDevices()
+        }
+    """)
+
+    # MUST-CATCH: private method scheduled via runInMillis.
+    BAD_PRIVATE_RUNINMILLIS = textwrap.dedent("""\
+        private void deferredApply() {
+            applyIt()
+        }
+        def kick() {
+            runInMillis(500, "deferredApply")
+        }
+    """)
+
+    # MUST-NOT-CATCH: non-private scheduled handler (the correct convention).
+    GOOD_NONPRIVATE = textwrap.dedent("""\
+        Boolean getDevices() {
+            return doFetch()
+        }
+        def ensurePollHealth() {
+            runIn(2, "getDevices")
+        }
+    """)
+
+    # MUST-NOT-CATCH: a private method that is never scheduled.
+    GOOD_PRIVATE_NEVER_SCHEDULED = textwrap.dedent("""\
+        private String helper(x) {
+            return x.toString()
+        }
+        def update(status) {
+            def s = helper(status)
+        }
+    """)
+
+    # MUST-NOT-CATCH: name appears only in unschedule() (does not invoke).
+    GOOD_UNSCHEDULE_ONLY = textwrap.dedent("""\
+        private void getDevices() {
+            doFetch()
+        }
+        def teardown() {
+            unschedule("getDevices")
+        }
+    """)
+
+    # MUST-NOT-CATCH: private FIELD initialized with a method call (not a method decl).
+    GOOD_PRIVATE_FIELD = textwrap.dedent("""\
+        private Integer refreshInterval = computeDefault()
+        def kick() {
+            runIn(2, "refreshInterval")
+        }
+    """)
+
+    def test_private_runin_handler_fails(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.BAD_PRIVATE_RUNIN, "VeSyncIntegration.groovy")
+        assert any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"Expected RULE52 for private runIn handler, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE52_private_scheduled_handler'), (
+            f"RULE52 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_private_schedule_handler_fails(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.BAD_PRIVATE_SCHEDULE, "VeSyncIntegration.groovy")
+        assert any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"Expected RULE52 for private schedule() handler, got: {findings}"
+        )
+
+    def test_private_runinmillis_handler_fails(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.BAD_PRIVATE_RUNINMILLIS, "LevoitVital200S.groovy")
+        assert any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"Expected RULE52 for private runInMillis handler, got: {findings}"
+        )
+
+    def test_nonprivate_handler_passes(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.GOOD_NONPRIVATE, "VeSyncIntegration.groovy")
+        assert not any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"Non-private scheduled handler must not flag RULE52, got: {findings}"
+        )
+
+    def test_private_never_scheduled_passes(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.GOOD_PRIVATE_NEVER_SCHEDULED, "VeSyncIntegration.groovy")
+        assert not any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"A private method that is never scheduled must not flag RULE52, got: {findings}"
+        )
+
+    def test_unschedule_only_passes(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.GOOD_UNSCHEDULE_ONLY, "VeSyncIntegration.groovy")
+        assert not any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"A name used only in unschedule() must not flag RULE52, got: {findings}"
+        )
+
+    def test_private_field_not_flagged(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.GOOD_PRIVATE_FIELD, "VeSyncIntegration.groovy")
+        assert not any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"A private FIELD (not a method decl) must not flag RULE52, got: {findings}"
         )

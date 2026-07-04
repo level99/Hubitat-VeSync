@@ -184,6 +184,7 @@ def _collect_per_file_rules():
         bp30_dedup_after_delegation,
         bp30_dedup_clear_on_failure,
         result_map_guard,
+        private_scheduled_handler,
     )
     rules = []
     for module in [
@@ -209,6 +210,7 @@ def _collect_per_file_rules():
         bp30_dedup_after_delegation,
         bp30_dedup_clear_on_failure,
         result_map_guard,
+        private_scheduled_handler,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

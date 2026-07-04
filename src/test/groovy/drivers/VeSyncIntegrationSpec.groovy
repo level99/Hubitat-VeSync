@@ -70,6 +70,19 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     List<Map> capturedHttpPosts = []
     List<Map> capturedBypassBodies = []
 
+    /**
+     * Minimal stand-in for Hubitat's groovyx.net.http.HttpResponseException.
+     * Real Hubitat httpPost THROWS this (it does NOT invoke the success closure)
+     * on any non-2xx status, exposing the HTTP status via getResponse()?.status.
+     * The BP13 re-auth code detects a thrown 401 through exactly that accessor,
+     * so a representative test must THROW this (not call the callback with a 401).
+     */
+    static class FakeHttpResponseException extends RuntimeException {
+        private final int httpStatus
+        FakeHttpResponseException(int s) { super("HTTP ${s}"); this.httpStatus = s }
+        def getResponse() { return [status: httpStatus] }
+    }
+
     @Override
     String driverSourcePath() {
         "Drivers/Levoit/VeSyncIntegration.groovy"
@@ -517,6 +530,83 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         !state.containsKey('reAuthInProgress')
     }
 
+    def "sendBypassRequest re-authenticates when httpPost THROWS HTTP 401 (Bug Pattern #13 — real Hubitat throw path)"() {
+        // The test above delivers a 401 by CALLING the callback with status=401.
+        // Real Hubitat httpPost does NOT do that — it THROWS HttpResponseException on
+        // a non-2xx status, so effectiveClosure (which only runs on 2xx) never sees the
+        // 401. This test throws (representative), proving the catch-block detects the
+        // thrown 401 and routes a synthetic response through the same re-auth path.
+        // Discriminating: without that catch-block handling, the thrown 401 is logged as
+        // a generic error, login() never runs, and state.token stays "old-token".
+        given: "httpPost THROWS a 401 on the first call (as real Hubitat does), succeeds on retry"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "old-token"
+        state.accountID = "acc-001"
+        int httpPostCallCount = 0
+        List<Object> closureReceivedResponses = []
+        def equip = new TestDevice()
+
+        driver.metaClass.login = { ->
+            state.token = "new-token"; state.accountID = "acc-001"; true
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            if (httpPostCallCount == 1) {
+                throw new FakeHttpResponseException(401)  // real Hubitat: throw, do NOT call callback
+            }
+            callback(successResp())
+        }
+        Closure callerClosure = { resp -> closureReceivedResponses << resp }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], callerClosure)
+
+        then: "the THROWN 401 triggered re-auth (token refreshed by login())"
+        state.token == "new-token"
+
+        and: "httpPost was called twice (initial throw + retry after re-auth)"
+        httpPostCallCount == 2
+
+        and: "the caller's closure received the retry's success response"
+        closureReceivedResponses.size() == 1
+        (closureReceivedResponses[0].status as Integer) == 200
+
+        and: "state.reAuthInProgress is cleared"
+        !state.containsKey('reAuthInProgress')
+    }
+
+    def "sendBypassRequest does NOT re-auth on a THROWN non-401 (e.g. HTTP 500) (Bug Pattern #13 negative control)"() {
+        // A thrown 500 (or any non-401) must NOT trigger re-auth — only a genuine 401 does.
+        given: "httpPost throws HTTP 500 on the first call"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "old-token"
+        state.accountID = "acc-001"
+        int httpPostCallCount = 0
+        int loginCallCount    = 0
+        def equip = new TestDevice()
+
+        driver.metaClass.login = { -> loginCallCount++; state.token = "new-token"; true }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            throw new FakeHttpResponseException(500)
+        }
+        Closure callerClosure = { resp -> }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], callerClosure)
+
+        then: "login() was never called (500 is not an auth failure)"
+        loginCallCount == 0
+
+        and: "no retry occurred"
+        httpPostCallCount == 1
+
+        and: "token unchanged"
+        state.token == "old-token"
+    }
+
     def "sendBypassRequest detects inner code -11001000 and re-authenticates (Bug Pattern #13)"() {
         given: "httpPost returns HTTP 200 with inner code -11001000 on first call"
         settings.descriptionTextEnable = true
@@ -790,9 +880,12 @@ class VeSyncIntegrationSpec extends HubitatSpec {
     // getDevices() Bug Pattern #13 extension — auth-failure retry (Issue 3)
     //
     // Architecture note:
-    //   getDevices() is private but accessible via Groovy 3 dynamic dispatch.
-    //   It is wrapped in retryableHttp("getDevices", 3) which simply invokes
-    //   the closure — the wrapper does not complicate these auth-retry tests.
+    //   getDevices() is non-private (package-default): it is invoked as a
+    //   string-literal handler via runIn(2, "getDevices") by the BP17 self-heal,
+    //   and Hubitat's scheduler cannot reach a private method through the MOP
+    //   (enforced by RULE52). It is wrapped in retryableHttp("getDevices", 3)
+    //   which simply invokes the closure — the wrapper does not complicate these
+    //   auth-retry tests.
     //
     //   The success response must include resp.data.result.list or getDevices()
     //   will short-circuit with a "No list in response result" error log. We
@@ -865,6 +958,84 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         and: "getDevices() returned true (retry succeeded)"
         result == true
+    }
+
+    def "getDevices() re-authenticates when httpPost THROWS HTTP 401 (Issue 3 / Bug Pattern #13 — real Hubitat throw path)"() {
+        // As with sendBypassRequest, the A1 test above delivers a 401 by CALLING the
+        // callback — real Hubitat THROWS on a non-2xx, so effectiveClosure never sees it.
+        // This test throws (representative), proving the getDevices() catch-block detects
+        // the thrown 401 and routes it through the re-auth path. Discriminating: without
+        // that handling, the throw propagates to retryableHttp's catch, login() never runs,
+        // and getDevices() returns false.
+        given: "httpPost THROWS a 401 on the first call (as real Hubitat does), succeeds on retry"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "old-token"
+        state.accountID = "acc-001"
+        state.prefsSeeded = true
+        int httpPostCallCount = 0
+        int loginCallCount    = 0
+
+        driver.metaClass.login = { ->
+            loginCallCount++
+            state.token = "new-token"; state.accountID = "acc-001"; true
+        }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            if (httpPostCallCount == 1) {
+                throw new FakeHttpResponseException(401)  // real Hubitat: throw, do NOT call callback
+            }
+            callback(getDevicesSuccess())
+        }
+
+        when:
+        def result = driver.getDevices()
+
+        then: "login() was invoked exactly once (re-auth triggered by the THROWN 401)"
+        loginCallCount == 1
+
+        and: "httpPost was called twice (initial throw + retry after re-auth)"
+        httpPostCallCount == 2
+
+        and: "the retry used the refreshed token"
+        state.token == "new-token"
+
+        and: "state.reAuthInProgress is cleared"
+        !state.containsKey('reAuthInProgress')
+
+        and: "getDevices() returned true (retry succeeded)"
+        result == true
+    }
+
+    def "getDevices() re-throws a THROWN non-401 so retryableHttp handling is unchanged (Bug Pattern #13 negative control)"() {
+        // A thrown non-401 (e.g. 500) must NOT be swallowed by the 401 handler — it must
+        // propagate to retryableHttp's catch (which logs + returns false). login() must not run.
+        given: "httpPost throws HTTP 500 on every call"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "old-token"
+        state.accountID = "acc-001"
+        state.prefsSeeded = true
+        int httpPostCallCount = 0
+        int loginCallCount    = 0
+
+        driver.metaClass.login = { -> loginCallCount++; state.token = "new-token"; true }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            throw new FakeHttpResponseException(500)
+        }
+
+        when:
+        def result = driver.getDevices()
+
+        then: "login() was never called (500 is not an auth failure)"
+        loginCallCount == 0
+
+        and: "token unchanged and getDevices returned false"
+        state.token == "old-token"
+        result == false
     }
 
     def "getDevices() re-authenticates on inner code -11001000 and retries (Issue 3 / Bug Pattern #13)"() {
@@ -3633,6 +3804,44 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         and: "the epoch-hour WARN bucket is seeded to the current bucket (BP22 v2.9 bucket)"
         (state.lastNetworkWarnHourBucket as Long) == ((driver.now() / 3600000L) as long)
+    }
+
+    def "sendBypassRequest() first outage seeds the 5-min PROBE bucket too (BP22 — F4 seeding symmetry)"() {
+        // F4: the recovery-clear path resets BOTH lastNetworkWarnHourBucket AND
+        // lastNetworkProbeBucket, but the first-fire path historically seeded only the
+        // WARN bucket. Leaving the probe bucket unseeded let another child in the SAME
+        // outage cycle fire an immediate (guaranteed-to-fail) recovery probe. The failing
+        // call that set the outage already consumed this bucket's probe slot, so first-fire
+        // must seed lastNetworkProbeBucket to the current 5-min epoch bucket — matching the
+        // WARN-bucket rationale and the recovery-clear symmetry.
+        // Discriminating: without the seed, lastNetworkProbeBucket stays absent (null).
+        given: "no prior outage state; both buckets cleared; httpPost throws a network exception"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.networkUnreachableSince = null
+        state.remove('lastNetworkWarnHourBucket')
+        state.remove('lastNetworkProbeBucket')
+
+        def equip = new TestDevice()
+        equip.updateDataValue("cid", "f4-cid")
+        equip.updateDataValue("configModule", "f4-cm")
+        equip.typeName = "Levoit Vital 200S Air Purifier"
+
+        driver.metaClass.httpPost = { Map params, Closure cb ->
+            throw new java.net.UnknownHostException("smartapi.vesync.com")
+        }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], { resp -> })
+
+        then: "the 5-min PROBE bucket is seeded to the current epoch bucket"
+        (state.lastNetworkProbeBucket as Long) == ((driver.now() / 300000L) as long)
+
+        and: "the WARN bucket is also seeded (pre-existing behavior, unchanged)"
+        (state.lastNetworkWarnHourBucket as Long) == ((driver.now() / 3600000L) as long)
+
+        and: "networkUnreachableSince is set"
+        (state.networkUnreachableSince as Long) == driver.now()
     }
 
     def "sendBypassRequest() subsequent network exceptions during outage are DEBUG-only (R2)"() {

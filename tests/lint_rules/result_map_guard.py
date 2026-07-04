@@ -29,7 +29,15 @@ Detection scope:
     ``VeSyncIntegration.groovy`` and the virtual test parent
     ``VeSyncIntegrationVirtual.groovy`` are the parent-side auth/discovery
     response subsystem (a separate reachability cluster) and are out of scope
-    for this rule by design — they are excluded by name.
+    for this rule by design — they are excluded by name. Rationale (audited
+    v2.10 cluster 2): every ``.data.result`` / ``.data.code`` read in the parent
+    is already inside a try/catch that catches the MissingPropertyException a
+    non-Map body would throw and degrades gracefully (logs + returns false,
+    retried next cycle) rather than aborting a command — ``login`` stages and
+    ``getDevices`` run inside ``retryableHttp``'s catch; the ``updateDevices``
+    poll closure runs inside ``sendBypassRequest``'s own catch; ``isAuthFailure``
+    has its own try/catch. Child command paths (this rule's scope) lack that
+    surrounding catch, which is why the guard is mandatory there but not here.
   - Comment- and string-literal content is removed before scanning (a
     ``.data.result`` token inside a ``//`` comment or a log-string literal is
     not a code read).
