@@ -187,6 +187,7 @@ def _collect_per_file_rules():
         private_scheduled_handler,
         power_write_reporter,
         switch_toggle_sync,
+        bare_bool_flag_eq,
     )
     rules = []
     for module in [
@@ -215,6 +216,7 @@ def _collect_per_file_rules():
         private_scheduled_handler,
         power_write_reporter,
         switch_toggle_sync,
+        bare_bool_flag_eq,
     ]:
         rules.extend(module.ALL_RULES)
     return rules

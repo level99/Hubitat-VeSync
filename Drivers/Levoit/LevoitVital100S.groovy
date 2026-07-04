@@ -123,7 +123,7 @@ def applyStatus(status) {
     // Diagnostic: gated by debugOutput pref — quiet in production, easy to triage when needed.
     logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
-    def powerOn = r.powerSwitch == 1
+    def powerOn = asBool(r.powerSwitch)
     emitSwitchState(powerOn)
 
     // Filter
@@ -203,8 +203,8 @@ def applyStatus(status) {
     //   Refutation: community user confirms setLightDetection WORKS on V102S hardware -->
     //     expose the toggle conditionally (feature-flag check or simple expose).
 
-    device.sendEvent(name:"childLock", value: r.childLockSwitch == 1 ? "on":"off")
-    device.sendEvent(name:"display",   value: r.screenSwitch == 1 ? "on":"off")
+    device.sendEvent(name:"childLock", value: asBool(r.childLockSwitch) ? "on":"off")
+    device.sendEvent(name:"display",   value: asBool(r.screenSwitch) ? "on":"off")
 
     // Error code and timer remain
     if (r.errorCode != null) {

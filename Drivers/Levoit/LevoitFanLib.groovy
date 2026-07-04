@@ -82,7 +82,13 @@ def installed() {
 
 def updated() {
     logDebug "Updated ${settings}"
+    // Preserve state.timerId across state.clear() — it's the only long-lived, load-bearing fan-line
+    // state (the id an active device timer must reference to be cancelled). Wiping it on every Save
+    // Preferences would leave cancelTimer() unable to cancel a running timer (silent no-op). Mirrors
+    // how the parent preserves state.terminalId across its own state.clear().
+    def savedTimerId = state.timerId
     state.clear(); unschedule(); initialize()
+    if (savedTimerId != null) state.timerId = savedTimerId
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {

@@ -910,6 +910,20 @@ class LevoitTowerFanSpec extends HubitatSpec {
         req.data.id == 42
     }
 
+    def "updated() preserves state.timerId across state.clear() so cancelTimer still works"() {
+        // state.timerId is the only long-lived, load-bearing fan-line state — the id an active
+        // device timer must reference to be cancelled. Save Preferences (updated -> state.clear())
+        // must not wipe it. Discriminating: pre-fix updated() clears state.timerId to null.
+        given: "an active timer id is stored"
+        state.timerId = 42
+
+        when: "the user saves preferences"
+        driver.updated()
+
+        then: "state.timerId survives the state.clear()"
+        state.timerId == 42
+    }
+
     def "cancelTimer with no state.timerId is a no-op (no API call)"() {
         given: "no timer id in state"
         assert state.timerId == null

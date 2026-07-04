@@ -84,6 +84,7 @@ from lint_rules.result_map_guard import check_rule51_result_map_guard
 from lint_rules.private_scheduled_handler import check_rule52_private_scheduled_handler
 from lint_rules.power_write_reporter import check_rule53_power_write_reporter
 from lint_rules.switch_toggle_sync import check_rule54_switch_toggle_sync
+from lint_rules.bare_bool_flag_eq import check_rule55_bare_bool_flag_eq
 from lint_rules.library_no_top_block_comment import check_rule29_library_no_top_block_comment
 from lint_rules.direct_log_calls import check_rule30_direct_log_in_driver
 from lint_rules.bp24_state_switch_dead_branch import check_rule31_state_switch_dead_branch
@@ -10144,3 +10145,61 @@ class TestRule54SwitchToggleSync:
         assert not any(f['rule_id'] == 'RULE54_switch_toggle_sync' for f in findings), (
             f"The write-path literal switch emit must not flag RULE54, got: {findings}"
         )
+
+
+# ---------------------------------------------------------------------------
+# RULE55 — bare bool-flag == 0|1 coercion (BP7 divergence companion to RULE45)
+# ---------------------------------------------------------------------------
+
+class TestRule55BareBoolFlagEq:
+    """
+    RULE55: a bare `<recv>.<boolFlag> == 0|1` on a VeSync boolean flag returns the wrong
+    answer for the Boolean/String shapes (true==1 is false) — route it through asBool().
+    Distinct from RULE45's throw-prone `(x as Integer) == 1` cast form.
+    """
+
+    def test_bare_powerswitch_eq_fails(self):
+        findings = run_rule(check_rule55_bare_bool_flag_eq, 'def x = r.powerSwitch == 1\n', "LevoitGeneric.groovy")
+        assert any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE55_bare_bool_flag_eq'), (
+            f"RULE55 must be FAIL to gate lint --strict; got: {findings}"
+        )
+
+    def test_bare_childlock_eq0_fails(self):
+        findings = run_rule(check_rule55_bare_bool_flag_eq,
+                            'device.sendEvent(name:"childLock", value: r.childLockSwitch == 0 ? "off":"on")\n')
+        assert any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+
+    def test_gstring_interpolated_coercion_fails(self):
+        # The primary finding shape: the coercion lives inside a GString ${...} interpolation.
+        findings = run_rule(check_rule55_bare_bool_flag_eq,
+                            'parts << "Power: ${r.powerSwitch == 1 ? \'on\' : \'off\'}"\n', "LevoitGeneric.groovy")
+        assert any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), (
+            f"A bool coercion inside a GString ${{...}} interpolation must be flagged, got: {findings}"
+        )
+
+    def test_asbool_passes(self):
+        findings = run_rule(check_rule55_bare_bool_flag_eq,
+                            'device.sendEvent(name:"switch", value: asBool(r.powerSwitch) ? "on":"off")\n')
+        assert not any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+
+    def test_as_integer_cast_form_not_flagged(self):
+        # RULE45's throw-form has `as Integer)` between the field and `==`, so RULE55 must not match.
+        findings = run_rule(check_rule55_bare_bool_flag_eq, 'def x = (r.powerSwitch as Integer) == 1\n')
+        assert not any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+
+    def test_enum_field_not_flagged(self):
+        # dryingState is a 0/1/2 ENUM, not a boolean flag — `== 1` is a legitimate enum test.
+        findings = run_rule(check_rule55_bare_bool_flag_eq, 'if (r.dryingState == 1) s = "active"\n')
+        assert not any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+
+    def test_local_var_not_flagged(self):
+        # A local variable (not a <recv>.<field> access) is out of scope — those are as-Integer locals.
+        findings = run_rule(check_rule55_bare_bool_flag_eq, 'device.sendEvent(name:"mute", value: muteState == 1 ? "on":"off")\n')
+        assert not any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+
+    def test_flag_in_log_string_not_flagged(self):
+        # A flag token inside a plain (non-interpolated) log-string literal is not code.
+        findings = run_rule(check_rule55_bare_bool_flag_eq, 'logDebug "the powerSwitch == 1 branch ran"\n')
+        assert not any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings

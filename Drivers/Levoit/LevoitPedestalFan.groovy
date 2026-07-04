@@ -18,15 +18,15 @@
  */
 
 // NOTE: Pedestal Fan shipped as a preview driver (v2.1). Maintainer received
-// LPF-R432S hardware (device 1132, "Family Room Fan") week of 2026-04-26.
+// LPF-R432S hardware week of 2026-04-26.
 // v2.4 adds write-path commands confirmed by live hardware poll capture.
 //
-// Confirmed write paths (commands live-verified on device 1132, v2.4):
+// Confirmed write paths (commands live-verified on live hardware, v2.4):
 //   - power, setSpeed, setMode, setHorizontalOscillation, setVerticalOscillation,
 //     setHorizontalRange, setVerticalRange, setMute, setDisplay,
 //     setChildLock, setSmartCleaningReminder
 //
-// v2.4 write-path additions (live-verified on device 1132 LPF-R432S-AUK, 2026-05-01):
+// v2.4 write-path additions (live-verified on a live LPF-R432S-AUK, 2026-05-01):
 //   - setChildLock: {childLock: 1|0} — CONFIRMED inner 0
 //   - setSmartCleaningReminder: {smartCleaningReminderState: 1|0} — CONFIRMED inner 0
 //
@@ -83,7 +83,7 @@
  *    - Range payloads require the matching axis state=1 (on) and the
  *      left/right (horizontal) or top/bottom (vertical) range fields.
  *    - childLock: exposed as both a read attribute AND writable via setChildLock
- *      command. Payload {childLock: 1|0} confirmed on device 1132 (2026-05-01).
+ *      command. Payload {childLock: 1|0} confirmed on live hardware (2026-05-01).
  *      pyvesync VeSyncPedestalFan has no set_child_lock() method (community gap).
  *    - Timer omitted: no setTimer/clearTimer in pyvesync VeSyncPedestalFan.
  *    - Switch payload is purifier-style {powerSwitch, switchIdx}, NOT
@@ -110,13 +110,13 @@
  *                      BP18 normalization: setHorizontalRange and setVerticalRange
  *                      now explicitly reject null args with logWarn + return,
  *                      replacing the previous silent-zeroing ?: coercions.
- *    2026-05-01: v2.4  Write-path live-verification complete on device 1132. Confirmed working:
+ *    2026-05-01: v2.4  Write-path live-verification complete on live hardware. Confirmed working:
  *                      setChildLock, setSmartCleaningReminder. Deferred to v2.5+ (refuted):
  *                      setTimer, cancelTimer, setSleepPreference, setHighTemperatureThreshold,
  *                      setHighTemperatureReminder, setLevelMemory, runOscillationCalibration.
  *                      Read-only attributes retained for all deferred fields.
  *    2026-04-30: v2.4  Write-path attempt — 7 new setter commands + read-only attribute exposures
- *                      added using live poll response field shapes (LPF-R432S device 1132).
+ *                      added using live poll response field shapes (a live LPF-R432S).
  *                      Payloads marked [PREVIEW v2.4] pending live command verification.
  *    2026-04-29: v2.4  Phase 5 — captureDiagnostics + error ring-buffer via LevoitDiagnosticsLib.
  *    2026-04-26: v2.0  Community fork initial release (Dan Cox). Preview driver.
@@ -171,8 +171,7 @@ metadata {
         attribute "mode",                   "string"    // normal | turbo | eco | sleep
         attribute "mute",                   "string"    // on | off
         attribute "displayOn",              "string"    // on | off
-        // childLock: v2.4 adds setChildLock command (payload confirmed via Sister-Switch convention
-        // + live poll field shape; command-level verification pending live hardware dispatch).
+        // childLock: v2.4 setChildLock command — payload {childLock: 1|0} verified on live hardware (inner 0).
         attribute "childLock",              "string"    // on | off
         attribute "errorCode",              "number"
         attribute "timerRemain",            "number"    // seconds remaining on active timer (0 = no timer)
@@ -181,7 +180,7 @@ metadata {
         // Oscillation calibration progress (read-only; populated during runOscillationCalibration)
         attribute "oscillationCalibrationState",    "string"    // idle | calibrating
         attribute "oscillationCalibrationProgress", "number"    // 0-100
-        // High temperature reminder threshold + enable (setters below)
+        // High temperature reminder threshold + enable (read-only; write-path setters deferred to v2.5+ — see the refuted-payload CROSS-CHECK below)
         attribute "highTemperature",         "number"    // user-set threshold, degrees F
         attribute "highTemperatureReminder", "string"    // on | off
         // Smart cleaning reminder enable (setter below)
@@ -218,7 +217,7 @@ metadata {
         command "setMute",    [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         command "setDisplay", [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
 
-        // v2.4 write-path additions — live-verified on device 1132 LPF-R432S-AUK (2026-05-01).
+        // v2.4 write-path additions — live-verified on a live LPF-R432S-AUK (2026-05-01).
         command "setChildLock",            [[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
         command "setSmartCleaningReminder",[[name:"On/Off*", type:"ENUM", constraints:["on","off"]]]
 
@@ -463,23 +462,12 @@ def setVerticalRange(top, bottom){
 
 // ---------- v2.4 write-path additions ----------
 
-// CROSS-CHECK [v2.4 hardware capture / iteration #1 / pyvesync gap]:
-//   [PREVIEW v2.4 — payload is a best-effort guess pending live command verification]
-//   Candidate #1 (current): method "setChildLock" + payload field "childLock" (symmetric to
-//     the read field name). This is iteration #1 after candidate #0 was REFUTED by live hardware.
-//   Candidate #0 REFUTED: method "setChildLockSwitch" + payload {childLockSwitch: v} -- tested
-//     on device 1132 (2026-04-30); device returned HTTP 200 with inner code -1, confirming
-//     Sister-Switch convention does NOT apply to childLock. Payload rejected at device level.
-//   Rationale for #1: if the read field is "childLock", the most symmetric write payload is
-//     also "childLock" (mirrors the setHumidifierStatus convention in other families where
-//     read and write share the same field name). Method "setChildLock" (no Switch suffix)
-//     follows the same logic: setChildLock / {childLock}.
-//   Remaining candidates (if #1 also returns inner -1):
-//     #2: method "setChildLockSwitch" + payload {childLock: v}
-//     #3: method "setChildLock" + payload {childLockSwitch: v}
-//     #4: method "setLock" + payload {lock: v}
-//   Source: live poll response (device 1132, 2026-04-30); pyvesync gap confirmed (no
-//     set_child_lock() method in VeSyncPedestalFan as of 2026-04-30).
+// CROSS-CHECK [v2.4 hardware capture / pyvesync gap]:
+//   setChildLock + payload {childLock: 1|0} (write field symmetric to the read field) — CONFIRMED
+//   inner 0 on live hardware. An earlier candidate (setChildLockSwitch + {childLockSwitch}) was
+//   REFUTED (HTTP 200, inner -1), confirming the Sister-Switch convention does NOT apply to
+//   childLock. pyvesync has no set_child_lock() for this fan class, so the payload was derived from
+//   the read-field shape and verified against a real device.
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setChildLock(onOff){
     logDebug "setChildLock(${onOff})"
@@ -493,7 +481,7 @@ def setChildLock(onOff){
     // C3 state-change gate: suppress redundant cloud calls when value already matches attribute.
     if (device.currentValue("childLock") == s) return
     int v = (s == "on") ? 1 : 0  // strict-enum gate above guarantees s is "on" or "off"; truthy variants are unreachable
-    // [PREVIEW v2.4] iteration #1: method setChildLock + payload {childLock} (symmetric to read field)
+    // Confirmed payload: method setChildLock + {childLock} (write field symmetric to the read field).
     def resp = hubBypass("setChildLock", [childLock: v], "setChildLock(${s})")
     if (httpOk(resp)) {
         device.sendEvent(name:"childLock", value: s)
@@ -503,7 +491,7 @@ def setChildLock(onOff){
     }
 }
 
-// CROSS-CHECK [maintainer's hardware capture, device 1132 LPF-R432S-AUK, 2026-05-01]:
+// CROSS-CHECK [maintainer's hardware capture, a live LPF-R432S-AUK, 2026-05-01]:
 //   Decision: Pedestal Fan timer commands (setTimer/cancelTimer) deferred to v2.5+.
 //   Rationale: Two payload guesses both refuted on live hardware (HTTP 200, inner -1
 //   on both `setTimer + {action: "on"|"off", total: N}` and `clearTimer + {}`).
@@ -517,7 +505,7 @@ def setChildLock(onOff){
 //   response (the device reports remaining seconds even though we cannot SET a timer
 //   via the cloud API yet); see applyStatus emission below.
 
-// CROSS-CHECK [maintainer's hardware capture, device 1132 LPF-R432S-AUK, 2026-05-01]:
+// CROSS-CHECK [maintainer's hardware capture, a live LPF-R432S-AUK, 2026-05-01]:
 //   The following write-path commands were attempted with educated-guess payloads
 //   (informed by read-shape field names + sister-method patterns from Tower Fan)
 //   and ALL refuted via live hardware tests. Each returned a non-zero VeSync API
@@ -543,12 +531,8 @@ def setChildLock(onOff){
 //   state, even though they can't change it from Hubitat yet.
 
 // CROSS-CHECK [v2.4 hardware capture / field-name convention]:
-//   [PREVIEW v2.4 — method name and payload field are best-effort guesses]
-//   Decision: method "setSmartCleaningReminder" with {smartCleaningReminderState: 1|0}.
-//     Payload field matches the read-field name exactly (smartCleaningReminderState).
-//   Source: live poll smartCleaningReminderState:1 (device 1132, 2026-04-30).
-//   Refutation: inner code -1 --> try payload field "smartCleaningReminder" (without "State"
-//     suffix) or try method "setSmartCleaning"; update CROSS-CHECK when confirmed.
+//   setSmartCleaningReminder + {smartCleaningReminderState: 1|0} (payload field matches the read
+//   field name exactly) — CONFIRMED inner 0 on live hardware.
 // BP24: NO-ON — configures a device preference; powering on is not implied.
 def setSmartCleaningReminder(onOff){
     logDebug "setSmartCleaningReminder(${onOff})"
@@ -670,9 +654,9 @@ def applyStatus(status){
 
     // ---- childLock ----
     // CROSS-CHECK [pyvesync VeSyncPedestalFan class / v2.4 hardware capture / iteration #1]:
-    //   Read field "childLock" confirmed from live poll (device 1132, 2026-04-30). Value is 0|1 int.
+    //   Read field "childLock" confirmed from live poll (a live device, 2026-04-30). Value is 0|1 int.
     //   Write candidate #0 REFUTED: setChildLockSwitch + {childLockSwitch} returned inner -1 on
-    //     device 1132 (2026-04-30). Write candidate #1 (current): setChildLock + {childLock}.
+    //     a live device (2026-04-30). Write candidate #1 (current): setChildLock + {childLock}.
     //   See setChildLock() CROSS-CHECK block above for full refutation chain and remaining candidates.
     if (r.childLock != null) {
         device.sendEvent(name:"childLock", value: asBool(r.childLock) ? "on" : "off")

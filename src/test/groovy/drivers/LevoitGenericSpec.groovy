@@ -93,6 +93,26 @@ class LevoitGenericSpec extends HubitatSpec {
         lastEventValue("airQuality") != null
     }
 
+    def "info tile power state agrees with the switch attribute when powerSwitch is a Boolean"() {
+        // The switch event derives via asBool; the info tile previously used a raw `== 1`. For a
+        // Boolean-typed powerSwitch (true == 1 is false), the two diverged — the tile said "off"
+        // while the switch said "on". Both now route through asBool. Discriminating: pre-fix the
+        // tile shows "Power: off" here.
+        given: "powerSwitch arrives as a Boolean true (not the integer 1)"
+        def status = [code: 0, result: [powerSwitch: true]]
+
+        when:
+        driver.applyStatus(status)
+
+        then: "the switch attribute reads on"
+        lastEventValue("switch") == "on"
+
+        and: "the info tile agrees — 'Power: on', not 'Power: off'"
+        def info = lastEventValue("info")
+        info?.contains("Power: on")
+        !(info?.contains("Power: off"))
+    }
+
     def "applyStatus peels double-wrap envelope to reach humidifier device fields (Bug Pattern #3)"() {
         given: "a double-wrapped humidifier status response"
         def fixture = loadYamlFixture("LevoitGeneric.yaml")

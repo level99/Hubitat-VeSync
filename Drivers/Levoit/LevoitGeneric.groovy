@@ -316,7 +316,7 @@ def applyStatus(status){
     // --- Info HTML (for dashboard tiles) ---
     def parts = []
     parts << "Shape: ${detectedCompat}"
-    if (r.powerSwitch != null)       parts << "Power: ${r.powerSwitch == 1 ? 'on' : 'off'}"
+    if (r.powerSwitch != null)       parts << "Power: ${asBool(r.powerSwitch) ? 'on' : 'off'}"
     if (r.humidity != null)          parts << "Humidity: ${r.humidity as Integer}%"
     if (r.PM25 != null)              parts << "PM2.5: ${r.PM25}µg/m³"
     if (localAqLabel != null)        parts << "Air Quality: ${localAqLabel}"
