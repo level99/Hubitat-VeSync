@@ -543,4 +543,40 @@ class LevoitGenericSpec extends HubitatSpec {
         and: "a logWarn naming 'setLevel' was emitted (requireNotNull rejection)"
         testLog.warns.any { it.contains("setLevel") }
     }
+
+    def "on() power-write failure during a known outage is DEBUG-suppressed, not ERROR/recorded (BP22)"() {
+        given: "the parent reports a known network outage and the cloud write fails"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = true
+        testParent.networkUnreachable = true
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+
+        when:
+        driver.on()
+
+        then: "the power-on write was attempted"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "the failure is DEBUG-suppressed (BP22), not ERROR spam or a diagnostics record"
+        !testLog.errors.any { it.contains("Power on failed") }
+        (state.errorHistory == null) || (state.errorHistory.isEmpty())
+    }
+
+    def "off() power-write failure during a known outage is DEBUG-suppressed, not ERROR/recorded (BP22)"() {
+        given: "the parent reports a known network outage and the cloud write fails"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = true
+        testParent.networkUnreachable = true
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+
+        when:
+        driver.off()
+
+        then: "the power-off write was attempted"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "the failure is DEBUG-suppressed (BP22), not ERROR spam or a diagnostics record"
+        !testLog.errors.any { it.contains("Power off failed") }
+        (state.errorHistory == null) || (state.errorHistory.isEmpty())
+    }
 }
