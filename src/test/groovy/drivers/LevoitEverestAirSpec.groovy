@@ -856,6 +856,29 @@ class LevoitEverestAirSpec extends HubitatSpec {
         testParent.allRequests.find { it.method == "clearTimer" } == null
     }
 
+    // -------------------------------------------------------------------------
+    // F4: updated() (Save Preferences) must preserve state.timerId across state.clear().
+    // EverestAir wiped it, so cancelTimer became a silent no-op after a preferences save.
+    // NON-VACUITY: removing the savedTimerId preservation in updated() clears state.timerId,
+    // so cancelTimer() early-exits (no delTimerV2 call), and the assertion goes RED.
+    // -------------------------------------------------------------------------
+
+    def "updated() preserves state.timerId so cancelTimer still fires the delTimerV2 call (F4)"() {
+        given: "an active timer id is stored"
+        settings.descriptionTextEnable = false
+        state.timerId = 42
+
+        when: "the user saves preferences, then cancels the timer"
+        driver.updated()
+        testParent.allRequests.clear()
+        driver.cancelTimer()
+
+        then: "the delTimerV2 cloud call was made -- the id survived the state.clear()"
+        def req = testParent.allRequests.find { it.method == "delTimerV2" }
+        req != null
+        req.data.id == 42
+    }
+
     def "cancelTimer with no state.timerId is a no-op (no API call)"() {
         given: "no timer id in state"
         assert state.timerId == null

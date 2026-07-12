@@ -865,6 +865,28 @@ private void emitNetworkWarnIfDue() {
     }
 }
 
+// Re-auth storm cooldown: after a FAILED login() (e.g. bad credentials), every subsequent
+// auth-failed response would otherwise re-run a full two-stage login() — for bad credentials
+// that means indefinite login hammering, which risks a VeSync account lockout. Once a login
+// has failed within the last 15 minutes, skip re-auth entirely (the token isn't going to
+// refresh with the same bad credentials) and log an hourly-throttled WARN pointing the user at
+// their credentials. A SUCCESSFUL login() clears state.lastAuthFailAt (see login()), so a
+// transient failure that later recovers resumes normal re-auth immediately.
+private boolean reAuthCooldownActive() {
+    Long failedAt = state.lastAuthFailAt as Long
+    if (failedAt == null) return false
+    long elapsed = now() - failedAt
+    if (elapsed >= 15 * 60 * 1000L) return false   // cooldown window elapsed; allow re-auth
+    // Still cooling down: emit at most one WARN per hour so bad credentials don't spam the log.
+    long bucket = (now() / 3600000L) as long
+    Long lastBucket = state.lastAuthFailWarnHourBucket as Long
+    if (lastBucket == null || bucket != lastBucket) {
+        logWarn "VeSync re-auth suppressed: a login attempt failed recently; not retrying for 15 min to avoid account lockout. Check the VeSync email/password in driver settings."
+        state.lastAuthFailWarnHourBucket = bucket
+    }
+    return true
+}
+
 /**
  * Returns the configured API region ("US" or "EU").
  * Reads from settings?.deviceRegion; defaults to "US" when preference is unset
@@ -951,7 +973,7 @@ private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCal
  *   docs/oauth-flow.md
  */
 Boolean login() {
-    return retryableHttp("login", 3) {
+    Boolean ok = retryableHttp("login", 3) {
         Map stage1 = getAuthorizationCode()
         if (!stage1?.authCode) {
             // getAuthorizationCode() logged the failure detail via logError + recordError.
@@ -963,6 +985,16 @@ Boolean login() {
         // "both state.token and state.accountID are set, or both are absent").
         return exchangeAuthCode(stage1.authCode, stage1.stage1AccountID, null, null, 0)
     }
+    // Re-auth storm cooldown bookkeeping (see reAuthCooldownActive()): record a failed login so
+    // repeated auth-failed responses don't hammer login() (lockout risk); clear on success so a
+    // recovered login resumes normal re-auth immediately.
+    if (ok) {
+        state.remove('lastAuthFailAt')
+        state.remove('lastAuthFailWarnHourBucket')
+    } else {
+        state.lastAuthFailAt = now()
+    }
+    return ok
 }
 
 /**
@@ -1887,9 +1919,18 @@ Boolean getDevices() {
                 }
 
                 def newList = [:]
+                // Track EVERY cid present in the raw response, regardless of whether the device
+                // classified into a known dtype. A present-but-unclassified device (null/blank
+                // deviceType, or a firmware code we don't yet map) is absent from newList but its
+                // child must NOT be deleted -- deleting it and re-adding later gives a new ID that
+                // breaks Rule Machine rules and dashboards. The removal loop below spares any child
+                // whose base cid is in this raw set even when it didn't make it into newList.
+                def rawCids = [] as Set
 
                 for (device in resp.data.result.list) {
                     logDebug "Device found: ${device.deviceType} / ${device.deviceName} / ${device.macID}"
+
+                    if (device.cid != null) rawCids << (device.cid as String)
 
                     def dtype = deviceType(device.deviceType);
 
@@ -1912,12 +1953,28 @@ Boolean getDevices() {
 
                 // Remove devices that are no longer present.
                 def list = getChildDevices();
-                if (list) list.each {
-                    String dni = it.getDeviceNetworkId();
-                    if (newList.containsKey(dni) == false) {
-                        logInfo "Removed child device: ${dni}"
-                        logDebug "Deleting ${dni}"
-                        deleteChildDevice(dni);
+                // Guard against a transient empty/degenerate device list deleting every
+                // child. getDevices runs unattended (poll-health self-heal), so an empty
+                // response must not wipe existing children -- re-added children get new IDs
+                // and break Rule Machine rules and dashboards. An empty newList with
+                // existing children means the response carried no usable devices; skip the
+                // removal loop and leave the children in place until a good response arrives.
+                if (newList.isEmpty() && list) {
+                    logWarn "getDevices returned an empty/degenerate device list; skipping child removal to avoid deleting devices on a transient response"
+                } else if (list) {
+                    list.each {
+                        String dni = it.getDeviceNetworkId();
+                        // A child's base cid is its DNI minus the "-nl" night-light suffix.
+                        String baseCid = dni?.endsWith("-nl") ? dni.substring(0, dni.length() - 3) : dni;
+                        // Delete only when the device is truly gone: absent from newList AND its base
+                        // cid is not present in the raw response at all. A present-but-unclassified
+                        // device (in rawCids, absent from newList) is spared -- never delete a child
+                        // whose device the cloud still reports, just because we couldn't classify it.
+                        if (newList.containsKey(dni) == false && !rawCids.contains(baseCid)) {
+                            logInfo "Removed child device: ${dni}"
+                            logDebug "Deleting ${dni}"
+                            deleteChildDevice(dni);
+                        }
                     }
                 }
 
@@ -2631,7 +2688,7 @@ Boolean getDevices() {
         // Mirrors the same pattern used in sendBypassRequest. Re-uses the
         // state.reAuthInProgress guard so the two entry points don't collide.
         Closure effectiveClosure = { resp ->
-            if (isAuthFailure(resp) && !state.reAuthInProgress) {
+            if (isAuthFailure(resp) && !state.reAuthInProgress && !reAuthCooldownActive()) {
                 logInfo "VeSync token expired or invalid (getDevices) -- re-authenticating"
                 state.reAuthInProgress = true
                 try {
@@ -2652,7 +2709,7 @@ Boolean getDevices() {
                     state.remove('reAuthInProgress')
                 }
             }
-            // Not an auth failure (or re-auth failed): process the response as-is
+            // Not an auth failure (or re-auth failed / cooling down): process the response as-is
             processResponse(resp)
         }
 
@@ -2811,7 +2868,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
     // login() itself somehow triggers sendBypassRequest (it does NOT — login()
     // uses httpPost directly via retryableHttp — but we guard defensively).
     Closure effectiveClosure = { resp ->
-        if (isAuthFailure(resp) && !state.reAuthInProgress) {
+        if (isAuthFailure(resp) && !state.reAuthInProgress && !reAuthCooldownActive()) {
             logInfo "VeSync token expired or invalid -- re-authenticating"
             state.reAuthInProgress = true
             try {
@@ -2833,7 +2890,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
                 state.remove('reAuthInProgress')
             }
         }
-        // Not an auth failure (or re-auth failed): pass through to inner closure
+        // Not an auth failure (or re-auth failed / cooling down): pass through to inner closure
         tracingClosure(resp)
     }
 

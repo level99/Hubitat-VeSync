@@ -55,7 +55,13 @@ def installed() {
 
 def updated() {
     logDebug "Updated ${settings}"
-    state.clear(); unschedule(); initialize()
+    // Preserve state.timerId across state.clear() — it's the id an active device timer must
+    // reference to be cancelled. Wiping it on every Save Preferences would leave cancelTimer()
+    // unable to cancel a running timer (silent no-op). Mirrors LevoitFanLib.updated().
+    def savedTimerId = state.timerId
+    state.clear()
+    if (savedTimerId != null) state.timerId = savedTimerId
+    unschedule(); initialize()
     runIn(3, "update")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -161,13 +167,22 @@ def off() {
 
     state.turningOff = true
     try {
-        // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence.
+        // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence,
+        // and clear the speed dedup slot so a low -> off -> low re-establish write within the
+        // 2s window is not suppressed (matches the sibling EverestAir/SproutAir off() theme).
         clearPowerOnWindow()
+        clearDuplicateWrite("speed")
         if (handlePower(false)) {
             logInfo "Power off"
             state.lastSwitchSet = "off"
             // CRITICAL: Update switch state IMMEDIATELY
             device.sendEvent(name:"switch", value:"off")
+            // BP6: clear the active FanControl/SwitchLevel mirrors on the off edge so the dashboard
+            // fan/dimmer tiles read off/0 immediately (not the retained level) ahead of the next poll.
+            // Centralized here so EVERY off entry point is covered: direct off(), setLevel(0),
+            // setSpeed("off"), and toggle().
+            device.sendEvent(name:"speed", value:"off")
+            device.sendEvent(name:"level", value: 0)
         } else {
             reportWriteError("Failed to turn off device", [method:"off"])
         }
@@ -220,10 +235,14 @@ def setLevel(val) {
     // state.turningOn is set by on() while configureOnState() runs async;
     // skip the redundant on() call if a turn-on cycle is already in flight.
     ensureSwitchOn()
+    // Bands are CEILINGS aligned to the emitted values (speedToLevel: 1->25, 2->50, 3->75, 4->100)
+    // so re-applying an emitted level is a fixed point: setLevel(25) -> lvl1 -> emits 25 (not 50).
+    // The prior open-interval bands (<20/<40/<60) escalated on round-trip: setLevel(25) -> lvl2 -> 50.
+    // Matches the sibling EverestAir/SproutAir ceiling convention.
     Integer lvl
-    if (pct < 20) lvl=1
-    else if (pct < 40) lvl=2
-    else if (pct < 60) lvl=3
+    if (pct <= 25) lvl=1
+    else if (pct <= 50) lvl=2
+    else if (pct <= 75) lvl=3
     else lvl=4
     def ok = setSpeedLevel(lvl)
     if (ok) {

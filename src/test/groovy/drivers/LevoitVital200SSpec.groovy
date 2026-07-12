@@ -172,8 +172,8 @@ class LevoitVital200SSpec extends HubitatSpec {
         when:
         driver.setLevel(50)
 
-        then: "the fan-speed tile is updated immediately (level 50 -> band 3 'medium')"
-        lastEventValue("speed") == "medium"
+        then: "the fan-speed tile is updated immediately (ceiling bands: 50 -> band 2 'low')"
+        lastEventValue("speed") == "low"
     }
 
     def "setLevel emits the BANDED level so command and poll agree (no raw-pct 30->50 snap)"() {
@@ -189,6 +189,51 @@ class LevoitVital200SSpec extends HubitatSpec {
 
         then: "level is the banded value (band 2 -> 50%), identical to what a poll at speed 2 emits"
         lastEventValue("level") == 50
+    }
+
+    @Unroll
+    def "setLevel banding is a fixed point: re-applying emitted level #v stays at #v (round-trip, no escalation)"() {
+        // Bands must be CEILINGS aligned to speedToLevel (1->25,2->50,3->75,4->100) so re-applying an
+        // emitted level does not walk the speed up a step. Pre-fix open-interval bands (<20/<40/<60)
+        // escalated: setLevel(25)->lvl2->emits 50; setLevel(50)->lvl3->emits 75; etc.
+        // NON-VACUITY: reverting to the open-interval bands makes setLevel(25) emit 50 (RED at v=25),
+        // setLevel(50) emit 75 (RED at v=50), setLevel(75) emit 100 (RED at v=75).
+        given: "device already on so setLevel proceeds without an on() side-trip"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "an emitted level value is re-applied"
+        driver.setLevel(v)
+
+        then: "the emitted level equals the input — no band drift on round-trip"
+        lastEventValue("level") == v
+
+        where:
+        v << [25, 50, 75, 100]
+    }
+
+    // -------------------------------------------------------------------------
+    // BP6 off-edge: off() clears the active FanControl/SwitchLevel mirrors so the
+    // dashboard reads off/0 immediately (matches sibling EverestAir/SproutAir off()).
+    // NON-VACUITY: deleting the two sendEvent lines in Vital off() makes speed/level
+    // stay at their last-set values -> both assertions go RED.
+    // -------------------------------------------------------------------------
+
+    def "off() emits speed='off' and level=0 on the off edge (BP6)"() {
+        given: "device is on at a known speed"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        driver.setSpeed("high")
+        testParent.allRequests.clear()
+        // A successful power-off so off()'s success branch runs.
+        testParent.cannedResponse = support.TestParent.successResponse([powerSwitch: 0])
+
+        when: "the device is turned off"
+        driver.off()
+
+        then: "the fan-speed and level tiles read off/0 immediately (not the retained value)"
+        lastEventValue("speed") == "off"
+        lastEventValue("level") == 0
     }
 
     def "applyStatus handles null status gracefully without throwing"() {
@@ -210,7 +255,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
 
-        when: "setLevel(50) is called — maps to speed level 3"
+        when: "setLevel(50) is called — ceiling bands map 50 to fan level 2"
         driver.setLevel(50)
 
         then: "sendBypassRequest was called with correct V201S field names"
@@ -1188,6 +1233,29 @@ class LevoitVital200SSpec extends HubitatSpec {
         then:
         testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
         !testLog.errors.any { it.contains("Timer cancel failed") }
+    }
+
+    // -------------------------------------------------------------------------
+    // F4: updated() (Save Preferences) must preserve state.timerId across state.clear().
+    // The Vital line wiped it, so cancelTimer became a silent no-op after a preferences save.
+    // NON-VACUITY: removing the savedTimerId preservation in the Vital lib's updated() clears
+    // state.timerId, so cancelTimer() early-exits (no delTimerV2 call), and the assertion RED.
+    // -------------------------------------------------------------------------
+
+    def "updated() preserves state.timerId so cancelTimer still fires the delTimerV2 call (F4)"() {
+        given: "an active timer id is stored"
+        settings.descriptionTextEnable = false
+        state.timerId = "t42"
+
+        when: "the user saves preferences, then cancels the timer"
+        driver.updated()
+        testParent.allRequests.clear()
+        driver.cancelTimer()
+
+        then: "the delTimerV2 cloud call was made -- the id survived the state.clear()"
+        def req = testParent.allRequests.find { it.method == "delTimerV2" }
+        req != null
+        req.data.id == "t42"
     }
 
     // ---- BP25: setLightDetection (Vital200S-only setter) ----

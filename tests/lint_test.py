@@ -3452,6 +3452,30 @@ class TestRule45BoolCoercionAsInteger:
         }
     """)
 
+    # D4 MUST-CATCH: the PARENTHESIZED-cast SPLIT form — the assignment line ENDS in
+    # `as Integer)` (a wrapping paren), which the prior `as\\s+Integer\\s*$` anchor missed.
+    # This is the exact shape that let oscillationCalibrationState (a 0/1 flag) evade RULE45:
+    #     Integer cs = (r.oscillationCalibrationState as Integer)
+    #     device.sendEvent(..., value: cs == 1 ? "calibrating" : "idle")
+    BAD_PAREN_SPLIT = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            Integer cs = (r.oscillationCalibrationState as Integer)
+            device.sendEvent(name:"oscillationCalibrationState", value: cs == 1 ? "calibrating" : "idle")
+        }
+    """)
+
+    # D4 MUST-NOT-CATCH: a legitimate PARENTHESIZED numeric cast whose var is compared to a
+    # THRESHOLD (`> 0`), not `== 1` — a real numeric value (e.g. temperature tenths), NOT a
+    # 0/1 flag. Confirms the widened anchor did not start flagging genuine numeric casts.
+    GOOD_PAREN_SPLIT_NUMERIC = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            Integer rawHigh = (r.highTemperature as Integer)
+            if (rawHigh > 0) device.sendEvent(name:"highTemperature", value: rawHigh / 10.0)
+        }
+    """)
+
     # MUST-CATCH: the verbose instanceof-Boolean ternary (its tail is `as Integer) == 1`).
     BAD_VERBOSE_TERNARY = textwrap.dedent("""\
         def applyStatus(status) {
@@ -3659,6 +3683,24 @@ class TestRule45BoolCoercionAsInteger:
         findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_SPLIT_BARE_COMPARE)
         assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
             f"Expected RULE45 for the SPLIT form with a bare `var == 1`, got: {findings}"
+        )
+
+    def test_paren_split_form_fails(self):
+        """D4: the PARENTHESIZED-cast SPLIT form (`Integer cs = (r.flag as Integer)` then
+        `cs == 1`) ends the assignment line in `as Integer)`. The prior `as\\s+Integer\\s*$`
+        anchor missed the trailing paren — this is exactly how oscillationCalibrationState
+        evaded RULE45. The widened anchor must now catch it."""
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_PAREN_SPLIT)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for the PARENTHESIZED split form `(r.flag as Integer)` / `== 1`, got: {findings}"
+        )
+
+    def test_paren_split_numeric_passes(self):
+        """A genuine PARENTHESIZED numeric cast compared to a threshold (`> 0`), not `== 1`,
+        must NOT flag — confirms the widened anchor added no false positives on numeric casts."""
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_PAREN_SPLIT_NUMERIC)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"parenthesized numeric cast (compared to threshold, not == 1) must not flag RULE45, got: {findings}"
         )
 
     def test_split_numeric_level_passes(self):

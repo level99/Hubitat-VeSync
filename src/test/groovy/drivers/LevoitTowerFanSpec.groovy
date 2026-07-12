@@ -695,6 +695,51 @@ class LevoitTowerFanSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // fan-#1: flag fields (oscillation/mute/display) must be coerced via asBool(), not a bare
+    // `as Integer`. A firmware variant reporting a flag as a Boolean or String (true / "1")
+    // would throw GroovyCastException/NumberFormatException mid-parse and abort applyStatus.
+    // The test ALSO asserts the rendered `info` attribute so the info-HTML block downstream
+    // is exercised — that block references the coerced oscillation local, so a stale/orphaned
+    // reference (e.g. a removed `oscState`) throws MissingPropertyException on the sandbox.
+    // NON-VACUITY: reverting oscillationState/muteState/screenState to `(x as Integer)` throws
+    // on the fixture below; a stale `oscState` in the info block throws on the sandbox too.
+    // Both -> the info-string assertions go RED.
+    // -------------------------------------------------------------------------
+
+    def "applyStatus does not throw and reads flags correctly when they arrive as String/Boolean (fan-#1)"() {
+        given: "a fixture whose flag fields are String/Boolean-typed (firmware variant)"
+        def deviceData = [powerSwitch: 1, workMode: "normal", manualSpeedLevel: 3,
+                          fanSpeedLevel: 3, temperature: 0, errorCode: 0, timerRemain: 0,
+                          screenState: "1", screenSwitch: 1,
+                          oscillationSwitch: 1, oscillationState: "1",
+                          muteSwitch: 0, muteState: true, scheduleCount: 0]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "no exception -- flags coerced robustly instead of a bare as-Integer cast"
+        noExceptionThrown()
+
+        and: "oscillation reads 'on' from the String '1'"
+        lastEventValue("oscillation") == "on"
+
+        and: "mute reads 'on' from the Boolean true"
+        lastEventValue("mute") == "on"
+
+        and: "displayOn reads 'on' from the String '1'"
+        lastEventValue("displayOn") == "on"
+
+        and: "the info-HTML block executed and rendered the coerced oscillation/mute locals"
+        // Guards the orphaned-local regression: the info block references the coerced
+        // oscillation boolean; a stale `oscState` reference throws on the sandbox.
+        def info = lastEventValue("info") as String
+        info != null
+        info.contains("Oscillation: on")
+        info.contains("Mute: on")
+    }
+
+    // -------------------------------------------------------------------------
     // displayingType read-only attribute (HA finding #5)
     // -------------------------------------------------------------------------
 

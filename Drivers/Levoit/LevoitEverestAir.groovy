@@ -180,7 +180,13 @@ metadata {
 def installed(){ logDebug "Installed ${settings}"; updated() }
 def updated(){
     logDebug "Updated ${settings}"
-    state.clear(); unschedule(); initialize()
+    // Preserve state.timerId across state.clear() — it's the id an active device timer must
+    // reference to be cancelled. Wiping it on every Save Preferences would leave cancelTimer()
+    // unable to cancel a running timer (silent no-op). Mirrors LevoitFanLib.updated().
+    def savedTimerId = state.timerId
+    state.clear()
+    if (savedTimerId != null) state.timerId = savedTimerId
+    unschedule(); initialize()
     runIn(3, "refresh")
     if (settings?.debugOutput) {
         runIn(1800, "logDebugOff")

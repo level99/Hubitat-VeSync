@@ -67,7 +67,12 @@ def initialize() {
 // records state.debugEnabledAt for cross-reboot auto-disable per LevoitChildBase.
 def updated() {
     logDebug "Updated with settings: ${settings}"
+    // Preserve state.timerId across state.clear() — it's the id an active device timer must
+    // reference to be cancelled. Wiping it on every Save Preferences would leave cancelTimer()
+    // unable to cancel a running timer (silent no-op). Mirrors LevoitFanLib.updated().
+    def savedTimerId = state.timerId
     state.clear()
+    if (savedTimerId != null) state.timerId = savedTimerId
     unschedule()
     initialize()
 
@@ -336,28 +341,50 @@ def setSpeed(speed) {
     if (supportsAutoMode() && s == "auto") {
         // A1-delegation: this branch delegated to setMode after recording the "speed" slot; if the
         // delegated mode write FAILS, clear "speed" so a same-value retry is not falsely suppressed.
-        // B1 fail-safe: the delegated setter's false can mean a genuine failure OR its own dedup-suppress; clearing the outer slot on either is harmless (inner write stays deduped -> no extra cloud write).
-        if (!setMode(s)) clearDuplicateWrite("speed")
-        state.speed = s
-        handleEvent("speed", s)
+        // Commit state + emit only when the cloud accepted the mode write (matches the setMode gate
+        // below and the sibling Vital setSpeed) — a bare emit reported the new speed even on failure.
+        if (setMode(s)) {
+            state.speed = s
+            handleEvent("speed", s)
+        } else {
+            clearDuplicateWrite("speed")
+        }
     }
     else if (s == "sleep") {
-        // B1 fail-safe: the delegated setter's false can mean a genuine failure OR its own dedup-suppress; clearing the outer slot on either is harmless (inner write stays deduped -> no extra cloud write).
-        if (!setMode(s)) clearDuplicateWrite("speed")   // A1-delegation: failed mode-delegate must not block speed retry
-        handleEvent("speed", "on")
+        // A1-delegation: failed mode-delegate must not block speed retry, and must not emit "on".
+        if (setMode(s)) {
+            handleEvent("speed", "on")
+        } else {
+            clearDuplicateWrite("speed")
+        }
     }
     else if (state.mode == "manual") {
-        if (!handleSpeed(s)) clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
+        // Commit state + emit only when the cloud accepted the speed write; a failed write left
+        // state.speed/the speed event advanced to a value the device never took (matches Vital).
+        if (handleSpeed(s)) {
+            state.speed = s
+            handleEvent("speed", s)
+            logInfo "Speed: ${s}"
+        } else {
+            clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
+        }
     }
     else if (state.mode == "sleep") {
-        setMode("manual")
-        if (!handleSpeed(s)) clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
+        // Gate the speed commit/emit on BOTH the mode transition AND the speed write succeeding.
+        // If setMode("manual") fails but handleSpeed succeeds, committing here would report a
+        // manual speed on a device still in sleep mode -- the exact stale-tile class this fix
+        // closes. (Every other branch already gates on its own write.)
+        if (setMode("manual")) {
+            if (handleSpeed(s)) {
+                state.speed = s
+                handleEvent("speed", s)
+                logInfo "Speed: ${s}"
+            } else {
+                clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
+            }
+        } else {
+            clearDuplicateWrite("speed")   // failed mode transition must not block a same-value retry
+        }
     }
     else {
         // Recover: unknown or null state.mode (e.g. fresh device, pre-first-poll).
@@ -374,10 +401,13 @@ def setSpeed(speed) {
                 handleEvent("mode", "manual")
             }
         }
-        if (!handleSpeed(s)) clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
+        if (handleSpeed(s)) {
+            state.speed = s
+            handleEvent("speed", s)
+            logInfo "Speed: ${s}"
+        } else {
+            clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
+        }
     }
 }
 

@@ -377,8 +377,11 @@ def applyStatus(status){
     // ---- Oscillation (single-axis; Tower-specific) ----
     // oscillationState = actual hardware state; oscillationSwitch = configured setting.
     // Prefer state (actual) for reporting.
-    Integer oscState = (r.oscillationState != null) ? (r.oscillationState as Integer) : (r.oscillationSwitch as Integer)
-    device.sendEvent(name:"oscillation", value: oscState == 1 ? "on" : "off")
+    // asBool() coerces the flag robustly (Boolean/Number/String "1"/"true") without throwing;
+    // a bare `as Integer` on a Boolean- or String-typed flag from a firmware variant would throw
+    // mid-parse and abort applyStatus. oscillationState (actual) preferred over oscillationSwitch (configured).
+    boolean oscOn = (r.oscillationState != null) ? asBool(r.oscillationState) : asBool(r.oscillationSwitch)
+    device.sendEvent(name:"oscillation", value: oscOn ? "on" : "off")
 
     // ---- Mute + Display (shared LevoitFanLib block) ----
     Integer muteState = applyFanMuteDisplay(r)
@@ -433,7 +436,7 @@ def applyStatus(status){
     def parts = []
     parts << "Mode: ${reportedMode}"
     parts << "Speed: ${powerOn ? levelToFanControlEnum(activeSpeed) + ' (L' + activeSpeed + ')' : 'off'}"
-    parts << "Oscillation: ${oscState == 1 ? 'on' : 'off'}"
+    parts << "Oscillation: ${oscOn ? 'on' : 'off'}"
     parts << "Mute: ${muteState == 1 ? 'on' : 'off'}"
     if (r.temperature != null && (r.temperature as Integer) > 0) {
         Float tf = (r.temperature as Integer) / 10.0f

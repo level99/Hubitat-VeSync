@@ -648,6 +648,64 @@ class LevoitPedestalFanSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // fan-#1: flag fields (horizontal/vertical oscillation, high-temp / smart-cleaning reminder,
+    // mute, display) must be coerced via asBool(), not a bare `as Integer`. A firmware variant
+    // reporting a flag as Boolean/String (true / "1") would throw mid-parse and abort applyStatus.
+    // The test ALSO asserts the rendered `info` attribute so the info-HTML block downstream is
+    // exercised — it references the coerced h/v-oscillation locals, so a stale/orphaned reference
+    // (e.g. a removed `hOscState`/`vOscState`) throws MissingPropertyException on the sandbox.
+    // NON-VACUITY: reverting these flags to `(x as Integer)` throws on the fixture below; a stale
+    // `hOscState`/`vOscState` in the info block throws on the sandbox too. Both -> assertions RED.
+    // -------------------------------------------------------------------------
+
+    def "applyStatus does not throw and reads flags correctly when they arrive as String/Boolean (fan-#1)"() {
+        given: "a fixture whose flag fields are String/Boolean-typed (firmware variant)"
+        def deviceData = [powerSwitch: 1, workMode: "normal", fanSpeedLevel: 3,
+                          manualSpeedLevel: 3, temperature: 0, errorCode: 0,
+                          horizontalOscillationState: "1", verticalOscillationState: true,
+                          highTemperatureReminderState: "1", smartCleaningReminderState: true,
+                          oscillationCalibrationState: true,
+                          muteSwitch: 0, muteState: true, screenSwitch: 1, screenState: "1",
+                          childLock: 0]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "no exception -- flags coerced robustly instead of a bare as-Integer cast"
+        noExceptionThrown()
+
+        and: "horizontal oscillation reads 'on' from the String '1'"
+        lastEventValue("horizontalOscillation") == "on"
+
+        and: "vertical oscillation reads 'on' from the Boolean true"
+        lastEventValue("verticalOscillation") == "on"
+
+        and: "high-temperature reminder reads 'on' from the String '1'"
+        lastEventValue("highTemperatureReminder") == "on"
+
+        and: "smart-cleaning reminder reads 'on' from the Boolean true"
+        lastEventValue("smartCleaningReminder") == "on"
+
+        and: "oscillation calibration reads 'calibrating' from the Boolean true (RULE45-widening site)"
+        // This is the parenthesized-cast flag that evaded RULE45; a bare `as Integer` on the
+        // Boolean below would throw and abort applyStatus.
+        lastEventValue("oscillationCalibrationState") == "calibrating"
+
+        and: "mute reads 'on' from the Boolean true (shared LevoitFanLib block)"
+        lastEventValue("mute") == "on"
+
+        and: "the info-HTML block executed and rendered the coerced h/v-oscillation locals"
+        // Guards the orphaned-local regression: the info block references the coerced
+        // hOscOn/vOscOn booleans; a stale `hOscState`/`vOscState` reference throws on the sandbox.
+        def info = lastEventValue("info") as String
+        info != null
+        info.contains("H-Osc: on")
+        info.contains("V-Osc: on")
+        info.contains("Mute: on")
+    }
+
+    // -------------------------------------------------------------------------
     // Oscillation toggles
     // -------------------------------------------------------------------------
 

@@ -44,6 +44,57 @@ class LevoitCore300SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // F8: update(status, nightLight) must not NPE on a middle-wrapped/degenerate envelope
+    // ({code:0, result:null}) — status non-null but status.result null, so the bare
+    // status.result.level read would throw once per poll. The entry guard routes to the
+    // clean "No status" path (shared LevoitCoreAQPurifierLib code, covers 300S/400S/600S).
+    // NON-VACUITY: removing the `if (status?.result == null)` guard makes status.result.level
+    // throw NullPointerException -> noExceptionThrown() RED.
+    // -------------------------------------------------------------------------
+
+    def "update(status, nightLight) with null status.result does not NPE (F8)"() {
+        given: "a degenerate envelope: status present but status.result is null"
+        settings.descriptionTextEnable = false
+        def status = [code: 0, result: null]
+
+        when:
+        driver.update(status, null)
+
+        then: "no exception thrown, and the clean 'No status' error is reported"
+        noExceptionThrown()
+        testLog.errors.any { it.contains("No status returned from getPurifierStatus") }
+    }
+
+    // -------------------------------------------------------------------------
+    // F2: the self-fetch update() error path interpolates resp.msg. On a real hub resp is an
+    // HttpResponseDecorator with no 'msg' property, so a bare ${resp.msg} throws
+    // MissingPropertyException in the error path; resp?.hasProperty('msg') guards it.
+    // NON-VACUITY: reverting to a bare ${resp.msg} makes this throw -> noExceptionThrown() RED.
+    // -------------------------------------------------------------------------
+
+    def "update() self-fetch error path does not throw when the response has no 'msg' property (F2)"() {
+        given: "a parent that drives the closure with a msg-less response carrying null data"
+        settings.descriptionTextEnable = false
+        def noMsgResp = new NoMsgResponse()   // status 200, data null, NO 'msg' property
+        driver.metaClass.getParent = { ->
+            [ sendBypassRequest: { dev, payload, Closure cb -> cb(noMsgResp) } ]
+        }
+
+        when: "the self-fetch runs and hits the status==null error branch"
+        driver.update()
+
+        then: 'no MissingPropertyException — the resp.msg interpolation is guarded'
+        noExceptionThrown()
+        testLog.errors.any { it.contains("No status returned from getPurifierStatus") }
+    }
+
+    // Response object lacking a 'msg' property, matching Hubitat's HttpResponseDecorator.
+    static class NoMsgResponse {
+        Integer getStatus() { 200 }
+        def getData() { null }
+    }
+
+    // -------------------------------------------------------------------------
     // Bug Pattern #12: pref-seed
     // -------------------------------------------------------------------------
 
@@ -275,6 +326,30 @@ class LevoitCore300SSpec extends HubitatSpec {
         req.data.total == 300
     }
 
+    // -------------------------------------------------------------------------
+    // F4: updated() (Save Preferences) must preserve state.timerId across state.clear().
+    // The Core purifier line (200S/300S/400S/600S) wiped it, so cancelTimer became a silent
+    // no-op after a preferences save. Now preserved (mirrors LevoitFanLib.updated()).
+    // NON-VACUITY: removing the savedTimerId preservation in updated() clears state.timerId,
+    // so cancelTimer() finds no id, sends no delTimer, and the assertion goes RED.
+    // -------------------------------------------------------------------------
+
+    def "updated() preserves state.timerId so cancelTimer still fires the delTimer call (F4)"() {
+        given: "an active timer id is stored"
+        settings.descriptionTextEnable = false
+        state.timerId = 42
+
+        when: "the user saves preferences, then cancels the timer"
+        driver.updated()
+        testParent.allRequests.clear()
+        driver.cancelTimer()
+
+        then: "the delTimer cloud call was made -- the id survived the state.clear()"
+        def req = testParent.allRequests.find { it.method == "delTimer" }
+        req != null
+        req.data.id == 42
+    }
+
     def "resetFilter sends resetFilter method with empty data"() {
         given:
         settings.descriptionTextEnable = false
@@ -491,6 +566,66 @@ class LevoitCore300SSpec extends HubitatSpec {
 
         and: "no error was logged"
         testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // BP29: setSpeed must commit state.speed + emit the speed event ONLY when the
+    // cloud accepts the speed write. Previously the manual/recovery branches committed
+    // and emitted unconditionally even when handleSpeed failed, leaving the tile and
+    // stored speed contradicting a device still at its prior speed.
+    // NON-VACUITY: gating on `if (handleSpeed(s))` is what makes this pass; the pre-fix
+    // unconditional commit emits "medium" and sets state.speed -> both assertions go RED.
+    // -------------------------------------------------------------------------
+
+    def "setSpeed does NOT commit state.speed or emit speed when the write fails (BP29, manual branch)"() {
+        given: "device on, manual mode, no prior committed speed; the speed write will fail (HTTP 500)"
+        settings.descriptionTextEnable = false
+        state.mode = "manual"
+        state.remove("speed")
+        testDevice.events.add([name: "switch", value: "on"])
+        // handleSpeed's setLevel call gets an HTTP-500 -> checkHttpResponse returns false -> handleSpeed false.
+        testParent.cannedResponse = support.TestParent.httpErrorResponse(500)
+
+        when: "a speed is requested but the cloud write fails"
+        driver.setSpeed("medium")
+
+        then: "state.speed was NOT committed to the requested value"
+        state.speed != "medium"
+
+        and: "no speed event advanced the tile to the requested value"
+        lastEventValue("speed") != "medium"
+    }
+
+    // -------------------------------------------------------------------------
+    // BP29 sleep->manual branch: setSpeed from sleep mode must gate on BOTH the mode
+    // transition (setMode("manual")) AND the speed write. If setMode fails but the speed
+    // write would succeed, committing would report a manual speed on a still-sleeping
+    // device -- the exact stale-tile class this fix closes.
+    // NON-VACUITY: reverting to a bare `setMode("manual")` (ignoring its return) makes the
+    // speed commit/emit fire even though the mode transition failed -> assertions go RED.
+    // -------------------------------------------------------------------------
+
+    def "setSpeed from sleep does NOT commit speed when the mode transition fails (BP29 sleep->manual)"() {
+        given: "device on, mode sleep, no prior speed; setMode('manual')'s cloud write will FAIL"
+        settings.descriptionTextEnable = false
+        state.mode = "sleep"
+        state.remove("speed")
+        testDevice.events.add([name: "switch", value: "on"])
+        // First cloud write is setMode's setPurifierMode -> HTTP 500 -> handleMode false -> setMode false.
+        // Second (if the buggy path reached handleSpeed) would succeed; the fix must never consume it.
+        testParent.requestResponses = [
+            support.TestParent.httpErrorResponse(500),
+            support.TestParent.successResponse([:]),
+        ]
+
+        when: "a speed is requested from sleep mode but the mode transition fails"
+        driver.setSpeed("medium")
+
+        then: "state.speed was NOT committed -- the failed mode transition gates the speed commit"
+        state.speed != "medium"
+
+        and: "no speed event advanced the tile to the requested value"
+        lastEventValue("speed") != "medium"
     }
 
     def "BP24-B: setMode when switch is off calls on() before sending mode command (Core 300S)"() {

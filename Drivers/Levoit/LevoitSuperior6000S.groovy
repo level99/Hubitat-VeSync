@@ -213,7 +213,9 @@ def setLevel(val){
     pct = Math.max(0, Math.min(100, pct))
     if (pct == 0) { off(); return }
     Integer lvl = levelFromPercent(pct)
-    sendEvent(name:"level", value: pct)
+    // BP29: do NOT pre-emit the level here. setMistLevel's success branch emits the reconciled
+    // level (percentFromLevel(clamped)); pre-emitting fired a level event even when setMistLevel
+    // short-circuited without a write (e.g. sleep-mode reject), reporting a level the device never took.
     setMistLevel(lvl)
 }
 

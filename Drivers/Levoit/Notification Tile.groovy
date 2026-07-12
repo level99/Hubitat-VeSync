@@ -138,8 +138,12 @@ metadata {
 		// still NPEs — mirror the right-side ?: 5 guard on the left.
 		if ((state?.lastLimit ?: 5).toInteger()>(settings.msgLimit ?: 5).toInteger())
 			{
-			wkTile=device.currentValue("last5")
-			msgFilled=state.msgCount.toInteger()
+			// Null-guard: last5 is unset when this shrink branch is reached before any message
+			// has persisted the attribute (state.lastLimit>msgLimit on a Type-change/first run),
+			// so a bare .lastIndexOf() below would NPE. Default to the empty-tile markup.
+			wkTile=device.currentValue("last5") ?: '<span class="last5"></span>'
+			// state.msgCount is null on the same first-run/Type-change path; default to 0 before .toInteger().
+			msgFilled=(state.msgCount ?: 0).toInteger()
 			logDebug "Shinking tile count lastLimit ${state.lastLimit} newLimit ${settings.msgLimit} msgCount ${msgFilled}"
 			int i = wkTile.lastIndexOf('<br />');
 			while (i != -1 && msgFilled > (settings.msgLimit ?: 5).toInteger())

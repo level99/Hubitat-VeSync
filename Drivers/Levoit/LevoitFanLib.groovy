@@ -429,13 +429,16 @@ private Map applyFanCommonHead(Map r) {
 // muteState/screenState = actual hardware state; *Switch = configured. Prefer actual.
 // Returns muteState (Integer) for the info-HTML "Mute:" line.
 private Integer applyFanMuteDisplay(Map r) {
-    Integer muteState = (r.muteState != null) ? (r.muteState as Integer) : (r.muteSwitch as Integer)
-    device.sendEvent(name:"mute", value: muteState == 1 ? "on" : "off")
+    // asBool() coerces the flag robustly (Boolean/Number/String "1"/"true") without throwing;
+    // a bare `as Integer` on a Boolean- or String-typed flag from a firmware variant would throw
+    // mid-parse and abort applyStatus. Return 1/0 to preserve the Integer `== 1` contract callers use.
+    boolean muteOn = (r.muteState != null) ? asBool(r.muteState) : asBool(r.muteSwitch)
+    device.sendEvent(name:"mute", value: muteOn ? "on" : "off")
 
-    Integer screenState = (r.screenState != null) ? (r.screenState as Integer) : (r.screenSwitch as Integer)
-    device.sendEvent(name:"displayOn", value: screenState == 1 ? "on" : "off")
+    boolean screenOn = (r.screenState != null) ? asBool(r.screenState) : asBool(r.screenSwitch)
+    device.sendEvent(name:"displayOn", value: screenOn ? "on" : "off")
 
-    return muteState
+    return muteOn ? 1 : 0
 }
 
 // Ambient temperature. Raw / 10 = degrees F (HA finding #1 / pyvesync vesyncfan.py:314).

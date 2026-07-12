@@ -307,4 +307,31 @@ class NotificationTileSpec extends HubitatSpec {
         then: "no NPE — the comparison defaults the null lastLimit to 5"
         noExceptionThrown()
     }
+
+    // -------------------------------------------------------------------------
+    // fan-#3: the SHRINK branch body (lastLimit > msgLimit) reads last5 unguarded before
+    // calling .lastIndexOf('<br />'). If last5 was never persisted (Type-change/first run),
+    // that read is null and the shrink loop NPEs. The msgCount read on the same line is
+    // guarded for the same reason.
+    // NON-VACUITY: removing the `?: '<span class="last5"></span>'` guard on last5 makes the
+    // .lastIndexOf() call throw NullPointerException -> noExceptionThrown() RED.
+    // -------------------------------------------------------------------------
+
+    def "updated() shrink branch does not NPE when last5 is null (lastLimit > msgLimit)"() {
+        given: "the shrink branch is entered (lastLimit 10 > msgLimit 5) but last5 was never set"
+        settings.descriptionTextEnable = false
+        settings.msgLimit = 5
+        // Non-null msgCount skips the v1->v2 conversion block so we reach the shrink branch.
+        // lastLimit 10 > msgLimit 5 makes the comparison TRUE, entering the shrink body that
+        // reads currentValue("last5") -- which is null here (no last5 event).
+        state.msgCount = 6
+        state.lastLimit = 10
+        testDevice.events.clear()   // currentValue("last5") returns null
+
+        when:
+        driver.updated()
+
+        then: "no NPE — last5 and msgCount are null-guarded before the shrink loop"
+        noExceptionThrown()
+    }
 }

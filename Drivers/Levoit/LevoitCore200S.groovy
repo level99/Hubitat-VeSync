@@ -154,7 +154,7 @@ def update() {
                 // -> the status == null branch reports a clean failure (no stack-trace crash).
                 def status = (resp?.data instanceof Map) ? resp.data.result : null
                 if (status == null) {
-                    logError "No status returned from getPurifierStatus: ${resp.msg}"
+                    logError "No status returned from getPurifierStatus: ${resp?.hasProperty('msg') ? resp.msg : ''}"
                     recordError("No status returned from getPurifierStatus", [method:"update"])
                 } else
                     result = update(status, nightLight)
@@ -170,6 +170,15 @@ def update(status, nightLight)
     seedPrefs()
 
     logDebug status
+
+    // A middle-wrapped/degenerate envelope ({code:0, result:{code:<err>, result:null}}) leaves
+    // status non-null but status.result null; the bare status.result.level read below would NPE
+    // once per poll. Guard at entry and report the clean "No status" path instead of crashing.
+    if (status?.result == null) {
+        logError "No status returned from getPurifierStatus"
+        recordError("No status returned from getPurifierStatus", [method:"update"])
+        return
+    }
 
     state.speed = mapIntegerToSpeed(status.result.level)
     state.mode = status.result.mode

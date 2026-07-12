@@ -773,6 +773,43 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         !state.containsKey('reAuthInProgress')
     }
 
+    // -------------------------------------------------------------------------
+    // H1 re-auth cooldown at the sendBypassRequest site (distinct from the getDevices site).
+    // The command path has its OWN effectiveClosure with its OWN `&& !reAuthCooldownActive()`
+    // gate; the getDevices-path specs don't exercise it. While a recent login failure is on
+    // record (cooldown active), an auth-failure command response must NOT trigger a re-login.
+    // NON-VACUITY: removing the `&& !reAuthCooldownActive()` clause from the sendBypassRequest
+    // effectiveClosure makes login() fire on the auth-failure below -> loginCallCount 1, RED.
+    // -------------------------------------------------------------------------
+
+    def "sendBypassRequest does NOT re-auth while within the cooldown after a failed login (H1)"() {
+        given: "a recent login failure is on record (cooldown active) and the command hits an auth failure"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "expired-token"
+        state.accountID = "acc-cooldown-bp"
+        state.lastAuthFailAt = driver.now()   // cooldown window active (elapsed 0 < 15 min)
+        int loginCallCount    = 0
+        int httpPostCallCount = 0
+        def equip = new TestDevice()
+
+        driver.metaClass.login = { -> loginCallCount++; false }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            callback(authFailure_401())
+        }
+        Closure callerClosure = { resp -> }
+
+        when:
+        driver.sendBypassRequest(equip, [method: "getPurifierStatus", source: "APP", data: [:]], callerClosure)
+
+        then: "login() was NOT called -- the cooldown suppressed the command-path re-auth"
+        loginCallCount == 0
+
+        and: "no retry httpPost fired (the request was not re-attempted)"
+        httpPostCallCount == 1
+    }
+
     def "state.reAuthInProgress is cleared after successful re-auth (Bug Pattern #13)"() {
         given: "normal re-auth flow"
         settings.descriptionTextEnable = true
@@ -3358,6 +3395,144 @@ class VeSyncIntegrationSpec extends HubitatSpec {
         existingChild.getDataValue("uuid") == "new-uuid-400s"
     }
 
+    // -------------------------------------------------------------------------
+    // H2 mass child-deletion guard. getDevices() runs unattended (poll-health self-heal),
+    // so a transient EMPTY/degenerate device list must NOT delete every child: re-added
+    // children get new IDs and break Rule Machine rules and dashboards. When the discovery
+    // list is empty AND children exist, the removal loop is skipped (one WARN, no deletes).
+    // NON-VACUITY: removing the `newList.isEmpty() && list` guard makes the removal loop run
+    // over an empty newList and delete BOTH children -> deletedDnis.size() == 2, RED.
+    // -------------------------------------------------------------------------
+
+    def "getDevices() with an empty device list does NOT delete existing children (H2)"() {
+        given: "two children exist, but the cloud returns an empty device list"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-h2"
+        state.accountID = "acc-h2"
+        state.prefsSeeded = true
+
+        def child1 = new TestDevice(); child1.deviceNetworkId = "cid-h2-a"
+        def child2 = new TestDevice(); child2.deviceNetworkId = "cid-h2-b"
+        childDevices["cid-h2-a"] = child1
+        childDevices["cid-h2-b"] = child2
+
+        List<String> deletedDnis = []
+        driver.metaClass.getChildDevice  = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> childDevices.values() as List }
+        driver.metaClass.deleteChildDevice = { String dni -> deletedDnis << dni }
+
+        // Empty device list (transient/degenerate response).
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevices([]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "no child was deleted -- the mass-removal loop was skipped"
+        deletedDnis.isEmpty()
+
+        and: "a single WARN explains why removal was skipped"
+        testLog.warns.any { it.contains("empty/degenerate device list") }
+    }
+
+    // -------------------------------------------------------------------------
+    // H2 partial-degenerate: a present-but-unclassified device (null/blank deviceType) is
+    // absent from newList (no dtype branch matched) yet still present in the raw response.
+    // Its child must NOT be deleted -- the cloud still reports the device; we just couldn't
+    // classify it this cycle. The removal loop spares any child whose base cid is in the raw set.
+    // NON-VACUITY: removing the `!rawCids.contains(baseCid)` clause makes the unclassified
+    // device's child get deleted -> deletedDnis contains its cid, RED.
+    // -------------------------------------------------------------------------
+
+    def "getDevices() does NOT delete a child for a present-but-unclassified device (H2 partial)"() {
+        given: "a child exists for a device the cloud still reports but with a blank deviceType"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-h2p"
+        state.accountID = "acc-h2p"
+        state.prefsSeeded = true
+
+        def child = new TestDevice(); child.deviceNetworkId = "cid-h2p"
+        childDevices["cid-h2p"] = child
+
+        List<String> deletedDnis = []
+        driver.metaClass.getChildDevice  = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> childDevices.values() as List }
+        driver.metaClass.deleteChildDevice = { String dni -> deletedDnis << dni }
+
+        // Response lists the device (cid present) but with a blank deviceType -> unclassified,
+        // so it never enters newList; newList stays otherwise empty. Because the cid IS in the
+        // raw response, the child must survive.
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevice([
+                deviceType  : "",
+                deviceName  : "Unclassified Device",
+                cid         : "cid-h2p",
+                configModule: "cm-h2p",
+                uuid        : "uuid-h2p",
+                macID       : "AA:BB:CC:DD:EE:FF"
+            ]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "the child for the present-but-unclassified device was NOT deleted"
+        !deletedDnis.contains("cid-h2p")
+        deletedDnis.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // H2 night-light DNI: a night-light child's DNI is "<cid>-nl". When its parent device is
+    // present-but-unclassified (in rawCids, absent from newList), the `-nl` child must ALSO be
+    // spared -- the removal loop strips the "-nl" suffix to map the child back to its base cid.
+    // NON-VACUITY: dropping the `baseCid` "-nl" strip (comparing the raw "<cid>-nl" DNI to
+    // rawCids) makes the night-light child get deleted -> deletedDnis contains it, RED.
+    // -------------------------------------------------------------------------
+
+    def "getDevices() does NOT delete a night-light (-nl) child for a present-but-unclassified device (H2 -nl)"() {
+        given: "a night-light child (DNI cid-h2p-nl) whose base device is present but unclassified"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        settings.refreshInterval = 30
+        state.token     = "tok-h2nl"
+        state.accountID = "acc-h2nl"
+        state.prefsSeeded = true
+
+        def nlChild = new TestDevice(); nlChild.deviceNetworkId = "cid-h2p-nl"
+        childDevices["cid-h2p-nl"] = nlChild
+
+        List<String> deletedDnis = []
+        driver.metaClass.getChildDevice  = { String dni -> childDevices[dni] }
+        driver.metaClass.getChildDevices = { -> childDevices.values() as List }
+        driver.metaClass.deleteChildDevice = { String dni -> deletedDnis << dni }
+
+        // Base device cid-h2p is present but unclassified (blank deviceType) -> absent from
+        // newList (including its -nl entry) but present in rawCids. The -nl child's DNI strips
+        // to cid-h2p, which IS in rawCids, so it must survive.
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            callback(getDevicesWithDevice([
+                deviceType  : "",
+                deviceName  : "Unclassified Device",
+                cid         : "cid-h2p",
+                configModule: "cm-h2p",
+                uuid        : "uuid-h2p",
+                macID       : "AA:BB:CC:DD:EE:FF"
+            ]))
+        }
+
+        when:
+        driver.getDevices()
+
+        then: "the -nl night-light child was NOT deleted (base-cid strip protects it)"
+        !deletedDnis.contains("cid-h2p-nl")
+        deletedDnis.isEmpty()
+    }
+
     // =========================================================================
     // Section Q — Bug Pattern #21: bounded self-heal backoff for offline devices
     //
@@ -4573,6 +4748,68 @@ class VeSyncIntegrationSpec extends HubitatSpec {
 
         and: "state.token is NOT set"
         !state.containsKey('token') || state.token == null
+
+        and: "H1 re-auth cooldown: a FAILED login records state.lastAuthFailAt so re-auth backs off"
+        state.lastAuthFailAt != null
+    }
+
+    // -------------------------------------------------------------------------
+    // H1 re-auth storm cooldown. After a FAILED login, repeated auth-failed responses must
+    // NOT each re-run a full login() — that would hammer VeSync and risk an account lockout.
+    // Two contracts, tested separately:
+    //   (a) a failed login records state.lastAuthFailAt (asserted in V27.2 above);
+    //   (b) while within the 15-min cooldown, an auth-failure does NOT invoke login().
+    // NON-VACUITY: removing the `&& !reAuthCooldownActive()` gate from the effectiveClosure
+    // makes login() fire on the auth-failure below -> loginCallCount goes 1, RED.
+    // -------------------------------------------------------------------------
+
+    def "H1: re-auth is suppressed while within the 15-min cooldown after a failed login (getDevices path)"() {
+        given: "a recent login failure is on record (cooldown active) and the cloud returns an auth failure"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "expired-token"
+        state.accountID = "acc-cooldown"
+        state.prefsSeeded = true
+        state.lastAuthFailAt = driver.now()   // cooldown window is active
+        int loginCallCount = 0
+        int httpPostCallCount = 0
+
+        driver.metaClass.login = { -> loginCallCount++; false }
+        driver.metaClass.httpPost = { Map params, Closure callback ->
+            httpPostCallCount++
+            callback(authFailure_401())
+        }
+
+        when: "getDevices runs and receives an auth-failure response"
+        driver.getDevices()
+
+        then: "login() is NOT called -- the cooldown suppressed the re-auth"
+        loginCallCount == 0
+
+        and: "no retry httpPost fired either (the request was not re-attempted)"
+        httpPostCallCount == 1
+    }
+
+    def "H1: a single auth-failure storm across two cycles invokes login() exactly once (getDevices path)"() {
+        given: "no cooldown yet; login() fails and records the cooldown as the real login() would"
+        settings.descriptionTextEnable = true
+        settings.debugOutput = false
+        state.token     = "expired-token"
+        state.accountID = "acc-storm"
+        state.prefsSeeded = true
+        int loginCallCount = 0
+
+        // Mock login() to fail AND set the cooldown timestamp, mirroring the real login()'s
+        // documented failure contract (the real login() is unit-tested to set lastAuthFailAt in V27.2).
+        driver.metaClass.login = { -> loginCallCount++; state.lastAuthFailAt = driver.now(); false }
+        driver.metaClass.httpPost = { Map params, Closure callback -> callback(authFailure_401()) }
+
+        when: "two consecutive poll cycles each hit an auth failure"
+        driver.getDevices()
+        driver.getDevices()
+
+        then: "login() was attempted only once across both cycles (cooldown gates the second)"
+        loginCallCount == 1
     }
 
     def "V27.2b Stage 1 -11260022 emits actionable region-mismatch ERROR (not generic inner-code message)"() {

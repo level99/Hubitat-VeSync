@@ -74,9 +74,14 @@ AS_INTEGER_EQ1_RE = re.compile(r'as\s+Integer\s*\)\s*==\s*1\b')
 # D3: broaden the leading-type token — a typed decl with ANY type (e.g. `Long x = ... as Integer`)
 # previously evaded the assign-form because the optional type only allowed Integer/int/def, so
 # `Long` was mis-read as the variable name and the `= ...` then failed to match.
+# D4: allow an optional trailing `)` after `as Integer` — the PARENTHESIZED cast form
+# `Integer cs = (r.oscillationCalibrationState as Integer)` ends the line in `as Integer)`,
+# which the prior `as\s+Integer\s*$` anchor missed (the `)` broke the end-of-line anchor).
+# That is exactly how oscillationCalibrationState evaded the SPLIT pass. Optional whitespace
+# is allowed before the `)` and before end-of-line.
 ASSIGN_AS_INTEGER_RE = re.compile(
     r'^\s*(?:Integer|int|def|Long|long|Boolean|boolean|Object|Number|BigDecimal|'
-    r'Double|double|Float|float|String|var)?\s*(\w+)\s*=\s*.*\bas\s+Integer\s*$'
+    r'Double|double|Float|float|String|var)?\s*(\w+)\s*=\s*.*\bas\s+Integer\s*\)?\s*$'
 )
 # Part 2: that captured variable later compared `== 1` (bare or as a ternary test). The
 # `== 1` (NOT `> 0` / `>= N` / `< N` / used in arithmetic) is the discriminator that

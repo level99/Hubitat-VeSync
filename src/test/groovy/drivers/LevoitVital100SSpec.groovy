@@ -177,7 +177,7 @@ class LevoitVital100SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
 
-        when: "setLevel(50) is called -- maps to speed level 3"
+        when: "setLevel(50) is called -- ceiling bands map 50 to fan level 2"
         driver.setLevel(50)
 
         then: "sendBypassRequest was called with correct V102S field names"
@@ -646,13 +646,13 @@ class LevoitVital100SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
 
-        when: "setLevel(50) is called -- maps to lvl=3 (val >= 40), which is 'medium' speed"
+        when: "setLevel(50) is called -- ceiling bands map 50 to lvl=2 ('low')"
         driver.setLevel(50)
 
         then: "state.speed is set (not null) so configureOnState can replay it"
         state.speed != null
-        // lvl=3 maps to "medium" via mapIntegerToSpeed
-        state.speed == "medium"
+        // lvl=2 maps to "low" via mapIntegerToSpeed (ceiling bands: 50 <= 50 -> lvl 2)
+        state.speed == "low"
 
         and: "state.mode is 'manual'"
         state.mode == "manual"

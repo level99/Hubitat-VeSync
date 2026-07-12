@@ -1086,6 +1086,32 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP29: setLevel must NOT pre-emit the level. setMistLevel's success branch emits the
+    // reconciled level (percentFromLevel); when setMistLevel short-circuits without a write
+    // (sleep mode rejects the mist write), setLevel must not have already reported a level
+    // the device never took.
+    // NON-VACUITY: restoring the pre-emit `sendEvent(name:"level", value: pct)` in setLevel
+    // makes a level event fire here -> the assertion goes RED.
+    // -------------------------------------------------------------------------
+
+    def "setLevel in sleep mode does NOT emit a level event (no pre-emit; setMistLevel short-circuits)"() {
+        given: "device is in sleep mode and on (setMistLevel rejects the mist write in sleep)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "mode", value: "sleep"])
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setLevel(60) is called -- maps to a positive mist level, short-circuited by sleep mode"
+        driver.setLevel(60)
+
+        then: "no mist-write call was made (sleep short-circuit)"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+
+        and: "no level event fired -- setLevel did not pre-emit a level the device never took"
+        lastEventValue("level") == null
+    }
+
+    // -------------------------------------------------------------------------
     // BUG #213: requireNonEmptyEnum — empty-string inputs silently rejected
     // These tests MUST FAIL on pre-fix code (setMode("") produced an INFO leak)
     // and PASS on post-fix code (silent early return, no API call, no log).

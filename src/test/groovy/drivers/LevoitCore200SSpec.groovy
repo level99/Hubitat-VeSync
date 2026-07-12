@@ -72,6 +72,62 @@ class LevoitCore200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // F8: update(status, nightLight) must not NPE on a middle-wrapped/degenerate envelope
+    // ({code:0, result:null}) — status is non-null but status.result is null, so the bare
+    // status.result.level read would throw once per poll. The entry guard routes to the clean
+    // "No status" logError path instead.
+    // NON-VACUITY: removing the `if (status?.result == null)` guard makes the bare
+    // status.result.level read throw NullPointerException -> noExceptionThrown() goes RED.
+    // -------------------------------------------------------------------------
+
+    def "update(status, nightLight) with null status.result does not NPE (F8)"() {
+        given: "a degenerate envelope: status present but status.result is null"
+        settings.descriptionTextEnable = false
+        def status = [code: 0, result: null]
+
+        when:
+        driver.update(status, null)
+
+        then: "no exception thrown, and the clean 'No status' error is reported"
+        noExceptionThrown()
+        testLog.errors.any { it.contains("No status returned from getPurifierStatus") }
+    }
+
+    // -------------------------------------------------------------------------
+    // F2: the self-fetch update() error path interpolates resp.msg. On a real hub resp is an
+    // HttpResponseDecorator with no 'msg' property, so a bare ${resp.msg} throws
+    // MissingPropertyException exactly in the error path. The fix guards with
+    // resp?.hasProperty('msg'). This test drives the closure with a response object that has
+    // NO 'msg' property (unlike the harness default) and asserts the error path does not throw.
+    // NON-VACUITY: reverting to a bare ${resp.msg} makes this throw -> noExceptionThrown() RED.
+    // -------------------------------------------------------------------------
+
+    def "update() self-fetch error path does not throw when the response has no 'msg' property (F2)"() {
+        given: "a parent that drives the closure with a msg-less response carrying null data"
+        settings.descriptionTextEnable = false
+        def noMsgResp = new NoMsgResponse()   // status 200, data null, NO 'msg' property
+        driver.metaClass.getParent = { ->
+            [ getChildDevice   : { String dni -> null },
+              sendBypassRequest: { dev, payload, Closure cb -> cb(noMsgResp) } ]
+        }
+
+        when: "the self-fetch runs and hits the status==null error branch"
+        driver.update()
+
+        then: 'no MissingPropertyException — the resp.msg interpolation is guarded'
+        noExceptionThrown()
+        testLog.errors.any { it.contains("No status returned from getPurifierStatus") }
+    }
+
+    // A response object that lacks a 'msg' property, matching Hubitat's HttpResponseDecorator
+    // (which has no 'msg'). A bare ${resp.msg} on this throws MissingPropertyException; the
+    // resp?.hasProperty('msg') guard yields '' instead. status 200 so checkHttpResponse passes.
+    static class NoMsgResponse {
+        Integer getStatus() { 200 }
+        def getData() { null }
+    }
+
+    // -------------------------------------------------------------------------
     // Bug Pattern #12: pref-seed (lives in update, not applyStatus for Core 200S)
     // -------------------------------------------------------------------------
 

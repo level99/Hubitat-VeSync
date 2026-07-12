@@ -600,12 +600,16 @@ def applyStatus(status){
     String  reportedMode = head.reportedMode
 
     // ---- Horizontal oscillation ----
-    Integer hOscState = (r.horizontalOscillationState as Integer)
-    device.sendEvent(name:"horizontalOscillation", value: hOscState == 1 ? "on" : "off")
+    // asBool() coerces the flag robustly (Boolean/Number/String "1"/"true") without throwing;
+    // a bare `as Integer` on a Boolean- or String-typed flag from a firmware variant would throw
+    // mid-parse and abort applyStatus (same class asBool() was extracted for; see childLock below).
+    // Locals reused by the info-HTML block below so nothing there references a raw as-Integer cast.
+    boolean hOscOn = asBool(r.horizontalOscillationState)
+    device.sendEvent(name:"horizontalOscillation", value: hOscOn ? "on" : "off")
 
     // ---- Vertical oscillation ----
-    Integer vOscState = (r.verticalOscillationState as Integer)
-    device.sendEvent(name:"verticalOscillation", value: vOscState == 1 ? "on" : "off")
+    boolean vOscOn = asBool(r.verticalOscillationState)
+    device.sendEvent(name:"verticalOscillation", value: vOscOn ? "on" : "off")
 
     // ---- Oscillation range (nested object) ----
     if (r.oscillationRange instanceof Map) {
@@ -625,8 +629,8 @@ def applyStatus(status){
 
     // ---- Oscillation calibration (read-only feedback for runOscillationCalibration) ----
     if (r.oscillationCalibrationState != null) {
-        Integer cs = (r.oscillationCalibrationState as Integer)
-        device.sendEvent(name:"oscillationCalibrationState", value: cs == 1 ? "calibrating" : "idle")
+        // asBool(): robust flag coercion; a bare `as Integer` on a Boolean/String flag throws.
+        device.sendEvent(name:"oscillationCalibrationState", value: asBool(r.oscillationCalibrationState) ? "calibrating" : "idle")
     }
     if (r.oscillationCalibrationProgress != null) {
         device.sendEvent(name:"oscillationCalibrationProgress", value: (r.oscillationCalibrationProgress as Integer))
@@ -639,14 +643,13 @@ def applyStatus(status){
         device.sendEvent(name:"highTemperature", value: (rawHigh / 10.0) as BigDecimal)
     }
     if (r.highTemperatureReminderState != null) {
-        Integer hrm = (r.highTemperatureReminderState as Integer)
-        device.sendEvent(name:"highTemperatureReminder", value: hrm == 1 ? "on" : "off")
+        // asBool(): robust flag coercion; a bare `as Integer` on a Boolean/String flag throws.
+        device.sendEvent(name:"highTemperatureReminder", value: asBool(r.highTemperatureReminderState) ? "on" : "off")
     }
 
     // ---- Smart cleaning reminder ----
     if (r.smartCleaningReminderState != null) {
-        Integer scrm = (r.smartCleaningReminderState as Integer)
-        device.sendEvent(name:"smartCleaningReminder", value: scrm == 1 ? "on" : "off")
+        device.sendEvent(name:"smartCleaningReminder", value: asBool(r.smartCleaningReminderState) ? "on" : "off")
     }
 
     // ---- Mute + Display (shared LevoitFanLib block) ----
@@ -690,8 +693,8 @@ def applyStatus(status){
     def parts = []
     parts << "Mode: ${reportedMode}"
     parts << "Speed: ${powerOn ? levelToFanControlEnum(activeSpeed) + ' (L' + activeSpeed + ')' : 'off'}"
-    parts << "H-Osc: ${hOscState == 1 ? 'on' : 'off'}"
-    parts << "V-Osc: ${vOscState == 1 ? 'on' : 'off'}"
+    parts << "H-Osc: ${hOscOn ? 'on' : 'off'}"
+    parts << "V-Osc: ${vOscOn ? 'on' : 'off'}"
     parts << "Mute: ${muteState == 1 ? 'on' : 'off'}"
     if (r.temperature != null && (r.temperature as Integer) > 0) {
         Float tf = (r.temperature as Integer) / 10.0f
