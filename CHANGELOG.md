@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10] - 2026-07-16
+
 ### Added
 
 - **EverestAir and Sprout Air now expose standard fan-speed and level controls.** Both purifiers gained the standard FanControl (`setSpeed` — off/low/medium/high/sleep/auto — and `cycleSpeed`) and SwitchLevel (`setLevel` 0–100) capabilities, so their fan speed and level can be driven from dashboard fan/dimmer tiles, Rule Machine, and voice assistants (Alexa/Google/HomeKit) — previously only a custom numeric `setFanSpeed` (1–3) was available, which those surfaces don't recognize. The existing `setFanSpeed` command and `fanSpeed` attribute are unchanged, so any existing rules keep working. (Additive — no device re-pairing needed; you may need to add a fan/dimmer tile to a dashboard to surface the new controls.)

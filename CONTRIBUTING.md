@@ -47,7 +47,7 @@ Hubitat-VeSync/
 ├── src/test/groovy/drivers/              ← Spock unit-test specs (one per driver)
 ├── tests/
 │   ├── lint.py                            ← static lint orchestrator
-│   ├── lint_rules/                        ← 25 pluggable rules (BP1-16, RULE15-25)
+│   ├── lint_rules/                        ← 47 pluggable rules (BP1-30, RULE15-57)
 │   ├── lint_config.yaml                   ← frozen_driver_names, exemptions
 │   └── fixtures/*.yaml                    ← captured pyvesync API responses
 ├── levoitManifest.json                    ← HPM package manifest
@@ -258,7 +258,7 @@ The catalog itself lives in **`docs/BUG-PATTERNS.md`** (the single source of tru
 
 ## Conventions enforced by lint/tests
 
-The Spock harness + 22 lint rules catch a long tail of regressions. Most of these you don't need to memorize — you'll trip them, read the finding, fix. But a few are worth knowing up-front because they shape how a driver is written.
+The Spock harness + 47 lint rules catch a long tail of regressions. Most of these you don't need to memorize — you'll trip them, read the finding, fix. But a few are worth knowing up-front because they shape how a driver is written.
 
 ### High-leverage conventions
 
