@@ -331,12 +331,16 @@ def check_rule38_process_token_scrub(
                     and _PR_ISSUE_RE.match(m.group())
                     and _has_external_provenance(line)):
                 continue
-            # C2 (a): for a BARE `#<digits>` match (Python only), suppress if the line carries an
-            # internal-doc prefix (FIX/GAP/Bug Pattern/Pattern/BP/Task) or external provenance —
-            # those are legitimate `#N` uses, not this-fork issue refs.
+            # C2 (a): for a BARE `#<digits>` match (Python only), suppress if the token is the
+            # comment's leading text -- a numbered-list item whose comment starts with a hash then a
+            # digit (`#` is the Python comment char) -- or the line carries an internal-doc prefix
+            # (FIX/GAP/Bug Pattern/Pattern/BP/Task) or external provenance -- those are legitimate
+            # `#N` uses, not this-fork issue refs.
             if (file_ext == '.py'
                     and _BARE_HASH_RE.fullmatch(m.group().strip())
-                    and (_INTERNAL_DOC_RE.search(line) or _has_external_provenance(line))):
+                    and (line.strip().startswith(m.group().strip())
+                         or _INTERNAL_DOC_RE.search(line)
+                         or _has_external_provenance(line))):
                 continue
             findings.append(make_finding_for_file(
                 severity='FAIL',

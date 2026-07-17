@@ -4788,6 +4788,14 @@ class TestRule38ProcessTokenScrub:
         # `pyvesync issue #296` stays suppressed (external provenance)
         assert not self._run_py("# Confirmed: pyvesync issue #296; minHumidityLevel 40")
 
+    def test_c2_does_not_catch_python_numbered_list_comment(self):
+        # A `#<digit>` that is the comment's leading text is a numbered-list item, not a this-fork
+        # issue ref (`#` is the Python comment char). Must NOT be flagged, regardless of keywords.
+        assert not self._run_py("#1. Parse the response envelope")
+        assert not self._run_py("    #2. Check the inner status code")
+        # ...but an INLINE bare-hash ref (not leading) is still a this-fork issue ref -> caught.
+        assert self._run_py("# closes the parser gap, see #258")
+
     # -----------------------------------------------------------------------
     # Must-catch: Tier forms
     # -----------------------------------------------------------------------
