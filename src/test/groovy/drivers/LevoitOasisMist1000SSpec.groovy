@@ -613,7 +613,7 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // Nightlight write-path: toggle vs brightness split (BLOCKING #1 fix)
+    // Nightlight write-path: toggle vs brightness split (separate on/off toggle from brightness write)
     //
     // pyvesync uses TWO distinct API methods:
     //   toggle_nightlight()         → setNightLightStatus {nightLightSwitch: int}
@@ -672,6 +672,41 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
         call != null
         call.data.brightness       == 0
         call.data.nightLightSwitch == 0
+    }
+
+    // A non-numeric brightness (a blank Rule Machine slot, a typo) must not invert an explicit
+    // "on" into an OFF write. It routes to the on/off toggle path instead of a brightness=0 write.
+    @Unroll
+    def "setNightlight('on', '#bad') honors on via the toggle path (no inverted OFF brightness write)"() {
+        given:
+        state.deviceType = "LUH-M101S-WEUR"
+
+        when: "a non-numeric brightness reaches setNightlight"
+        driver.setNightlight("on", bad)
+
+        then: "toggle path with nightLightSwitch=1 (ON) -- NOT a setLightStatus OFF write"
+        def toggle = testParent.allRequests.find { it.method == "setNightLightStatus" }
+        toggle != null
+        toggle.data.nightLightSwitch == 1
+        testParent.allRequests.find { it.method == "setLightStatus" } == null
+
+        where:
+        bad << ["abc", "", true]
+    }
+
+    def "setNightlight('on', 0) still turns the nightlight off (explicit numeric 0 preserved)"() {
+        given:
+        state.deviceType = "LUH-M101S-WEUR"
+
+        when: "an explicit numeric 0 -- distinct from a non-numeric value"
+        driver.setNightlight("on", 0)
+
+        then: "brightness path with nightLightSwitch=0 (OFF)"
+        def call = testParent.allRequests.find { it.method == "setLightStatus" }
+        call != null
+        call.data.brightness       == 0
+        call.data.nightLightSwitch == 0
+        testParent.allRequests.find { it.method == "setNightLightStatus" } == null
     }
 
     // -------------------------------------------------------------------------
@@ -784,15 +819,18 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // BP26: safe numeric coercion — setNightlight brightness (2nd param)
-    // RULE37 is first-param-only by design; non-first-param coercions are gated
-    // by Spock regression specs instead of lint. setNightlight brightness is the
-    // canonical worked example of this pattern.
+    // setNightlight brightness (2nd param) uses parseLevelOrNull, so a non-numeric
+    // value routes to the on/off toggle path (honoring onOff) instead of coercing to
+    // 0 and inverting an explicit "on" into an OFF write. The garbage-input regression
+    // specs live in the BP28 section above; the specs below confirm a genuinely-numeric
+    // brightness (including a truncating decimal) still reaches the API on the
+    // brightness path. RULE37 is first-param-only by design; this 2nd-param behavior
+    // is gated by these Spock specs instead of lint.
     // -------------------------------------------------------------------------
 
     def "BP26: setNightlight('on', 50) happy path — numeric brightness reaches API unchanged"() {
         // Baseline: confirms the brightness path works correctly with a valid numeric input.
-        // safeIntArg(50, 0) → 50; Math.max(0, Math.min(100, 50)) = 50; nlSwitch = 1.
+        // parseLevelOrNull(50) → 50; Math.max(0, Math.min(100, 50)) = 50; nlSwitch = 1.
         given:
         settings.descriptionTextEnable = false
         state.deviceType = "LUH-M101S-WEUR"
@@ -806,27 +844,6 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
         req != null
         req.data.brightness      == 50
         req.data.nightLightSwitch == 1
-    }
-
-    def "BP26: setNightlight('on', '#badBr') does not throw; brightness coerces to 0, nightLightSwitch=0"() {
-        // safeIntArg("abc"/""/true → fallback 0) → Math.max(0,Math.min(100,0)) = 0.
-        // nl="on", br=0 → nlSwitch = (0>0)?1:0 = 0. setLightStatus called with brightness=0.
-        given:
-        settings.descriptionTextEnable = false
-        state.deviceType = "LUH-M101S-WEUR"
-
-        when:
-        driver.setNightlight("on", badBr)
-
-        then:
-        noExceptionThrown()
-        def req = testParent.allRequests.find { it.method == "setLightStatus" }
-        req != null
-        req.data.brightness       == 0
-        req.data.nightLightSwitch == 0
-
-        where:
-        badBr << ["abc", "", true]
     }
 
     // -----------------------------------------------------------------------
@@ -913,7 +930,7 @@ class LevoitOasisMist1000SSpec extends HubitatSpec {
     }
 
     def "BP26: setNightlight('on', '55.7') does not throw; brightness truncates to 55, nightLightSwitch=1"() {
-        // safeIntArg("55.7", 0) → BigDecimal("55.7").intValue() = 55 (truncation).
+        // parseLevelOrNull("55.7") → BigDecimal("55.7").intValue() = 55 (truncation, a genuinely-numeric value).
         // Math.max(0, Math.min(100, 55)) = 55. nlSwitch = (55>0)?1:0 = 1.
         given:
         settings.descriptionTextEnable = false

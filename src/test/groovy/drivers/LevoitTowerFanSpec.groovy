@@ -41,6 +41,24 @@ class LevoitTowerFanSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // FanControl coherence (v2.10): supportedFanSpeeds published once on initialize()
+    // (fan line emits a uniform list from LevoitFanLib, mirroring levelToFanControlEnum's
+    // output buckets). NON-VACUITY: removing the emit from the Fan lib's initialize()
+    // makes this RED.
+    // -------------------------------------------------------------------------
+
+    def "initialize() emits supportedFanSpeeds matching the fan FanControl buckets"() {
+        when:
+        driver.initialize()
+
+        then: "supportedFanSpeeds emitted as a JSON list of the fan's FanControl enum buckets"
+        def raw = lastEventValue("supportedFanSpeeds")
+        raw != null
+        new groovy.json.JsonSlurper().parseText(raw as String) ==
+            ["off", "low", "medium-low", "medium", "medium-high", "high"]
+    }
+
+    // -------------------------------------------------------------------------
     // Bug Pattern #1: 3-signature update() methods
     // -------------------------------------------------------------------------
 
@@ -618,6 +636,33 @@ class LevoitTowerFanSpec extends HubitatSpec {
         tempVal != 717
     }
 
+    def "applyStatus converts temperature to °C on a Celsius hub (°F passthrough on a Fahrenheit hub)"() {
+        // API returns F × 10; the emit must honor location.temperatureScale (wrong on °C hubs / EU-AUS
+        // SKUs). 717 -> 71.7°F -> (71.7-32)*5/9 = 22.1°C. Pre-fix emitted the raw 71.7 with unit °F.
+        given: "hub configured for Celsius"
+        driver.metaClass.getLocation = { -> [temperatureScale: "C"] as Object }
+        def fixture = loadYamlFixture("LTF-F422S.yaml")
+        def deviceData = fixture.responses.device_on_normal_speed5 as Map
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "temperature is converted to °C (22.1) and the unit is °C"
+        def ev = testDevice.events.reverse().find { it.name == "temperature" }
+        Math.abs((ev.value as Double) - 22.1d) < 0.05d
+        ev.unit == "°C"
+
+        when: "hub configured for Fahrenheit"
+        driver.metaClass.getLocation = { -> [temperatureScale: "F"] as Object }
+        driver.applyStatus(status)
+
+        then: "temperature passes through as °F (71.7) with unit °F"
+        def ev2 = testDevice.events.reverse().find { it.name == "temperature" }
+        Math.abs((ev2.value as Double) - 71.7d) < 0.05d
+        ev2.unit == "°F"
+    }
+
     def "applyStatus with temperature=850 emits 85.0°F (HA finding #1)"() {
         given: "fixture with temperature=850"
         def fixture = loadYamlFixture("LTF-F422S.yaml")
@@ -647,6 +692,51 @@ class LevoitTowerFanSpec extends HubitatSpec {
         then: "no temperature event was emitted for raw value 0"
         def tempEvents = testDevice.events.findAll { it.name == "temperature" }
         tempEvents.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // fan-#1: flag fields (oscillation/mute/display) must be coerced via asBool(), not a bare
+    // `as Integer`. A firmware variant reporting a flag as a Boolean or String (true / "1")
+    // would throw GroovyCastException/NumberFormatException mid-parse and abort applyStatus.
+    // The test ALSO asserts the rendered `info` attribute so the info-HTML block downstream
+    // is exercised — that block references the coerced oscillation local, so a stale/orphaned
+    // reference (e.g. a removed `oscState`) throws MissingPropertyException on the sandbox.
+    // NON-VACUITY: reverting oscillationState/muteState/screenState to `(x as Integer)` throws
+    // on the fixture below; a stale `oscState` in the info block throws on the sandbox too.
+    // Both -> the info-string assertions go RED.
+    // -------------------------------------------------------------------------
+
+    def "applyStatus does not throw and reads flags correctly when they arrive as String/Boolean (fan-#1)"() {
+        given: "a fixture whose flag fields are String/Boolean-typed (firmware variant)"
+        def deviceData = [powerSwitch: 1, workMode: "normal", manualSpeedLevel: 3,
+                          fanSpeedLevel: 3, temperature: 0, errorCode: 0, timerRemain: 0,
+                          screenState: "1", screenSwitch: 1,
+                          oscillationSwitch: 1, oscillationState: "1",
+                          muteSwitch: 0, muteState: true, scheduleCount: 0]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "no exception -- flags coerced robustly instead of a bare as-Integer cast"
+        noExceptionThrown()
+
+        and: "oscillation reads 'on' from the String '1'"
+        lastEventValue("oscillation") == "on"
+
+        and: "mute reads 'on' from the Boolean true"
+        lastEventValue("mute") == "on"
+
+        and: "displayOn reads 'on' from the String '1'"
+        lastEventValue("displayOn") == "on"
+
+        and: "the info-HTML block executed and rendered the coerced oscillation/mute locals"
+        // Guards the orphaned-local regression: the info block references the coerced
+        // oscillation boolean; a stale `oscState` reference throws on the sandbox.
+        def info = lastEventValue("info") as String
+        info != null
+        info.contains("Oscillation: on")
+        info.contains("Mute: on")
     }
 
     // -------------------------------------------------------------------------
@@ -863,6 +953,20 @@ class LevoitTowerFanSpec extends HubitatSpec {
         def req = testParent.allRequests.find { it.method == "clearTimer" }
         req != null
         req.data.id == 42
+    }
+
+    def "updated() preserves state.timerId across state.clear() so cancelTimer still works"() {
+        // state.timerId is the only long-lived, load-bearing fan-line state — the id an active
+        // device timer must reference to be cancelled. Save Preferences (updated -> state.clear())
+        // must not wipe it. Discriminating: pre-fix updated() clears state.timerId to null.
+        given: "an active timer id is stored"
+        state.timerId = 42
+
+        when: "the user saves preferences"
+        driver.updated()
+
+        then: "state.timerId survives the state.clear()"
+        state.timerId == 42
     }
 
     def "cancelTimer with no state.timerId is a no-op (no API call)"() {
@@ -1357,5 +1461,41 @@ class LevoitTowerFanSpec extends HubitatSpec {
 
         and: "a setLevel API call was made"
         !testParent.allRequests.findAll { it.method == "setLevel" }.isEmpty()
+    }
+
+    def "on() power-write failure during a known outage is DEBUG-suppressed, not ERROR/recorded (BP22)"() {
+        given: "the parent reports a known network outage and the cloud write fails"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = true
+        testParent.networkUnreachable = true
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+
+        when:
+        driver.on()
+
+        then: "the power-on write was attempted"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "the failure is DEBUG-suppressed (BP22), not ERROR spam or a diagnostics record"
+        !testLog.errors.any { it.contains("Power on failed") }
+        (state.errorHistory == null) || (state.errorHistory.isEmpty())
+    }
+
+    def "off() power-write failure during a known outage is DEBUG-suppressed, not ERROR/recorded (BP22)"() {
+        given: "the parent reports a known network outage and the cloud write fails"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = true
+        testParent.networkUnreachable = true
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+
+        when:
+        driver.off()
+
+        then: "the power-off write was attempted"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "the failure is DEBUG-suppressed (BP22), not ERROR spam or a diagnostics record"
+        !testLog.errors.any { it.contains("Power off failed") }
+        (state.errorHistory == null) || (state.errorHistory.isEmpty())
     }
 }

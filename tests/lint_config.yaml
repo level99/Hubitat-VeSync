@@ -141,6 +141,32 @@ bp26_unsafe_int_coercion_exemptions:
 
 
 # ---------------------------------------------------------------------------
+# RULE51 — result-Map guard per-method exemptions
+# ---------------------------------------------------------------------------
+# Each entry exempts a specific (file, method) pair from RULE51's unguarded
+# `<recv>.data.result` detection. Use ONLY when the unguarded read cannot abort
+# a command — e.g. it is wrapped in a try/catch whose purpose is to surface the
+# non-Map body as diagnostic output.
+#
+# Required fields:
+#   file      — repo-root-relative path using forward slashes
+#   method    — exact Groovy method name
+#   rationale — REQUIRED non-empty explanation
+
+result_map_guard_exemptions:
+  - file: "Drivers/Levoit/LevoitGeneric.groovy"
+    method: "runProbeMethod"
+    rationale: >
+      The `resp?.data?.result?.code` / `resp?.data?.result` reads here are inside a
+      `try { ... } catch (Exception e) { result.errorMsg = e.message }` block whose
+      entire purpose is diagnostic capture. On a non-JSON (String) body the property
+      access throws MissingPropertyException, which the catch converts into
+      `errorMsg` — it CANNOT abort a command, and the captured exception message is
+      itself useful diagnostic signal (it tells the user the gateway returned a
+      non-JSON body). Guarding here would suppress that signal. Safe by construction.
+
+
+# ---------------------------------------------------------------------------
 # Rule 16: PII scan — token string allow-list
 # ---------------------------------------------------------------------------
 # Specific 32-64 char alphanumeric strings that are known-safe (e.g., test

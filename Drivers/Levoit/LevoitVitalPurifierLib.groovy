@@ -55,7 +55,13 @@ def installed() {
 
 def updated() {
     logDebug "Updated ${settings}"
-    state.clear(); unschedule(); initialize()
+    // Preserve state.timerId across state.clear() — it's the id an active device timer must
+    // reference to be cancelled. Wiping it on every Save Preferences would leave cancelTimer()
+    // unable to cancel a running timer (silent no-op). Mirrors LevoitFanLib.updated().
+    def savedTimerId = state.timerId
+    state.clear()
+    if (savedTimerId != null) state.timerId = savedTimerId
+    unschedule(); initialize()
     runIn(3, "update")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -72,6 +78,10 @@ def uninstalled() {
 
 def initialize() {
     logDebug "Initializing"
+    // FanControl: publish the static speed enum once so dashboard fan-tiles and
+    // integrations can populate their speed picker. Uniform across Vital 100S/200S.
+    device.sendEvent(name:"supportedFanSpeeds",
+        value: groovy.json.JsonOutput.toJson(["off","sleep","low","medium","high","max"]))
 }
 
 // ---- Power ----
@@ -82,6 +92,15 @@ def on() {
     // Prevent re-entrance loop
     if (state.turningOn) {
         logDebug "Already turning on, skipping recursive call"
+        return
+    }
+
+    // BP30: async-window storm guard — collapse a burst of overlapping on() commands into
+    // ONE effective power+mode sequence. Spans the runInMillis(500, configureOnState) async
+    // leg below (state.turningOn clears synchronously before configureOnState runs, so it
+    // alone cannot catch a storm). Returns false while a power-on is already in flight.
+    if (!beginPowerOnWindow()) {
+        logDebug "Power-on already in flight (BP30 storm guard); skipping redundant burst"
         return
     }
 
@@ -97,6 +116,7 @@ def on() {
             // Now attempt speed/mode configuration (these may fail but device is already on)
             runInMillis(500, "configureOnState")
         } else {
+            clearPowerOnWindow()   // B2: failed power-on is retryable immediately (don't hold the window)
             reportWriteError("Failed to turn on device", [method:"on"])
         }
     } finally {
@@ -147,11 +167,22 @@ def off() {
 
     state.turningOff = true
     try {
+        // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence,
+        // and clear the speed dedup slot so a low -> off -> low re-establish write within the
+        // 2s window is not suppressed (matches the sibling EverestAir/SproutAir off() theme).
+        clearPowerOnWindow()
+        clearDuplicateWrite("speed")
         if (handlePower(false)) {
             logInfo "Power off"
             state.lastSwitchSet = "off"
             // CRITICAL: Update switch state IMMEDIATELY
             device.sendEvent(name:"switch", value:"off")
+            // BP6: clear the active FanControl/SwitchLevel mirrors on the off edge so the dashboard
+            // fan/dimmer tiles read off/0 immediately (not the retained level) ahead of the next poll.
+            // Centralized here so EVERY off entry point is covered: direct off(), setLevel(0),
+            // setSpeed("off"), and toggle().
+            device.sendEvent(name:"speed", value:"off")
+            device.sendEvent(name:"level", value: 0)
         } else {
             reportWriteError("Failed to turn off device", [method:"off"])
         }
@@ -204,18 +235,28 @@ def setLevel(val) {
     // state.turningOn is set by on() while configureOnState() runs async;
     // skip the redundant on() call if a turn-on cycle is already in flight.
     ensureSwitchOn()
+    // Bands are CEILINGS aligned to the emitted values (speedToLevel: 1->25, 2->50, 3->75, 4->100)
+    // so re-applying an emitted level is a fixed point: setLevel(25) -> lvl1 -> emits 25 (not 50).
+    // The prior open-interval bands (<20/<40/<60) escalated on round-trip: setLevel(25) -> lvl2 -> 50.
+    // Matches the sibling EverestAir/SproutAir ceiling convention.
     Integer lvl
-    if (pct < 20) lvl=1
-    else if (pct < 40) lvl=2
-    else if (pct < 60) lvl=3
+    if (pct <= 25) lvl=1
+    else if (pct <= 50) lvl=2
+    else if (pct <= 75) lvl=3
     else lvl=4
-    sendEvent(name:"level", value: pct)
     def ok = setSpeedLevel(lvl)
     if (ok) {
         // setLevel establishes manual mode + speed atomically (V2 quirk); emit mode events here.
         // Also write state.speed so configureOnState() replay path re-applies the correct named speed.
         state.speed = mapIntegerToSpeed(lvl)
         state.mode = "manual"
+        // Emit the BANDED level (speedToLevel(lvl)) — NOT the raw requested pct — so the command and
+        // the poll agree: a 4-speed device only has discrete levels, and applyStatus mirrors the same
+        // speedToLevel(sp). Emitting the raw pct here made setLevel(30) show 30 then snap to 50 on the
+        // next poll. Emit the FanControl `speed` mirror too — setSpeed()/setMode("manual") both emit
+        // speed on success, but setLevel() left it stale. Gated on the write succeeding (matches speed).
+        device.sendEvent(name:"level", value: speedToLevel(lvl))
+        device.sendEvent(name:"speed", value: state.speed)
         device.sendEvent(name:"mode", value: "manual")
         device.sendEvent(name:"petMode", value: "off")
         logInfo "Level: ${pct}% (fan level ${lvl})"
@@ -228,21 +269,35 @@ def setSpeed(spd) {
     // BP25: normalize to lowercase so Rule Machine "OFF"/"SLEEP" route correctly.
     String s = (spd as String).trim().toLowerCase()
     if (s == "off") return off()
-    if (s == "sleep") { setMode("sleep"); device.sendEvent(name:"speed", value:"on"); return }
 
     // Reject unknown speed values BEFORE ensureSwitchOn() and before any cloud write.
     // Without this, an unrecognized value (e.g. "turbo") falls through to mapSpeedToInteger,
     // which defaults unknown input to the "low" band (default: return 2) -- silently widening
     // garbage to a real speed AND auto-powering the device on. setMode already rejects invalid
     // modes; mirror that here so a malformed FanControl/Rule Machine speed does not turn the
-    // device on. (BP24-class: reject-before-auto-on.)
+    // device on. (BP24-class: reject-before-auto-on.) "sleep" is a valid speed value (delegates to setMode).
     List validSpeeds = ["low", "medium", "high", "max"]
-    if (!(s in validSpeeds)) {
+    if (!(s == "sleep" || s in validSpeeds)) {
         logWarn "setSpeed: invalid speed '${s}' -- must be one of: ${(validSpeeds + ['sleep','off']).join(', ')}; ignoring"
         return
     }
 
     ensureSwitchOn()
+
+    // BP30 Layer 3 (A1): dedup BEFORE the sleep early-return so the "speed" slot reflects the NEW
+    // effective speed even when sleep delegates to setMode — otherwise low->sleep->low within the
+    // window would falsely suppress the 3rd write (slot stale at "low"). The turningOn/powerOnPending
+    // guard keeps an in-flight power-on's establishment write from being suppressed. (Matches the
+    // setMode reference, which dedups before its manual branch.)
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("speed", s)) {
+        logDebug "setSpeed: identical speed write within dedup window (storm duplicate); skipping"
+        return false
+    }
+
+    // A1-delegation: the "speed" slot is already recorded; if the delegated setMode("sleep") FAILS,
+    // clear it so a same-value setSpeed("sleep") retry is not falsely suppressed.
+    // B1 fail-safe: the delegated setter's false can mean a genuine failure OR its own dedup-suppress; clearing the outer slot on either is harmless (inner write stays deduped -> no extra cloud write).
+    if (s == "sleep") { if (!setMode("sleep")) clearDuplicateWrite("speed"); device.sendEvent(name:"speed", value:"on"); return }
 
     // setLevel establishes manual mode + speed atomically; no setMode("manual") pre-call needed (V2 quirk)
     def lvl = mapSpeedToInteger(s)
@@ -254,6 +309,8 @@ def setSpeed(spd) {
         device.sendEvent(name:"mode", value: "manual")
         device.sendEvent(name:"petMode", value: "off")
         logInfo "Speed: ${s}"
+    } else {
+        clearDuplicateWrite("speed")   // B1: failed write must not suppress an immediate retry
     }
 }
 
@@ -290,6 +347,15 @@ def setMode(mode) {
 
     ensureSwitchOn()
 
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return false
+    }
+
     boolean ok = false
     if (m == "manual") {
         // V2-line: manual mode is established by sending a speed via setLevel (no separate mode command)
@@ -310,6 +376,7 @@ def setMode(mode) {
         else device.sendEvent(name: "speed", value: "auto")
         logInfo "Mode: ${m}"
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed for ${m}", [method:"setMode"])
     }
     return ok
@@ -325,19 +392,23 @@ def setPetMode(onOff) {
     setMode(canon == "on" ? "pet" : "auto")
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setAutoPreference(pref) {
     logDebug "setAutoPreference(${pref})"
     if (!requireNonEmptyEnum(pref, "setAutoPreference")) return
     def resp = hubBypass("setAutoPreference", [autoPreference: pref, roomSize: state.roomSize ?: 600], "setAutoPreference")
     if (httpOk(resp)) { state.autoPreference = pref; device.sendEvent(name:"autoPreference", value: pref) }
+    else { reportWriteFailure("Auto preference write failed", resp, [method:"setAutoPreference"]) }
 }
 
+// BP24: NO-ON — configures a device preference; powering on is not implied.
 def setRoomSize(sz) {
     logDebug "setRoomSize(${sz})"
     if (!requireNotNull(sz, "setRoomSize")) return
     Integer roomSz = safeIntArg(sz, 600)   // BP26: safeIntArg never throws on non-numeric RM input
     def resp = hubBypass("setAutoPreference", [autoPreference: state.autoPreference ?: "default", roomSize: roomSz], "setAutoPreference(roomSize)")
     if (httpOk(resp)) { state.roomSize = roomSz; device.sendEvent(name:"roomSize", value: roomSz) }
+    else { reportWriteFailure("Room size write failed", resp, [method:"setRoomSize"]) }
 }
 
 // BP24: NO-ON — configures a device preference; powering on is not implied.
@@ -357,7 +428,7 @@ def setChildLock(onOff) {
     if (httpOk(resp)) {
         device.sendEvent(name:"childLock", value: canon)
         logInfo "Child lock: ${canon}"
-    }
+    } else { reportWriteFailure("Child lock write failed", resp, [method:"setChildLock"]) }
 }
 
 // BP24: NO-ON — configures a device preference; powering on is not implied.
@@ -374,17 +445,23 @@ def setDisplay(onOff) {
     if (httpOk(resp)) {
         device.sendEvent(name:"display", value: canon)
         logInfo "Display: ${canon}"
-    }
+    } else { reportWriteFailure("Display write failed", resp, [method:"setDisplay"]) }
 }
 
+// BP24: NO-ON — maintenance action; powering on is not implied.
 def resetFilter() {
     logDebug "resetFilter()"
     def resp = hubBypass("resetFilter", [:], "resetFilter")
-    if (httpOk(resp)) logDebug "Filter reset requested"
+    if (httpOk(resp)) {
+        logDebug "Filter reset requested"
+    } else {
+        reportWriteFailure("Filter reset failed", resp, [method:"resetFilter"])
+    }
 }
 
 // ---- Timer (V2-line uses addTimerV2 / delTimerV2) ----
 
+// BP24: NO-ON — scheduling action; powering on is not implied.
 def setTimer(minutes) {
     if (!requireNotNull(minutes, "setTimer")) return   // BP18: null-guard (RM blank slot)
     int n = safeIntArg(minutes, 0)                     // BP26: safeIntArg never throws on non-numeric RM input
@@ -398,12 +475,16 @@ def setTimer(minutes) {
     ]
     def resp = hubBypass("addTimerV2", data, "addTimerV2(${n}min)")
     if (httpOk(resp)) {
-        def tid = resp?.data?.result?.id
+        // Type-guard: a non-JSON body makes resp.data a String; the .result read would throw.
+        def tid = (resp?.data instanceof Map) ? resp.data.result?.id : null
         if (tid != null) state.timerId = tid
         logInfo "Timer set: power off in ${n} minutes (id=${tid})"
+    } else {
+        reportWriteFailure("Timer set failed", resp, [method:"addTimerV2"])
     }
 }
 
+// BP24: NO-ON — scheduling action; powering on is not implied.
 def cancelTimer() {
     logDebug "cancelTimer()"
     if (!state.timerId) {
@@ -414,6 +495,8 @@ def cancelTimer() {
     if (httpOk(resp)) {
         state.remove("timerId")
         logInfo "Timer cancelled"
+    } else {
+        reportWriteFailure("Timer cancel failed", resp, [method:"delTimerV2"])
     }
 }
 
@@ -497,5 +580,18 @@ def mapIntegerToSpeed(n) {
         case 4: return "high"
         case 255: return "off"
         default: return "low"
+    }
+}
+
+// Map a manual fan level (1-4) to a 0-100 SwitchLevel percent for the `level` mirror emitted
+// by applyStatus (Vital 100S/200S). Mirrors the EverestAir speedToLevel convention for a banded
+// fan so the dimmer tile reflects the real device level every poll instead of only after setLevel().
+Integer speedToLevel(lvl) {
+    switch (lvl as Integer) {
+        case 1: return 25
+        case 2: return 50
+        case 3: return 75
+        case 4: return 100
+        default: return 25
     }
 }

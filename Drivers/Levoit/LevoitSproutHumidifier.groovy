@@ -100,11 +100,12 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Sprout Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Sprout Humidifier (LEH-B381S-WUS/-WEU) — mist 1-2, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display, child lock, drying mode, nightlight (brightness + color temp). pyvesync VeSyncSproutHumid class; V2-style payloads. Auto mode wire value: 'autoPro' (not 'auto' — contrast OasisMist 1000S).",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -178,6 +179,14 @@ def setMode(mode){
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     ensureSwitchOn()
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return false
+    }
     // Wire-value mapping: auto -> 'autoPro' (device_map.py mist_modes for Sprout)
     String wire = (m == "auto") ? "autoPro" : m
     def resp = hubBypass("setHumidityMode", [workMode: wire], "setHumidityMode(${wire})")
@@ -186,6 +195,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
@@ -345,8 +355,8 @@ def applyStatus(status){
 
     // ---- Power ----
     def powerRaw = r.powerSwitch
-    boolean powerOn = (powerRaw instanceof Boolean) ? powerRaw : ((powerRaw as Integer) == 1)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    boolean powerOn = asBool(powerRaw)
+    emitSwitchState(powerOn)
 
     // ---- Humidity ----
     if (r.humidity != null) device.sendEvent(name:"humidity", value: r.humidity as Integer)
@@ -355,10 +365,9 @@ def applyStatus(status){
     // Null/0 temperature is common when sensor is not present or not yet warmed up.
     if (r.temperature != null) {
         Integer tempRaw = r.temperature as Integer
-        if (tempRaw != 0) {
-            BigDecimal tempF = tempRaw / 10.0
-            device.sendEvent(name:"temperature", value: tempF, unit: "°F")
-        }
+        // API gives F × 10; emitTemperature (LevoitChildBase) converts to the hub scale.
+        // Skip 0 raw (sensor absent / not yet warmed up).
+        if (tempRaw != 0) emitTemperature(tempRaw)
     }
 
     // ---- Target humidity ----
@@ -373,22 +382,22 @@ def applyStatus(status){
     device.sendEvent(name:"mode", value: userMode)
 
     // ---- Mist level (1-2 range) ----
-    // BP#6: clamp to 0 when device is off (virtualLevel may retain last-set value).
+    // BP#6: clamp the active mist level to 0 when off (virtualLevel may retain last-set value).
     Integer mistVirtual = null
     if (r.virtualLevel != null) {
         mistVirtual = r.virtualLevel as Integer
     } else if (r.mistLevel != null) {
         mistVirtual = r.mistLevel as Integer
     }
-    if (!powerOn && mistVirtual != null && mistVirtual > 0) mistVirtual = 0
+    mistVirtual = clampOffLevel(mistVirtual, powerOn)
     if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
 
     // ---- Water lacks ----
     def waterLacksRaw = r.waterLacksState
-    boolean waterLacks = (waterLacksRaw instanceof Boolean) ? waterLacksRaw : ((waterLacksRaw as Integer) == 1)
+    boolean waterLacks = asBool(waterLacksRaw)
     if (!waterLacks && r.waterTankLifted != null) {
         def liftedRaw = r.waterTankLifted
-        waterLacks = (liftedRaw instanceof Boolean) ? liftedRaw : ((liftedRaw as Integer) == 1)
+        waterLacks = asBool(liftedRaw)
     }
     String waterLacksStr = waterLacks ? "yes" : "no"
     if (state.lastWaterLacks != waterLacksStr) {
@@ -400,12 +409,12 @@ def applyStatus(status){
     // ---- Auto-stop ----
     def autoStopSwitchRaw = r.autoStopSwitch
     if (autoStopSwitchRaw != null) {
-        boolean autoStopEnabled = (autoStopSwitchRaw instanceof Boolean) ? autoStopSwitchRaw : ((autoStopSwitchRaw as Integer) == 1)
+        boolean autoStopEnabled = asBool(autoStopSwitchRaw)
         device.sendEvent(name:"autoStopEnabled", value: autoStopEnabled ? "on" : "off")
     }
     def autoStopStateRaw = r.autoStopState
     if (autoStopStateRaw != null) {
-        boolean autoStopReached = (autoStopStateRaw instanceof Boolean) ? autoStopStateRaw : ((autoStopStateRaw as Integer) == 1)
+        boolean autoStopReached = asBool(autoStopStateRaw)
         device.sendEvent(name:"autoStopReached", value: autoStopReached ? "yes" : "no")
     }
 
@@ -413,14 +422,14 @@ def applyStatus(status){
     // Prefer screenState (actual) over screenSwitch (config).
     def displayRaw = r.screenState != null ? r.screenState : r.screenSwitch
     if (displayRaw != null) {
-        boolean displayOn = (displayRaw instanceof Boolean) ? displayRaw : ((displayRaw as Integer) == 1)
+        boolean displayOn = asBool(displayRaw)
         device.sendEvent(name:"displayOn", value: displayOn ? "on" : "off")
     }
 
     // ---- Child lock ----
     def childLockRaw = r.childLockSwitch
     if (childLockRaw != null) {
-        boolean childLock = (childLockRaw instanceof Boolean) ? childLockRaw : ((childLockRaw as Integer) == 1)
+        boolean childLock = asBool(childLockRaw)
         device.sendEvent(name:"childLock", value: childLock ? "on" : "off")
     }
 
@@ -430,7 +439,7 @@ def applyStatus(status){
         // autoDryingSwitch = user-enabled flag; dryingState = current runtime state
         def autoDrySwRaw = dryingModeObj.autoDryingSwitch
         if (autoDrySwRaw != null) {
-            boolean dryingEnabled = (autoDrySwRaw instanceof Boolean) ? autoDrySwRaw : ((autoDrySwRaw as Integer) == 1)
+            boolean dryingEnabled = asBool(autoDrySwRaw)
             device.sendEvent(name:"dryingEnabled", value: dryingEnabled ? "on" : "off")
         }
     }
@@ -445,7 +454,7 @@ def applyStatus(status){
     if (nl instanceof Map) {
         def nlSwitchRaw = nl.nightLightSwitch
         if (nlSwitchRaw != null) {
-            boolean nlOn = (nlSwitchRaw instanceof Boolean) ? nlSwitchRaw : ((nlSwitchRaw as Integer) == 1)
+            boolean nlOn = asBool(nlSwitchRaw)
             device.sendEvent(name:"nightlightOn", value: nlOn ? "on" : "off")
         }
         if (nl.brightness != null)       device.sendEvent(name:"nightlightBrightness", value: nl.brightness as Integer)
@@ -456,7 +465,7 @@ def applyStatus(status){
     def parts = []
     if (r.humidity != null)         parts << "Humidity: ${r.humidity as Integer}%"
     if (r.targetHumidity != null)   parts << "Target: ${r.targetHumidity as Integer}%"
-    if (mistVirtual != null)        parts << "Mist: L${mistVirtual} (1-2)"
+    if (mistVirtual != null)        parts << "Mist: ${mistVirtual > 0 ? 'L'+mistVirtual+' (1-2)' : 'off'}"
     parts << "Mode: ${userMode}"
     parts << "Water: ${waterLacksStr == 'yes' ? 'empty' : 'ok'}"
     if (r.filterLifePercent != null)     parts << "Filter: ${r.filterLifePercent as Integer}%"

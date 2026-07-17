@@ -140,6 +140,21 @@ class LevoitDual200SSpec extends HubitatSpec {
         lastEventValue("mistLevel") == 0
     }
 
+    def "applyStatus off but API retains nonzero mist level -> mistLevel clamps to 0 (Bug Pattern #6)"() {
+        given: "device OFF yet the cloud still reports the last-set mist level (2 = Dual200S max)"
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("LUH-D301S.yaml")
+        def deviceData = (fixture.responses.device_off as Map) + [mist_virtual_level: 2, mist_level: 2]
+        assert deviceData.enabled == false
+
+        when:
+        driver.applyStatus(v2StatusEnvelope(deviceData))
+
+        then: "switch off and mistLevel reports 0 (no stale 'Mist: 2' on an off device)"
+        lastEventValue("switch") == "off"
+        lastEventValue("mistLevel") == 0
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #12: pref-seed
     // -------------------------------------------------------------------------
@@ -524,6 +539,36 @@ class LevoitDual200SSpec extends HubitatSpec {
         !testLog.errors.isEmpty()
 
         and: "no mode event emitted"
+        !eventEmitted("mode", "auto")
+    }
+
+    // result.code non-Map crash class: sendModeRequest reads
+    // resp?.data?.result?.code directly (not behind httpOk). On a non-JSON gateway
+    // error body (HTTP 200 with a raw HTML String, not a Map), the pre-fix bare read
+    // did a property access on the String and threw MissingPropertyException, aborting
+    // setMode() with a raw sandbox stack trace. Post-fix, `bodyIsMap = resp?.data
+    // instanceof Map` gates the read and forces ok=false, so setMode reports a clean
+    // failure (no crash, no spurious mode event).
+    //
+    // DISCRIMINATION: reverting to `def innerCode = resp?.data?.result?.code` +
+    // unguarded `ok` makes setMode throw on the String body -> the notThrown block goes
+    // RED. (Orchestrator owns the both-ways proof.)
+    def "setMode('auto') with a non-JSON String body does NOT throw and emits no mode event (v2.10 result.code crash class)"() {
+        given: "device is on so BP24-B ensureSwitchOn() no-ops; both mode requests get a String body"
+        testDevice.events.add([name: "switch", value: "on"])
+        settings.descriptionTextEnable = false
+        testParent.requestResponses = [
+            [status: 200, data: "<html><body>200 but not JSON</body></html>"],
+            [status: 200, data: "<html><body>200 but not JSON</body></html>"]
+        ]
+
+        when:
+        driver.setMode("auto")
+
+        then: "the .result read on the String body did not throw"
+        notThrown(Exception)
+
+        and: "no spurious success -> no mode event emitted"
         !eventEmitted("mode", "auto")
     }
 

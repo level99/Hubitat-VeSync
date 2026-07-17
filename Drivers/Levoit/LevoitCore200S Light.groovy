@@ -48,11 +48,12 @@ SOFTWARE.
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Core200S Air Purifier Light",
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S air purifier's night light capability",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -60,6 +61,7 @@ metadata {
 
             command "setNightLight", [[name:"Night Light*", type: "ENUM", description: "Display", constraints: ["on", "off", "dim"] ] ]
 
+            attribute "mode",            "string"        // on | dim | off  (Night light mode)
             attribute "diagnostics",     "string"
             command "captureDiagnostics"
         }
@@ -124,6 +126,15 @@ def setNightLight(mode)
     // API expects literal "on"/"off"/"dim" string in night_light field.
     String m = (mode as String).trim().toLowerCase()
 
+    // BP30 Layer 3: drop an identical night-light write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted state stays correctable (see isDuplicateWrite).
+    // No turningOn/powerOnPending exclusion here: setNightLight is a single idempotent write with no
+    // multi-step power-on establishment sequence, so there is no establishment write to protect (L2 N/A).
+    if (isDuplicateWrite("nightLight", m)) {
+        logDebug "setNightLight: identical night-light write within dedup window (storm duplicate); skipping"
+        return false
+    }
+
     def result = false
 
     parent.sendBypassRequest(device, [
@@ -133,10 +144,18 @@ def setNightLight(mode)
 			if (checkHttpResponse("setNightLight", resp))
 			{
                 sendLevelEvent(m)
+                // Emit the `mode` attribute on the command path too — the poll path (update(status))
+                // already sets state.mode + emits mode, but a setNightLight() command left mode stale
+                // until the next poll (unlike the level/switch mirrors emitted via sendLevelEvent).
+                state.mode = m
+                device.sendEvent(name: "mode", value: m)
                 logInfo "Night light: ${m}"
 				result = true
 			}
 		}
+    // B1: a FAILED write must not suppress an immediate identical retry — clear the dedup slot
+    // so the same value fires again (result is synchronously real here; the closure already ran).
+    if (!result) clearDuplicateWrite("nightLight")
     return result
 }
 
@@ -201,6 +220,11 @@ def update(status) {
     state.mode = mode
 
     sendLevelEvent(mode)
+    // `mode` is a declared attribute, so the platform drops same-value events
+    // (isStateChange:false) — that declaration is what stopped the once-a-minute
+    // event-log churn on this night-light child. Emit unconditionally, matching every
+    // sibling driver (Core/Vital/Fan/humidifiers all emit their `mode` this way and
+    // rely on the platform's same-value dedup).
     device.sendEvent(name: "mode", value: mode)
 
     return result

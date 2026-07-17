@@ -264,6 +264,33 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
         lastEventValue("warmMistEnabled") == "off"
     }
 
+    def "applyStatus off-state with RETAINED nonzero mist+warm levels clamps both attrs and tile to off (Bug Pattern #6)"() {
+        given: "device off (enabled=false) but API still reports retained mist_virtual_level=5 + warm_level=2"
+        // NON-VACUOUS: device_off has mist_virtual_level=0 / warm_level=0, which pass with or
+        // without the clamp. Override to retained nonzero values so the emitted mistLevel,
+        // warmMistLevel, and the info tile depend on clampOffLevel; the guard goes RED if reverted.
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("LUH-O451S-WUS.yaml")
+        def deviceData = (fixture.responses.device_off as Map) +
+            [mist_virtual_level: 5, mist_level: 5, warm_level: 2, warm_enabled: true]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "active mist + warm clamp to 0/off even though the API retains nonzero values"
+        lastEventValue("switch") == "off"
+        lastEventValue("mistLevel") == 0
+        lastEventValue("warmMistLevel") == 0
+        lastEventValue("warmMistEnabled") == "off"
+
+        and: "info tile shows Mist: off and Warm: off (no stale L-level rendered)"
+        lastEventValue("info")?.contains("Mist: off")
+        lastEventValue("info")?.contains("Warm: off")
+        !lastEventValue("info")?.contains("Mist: L")
+        !lastEventValue("info")?.contains("Warm: L")
+    }
+
     def "applyStatus normalizes mode='humidity' (alt-firmware auto mode) to user-facing 'auto' (v2.2 read-path)"() {
         // v2.2: 'humidity' in the API response is the alt-firmware name for auto mode
         // (pyvesync PR #505 / LUH-A602S-WEU variant). The driver normalizes it to 'auto'
@@ -1947,17 +1974,15 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // BP26: safeIntArg regression — setWarmMistLevel / setHue / setSaturation
-    // non-null non-numeric inputs (the path that bypasses requireNotNull but
-    // reaches safeIntArg). Pre-fix: bare coercion threw before guard could fire.
+    // BP26/BP28: setWarmMistLevel uses parseLevelOrNull (not safeIntArg) — non-null
+    // non-numeric inputs must not throw AND must not coerce to 0 (which would silently
+    // turn warm mist off). Decimal strings still truncate to a valid Integer.
     // -------------------------------------------------------------------------
 
     def "BP26: setWarmMistLevel('abc') does not throw on non-numeric input from Rule Machine (OasisMist 450S)"() {
-        // safeIntArg("abc", 0) returns 0; range check 0<0||0>3 is false; lvl==0 &&
-        // switch!="on" hits early-return with no API call.
+        // parseLevelOrNull("abc") returns null; the null-guard logs a WARN and returns — no API call.
         given:
         settings.descriptionTextEnable = false
-        // switch=off so lvl=0 early-return fires cleanly with no cloud call
         testDevice.events.add([name: "switch", value: "off"])
 
         when:
@@ -1968,7 +1993,7 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
     }
 
     def "BP26: setWarmMistLevel('1.7') does not throw and makes a setVirtualLevel warm API call (OasisMist 450S)"() {
-        // safeIntArg("1.7") → 1 (truncation); 1 is within 0-3; switch is on so no early-return.
+        // parseLevelOrNull("1.7") → 1 (BigDecimal truncation); 1 is within 0-3; switch is on.
         given:
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
@@ -1981,6 +2006,43 @@ class LevoitOasisMist450SSpec extends HubitatSpec {
 
         and: "a setVirtualLevel warm API call was made"
         testParent.allRequests.any { it.method == "setVirtualLevel" && it.data.type == "warm" }
+    }
+
+    // BP28: setWarmMistLevel non-numeric must be IGNORED, not coerced to 0 (warm-off).
+    @Unroll
+    def "BP28: setWarmMistLevel('#input') non-numeric is ignored, warm mist unchanged (OasisMist 450S)"() {
+        given: "device is ON; a non-numeric value (RM blank slot / dashboard typo) arrives"
+        testDevice.events.add([name: "switch", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setWarmMistLevel(input)
+
+        then: "no warm write is sent — garbage must NOT silently turn warm mist off"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" && it.data.type == "warm" }.isEmpty()
+        and: "a warning is logged pointing at the bad value"
+        testLog.warns.any { it.contains("setWarmMistLevel") }
+        and: "garbage input is a WARN, NOT an ERROR/recordError (bad input != driver fault)"
+        testLog.errors.isEmpty()
+        noExceptionThrown()
+
+        where:
+        input << ["abc", "", "hgih", "true"]
+    }
+
+    def "BP28: setWarmMistLevel(0) explicit zero still turns warm mist off (contract preserved) (OasisMist 450S)"() {
+        given: "device is ON so the lvl==0 no-op-when-off branch does not apply"
+        testDevice.events.add([name: "switch", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setWarmMistLevel(0)
+
+        then: "explicit 0 still routes to the warm-off write (level=0, type=warm)"
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" && it.data.type == "warm" }
+        req != null
+        req.data.level == 0
+        state.warmMistEnabled == "off"
     }
 
     def "BP26: setHue('abc') does not throw on non-numeric input from Rule Machine (OasisMist 450S WEU)"() {

@@ -100,6 +100,45 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
         noExceptionThrown()
     }
 
+    def "applyStatus reports a non-zero SwitchLevel for mist level 1 (0 would read as OFF while misting)"() {
+        // percentFromLevel(1) returned 0, so a device actively misting at its lowest level emitted
+        // level=0 — which conventionally means OFF and contradicts switch=on. It now floors at 1%.
+        given: "device on, misting at the lowest set level (virtualLevel 1)"
+        def status = v2StatusEnvelope([powerSwitch: 1, workMode: "manual", humidity: 50, virtualLevel: 1, mistLevel: 1])
+
+        when:
+        driver.applyStatus(status)
+
+        then: "level is a non-zero active percent, not 0"
+        (lastEventValue("level") as Integer) >= 1
+    }
+
+    def "percentFromLevel/levelFromPercent still round-trip for every mist level 1-9"() {
+        // The level-1 floor (max(1, ...)) must not break the level<->percent inverse. Every mist
+        // level must map to a percent that maps back to the same level, and level 1 must be non-zero.
+        expect:
+        (1..9).each { lvl ->
+            int pct = driver.percentFromLevel(lvl as Integer)
+            assert pct > 0, "level ${lvl} produced percent 0 (would read as OFF)"
+            assert driver.levelFromPercent(pct) == lvl, "round-trip broke: level ${lvl} -> ${pct}% -> ${driver.levelFromPercent(pct)}"
+        }
+    }
+
+    def "applyStatus syncs state.lastSwitchSet so toggle honors an external power change"() {
+        // Superior 6000S's toggle() (via LevoitHumidifier lib) prefers state.lastSwitchSet. The poll
+        // must sync it, else an external off is shadowed by a stale "on" mirror and toggle inverts wrong.
+        given: "stale lastSwitchSet 'on'; device now off externally"
+        state.lastSwitchSet = "on"
+        def status = v2StatusEnvelope([powerSwitch: 0, workMode: "manual", humidity: 50])
+
+        when:
+        driver.applyStatus(status)
+
+        then: "switch reads off AND the toggle mirror is synced off"
+        lastEventValue("switch") == "off"
+        state.lastSwitchSet == "off"
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #8: dryingMode enum 0/1/2 → off/active/complete (NOT boolean)
     // -------------------------------------------------------------------------
@@ -266,6 +305,33 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
 
         and: "no errors logged"
         testLog.errors.isEmpty()
+    }
+
+    def "applyStatus off but API retains nonzero mistLevel -> clamps to 0 (Bug Pattern #6)"() {
+        given: "device is OFF yet the cloud still reports the last-set mistLevel (5)"
+        settings.descriptionTextEnable = false
+        def deviceData = [
+            powerSwitch: 0, humidity: 45, targetHumidity: 55,
+            mistLevel: 5, virtualLevel: 5, workMode: "manual",
+            screenState: 1, screenSwitch: 1, childLockSwitch: 0,
+            autoStopSwitch: 1, temperature: 683
+        ]
+        def status = humidifierStatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "switch off and mistLevel reports 0 (no stale 'Mist: 5' on an off device)"
+        lastEventValue("switch") == "off"
+        lastEventValue("mistLevel") == 0
+
+        and: "the info tile shows 'Mist: off' (sourced from the setpoint, but clamped for display) — not 'Mist: L5'"
+        def info = lastEventValue("info") as String
+        info.contains("Mist: off")
+        !info.contains("Mist: L5")
+
+        and: "the virtualLevel/level SETPOINT attributes are intentionally retained (dimmer convention)"
+        lastEventValue("virtualLevel") == 5
     }
 
     def "autoPro workMode is reverse-mapped to 'auto' in mode attribute"() {
@@ -1017,6 +1083,32 @@ class LevoitSuperior6000SSpec extends HubitatSpec {
 
         and: "no setVirtualLevel mist-write call was made"
         testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // BP29: setLevel must NOT pre-emit the level. setMistLevel's success branch emits the
+    // reconciled level (percentFromLevel); when setMistLevel short-circuits without a write
+    // (sleep mode rejects the mist write), setLevel must not have already reported a level
+    // the device never took.
+    // NON-VACUITY: restoring the pre-emit `sendEvent(name:"level", value: pct)` in setLevel
+    // makes a level event fire here -> the assertion goes RED.
+    // -------------------------------------------------------------------------
+
+    def "setLevel in sleep mode does NOT emit a level event (no pre-emit; setMistLevel short-circuits)"() {
+        given: "device is in sleep mode and on (setMistLevel rejects the mist write in sleep)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "mode", value: "sleep"])
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.allRequests.clear()
+
+        when: "setLevel(60) is called -- maps to a positive mist level, short-circuited by sleep mode"
+        driver.setLevel(60)
+
+        then: "no mist-write call was made (sleep short-circuit)"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" }.isEmpty()
+
+        and: "no level event fired -- setLevel did not pre-emit a level the device never took"
+        lastEventValue("level") == null
     }
 
     // -------------------------------------------------------------------------

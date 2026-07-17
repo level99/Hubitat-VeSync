@@ -79,6 +79,14 @@ from lint_rules.bp16_watchdog_call_site import check_rule25_bp16_watchdog_call_s
 from lint_rules.groovy_javadoc_terminator import check_rule26_javadoc_terminator
 from lint_rules.bp18_null_guard import check_rule27_bp18_null_guard
 from lint_rules.captureDiagnostics_presence import check_rule28_capturediagnostics_presence
+from lint_rules.bp30_single_threaded import check_rule48_single_threaded
+from lint_rules.result_map_guard import check_rule51_result_map_guard
+from lint_rules.private_scheduled_handler import check_rule52_private_scheduled_handler
+from lint_rules.power_write_reporter import check_rule53_power_write_reporter
+from lint_rules.switch_toggle_sync import check_rule54_switch_toggle_sync
+from lint_rules.bare_bool_flag_eq import check_rule55_bare_bool_flag_eq
+from lint_rules.temperature_scale_emit import check_rule56_temperature_scale_emit
+from lint_rules.sandbox_forbidden_calls import check_rule57_sandbox_forbidden_calls
 from lint_rules.library_no_top_block_comment import check_rule29_library_no_top_block_comment
 from lint_rules.direct_log_calls import check_rule30_direct_log_in_driver
 from lint_rules.bp24_state_switch_dead_branch import check_rule31_state_switch_dead_branch
@@ -2759,6 +2767,959 @@ class TestRule40BP28LevelOffAmbiguity:
 
 
 # ---------------------------------------------------------------------------
+# RULE44 bp6_speed_level_power_gate — active-level emits must be power-gated
+# ---------------------------------------------------------------------------
+
+class TestRule44BP6PowerGate:
+    """
+    RULE44 (Bug Pattern #6): PER-EMIT power-gating of active-level attributes (mistLevel /
+    warmMistLevel / warmMistEnabled / speed / fanSpeed) in status-parse methods AND helpers.
+    Each active-level emit must be individually gated (clampOffLevel on the value, a
+    gated-local reference resolved by nearest-preceding assignment, or enclosure in a
+    power-gated if-block). Scope = applyStatus / update(status…) / apply* helpers; write-path
+    methods (set*/send*/handle*/on/off/configureOnState/…) are out of scope. Setpoint attrs
+    (virtualLevel / level) are never flagged. Comments (// and /* */) and string literals are
+    stripped string-literal-aware before the scan.
+    """
+
+    from lint_rules.bp6_speed_level_power_gate import check_rule44_bp6_power_gate as _rule
+
+    # MUST-NOT-CATCH: applyStatus routes the active mist level through clampOffLevel.
+    GOOD_CLAMP_HELPER = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = (r.enabled as Integer) == 1
+            Integer mistVirtual = r.mist_virtual_level as Integer
+            mistVirtual = clampOffLevel(mistVirtual, powerOn)
+            if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
+        }
+    """)
+
+    # MUST-NOT-CATCH: Core speed gated behind a !status.result.enabled branch (no helper).
+    GOOD_ENABLED_BRANCH = textwrap.dedent("""\
+        def update(status, nightLight) {
+            if (!status.result.enabled) {
+                device.sendEvent(name: "speed", value: "off")
+            } else {
+                device.sendEvent(name: "speed", value: mapIntegerToSpeed(status.result.level))
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: applyStatus emits only the SETPOINT attributes (virtualLevel/level).
+    # These intentionally retain their value while off and are NOT in the active allowlist.
+    GOOD_SETPOINT_ONLY = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            if (r.virtualLevel != null) {
+                Integer vl = r.virtualLevel as Integer
+                device.sendEvent(name:"virtualLevel", value: vl)
+                device.sendEvent(name:"level", value: percentFromLevel(vl))
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: a write-path setter emitting speed ungated is out of scope (the emit
+    # reflects the command just sent, not a poll of a possibly-off device).
+    GOOD_WRITE_PATH_SETTER = textwrap.dedent("""\
+        def setSpeed(spd) {
+            String s = (spd as String).toLowerCase()
+            ensureSwitchOn()
+            hubBypass("setLevel", [manualSpeedLevel: mapSpeedToInteger(s)], "setLevel")
+            device.sendEvent(name:"speed", value: s)
+        }
+    """)
+
+    # MUST-NOT-CATCH: an unrelated `updateFirmware(x)` (or `updateDisplay`, `update()` self-fetch)
+    # is NOT a status-parse entry point — the first-param `status` anchor must keep it out of scope
+    # even if it emits an active-allowlist attr.
+    GOOD_UPDATE_FIRMWARE = textwrap.dedent("""\
+        def updateFirmware(x) {
+            // not a status poll — must not be scanned as the status-parse path
+            device.sendEvent(name:"speed", value: x)
+        }
+    """)
+
+    # MUST-CATCH: applyStatus emits mistLevel with NO power gate (the BP6 bug).
+    BAD_UNGATED_MIST = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = (r.enabled as Integer) == 1
+            Integer mistVirtual = r.mist_virtual_level as Integer
+            if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
+        }
+    """)
+
+    # MUST-CATCH: update() emits speed from a mode switch with no off-case / no gate.
+    BAD_UNGATED_SPEED = textwrap.dedent("""\
+        def update(status, nightLight) {
+            state.mode = status.result.mode
+            switch(state.mode) {
+                case "manual": device.sendEvent(name: "speed", value: mapIntegerToSpeed(status.result.level)); break
+                case "sleep":  device.sendEvent(name: "speed", value: "on"); break
+            }
+        }
+    """)
+
+    # MUST-CATCH: applyStatus emits fanSpeed (purifier active speed) ungated.
+    BAD_UNGATED_FANSPEED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            Integer fanSpeedRaw = r.fanSpeedLevel as Integer
+            if (fanSpeedRaw != null) device.sendEvent(name:"fanSpeed", value: fanSpeedRaw)
+        }
+    """)
+
+    def test_clamp_helper_passes(self):
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_CLAMP_HELPER)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"clampOffLevel-gated body must not flag RULE44, got: {findings}"
+        )
+
+    def test_enabled_branch_passes(self):
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_ENABLED_BRANCH)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"!status.result.enabled-gated speed must not flag RULE44, got: {findings}"
+        )
+
+    def test_setpoint_only_passes(self):
+        """virtualLevel/level are setpoints, not in the active allowlist — never flagged."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_SETPOINT_ONLY)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"setpoint-only emit must not flag RULE44, got: {findings}"
+        )
+
+    def test_write_path_setter_passes(self):
+        """A set* command emitting speed ungated is out of scope (not a status-parse body)."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_WRITE_PATH_SETTER)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"write-path setter must not flag RULE44, got: {findings}"
+        )
+
+    def test_update_firmware_not_scanned(self):
+        """updateFirmware/updateDisplay/update() are not status-parse entry points — the
+        first-param `status` anchor must keep them out of scope even if they emit an active attr."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_UPDATE_FIRMWARE)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"updateFirmware (non-status method) must not flag RULE44, got: {findings}"
+        )
+
+    def test_ungated_mist_fails(self):
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.BAD_UNGATED_MIST)
+        assert any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"Expected RULE44 for ungated mistLevel emit, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE44_bp6_power_gate'), (
+            f"RULE44 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_ungated_speed_fails(self):
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.BAD_UNGATED_SPEED)
+        assert any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"Expected RULE44 for ungated speed emit, got: {findings}"
+        )
+
+    def test_ungated_fanspeed_fails(self):
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.BAD_UNGATED_FANSPEED)
+        assert any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"Expected RULE44 for ungated fanSpeed emit, got: {findings}"
+        )
+
+    # -------------------------------------------------------------------------
+    # FIX #3 — PER-EMIT (not method-level): a body that gates ONE active emit but emits a
+    # SECOND active attr ungated must be flagged on the second emit. (Method-level "any
+    # gating token anywhere" green-lit the LV600S warm-fallback regression.)
+    # -------------------------------------------------------------------------
+
+    # MUST-CATCH: mistLevel is clampOffLevel'd, but warmMistEnabled is emitted ungated in
+    # the warm-fallback branch (the exact LV600S:409 shape with `powerOn &&` removed).
+    BAD_PER_EMIT_SECOND_UNGATED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            Integer mistVirtual = clampOffLevel(r.mist_virtual_level as Integer, powerOn)
+            if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
+            if (r.warm_enabled != null) {
+                boolean warmOn = asBool(r.warm_enabled)
+                device.sendEvent(name:"warmMistEnabled", value: warmOn ? "on" : "off")
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: the REAL LV600S warm-fallback — warmMistEnabled gated via
+    # `warmOn = powerOn && asBool(...)`, sibling warm_level branch gates via the clamped
+    # warmLvl chain. Both warmMistEnabled emits are individually gated.
+    GOOD_WARM_FALLBACK = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            Integer mistVirtual = clampOffLevel(r.mist_virtual_level as Integer, powerOn)
+            if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
+            Integer warmLvl = null
+            if (r.warm_level != null) {
+                warmLvl = clampOffLevel(r.warm_level as Integer, powerOn)
+                boolean warmOn = (warmLvl > 0)
+                String warmOnStr = warmOn ? "on" : "off"
+                device.sendEvent(name:"warmMistLevel", value: warmLvl)
+                device.sendEvent(name:"warmMistEnabled", value: warmOnStr)
+            } else if (r.warm_enabled != null) {
+                boolean warmOn = powerOn && asBool(r.warm_enabled)
+                device.sendEvent(name:"warmMistEnabled", value: warmOn ? "on" : "off")
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: the Core per-mode speed shape — every speed emit is inside the
+    # `if (!enabled) { speed=off } else { switch(mode) … }` structure.
+    GOOD_PER_MODE_SPEED = textwrap.dedent("""\
+        def update(status, nightLight) {
+            boolean enabled = asBool(status.result.enabled)
+            if (!enabled) {
+                device.sendEvent(name: "speed", value: "off")
+            } else {
+                switch(state.mode) {
+                    case "manual": device.sendEvent(name: "speed", value: mapIntegerToSpeed(status.result.level)); break
+                    case "sleep":  device.sendEvent(name: "speed", value: "on"); break
+                }
+            }
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # FIX #4 — status-parse HELPER methods (apply*) are scanned, not just applyStatus/update.
+    # -------------------------------------------------------------------------
+
+    # MUST-NOT-CATCH: the real FanLib applyFanCommonHead — speed emits inside if(!powerOn)/else.
+    GOOD_FAN_HELPER_GATED = textwrap.dedent("""\
+        private Map applyFanCommonHead(Map r) {
+            boolean powerOn = asBool(r.powerSwitch)
+            device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+            Integer activeSpeed = (r.fanSpeedLevel ?: r.manualSpeedLevel ?: 1) as Integer
+            if (!powerOn) {
+                device.sendEvent(name:"speed", value:"off")
+            } else {
+                String speedEnum = levelToFanControlEnum(activeSpeed)
+                device.sendEvent(name:"speed", value: speedEnum)
+            }
+            return [powerOn: powerOn]
+        }
+    """)
+
+    # MUST-CATCH: an apply* helper that emits speed UNGATED (the FanLib vacuous-pass regression).
+    BAD_FAN_HELPER_UNGATED = textwrap.dedent("""\
+        private Map applyFanCommonHead(Map r) {
+            boolean powerOn = asBool(r.powerSwitch)
+            Integer activeSpeed = (r.fanSpeedLevel ?: 1) as Integer
+            String speedEnum = levelToFanControlEnum(activeSpeed)
+            device.sendEvent(name:"speed", value: speedEnum)
+            return [powerOn: powerOn]
+        }
+    """)
+
+    # MUST-NOT-CATCH: a write-path helper (NOT apply*) that emits speed after a command it
+    # just issued — sendLevel / configureOnState shape. Out of scope (not a poll).
+    GOOD_WRITE_PATH_HELPER = textwrap.dedent("""\
+        private boolean sendLevel(Integer level) {
+            def resp = hubBypass("setLevel", [manualSpeedLevel: level], "setLevel")
+            if (httpOk(resp)) {
+                String enumVal = levelToFanControlEnum(level)
+                device.sendEvent(name:"speed", value: enumVal)
+                return true
+            }
+            return false
+        }
+    """)
+
+    GOOD_CONFIGURE_ON_STATE = textwrap.dedent("""\
+        def configureOnState() {
+            if (device.currentValue("switch") != "on") return
+            def targetSpeed = state.speed ?: "low"
+            device.sendEvent(name: "speed", value: targetSpeed)
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # FIX #10 — comment/string-literal stripping.
+    # -------------------------------------------------------------------------
+
+    # MUST-CATCH: the ONLY gating token is inside a /* */ block comment — must NOT gate.
+    BAD_GATE_IN_BLOCK_COMMENT = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            /* clampOffLevel(x, powerOn) -- mentioned only in a comment, does not gate */
+            Integer mistVirtual = r.mist_virtual_level as Integer
+            if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
+        }
+    """)
+
+    # MUST-NOT-CATCH: a `//` inside a string co-located with a REAL gating token — the
+    # string's `//` must not truncate the line and hide the real clampOffLevel.
+    GOOD_STRING_WITH_SLASHES = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            logDebug("source url http://vesync.example/path")
+            Integer mistVirtual = clampOffLevel(r.mist_virtual_level as Integer, asBool(r.enabled))
+            if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
+        }
+    """)
+
+    def test_per_emit_second_ungated_fails(self):
+        """FIX #3: a body that clamps mistLevel but emits warmMistEnabled ungated in the
+        warm-fallback branch must be flagged on the SECOND emit (per-emit, not method-level)."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.BAD_PER_EMIT_SECOND_UNGATED)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE44_bp6_power_gate']
+        assert rule_findings, f"Expected RULE44 for the ungated warmMistEnabled emit, got: {findings}"
+        assert any('warmMistEnabled' in f['title'] for f in rule_findings), (
+            f"RULE44 must flag the warmMistEnabled emit specifically, got: {rule_findings}"
+        )
+        assert all(f['severity'] == 'FAIL' for f in rule_findings)
+
+    def test_warm_fallback_gated_passes(self):
+        """FIX #3 must-not-catch: the real LV600S warm-fallback (powerOn && asBool, plus the
+        clamped-warmLvl chain) is fully per-emit gated."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_WARM_FALLBACK)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"real warm-fallback must not flag RULE44, got: {findings}"
+        )
+
+    def test_per_mode_speed_gated_passes(self):
+        """FIX #3 must-not-catch: Core per-mode speed inside if(!enabled){…}else{switch…}."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_PER_MODE_SPEED)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"Core per-mode speed must not flag RULE44, got: {findings}"
+        )
+
+    def test_fan_helper_gated_passes(self):
+        """FIX #4 must-not-catch: applyFanCommonHead (a helper) with if(!powerOn)/else speed."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_FAN_HELPER_GATED)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"gated apply* helper must not flag RULE44, got: {findings}"
+        )
+
+    def test_fan_helper_ungated_fails(self):
+        """FIX #4 must-catch: an apply* helper that emits speed ungated is now scanned
+        (previously the Fan family passed VACUOUSLY because helpers weren't scanned)."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.BAD_FAN_HELPER_UNGATED)
+        assert any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"Expected RULE44 for ungated apply* helper, got: {findings}"
+        )
+
+    def test_write_path_send_helper_passes(self):
+        """FIX #4 must-not-catch: sendLevel (write-path helper, not apply*) is out of scope."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_WRITE_PATH_HELPER)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"write-path sendLevel helper must not flag RULE44, got: {findings}"
+        )
+
+    def test_configure_on_state_passes(self):
+        """FIX #4 must-not-catch: configureOnState (post-power-on write-path config) is out
+        of scope — not apply*/applyStatus/update."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_CONFIGURE_ON_STATE)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"configureOnState must not flag RULE44, got: {findings}"
+        )
+
+    def test_gate_in_block_comment_fails(self):
+        """FIX #10 must-catch: a gating token present ONLY inside a /* */ block comment must
+        not gate the ungated mistLevel emit."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.BAD_GATE_IN_BLOCK_COMMENT)
+        assert any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"gating token in a block comment must not gate; expected RULE44, got: {findings}"
+        )
+
+    def test_string_with_slashes_passes(self):
+        """FIX #10 must-not-catch: a `//` inside a string must not truncate the line and hide
+        the real clampOffLevel gating the emit."""
+        findings = run_rule(TestRule44BP6PowerGate._rule, self.GOOD_STRING_WITH_SLASHES)
+        assert not any(f['rule_id'] == 'RULE44_bp6_power_gate' for f in findings), (
+            f"string-with-// must not hide the real gate; expected no RULE44, got: {findings}"
+        )
+
+
+class TestRule44BP6ParserRobustness:
+    """
+    RULE44 R3-follow-up parser-robustness gaps (all verified real against source, zero-impact
+    on the current corpus). Each gap gets a must-catch (the edge form now caught) AND a
+    must-not-catch (a legit shape that must still pass).
+    """
+
+    from lint_rules.bp6_speed_level_power_gate import check_rule44_bp6_power_gate as _rule
+
+    def _ids(self, findings):
+        return [f for f in findings if f['rule_id'] == 'RULE44_bp6_power_gate']
+
+    # -------------------------------------------------------------------------
+    # GAP #1 — return-type allowlist widened to any valid Groovy type.
+    # -------------------------------------------------------------------------
+
+    # MUST-CATCH: an apply* helper with a `Boolean` return emitting ungated speed (the old
+    # fixed allowlist {def,void,Map,String,Integer,boolean,int,List,Object} silently skipped
+    # `Boolean`/`Long`/custom-typed methods).
+    BAD_BOOLEAN_RETURN_HELPER = textwrap.dedent("""\
+        Boolean applyFanCommonHead(Map r) {
+            Integer activeSpeed = r.fanSpeedLevel as Integer
+            device.sendEvent(name:"speed", value: levelToFanControlEnum(activeSpeed))
+            return true
+        }
+    """)
+
+    BAD_LONG_RETURN_HELPER = textwrap.dedent("""\
+        Long applyFanCommonHead(Map r) {
+            device.sendEvent(name:"fanSpeed", value: r.fanSpeedLevel as Integer)
+            return 0L
+        }
+    """)
+
+    # MUST-NOT-CATCH: a non-status method (write-path name) with a Boolean return is still
+    # ignored — widening the type allowlist must not pull write-path methods into scope.
+    GOOD_BOOLEAN_RETURN_WRITE_PATH = textwrap.dedent("""\
+        Boolean setSpeed(spd) {
+            device.sendEvent(name:"speed", value: spd)
+            return true
+        }
+    """)
+
+    # MUST-NOT-CATCH: a `return foo(x)` statement must not be mis-parsed as a method header
+    # (rettype="return") and pull an unrelated body into scope.
+    GOOD_RETURN_STATEMENT_NOT_METHOD = textwrap.dedent("""\
+        def helper() {
+            return computeSomething(1)
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #2 — multi-line emit (name:/value: span newlines).
+    # -------------------------------------------------------------------------
+
+    BAD_MULTILINE_UNGATED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            Integer fanSpeedRaw = r.fanSpeedLevel as Integer
+            device.sendEvent(
+                name:"speed",
+                value: fanSpeedRaw)
+        }
+    """)
+
+    GOOD_MULTILINE_GATED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            device.sendEvent(
+                name:"speed",
+                value: clampOffLevel(r.fanSpeedLevel as Integer, powerOn))
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #3 — named-arg order: value before name.
+    # -------------------------------------------------------------------------
+
+    BAD_VALUE_BEFORE_NAME = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            Integer fanSpeedRaw = r.fanSpeedLevel as Integer
+            device.sendEvent(value: fanSpeedRaw, name:"speed")
+        }
+    """)
+
+    GOOD_VALUE_BEFORE_NAME_GATED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            device.sendEvent(value: clampOffLevel(r.fanSpeedLevel as Integer, powerOn), name:"speed")
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #4 — multi-line RHS in a gated-local assignment (must NOT false-positive).
+    # -------------------------------------------------------------------------
+
+    GOOD_MULTILINE_ASSIGN_GATED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            Integer warmLvl =
+                clampOffLevel(r.warm_level as Integer, powerOn)
+            device.sendEvent(name:"warmMistLevel", value: warmLvl)
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #5 — Groovy string-flavour lexing (triple-quoted / slashy / dollar-slashy).
+    # -------------------------------------------------------------------------
+
+    # MUST-CATCH: a gating token present ONLY inside a triple-quoted string is NOT a real
+    # gate; the emit (ungated) must still be flagged.
+    BAD_GATE_IN_TRIPLE_QUOTE = textwrap.dedent('''\
+        def applyStatus(status) {
+            def r = status.result
+            logDebug("""note: clampOffLevel(x, powerOn) lives only in this doc string""")
+            Integer fanSpeedRaw = r.fanSpeedLevel as Integer
+            device.sendEvent(name:"speed", value: fanSpeedRaw)
+        }
+    ''')
+
+    # MUST-NOT-CATCH: a slashy regex literal containing `//` co-located with a real gate must
+    # not be mis-lexed (the `//` inside `/…/` is data, must not truncate the line).
+    GOOD_SLASHY_WITH_SLASHES = textwrap.dedent(r"""
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            def m = (r.note ?: "") =~ /a\/\/b/
+            device.sendEvent(name:"speed", value: clampOffLevel(r.fanSpeedLevel as Integer, powerOn))
+        }
+    """)
+
+    # MUST-NOT-CATCH: dollar-slashy string containing // co-located with a real gate.
+    GOOD_DOLLAR_SLASHY = textwrap.dedent(r"""
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            def doc = $/ url http://x and clampOffLevel-looking text /$
+            device.sendEvent(name:"speed", value: clampOffLevel(r.fanSpeedLevel as Integer, powerOn))
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #6 — else-if chain under a NEGATIVE gating if (whole chain gated).
+    # -------------------------------------------------------------------------
+
+    GOOD_NEG_ELSEIF_CHAIN = textwrap.dedent("""\
+        def update(status, nightLight) {
+            boolean enabled = asBool(status.result.enabled)
+            if (!enabled) {
+                device.sendEvent(name: "speed", value: "off")
+            } else if (state.mode == "manual") {
+                device.sendEvent(name: "speed", value: mapIntegerToSpeed(status.result.level))
+            } else if (state.mode == "sleep") {
+                device.sendEvent(name: "speed", value: "on")
+            }
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #7 — POSITIVE if(powerOn): else-branch active emit is NOT gated (BP6 bug).
+    # -------------------------------------------------------------------------
+
+    # MUST-CATCH: if(powerOn){ on-emit } else { active emit while OFF } — the else emit is
+    # ungated (runs when powerOn is false) and must be flagged.
+    BAD_POS_IF_ELSE_UNGATED = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            if (powerOn) {
+                device.sendEvent(name:"speed", value: levelToEnum(r.fanSpeedLevel as Integer))
+            } else {
+                device.sendEvent(name:"speed", value: levelToEnum(r.fanSpeedLevel as Integer))
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: if(powerOn){ active emit } — the THEN block (power true) is gated.
+    GOOD_POS_IF_THEN = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            if (powerOn) {
+                device.sendEvent(name:"speed", value: levelToEnum(r.fanSpeedLevel as Integer))
+            }
+        }
+    """)
+
+    # -------------------------------------------------------------------------
+    # GAP #8 — same-line emit-then-gated-assign (assignment offset is AFTER the emit).
+    # -------------------------------------------------------------------------
+
+    # MUST-CATCH: the emit uses `mistVirtual` BEFORE it is (re)assigned via clampOffLevel on
+    # the SAME line — the assignment does not gate an earlier emit.
+    BAD_EMIT_THEN_ASSIGN_SAME_LINE = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.enabled)
+            Integer mistVirtual = r.mist_virtual_level as Integer
+            device.sendEvent(name:"mistLevel", value: mistVirtual); mistVirtual = clampOffLevel(mistVirtual, powerOn)
+        }
+    """)
+
+    def test_gap1_boolean_return_helper_fails(self):
+        f = self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_BOOLEAN_RETURN_HELPER))
+        assert f, "GAP#1: Boolean-return apply* helper with ungated speed must be flagged"
+        assert all(x['severity'] == 'FAIL' for x in f)
+
+    def test_gap1_long_return_helper_fails(self):
+        assert self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_LONG_RETURN_HELPER)), \
+            "GAP#1: Long-return apply* helper with ungated fanSpeed must be flagged"
+
+    def test_gap1_boolean_write_path_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_BOOLEAN_RETURN_WRITE_PATH)), \
+            "GAP#1: a Boolean-return WRITE-PATH (setSpeed) must still be out of scope"
+
+    def test_gap1_return_statement_not_method(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_RETURN_STATEMENT_NOT_METHOD)), \
+            "GAP#1: a `return foo(x)` statement must not be parsed as a method header"
+
+    def test_gap2_multiline_ungated_fails(self):
+        assert self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_MULTILINE_UNGATED)), \
+            "GAP#2: a multi-line ungated speed emit must be flagged"
+
+    def test_gap2_multiline_gated_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_MULTILINE_GATED)), \
+            "GAP#2: a multi-line clampOffLevel-gated emit must pass"
+
+    def test_gap3_value_before_name_fails(self):
+        assert self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_VALUE_BEFORE_NAME)), \
+            "GAP#3: value-before-name ungated emit must be flagged"
+
+    def test_gap3_value_before_name_gated_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_VALUE_BEFORE_NAME_GATED)), \
+            "GAP#3: value-before-name gated emit must pass"
+
+    def test_gap4_multiline_assign_gated_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_MULTILINE_ASSIGN_GATED)), \
+            "GAP#4: a multi-line gated-local assignment must be recognised (no false positive)"
+
+    def test_gap5_gate_in_triple_quote_fails(self):
+        assert self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_GATE_IN_TRIPLE_QUOTE)), \
+            "GAP#5: a gating token only inside a triple-quoted string must not gate"
+
+    def test_gap5_slashy_with_slashes_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_SLASHY_WITH_SLASHES)), \
+            "GAP#5: a slashy regex with // inside must not be mis-lexed and hide the real gate"
+
+    def test_gap5_dollar_slashy_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_DOLLAR_SLASHY)), \
+            "GAP#5: a dollar-slashy string with // inside must not be mis-lexed"
+
+    def test_gap6_neg_elseif_chain_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_NEG_ELSEIF_CHAIN)), \
+            "GAP#6: every else-if branch under if(!enabled) is gated (on-branch); must pass"
+
+    def test_gap7_pos_if_else_ungated_fails(self):
+        f = self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_POS_IF_ELSE_UNGATED))
+        assert f, "GAP#7: an active emit in the ELSE of if(powerOn) (off-branch) must be flagged"
+        # exactly the else emit, not the then emit
+        assert all(x['severity'] == 'FAIL' for x in f)
+
+    def test_gap7_pos_if_then_passes(self):
+        assert not self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.GOOD_POS_IF_THEN)), \
+            "GAP#7: an active emit in the THEN of if(powerOn) (on-branch) is gated; must pass"
+
+    def test_gap8_emit_then_assign_same_line_fails(self):
+        assert self._ids(run_rule(TestRule44BP6ParserRobustness._rule, self.BAD_EMIT_THEN_ASSIGN_SAME_LINE)), \
+            "GAP#8: an emit BEFORE a same-line gated assignment must still be flagged (offset order)"
+
+
+class TestRule45BoolCoercionAsInteger:
+    """
+    RULE45: the throw-prone `(<expr> as Integer) == 1` boolean-coercion idiom (the bare,
+    inline-event, and verbose `instanceof Boolean ? : as Integer == 1` single-line forms)
+    AND the SPLIT form (`Integer s = (...) as Integer` on one line, `s == 1` a few lines
+    later) must be replaced by the shared asBool() helper. asBool's OWN body coerces via
+    `raw.intValue() == 1`, NOT `as Integer) == 1`, so it is exempt by construction.
+    A genuine numeric-level cast (compared to a range/threshold, never `== 1`) must NOT flag.
+    """
+
+    from lint_rules.bool_coercion_as_integer import (
+        check_rule45_bool_coercion_as_integer as _rule,
+    )
+
+    # MUST-CATCH: the bare assignment form.
+    BAD_BARE = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = (r.powerSwitch as Integer) == 1
+            device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+        }
+    """)
+
+    # MUST-CATCH: the SPLIT form — cast assigned on one line, `== 1` compare on a later
+    # line (this is exactly how Sup6000S:332/333 evaded the single-line rule).
+    BAD_SPLIT = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            Integer screen = (r.screenState != null ? r.screenState : r.screenSwitch) as Integer
+            device.sendEvent(name:"displayOn", value: screen == 1 ? "on" : "off")
+        }
+    """)
+
+    # MUST-CATCH: the SPLIT form with a bare `def`-typed cast and a bare `== 1` compare.
+    BAD_SPLIT_BARE_COMPARE = textwrap.dedent("""\
+        def applyStatus(status) {
+            def lifted = status.result.waterTankLifted as Integer
+            boolean removed = lifted == 1
+        }
+    """)
+
+    # D4 MUST-CATCH: the PARENTHESIZED-cast SPLIT form — the assignment line ENDS in
+    # `as Integer)` (a wrapping paren), which the prior `as\\s+Integer\\s*$` anchor missed.
+    # This is the exact shape that let oscillationCalibrationState (a 0/1 flag) evade RULE45:
+    #     Integer cs = (r.oscillationCalibrationState as Integer)
+    #     device.sendEvent(..., value: cs == 1 ? "calibrating" : "idle")
+    BAD_PAREN_SPLIT = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            Integer cs = (r.oscillationCalibrationState as Integer)
+            device.sendEvent(name:"oscillationCalibrationState", value: cs == 1 ? "calibrating" : "idle")
+        }
+    """)
+
+    # D4 MUST-NOT-CATCH: a legitimate PARENTHESIZED numeric cast whose var is compared to a
+    # THRESHOLD (`> 0`), not `== 1` — a real numeric value (e.g. temperature tenths), NOT a
+    # 0/1 flag. Confirms the widened anchor did not start flagging genuine numeric casts.
+    GOOD_PAREN_SPLIT_NUMERIC = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            Integer rawHigh = (r.highTemperature as Integer)
+            if (rawHigh > 0) device.sendEvent(name:"highTemperature", value: rawHigh / 10.0)
+        }
+    """)
+
+    # MUST-CATCH: the verbose instanceof-Boolean ternary (its tail is `as Integer) == 1`).
+    BAD_VERBOSE_TERNARY = textwrap.dedent("""\
+        def applyStatus(status) {
+            def waterLacksRaw = status.result.water_lacks
+            boolean waterLacks = (waterLacksRaw instanceof Boolean) ? waterLacksRaw : ((waterLacksRaw as Integer) == 1)
+        }
+    """)
+
+    # MUST-CATCH: the inline sendEvent form (`? "on" : "off"`).
+    BAD_INLINE_EVENT = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            device.sendEvent(name:"childLock", value: (r.childLockSwitch as Integer) == 1 ? "on" : "off")
+        }
+    """)
+
+    # MUST-NOT-CATCH: the asBool() call (the blessed replacement).
+    GOOD_ASBOOL_CALL = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            boolean powerOn = asBool(r.powerSwitch)
+            device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+        }
+    """)
+
+    # MUST-NOT-CATCH: asBool's own body — coerces via raw.intValue() == 1, NOT as Integer.
+    GOOD_ASBOOL_BODY = textwrap.dedent("""\
+        boolean asBool(raw) {
+            if (raw instanceof Boolean) return raw
+            if (raw instanceof Number)  return raw.intValue() == 1
+            if (raw instanceof CharSequence) return raw.toString().trim().toLowerCase() in ["true","1","on","yes"]
+            return false
+        }
+    """)
+
+    # MUST-NOT-CATCH: a comment mentioning the idiom (line-comment stripped before match).
+    GOOD_COMMENT_MENTION = textwrap.dedent("""\
+        // replaces the hand-inlined (x as Integer) == 1 sites that threw
+        boolean asBool(raw) { return raw instanceof Number ? raw.intValue() == 1 : false }
+    """)
+
+    # MUST-NOT-CATCH: an `as Integer` cast NOT compared to 1 (out of the coercion class).
+    GOOD_PLAIN_CAST = textwrap.dedent("""\
+        def applyStatus(status) {
+            Integer level = status.result.level as Integer
+            device.sendEvent(name:"level", value: level)
+        }
+    """)
+
+    # MUST-NOT-CATCH: a genuine NUMERIC-level cast assigned then compared to a THRESHOLD
+    # (`> 0`) / used in arithmetic — NOT `== 1`. The split-form discriminator must keep this
+    # out: it is a real mist level, not a 0/1 flag. (If pass 2 keyed on `as Integer` + "any
+    # downstream use" instead of specifically `== 1`, this would false-positive.)
+    GOOD_SPLIT_NUMERIC_LEVEL = textwrap.dedent("""\
+        def applyStatus(status) {
+            Integer lvl = status.result.mist_virtual_level as Integer
+            if (lvl > 0) device.sendEvent(name:"mistLevel", value: lvl)
+            Integer pct = lvl * 10
+            device.sendEvent(name:"level", value: pct)
+        }
+    """)
+
+    # MUST-NOT-CATCH: a numeric cast compared to a value OTHER than 1 (e.g. `== 5`) — also
+    # not a 0/1 flag; the discriminator is specifically `== 1`.
+    GOOD_SPLIT_EQ_OTHER = textwrap.dedent("""\
+        def applyStatus(status) {
+            Integer mode = status.result.workModeCode as Integer
+            if (mode == 5) device.sendEvent(name:"mode", value:"turbo")
+        }
+    """)
+
+    # D3 MUST-CATCH: a typed declaration with a NON-Integer type (`Long x = ... as Integer`)
+    # then `x == 1` — the prior assign regex only allowed Integer/int/def as the leading type,
+    # so `Long` was mis-read as the var name and the form escaped.
+    BAD_TYPED_DECL_SPLIT = textwrap.dedent("""\
+        def applyStatus(status) {
+            Long lifted = status.result.waterTankLifted as Integer
+            boolean removed = lifted == 1
+        }
+    """)
+
+    # D3 MUST-NOT-CATCH: a single-line /* block comment */ mentioning the idiom — block
+    # comments must be stripped before matching (the prior version stripped only `//`).
+    GOOD_BLOCK_COMMENT_MENTION = textwrap.dedent("""\
+        def applyStatus(status) {
+            /* legacy form was (r.powerSwitch as Integer) == 1 -- replaced by asBool() */
+            boolean powerOn = asBool(status.result.powerSwitch)
+        }
+    """)
+
+    # MUST-NOT-CATCH: a MULTI-LINE /* ... */ comment mentioning the idiom. The prior naive
+    # per-line stripper used a single-line `/\\*.*?\\*/` regex, so a `/*` that opened a block
+    # without a closing `*/` on the same line left the idiom line unstripped -> false positive.
+    # The harness cleaned_lines strips block comments across line boundaries, so this passes.
+    GOOD_MULTILINE_BLOCK_COMMENT_MENTION = textwrap.dedent("""\
+        def applyStatus(status) {
+            /*
+             * Legacy form was (r.powerSwitch as Integer) == 1 which threw on a
+             * non-numeric String; replaced by the shared asBool() helper below.
+             */
+            boolean powerOn = asBool(status.result.powerSwitch)
+        }
+    """)
+
+    # MUST-CATCH: a real violation preceded on the same line by a `//` INSIDE a string
+    # literal. The prior naive stripper (`re.sub('//[^\\n]*', '', line)`) chopped from the
+    # in-string `//` to end of line, deleting the real `(x as Integer) == 1` after it ->
+    # false negative. The string-literal-aware cleaned_lines keeps the coercion visible.
+    BAD_SLASH_IN_STRING_THEN_VIOLATION = textwrap.dedent("""\
+        def applyStatus(status) {
+            def note = "see //docs"; boolean powerOn = (status.result.powerSwitch as Integer) == 1
+        }
+    """)
+
+    def test_typed_decl_split_fails(self):
+        # D3
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_TYPED_DECL_SPLIT)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for typed-decl split form `Long x = ... as Integer; x == 1`, got: {findings}"
+        )
+
+    def test_block_comment_mention_passes(self):
+        # D3
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_BLOCK_COMMENT_MENTION)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"A /* block comment */ mentioning the idiom must not flag RULE45, got: {findings}"
+        )
+
+    def test_multiline_block_comment_mention_passes(self):
+        findings = run_rule(
+            TestRule45BoolCoercionAsInteger._rule, self.GOOD_MULTILINE_BLOCK_COMMENT_MENTION
+        )
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"A MULTI-LINE /* ... */ comment mentioning the idiom must not flag RULE45, got: {findings}"
+        )
+
+    def test_slash_in_string_then_violation_fails(self):
+        findings = run_rule(
+            TestRule45BoolCoercionAsInteger._rule, self.BAD_SLASH_IN_STRING_THEN_VIOLATION
+        )
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"A real `(x as Integer) == 1` after a `//` inside a string literal must flag "
+            f"RULE45 (the coercion is code, not a comment), got: {findings}"
+        )
+
+    def test_bare_form_fails(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_BARE)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for bare `(x as Integer) == 1`, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE45_bool_coercion_as_integer'), (
+            f"RULE45 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_verbose_ternary_fails(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_VERBOSE_TERNARY)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for verbose instanceof-Boolean ternary, got: {findings}"
+        )
+
+    def test_inline_event_form_fails(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_INLINE_EVENT)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for inline sendEvent `(x as Integer) == 1 ? ...`, got: {findings}"
+        )
+
+    def test_asbool_call_passes(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_ASBOOL_CALL)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"asBool() call must not flag RULE45, got: {findings}"
+        )
+
+    def test_asbool_body_passes(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_ASBOOL_BODY)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"asBool()'s own body (raw.intValue() == 1) must not flag RULE45, got: {findings}"
+        )
+
+    def test_comment_mention_passes(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_COMMENT_MENTION)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"A line-comment mentioning the idiom must not flag RULE45, got: {findings}"
+        )
+
+    def test_plain_cast_passes(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_PLAIN_CAST)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"`as Integer` not compared to 1 must not flag RULE45, got: {findings}"
+        )
+
+    def test_split_form_fails(self):
+        """SPLIT form: cast assigned on one line, `<var> == 1` a few lines later. This is
+        the exact shape Sup6000S:332/333 used to evade the single-line rule."""
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_SPLIT)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for the SPLIT cast/compare form, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE45_bool_coercion_as_integer'), (
+            f"split-form RULE45 finding must carry severity='FAIL'; got: {findings}"
+        )
+
+    def test_split_form_bare_compare_fails(self):
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_SPLIT_BARE_COMPARE)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for the SPLIT form with a bare `var == 1`, got: {findings}"
+        )
+
+    def test_paren_split_form_fails(self):
+        """D4: the PARENTHESIZED-cast SPLIT form (`Integer cs = (r.flag as Integer)` then
+        `cs == 1`) ends the assignment line in `as Integer)`. The prior `as\\s+Integer\\s*$`
+        anchor missed the trailing paren — this is exactly how oscillationCalibrationState
+        evaded RULE45. The widened anchor must now catch it."""
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.BAD_PAREN_SPLIT)
+        assert any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"Expected RULE45 for the PARENTHESIZED split form `(r.flag as Integer)` / `== 1`, got: {findings}"
+        )
+
+    def test_paren_split_numeric_passes(self):
+        """A genuine PARENTHESIZED numeric cast compared to a threshold (`> 0`), not `== 1`,
+        must NOT flag — confirms the widened anchor added no false positives on numeric casts."""
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_PAREN_SPLIT_NUMERIC)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"parenthesized numeric cast (compared to threshold, not == 1) must not flag RULE45, got: {findings}"
+        )
+
+    def test_split_numeric_level_passes(self):
+        """A genuine numeric-level cast compared to a threshold (`> 0`) / used in arithmetic —
+        never `== 1` — must NOT flag. This is the discriminator that keeps pass 2 safe."""
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_SPLIT_NUMERIC_LEVEL)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"numeric-level cast (compared to threshold, not == 1) must not flag RULE45, got: {findings}"
+        )
+
+    def test_split_eq_other_value_passes(self):
+        """A numeric cast compared to a value other than 1 (e.g. == 5) is not a 0/1 flag."""
+        findings = run_rule(TestRule45BoolCoercionAsInteger._rule, self.GOOD_SPLIT_EQ_OTHER)
+        assert not any(f['rule_id'] == 'RULE45_bool_coercion_as_integer' for f in findings), (
+            f"`as Integer` compared to a non-1 value must not flag RULE45, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # RULE20 version_lockstep — _extract_definition_block parser robustness
 # ---------------------------------------------------------------------------
 
@@ -2993,6 +3954,301 @@ class TestRule28CaptureDiagnosticsPresence:
             rel_base=REPO_ROOT,
         )
         assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# RULE48 — BP30 singleThreaded presence check
+# ---------------------------------------------------------------------------
+
+class TestRule48SingleThreaded:
+    """RULE48 (Bug Pattern #30 Layer 1): every child cloud driver (one that
+    #includes level99.LevoitChildBase) must declare singleThreaded: true in its
+    definition() block. Libraries, the parent app, and the virtual test parent are
+    out of scope by construction.
+    """
+
+    GOOD = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+        #include level99.LevoitChildBase
+
+        metadata {
+            definition(
+                singleThreaded: true,
+                name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson",
+                version: "2.9") {
+                capability "Switch"
+            }
+        }
+    """)
+
+    # Missing singleThreaded entirely — the must-catch case.
+    MISSING = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+        #include level99.LevoitChildBase
+
+        metadata {
+            definition(
+                name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson",
+                version: "2.9") {
+                capability "Switch"
+            }
+        }
+    """)
+
+    # D1: singleThreaded:true present ONLY in a comment must NOT satisfy the rule (must-catch).
+    COMMENTED_ONLY = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+        #include level99.LevoitChildBase
+
+        metadata {
+            definition(
+                // singleThreaded: true,   // TODO: actually enable this
+                name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson",
+                version: "2.9") {
+                capability "Switch"
+            }
+        }
+    """)
+
+    # singleThreaded:false is treated as MISSING the invariant.
+    EXPLICIT_FALSE = textwrap.dedent("""\
+        #include level99.LevoitChildBase
+
+        metadata {
+            definition(
+                singleThreaded: false,
+                name: "Levoit Vital 200S Air Purifier", namespace: "NiklasGustafsson") {
+                capability "Switch"
+            }
+        }
+    """)
+
+    # No LevoitChildBase include => not a child cloud driver => out of scope (e.g. parent app).
+    NO_CHILDBASE = textwrap.dedent("""\
+        #include level99.LevoitDiagnostics
+
+        metadata {
+            definition(name: "Some Non-Cloud Driver", namespace: "NiklasGustafsson") {
+                capability "Actuator"
+            }
+        }
+    """)
+
+    # Library file (library() block) — skipped regardless of content.
+    LIBRARY_FILE = textwrap.dedent("""\
+        #include level99.LevoitChildBase
+        library(
+            name: "LevoitCorePurifier",
+            namespace: "level99"
+        )
+        def on() { }
+    """)
+
+    def test_good_driver_passes(self):
+        findings = run_rule(check_rule48_single_threaded, self.GOOD, "LevoitVital200S")
+        assert findings == []
+
+    def test_missing_single_threaded_fails(self):
+        findings = run_rule(check_rule48_single_threaded, self.MISSING, "LevoitVital200S")
+        rule_ids_found = [f['rule_id'] for f in findings]
+        assert "RULE48_missing_single_threaded" in rule_ids_found
+        assert all(f['severity'] == 'FAIL' for f in findings)
+
+    def test_explicit_false_fails(self):
+        findings = run_rule(check_rule48_single_threaded, self.EXPLICIT_FALSE, "LevoitCore200S")
+        rule_ids_found = [f['rule_id'] for f in findings]
+        assert "RULE48_missing_single_threaded" in rule_ids_found
+
+    def test_commented_only_fails(self):
+        # D1: a commented-out `// singleThreaded: true` must NOT satisfy the rule.
+        findings = run_rule(check_rule48_single_threaded, self.COMMENTED_ONLY, "LevoitVital200S")
+        rule_ids_found = [f['rule_id'] for f in findings]
+        assert "RULE48_missing_single_threaded" in rule_ids_found
+        assert all(f['severity'] == 'FAIL' for f in findings)
+
+    def test_non_cloud_driver_out_of_scope(self):
+        # No LevoitChildBase include — not a child cloud driver — must NOT be flagged.
+        findings = run_rule(check_rule48_single_threaded, self.NO_CHILDBASE, "VeSyncIntegration")
+        assert findings == []
+
+    def test_library_file_out_of_scope(self):
+        findings = run_rule(check_rule48_single_threaded, self.LIBRARY_FILE, "LevoitCorePurifierLib")
+        assert findings == []
+
+    def test_virtual_parent_out_of_scope(self):
+        # VeSyncIntegrationVirtual is explicitly out of scope even without singleThreaded.
+        findings = run_rule(check_rule48_single_threaded, self.MISSING, "VeSyncIntegrationVirtual")
+        assert findings == []
+
+    def test_not_checked_for_non_groovy(self):
+        path = REPO_ROOT / "tests" / "lint_test.py"
+        from lint_rules.groovy_lite import clean_source
+        src = "#include level99.LevoitChildBase\n"
+        raw_lines = src.splitlines()
+        _, cleaned_lines = clean_source(src)
+        findings = check_rule48_single_threaded(
+            path=path,
+            raw_lines=raw_lines,
+            cleaned_lines=cleaned_lines,
+            raw_text=src,
+            config={},
+            rel_base=REPO_ROOT,
+        )
+        assert findings == []
+
+
+# ---------------------------------------------------------------------------
+# RULE49 — BP30 A1: isDuplicateWrite must precede an early-return delegation
+# ---------------------------------------------------------------------------
+
+class TestRule49DedupAfterDelegation:
+    """RULE49 (BP30 A1, E1): a set* method whose isDuplicateWrite is preceded by a
+    delegation-to-another-setter + return must FAIL (the slot would be recorded too late).
+    """
+
+    from lint_rules.bp30_dedup_after_delegation import (
+        check_rule49_dedup_after_delegation as _rule,
+    )
+
+    # MUST-CATCH: the pre-fix EverestAir shape — manual branch delegates to setFanSpeed and
+    # returns BEFORE the isDuplicateWrite("mode", m) call.
+    BAD_DELEGATION_BEFORE_DEDUP = textwrap.dedent("""\
+        def setMode(mode){
+            if (!requireNonEmptyEnum(mode, "setMode")) return
+            String m = (mode as String).trim().toLowerCase()
+            ensureSwitchOn()
+            if (m == "manual") {
+                setFanSpeed(state.lastFanSpeed ?: 1)
+                return
+            }
+            if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) return
+            def resp = hubBypass("setPurifierMode", [workMode: m], "x")
+        }
+    """)
+
+    # MUST-NOT-CATCH: the fixed shape — isDuplicateWrite AHEAD of the manual delegation.
+    GOOD_DEDUP_BEFORE_DELEGATION = textwrap.dedent("""\
+        def setMode(mode){
+            if (!requireNonEmptyEnum(mode, "setMode")) return
+            String m = (mode as String).trim().toLowerCase()
+            ensureSwitchOn()
+            if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) return
+            if (m == "manual") {
+                setFanSpeed(state.lastFanSpeed ?: 1)
+                return
+            }
+            def resp = hubBypass("setPurifierMode", [workMode: m], "x")
+        }
+    """)
+
+    # MUST-NOT-CATCH: a deduped setter whose only pre-dedup returns are VALIDATION guards
+    # (preceded by requireX/logError, NOT a setX( delegation).
+    GOOD_VALIDATION_ONLY_RETURNS = textwrap.dedent("""\
+        def setMode(mode){
+            if (!requireNonEmptyEnum(mode, "setMode")) return
+            String m = (mode as String).trim().toLowerCase()
+            if (!(m in ["auto","sleep"])) { logError "bad"; return }
+            ensureSwitchOn()
+            if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) return
+            def resp = hubBypass("setHumidityMode", [workMode: m], "x")
+        }
+    """)
+
+    # MUST-NOT-CATCH: a non-deduped setter (no isDuplicateWrite) is out of scope entirely.
+    GOOD_NO_DEDUP = textwrap.dedent("""\
+        def setMode(mode){
+            ensureSwitchOn()
+            if (mode == "manual") { setFanSpeed(1); return }
+            def resp = hubBypass("setPurifierMode", [workMode: mode], "x")
+        }
+    """)
+
+    def test_delegation_before_dedup_fails(self):
+        findings = run_rule(TestRule49DedupAfterDelegation._rule, self.BAD_DELEGATION_BEFORE_DEDUP, "LevoitEverestAir")
+        assert any(f['rule_id'] == 'RULE49_dedup_after_delegation' for f in findings), findings
+        assert all(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE49_dedup_after_delegation')
+
+    def test_dedup_before_delegation_passes(self):
+        findings = run_rule(TestRule49DedupAfterDelegation._rule, self.GOOD_DEDUP_BEFORE_DELEGATION, "LevoitEverestAir")
+        assert not any(f['rule_id'] == 'RULE49_dedup_after_delegation' for f in findings), findings
+
+    def test_validation_only_returns_passes(self):
+        findings = run_rule(TestRule49DedupAfterDelegation._rule, self.GOOD_VALIDATION_ONLY_RETURNS, "LevoitSuperior6000S")
+        assert not any(f['rule_id'] == 'RULE49_dedup_after_delegation' for f in findings), findings
+
+    def test_non_deduped_setter_out_of_scope(self):
+        findings = run_rule(TestRule49DedupAfterDelegation._rule, self.GOOD_NO_DEDUP, "LevoitEverestAir")
+        assert not any(f['rule_id'] == 'RULE49_dedup_after_delegation' for f in findings), findings
+
+
+# ---------------------------------------------------------------------------
+# RULE50 — B1 completeness: isDuplicateWrite must be paired with clearDuplicateWrite
+# ---------------------------------------------------------------------------
+
+class TestRule50DedupClearOnFailure:
+    """RULE50 (B1-completeness): a method that records a dedup slot via isDuplicateWrite must also
+    clear it (clearDuplicateWrite) on the write-failure path, else a failed write suppresses an
+    identical retry for the dedup window. Must-catch = the verbatim pre-fix setNightLight shape.
+    """
+
+    from lint_rules.bp30_dedup_clear_on_failure import (
+        check_rule50_dedup_clear_on_failure as _rule,
+    )
+
+    # MUST-CATCH: the verbatim PRE-FIX setNightLight shape — isDuplicateWrite, NO clearDuplicateWrite.
+    BAD_NO_CLEAR = textwrap.dedent("""\
+        def setNightLight(mode) {
+            String m = (mode as String).trim().toLowerCase()
+            if (isDuplicateWrite("nightLight", m)) {
+                logDebug "setNightLight(${m}): storm duplicate; skipping"
+                return false
+            }
+            def result = false
+            parent.sendBypassRequest(device, [data:[night_light:m], method:"setNightLight"]) { resp ->
+                if (checkHttpResponse("setNightLight", resp)) { result = true }
+            }
+            return result
+        }
+    """)
+
+    # MUST-NOT-CATCH: the FIXED shape — clearDuplicateWrite on the failure path.
+    GOOD_WITH_CLEAR = textwrap.dedent("""\
+        def setNightLight(mode) {
+            String m = (mode as String).trim().toLowerCase()
+            if (isDuplicateWrite("nightLight", m)) {
+                logDebug "setNightLight(${m}): storm duplicate; skipping"
+                return false
+            }
+            def result = false
+            parent.sendBypassRequest(device, [data:[night_light:m], method:"setNightLight"]) { resp ->
+                if (checkHttpResponse("setNightLight", resp)) { result = true }
+            }
+            if (!result) clearDuplicateWrite("nightLight")
+            return result
+        }
+    """)
+
+    # MUST-NOT-CATCH: a setter with no dedup at all is out of scope.
+    GOOD_NO_DEDUP = textwrap.dedent("""\
+        def setDisplay(onOff) {
+            String v = (onOff as String).trim().toLowerCase()
+            def resp = hubBypass("setDisplay", [screenSwitch: v == "on" ? 1 : 0], "setDisplay")
+            if (httpOk(resp)) device.sendEvent(name:"display", value: v)
+        }
+    """)
+
+    def test_no_clear_fails(self):
+        findings = run_rule(TestRule50DedupClearOnFailure._rule, self.BAD_NO_CLEAR, "LevoitCore200S Light")
+        assert any(f['rule_id'] == 'RULE50_dedup_clear_on_failure' for f in findings), findings
+        assert all(f['severity'] == 'FAIL' for f in findings if f['rule_id'] == 'RULE50_dedup_clear_on_failure')
+
+    def test_with_clear_passes(self):
+        findings = run_rule(TestRule50DedupClearOnFailure._rule, self.GOOD_WITH_CLEAR, "LevoitCore200S Light")
+        assert not any(f['rule_id'] == 'RULE50_dedup_clear_on_failure' for f in findings), findings
+
+    def test_no_dedup_out_of_scope(self):
+        findings = run_rule(TestRule50DedupClearOnFailure._rule, self.GOOD_NO_DEDUP, "LevoitEverestAir")
+        assert not any(f['rule_id'] == 'RULE50_dedup_clear_on_failure' for f in findings), findings
 
 
 # ---------------------------------------------------------------------------
@@ -3482,6 +4738,63 @@ class TestRule38ProcessTokenScrub:
             config={},
             rel_base=REPO_ROOT,
         )
+
+    # -----------------------------------------------------------------------
+    # C2 — this-fork process-LABEL shapes (the v2.10 C1 forms). Narrow by design;
+    # bare `#<digits>` is intentionally NOT caught (it would FP on FIX #N / GAP #N /
+    # Bug Pattern #N / Task #N / HA finding #N / pyvesync issue #N).
+    # -----------------------------------------------------------------------
+
+    def test_c2_catches_follow_up_form(self):
+        assert self._run_groovy("// BP29 class-completion (#258 follow-up): the last NO-ON setter")
+        assert self._run_py("# class-completion (#258 follow-up): the last setter")
+
+    def test_c2_catches_lesson_form(self):
+        assert self._run_groovy("// (#4 lesson: the else branch lives in the SHARED lib)")
+
+    def test_c2_catches_classwide_form(self):
+        assert self._run_groovy("// Cross-driver consistency (#258 class-wide): resetFilter / setTimer")
+
+    def test_c2_catches_blocking_form(self):
+        assert self._run_groovy("// BLOCKING #4: detectRealParent false-negative")
+
+    def test_c2_catches_version_slash_issue_form(self):
+        assert self._run_groovy("// Cross-driver consistency (v2.10 / #258): the remaining setters")
+
+    def test_c2_does_not_catch_bug_pattern(self):
+        # legit catalog reference — must NOT be flagged
+        assert not self._run_groovy("// Bug Pattern #4 — setLevel uses V2-API field names")
+
+    def test_c2_does_not_catch_fix_n_enumeration(self):
+        # internal rule-doc enumeration (FIX #N / GAP #N) — must NOT be flagged
+        assert not self._run_py("# FIX #3 -- per-emit check, not method-level")
+
+    def test_c2_bare_hash_digit_in_python_caught(self):
+        # C2 (a): a bare hash-digits ref in a .py comment with no internal-doc/external prefix
+        # IS a this-fork issue ref -> caught.
+        assert self._run_py("# closes the parser gap, see #258")
+
+    def test_c2_bare_hash_digit_groovy_out_of_scope(self):
+        # bare-hash-digits is the PYTHON variant only; a Groovy driver/spec comment is untouched.
+        assert not self._run_groovy("// regression guards for angular maxima, ref 249")
+
+    def test_c2_bare_hash_digit_internal_doc_not_caught(self):
+        # Bug Pattern / FIX / GAP / Task prefixes suppress the bare-hash-digits match (internal-doc).
+        assert not self._run_py("# Bug Pattern #142 -- a catalog ref, not a this-fork issue")
+        assert not self._run_py("# FIX #3 and GAP #4 -- internal rule-doc enumeration")
+        assert not self._run_py("# Task #142 -- left for the broader Spock-spec sweep TODO")
+
+    def test_c2_does_not_catch_external_provenance_issue(self):
+        # `pyvesync issue #296` stays suppressed (external provenance)
+        assert not self._run_py("# Confirmed: pyvesync issue #296; minHumidityLevel 40")
+
+    def test_c2_does_not_catch_python_numbered_list_comment(self):
+        # A `#<digit>` that is the comment's leading text is a numbered-list item, not a this-fork
+        # issue ref (`#` is the Python comment char). Must NOT be flagged, regardless of keywords.
+        assert not self._run_py("#1. Parse the response envelope")
+        assert not self._run_py("    #2. Check the inner status code")
+        # ...but an INLINE bare-hash ref (not leading) is still a this-fork issue ref -> caught.
+        assert self._run_py("# closes the parser gap, see #258")
 
     # -----------------------------------------------------------------------
     # Must-catch: Tier forms
@@ -7873,4 +9186,1459 @@ class TestRule43RecordErrorKeyStyle:
         findings = self._run(src)
         assert not any(f['rule_id'] == 'RULE43_recordError_key_style' for f in findings), (
             f"Bare [site:...] outside recordError must not flag RULE43, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE46 — NO-ON setter write-failure feedback (Bug Pattern #29)
+# ---------------------------------------------------------------------------
+
+from lint_rules.bp29_noon_write_feedback import check_rule46_noon_write_feedback
+
+
+class TestRule46NoOnWriteFeedback:
+    """
+    RULE46: a NO-ON setter that issues a bypassV2 write + ``if (httpOk(resp))``
+    check must route its failure branch through ``reportWriteFailure`` — else a
+    genuine cloud failure (and the expected device-off rejection) is silently
+    swallowed with no user feedback (Bug Pattern #29 class-completion).
+
+    Non-vacuity contracts:
+      - must-catch tests FAIL if the predicate is disabled/narrowed (rule returns
+        [] and the ``any(...)`` assertion fails). The first must-catch is the
+        verbatim pre-fix LevoitVital200S.setLightDetection shape — proving the rule
+        would have caught the shipped bug.
+      - must-not-catch tests FAIL if the rule over-fires on a fixed NO-ON setter,
+        a SHOULD-ON setter, a pure-delegation NO-ON setter, or a power path.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    @staticmethod
+    def _run(src: str) -> list:
+        return run_rule(check_rule46_noon_write_feedback, src, fname="TestDriver.groovy")
+
+    # -----------------------------------------------------------------------
+    # Must-catch
+    # -----------------------------------------------------------------------
+
+    def test_catches_setlightdetection_prefix_shape(self):
+        """
+        The exact pre-fix LevoitVital200S.setLightDetection shape: NO-ON marker,
+        hubBypass write, bare ``if (httpOk(resp))`` with NO else. MUST flag.
+        """
+        src = textwrap.dedent("""\
+            // BP24: NO-ON — configures a device preference; powering on is not implied.
+            def setLightDetection(onOff) {
+                if (!requireNonEmptyEnum(onOff, "setLightDetection")) return
+                String canon = canonOnOff((onOff as String).trim().toLowerCase())
+                if (device.currentValue("lightDetection") == canon) return
+                def resp = hubBypass("setLightDetection", [lightDetectionSwitch: (canon == "on") ? 1 : 0], "setLightDetection(${canon})")
+                if (httpOk(resp)) device.sendEvent(name:"lightDetection", value: canon)
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Expected RULE46 for NO-ON setter with bare if(httpOk)-no-else, got: {findings}"
+        )
+
+    def test_catches_block_form_no_else(self):
+        """
+        Block-form ``if (httpOk(resp)) { ... }`` with NO else, NO-ON marker. MUST flag.
+        """
+        src = textwrap.dedent("""\
+            // BP24: NO-ON — configures a device preference; powering on is not implied.
+            def setDisplay(onOff) {
+                String canon = canonOnOff((onOff as String).trim().toLowerCase())
+                def resp = hubBypass("setDisplay", [screenSwitch: canon == "on" ? 1 : 0], "setDisplay")
+                if (httpOk(resp)) {
+                    device.sendEvent(name:"display", value: canon)
+                    logInfo "Display: ${canon}"
+                }
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Expected RULE46 for block-form NO-ON setter with no else, got: {findings}"
+        )
+
+    def test_catches_dash_variant_marker(self):
+        """The ``// BP24: NO-ON -`` (ASCII hyphen) marker variant also keys the rule."""
+        src = textwrap.dedent("""\
+            // BP24: NO-ON - maintenance action; powering on is not implied.
+            def resetFilter() {
+                def resp = hubBypass("resetFilter", [:], "resetFilter")
+                if (httpOk(resp)) logDebug "Filter reset requested"
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Expected RULE46 for dash-variant NO-ON marker, got: {findings}"
+        )
+
+    def test_catches_void_method_form(self):
+        """D2: a NO-ON setter declared `void setX(y){` (typed return, not `def`) with a bare
+        `if (httpOk(other))` (non-`resp` variable) and no else MUST flag — the prior regex
+        only matched `def` + a hardcoded `resp`, so the void/typed form escaped."""
+        src = textwrap.dedent("""\
+            // BP24: NO-ON — configures a device preference; powering on is not implied.
+            void setChildLock(onOff) {
+                String canon = canonOnOff((onOff as String).trim().toLowerCase())
+                def r = hubBypass("setChildLock", [childLockSwitch: canon == "on" ? 1 : 0], "setChildLock")
+                if (httpOk(r)) device.sendEvent(name:"childLock", value: canon)
+            }
+        """)
+        findings = self._run(src)
+        assert any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Expected RULE46 for void-method NO-ON setter with no else, got: {findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch
+    # -----------------------------------------------------------------------
+
+    def test_fixed_noon_setter_passes(self):
+        """A NO-ON setter WITH a reportWriteFailure else branch must NOT flag (the fix)."""
+        src = textwrap.dedent("""\
+            // BP24: NO-ON — configures a device preference; powering on is not implied.
+            def setLightDetection(onOff) {
+                String canon = canonOnOff((onOff as String).trim().toLowerCase())
+                if (device.currentValue("lightDetection") == canon) return
+                def resp = hubBypass("setLightDetection", [lightDetectionSwitch: (canon == "on") ? 1 : 0], "setLightDetection(${canon})")
+                if (httpOk(resp)) {
+                    device.sendEvent(name:"lightDetection", value: canon)
+                } else {
+                    reportWriteFailure("Light detection write failed", resp, [method:"setLightDetection"])
+                }
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Fixed NO-ON setter (reportWriteFailure else) must not flag RULE46, got: {findings}"
+        )
+
+    def test_should_on_setter_passes(self):
+        """
+        A SHOULD-ON setter using reportWriteError (NOT reportWriteFailure) must NOT
+        flag — it carries the ``// BP24: SHOULD-ON`` marker, not NO-ON, so it is out
+        of scope by construction even without reportWriteFailure.
+        """
+        src = textwrap.dedent("""\
+            // BP24: SHOULD-ON — mist-level command; calls ensureSwitchOn() (SwitchLevel convention).
+            def setMistLevel(level) {
+                Integer clamped = Math.max(1, Math.min(9, parseLevelOrNull(level) ?: 1))
+                ensureSwitchOn()
+                def resp = hubBypass("setVirtualLevel", [id: 0, level: clamped, type: "mist"], "setVirtualLevel(${clamped})")
+                if (httpOk(resp)) {
+                    device.sendEvent(name:"mistLevel", value: clamped)
+                } else {
+                    reportWriteError("Mist level write failed: ${clamped}", [method:"setVirtualLevel"])
+                }
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"SHOULD-ON setter must not flag RULE46, got: {findings}"
+        )
+
+    def test_pure_delegation_noon_setter_passes(self):
+        """
+        A NO-ON setter that delegates to a shared doSet* helper (no own hubBypass /
+        no own if(httpOk)) must NOT flag — the helper carries the reportWriteFailure
+        branch.
+        """
+        src = textwrap.dedent("""\
+            // BP24: NO-ON — configures a device preference; powering on is not implied.
+            def setDisplay(onOff) { doSetDisplayStateSwitch(onOff) }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Pure-delegation NO-ON setter must not flag RULE46, got: {findings}"
+        )
+
+    def test_power_path_no_marker_passes(self):
+        """
+        A power path (on()) with hubBypass + if(httpOk) but NO ``// BP24: NO-ON``
+        marker must NOT flag — power is SHOULD-ON and out of scope.
+        """
+        src = textwrap.dedent("""\
+            def on() {
+                def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(power=1)")
+                if (httpOk(resp)) {
+                    device.sendEvent(name:"switch", value:"on")
+                } else {
+                    logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"])
+                }
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"Power path with no NO-ON marker must not flag RULE46, got: {findings}"
+        )
+
+    def test_marker_for_earlier_method_does_not_leak(self):
+        """
+        A ``// BP24: NO-ON`` marker documenting an EARLIER method must not leak onto
+        a later method separated by intervening code (the upward scan stops at the
+        first non-blank, non-comment line).
+        """
+        src = textwrap.dedent("""\
+            // BP24: NO-ON — configures a device preference; powering on is not implied.
+            def setChildLock(onOff) {
+                def resp = hubBypass("setChildLock", [childLockSwitch: 1], "setChildLock")
+                if (httpOk(resp)) { device.sendEvent(name:"childLock", value:"on") }
+                else { reportWriteFailure("Child lock write failed", resp, [method:"setChildLock"]) }
+            }
+
+            def someUnrelatedHelper() {
+                def resp = hubBypass("doThing", [:], "doThing")
+                if (httpOk(resp)) logDebug "ok"
+            }
+        """)
+        findings = self._run(src)
+        # setChildLock is fixed (has else); someUnrelatedHelper has no NO-ON marker
+        # above it (the def setChildLock line is the first non-comment line above it),
+        # so neither should flag.
+        assert not any(f['rule_id'] == 'RULE46_noon_write_feedback' for f in findings), (
+            f"NO-ON marker must not leak onto a later unrelated method, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE47 — capability coherence (declared capability must have required cmd/attr)
+# ---------------------------------------------------------------------------
+
+from lint_rules.capability_coherence import check_rule47_capability_coherence
+
+
+class TestRule47CapabilityCoherence:
+    """
+    RULE47: a declared `capability "X"` must have its required command(s) present
+    and its required attribute(s) emitted in the driver's EFFECTIVE source (driver
+    body + every #include'd library).
+
+    Non-vacuity contracts:
+      - must-catch tests FAIL if the rule predicate is disabled or narrowed (the
+        rule returns [] and the `any(...)` assertion fails).
+      - must-not-catch tests FAIL if the rule over-fires on a coherent driver, on a
+        lib-provided command/attribute (proves include resolution), or on a call
+        site mistaken for a definition.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    @staticmethod
+    def _run(src: str) -> list:
+        """Invoke RULE47 against src as a .groovy driver file via the shared run_rule helper."""
+        return run_rule(check_rule47_capability_coherence, src, fname="TestDriver.groovy")
+
+    # -----------------------------------------------------------------------
+    # Must-catch
+    # -----------------------------------------------------------------------
+
+    def test_catches_airquality_declared_but_only_airqualityindex_emitted(self):
+        """
+        The EverestAir-pre-fix shape: capability "AirQuality" declared, but only a
+        custom airQualityIndex is emitted -- the standard airQuality attribute is
+        never emitted. Must WARN (dead-capability).
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test AQ", namespace: "test", author: "t") {
+                    capability "AirQuality"
+                    capability "Sensor"
+                }
+            }
+            def applyStatus(status) {
+                def r = status.result
+                if (r.AQLevel != null) device.sendEvent(name:"airQualityIndex", value: r.AQLevel as Integer)
+            }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        assert rule_findings, f"Expected RULE47 for declared-but-unemitted airQuality, got: {findings}"
+        assert any('airQuality' in f['title'] and 'AirQuality' in f['title'] for f in rule_findings), (
+            f"RULE47 must name the airQuality attribute, got: {rule_findings}"
+        )
+        assert all(f['severity'] == 'WARN' for f in rule_findings), (
+            f"missing-attribute RULE47 finding must be WARN (gates under --strict), got: {rule_findings}"
+        )
+
+    def test_catches_fancontrol_without_supportedfanspeeds(self):
+        """
+        A FanControl driver that emits speed but never emits supportedFanSpeeds must
+        WARN -- the missing-supportedFanSpeeds class.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Fan", namespace: "test", author: "t") {
+                    capability "FanControl"
+                    command "setSpeed", [[name:"Speed*", type:"ENUM", constraints:["low","high"]]]
+                }
+            }
+            def applyStatus(status) {
+                device.sendEvent(name:"speed", value:"low")
+            }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        assert rule_findings, f"Expected RULE47 for FanControl missing supportedFanSpeeds, got: {findings}"
+        assert any('supportedFanSpeeds' in f['title'] for f in rule_findings), (
+            f"RULE47 must name the supportedFanSpeeds attribute, got: {rule_findings}"
+        )
+        assert all(f['severity'] == 'WARN' for f in rule_findings if 'supportedFanSpeeds' in f['title']), (
+            f"missing supportedFanSpeeds must be WARN, got: {rule_findings}"
+        )
+
+    def test_catches_fancontrol_without_cyclespeed(self):
+        """
+        FanControl requires BOTH setSpeed AND cycleSpeed (Hubitat capability contract).
+        A driver providing setSpeed (+ speed + supportedFanSpeeds) but lacking cycleSpeed
+        must FAIL on the missing command -- the EverestAir/Sprout-pre-fix shape, where a
+        dashboard/Rule-Machine cycleSpeed call throws MissingMethodException.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Fan No Cycle", namespace: "test", author: "t") {
+                    capability "FanControl"
+                    command "setSpeed", [[name:"Speed*", type:"ENUM", constraints:["low","high"]]]
+                }
+            }
+            def initialize() { device.sendEvent(name:"supportedFanSpeeds", value:'["low","high"]') }
+            def applyStatus(status) { device.sendEvent(name:"speed", value:"low") }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        cmd_findings = [f for f in rule_findings if 'cycleSpeed' in f['title']]
+        assert cmd_findings, f"Expected RULE47 FAIL for FanControl missing cycleSpeed, got: {rule_findings}"
+        assert all(f['severity'] == 'FAIL' for f in cmd_findings), (
+            f"missing cycleSpeed command must be FAIL (hard contract break), got: {cmd_findings}"
+        )
+
+    def test_catches_missing_required_command_as_fail(self):
+        """
+        A driver declaring SwitchLevel without a setLevel command (and no def setLevel,
+        no lib providing it) must FAIL -- a hard command-contract break.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test SL", namespace: "test", author: "t") {
+                    capability "SwitchLevel"
+                }
+            }
+            def applyStatus(status) {
+                device.sendEvent(name:"level", value: 50)
+            }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        assert rule_findings, f"Expected RULE47 for SwitchLevel missing setLevel command, got: {findings}"
+        cmd_findings = [f for f in rule_findings if 'setLevel' in f['title']]
+        assert cmd_findings, f"RULE47 must name the missing setLevel command, got: {rule_findings}"
+        assert all(f['severity'] == 'FAIL' for f in cmd_findings), (
+            f"missing-command RULE47 finding must be FAIL (hard contract break), got: {cmd_findings}"
+        )
+
+    # -----------------------------------------------------------------------
+    # Must-not-catch
+    # -----------------------------------------------------------------------
+
+    def test_lib_provided_commands_pass_via_include_resolution(self):
+        """
+        A driver declaring Switch + Refresh whose on()/off()/refresh() AND the emitted
+        `switch` attribute are provided by an #include'd library (real LevoitFanLib) must
+        NOT flag -- proves the rule resolves #include directives and scans lib source. The
+        driver body itself has no def on/off/refresh and no switch emit.
+
+        FS DEPENDENCY: this fixture reads the real Drivers/Levoit/LevoitFanLib.groovy from
+        disk at test time (via the rule's included_lib_texts resolution against the fake
+        path's parent dir). If that lib file moves or stops providing on/off/refresh +
+        switch, this test will break -- by design, since it exercises real include resolution.
+        """
+        src = textwrap.dedent("""\
+            #include level99.LevoitFan
+            metadata {
+                definition (name: "Test Include", namespace: "test", author: "t") {
+                    capability "Switch"
+                    capability "Refresh"
+                    capability "Actuator"
+                }
+            }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        assert not rule_findings, (
+            f"Lib-provided on/off/refresh (via #include) must not flag RULE47 -- "
+            f"include resolution failed, got: {rule_findings}"
+        )
+
+    def test_coherent_airquality_driver_passes(self):
+        """
+        A coherent AirQuality driver that emits the standard airQuality attribute (the
+        Core600S / post-fix EverestAir shape) must NOT flag.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test AQ OK", namespace: "test", author: "t") {
+                    capability "AirQuality"
+                    capability "Sensor"
+                }
+            }
+            def applyStatus(status) {
+                def r = status.result
+                if (r.AQLevel != null) {
+                    device.sendEvent(name:"airQualityIndex", value: r.AQLevel as Integer)
+                    device.sendEvent(name:"airQuality", value: r.AQLevel as Integer)
+                }
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
+            f"Coherent AirQuality driver (emits airQuality) must not flag RULE47, got: {findings}"
+        )
+
+    def test_fancontrol_with_setspeed_and_cyclespeed_passes(self):
+        """
+        A coherent FanControl driver providing BOTH setSpeed and cycleSpeed and emitting
+        speed + supportedFanSpeeds must NOT flag -- the post-fix EverestAir/Sprout shape
+        (cycleSpeed provided as a driver-local `def`, setSpeed via `command`).
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Fan OK", namespace: "test", author: "t") {
+                    capability "FanControl"
+                    command "setSpeed", [[name:"Speed*", type:"ENUM", constraints:["low","high"]]]
+                }
+            }
+            def initialize() { device.sendEvent(name:"supportedFanSpeeds", value:'["low","high"]') }
+            def cycleSpeed() { setSpeed("low") }
+            def applyStatus(status) { device.sendEvent(name:"speed", value:"low") }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
+            f"Coherent FanControl (setSpeed + cycleSpeed) must not flag RULE47, got: {findings}"
+        )
+
+    def test_handleEvent_emit_satisfies_attribute(self):
+        """
+        An attribute emitted via handleEvent("X", ...) (the Core lib idiom) satisfies
+        the contract -- must NOT flag. Mirrors how the Core AQ trio emits.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test HE", namespace: "test", author: "t") {
+                    capability "AirQuality"
+                }
+            }
+            def applyStatus(status) {
+                handleEvent("airQuality", 2)
+            }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
+            f"handleEvent-emitted airQuality must satisfy the contract, got: {findings}"
+        )
+
+    def test_catches_switch_declared_but_switch_attr_never_emitted(self):
+        """
+        Switch contract: a driver declaring `capability "Switch"` with on()/off() defined
+        but that never emits the `switch` attribute must WARN. The `switch` attribute is
+        NOT platform-auto-emitted (paid-Flash ship-gate finding). Same dead-capability class.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Switch", namespace: "test", author: "t") {
+                    capability "Switch"
+                }
+            }
+            def on()  { hubBypass("setSwitch", [powerSwitch: 1], "on") }
+            def off() { hubBypass("setSwitch", [powerSwitch: 0], "off") }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        assert any('switch' in f['title'] and f['severity'] == 'WARN' for f in rule_findings), (
+            f"Switch declared but `switch` attr never emitted must WARN, got: {rule_findings}"
+        )
+
+    def test_switch_attr_emitted_satisfies_switch_contract(self):
+        """
+        A Switch driver with on()/off() AND a `switch` sendEvent must NOT flag — proves the
+        new Switch-attr requirement doesn't false-positive on the normal (emitting) shape.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Switch OK", namespace: "test", author: "t") {
+                    capability "Switch"
+                }
+            }
+            def on()  { device.sendEvent(name:"switch", value:"on") }
+            def off() { device.sendEvent(name:"switch", value:"off") }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
+            f"Switch driver that emits `switch` must not flag RULE47, got: {findings}"
+        )
+
+    def test_call_site_not_mistaken_for_command_definition(self):
+        """
+        A bare call to a command name elsewhere (e.g. `setLevel(50)` inside another
+        method) must NOT satisfy the command requirement -- only a real definition or a
+        `command "..."` declaration does. Here SwitchLevel is declared, setLevel is only
+        CALLED, never defined -> must still FAIL on the missing command.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Call", namespace: "test", author: "t") {
+                    capability "SwitchLevel"
+                }
+            }
+            def someOther() {
+                setLevel(50)
+                return setLevel(60)
+            }
+            def applyStatus(status) {
+                device.sendEvent(name:"level", value: 50)
+            }
+        """)
+        findings = self._run(src)
+        rule_findings = [f for f in findings if f['rule_id'] == 'RULE47_capability_coherence']
+        assert any('setLevel' in f['title'] and f['severity'] == 'FAIL' for f in rule_findings), (
+            f"A bare setLevel() call must NOT satisfy the command contract; expected FAIL, got: {rule_findings}"
+        )
+
+    def test_void_method_definition_satisfies_command(self):
+        """
+        A `void` (not `def`) method definition satisfies the command contract -- the
+        Notification Tile shape (`void deviceNotification(...)`, `void push()`,
+        `void configure()`). Must NOT flag.
+        """
+        src = textwrap.dedent("""\
+            metadata {
+                definition (name: "Test Void", namespace: "test", author: "t") {
+                    capability "Notification"
+                    capability "Momentary"
+                    capability "Configuration"
+                }
+            }
+            void deviceNotification(notification) { logDebug "n" }
+            void push() { configure() }
+            void configure() { logDebug "c" }
+        """)
+        findings = self._run(src)
+        assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
+            f"void-typed command definitions must satisfy the contract, got: {findings}"
+        )
+
+    def test_library_file_skipped(self):
+        """A library file (library() block, no definition()) must be skipped entirely."""
+        src = textwrap.dedent("""\
+            library(name: "TestLib", namespace: "level99", author: "t", description: "d")
+            def on() { logDebug "on" }
+        """)
+        findings = run_rule(check_rule47_capability_coherence, src, fname="TestLib.groovy")
+        assert not any(f['rule_id'] == 'RULE47_capability_coherence' for f in findings), (
+            f"Library files must be skipped by RULE47, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE51 — result-Map guard (result.code crash class)
+# ---------------------------------------------------------------------------
+
+class TestRule51ResultMapGuard:
+    """
+    RULE51: a `<recv>.data.result` read in a child driver method must be guarded
+    by a `<recv>.data instanceof Map` check in the same method. A non-JSON gateway
+    error body (HTML/proxy page with a 2xx) leaves resp.data a String; the `?.`
+    operator guards null but not wrong-type, so the read throws
+    MissingPropertyException and aborts the command.
+    """
+
+    # MUST-CATCH: unguarded `.result?.code` read (the httpOk / sendModeRequest shape).
+    BAD_UNGUARDED = textwrap.dedent("""\
+        private boolean sendModeRequest(String v){
+            def resp = hubBypass("setHumidityMode", [mode: v], "m")
+            def innerCode = resp?.data?.result?.code
+            return innerCode == 0
+        }
+    """)
+
+    # MUST-CATCH: unguarded `.result` read inside a sendBypassRequest closure.
+    BAD_UNGUARDED_CLOSURE = textwrap.dedent("""\
+        def update(){
+            parent.sendBypassRequest(device, [:]) { resp ->
+                def status = resp.data.result
+                if (status == null) logError "none"
+            }
+        }
+    """)
+
+    # MUST-CATCH: unguarded `.result?.id` timer read.
+    BAD_UNGUARDED_TID = textwrap.dedent("""\
+        def setTimer(Integer n){
+            def resp = hubBypass("addTimerV2", [:], "t")
+            if (httpOk(resp)) {
+                def tid = resp?.data?.result?.id
+                if (tid != null) state.timerId = tid
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: same-line instanceof-Map guard (the canonical fix shape).
+    GOOD_SAME_LINE = textwrap.dedent("""\
+        private boolean sendModeRequest(String v){
+            def resp = hubBypass("setHumidityMode", [mode: v], "m")
+            boolean bodyIsMap = resp?.data instanceof Map
+            def innerCode = bodyIsMap ? resp.data.result?.code : null
+            return bodyIsMap && innerCode == 0
+        }
+    """)
+
+    # MUST-NOT-CATCH: early-return instanceof-Map guard (the httpOk fix shape).
+    GOOD_EARLY_RETURN = textwrap.dedent("""\
+        private boolean httpOk(resp){
+            if (!resp) return false
+            if (!(resp.data instanceof Map)) return false
+            def inner = resp.data.result?.code
+            return inner == null || inner == 0
+        }
+    """)
+
+    # MUST-NOT-CATCH: ternary site-guard (the tid fix shape).
+    GOOD_TERNARY = textwrap.dedent("""\
+        def setTimer(Integer n){
+            def resp = hubBypass("addTimerV2", [:], "t")
+            if (httpOk(resp)) {
+                def tid = (resp?.data instanceof Map) ? resp.data.result?.id : null
+                if (tid != null) state.timerId = tid
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: `.data.result` appears only in a comment and a string literal.
+    GOOD_COMMENT_STRING = textwrap.dedent("""\
+        private boolean f(x){
+            // a bare resp?.data?.result?.code would throw
+            def s = "resp.data.result"
+            return true
+        }
+    """)
+
+    def test_unguarded_result_code_fails(self):
+        findings = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED)
+        assert any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Expected RULE51 for unguarded resp?.data?.result?.code, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE51_result_map_guard'), (
+            f"RULE51 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_unguarded_closure_result_fails(self):
+        findings = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED_CLOSURE)
+        assert any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Expected RULE51 for unguarded resp.data.result in closure, got: {findings}"
+        )
+
+    def test_unguarded_tid_fails(self):
+        findings = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED_TID)
+        assert any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Expected RULE51 for unguarded resp?.data?.result?.id, got: {findings}"
+        )
+
+    def test_same_line_guard_passes(self):
+        findings = run_rule(check_rule51_result_map_guard, self.GOOD_SAME_LINE)
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Same-line instanceof-Map guard must not flag RULE51, got: {findings}"
+        )
+
+    def test_early_return_guard_passes(self):
+        findings = run_rule(check_rule51_result_map_guard, self.GOOD_EARLY_RETURN)
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Early-return instanceof-Map guard must not flag RULE51, got: {findings}"
+        )
+
+    def test_ternary_site_guard_passes(self):
+        findings = run_rule(check_rule51_result_map_guard, self.GOOD_TERNARY)
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Ternary site-guard must not flag RULE51, got: {findings}"
+        )
+
+    def test_comment_and_string_not_flagged(self):
+        findings = run_rule(check_rule51_result_map_guard, self.GOOD_COMMENT_STRING)
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f".data.result in a comment/string literal must not flag RULE51, got: {findings}"
+        )
+
+    def test_parent_files_excluded(self):
+        """The parent app-driver + virtual parent are a separate cluster — excluded by name."""
+        findings = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED, fname="VeSyncIntegration.groovy")
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"VeSyncIntegration.groovy must be excluded from RULE51, got: {findings}"
+        )
+        findings2 = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED, fname="VeSyncIntegrationVirtual.groovy")
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings2), (
+            f"VeSyncIntegrationVirtual.groovy must be excluded from RULE51, got: {findings2}"
+        )
+
+    def test_exemption_suppresses_finding(self):
+        path = make_fake_path("TestDriver.groovy")
+        file_rel = str(path.relative_to(REPO_ROOT)).replace('\\', '/')
+        config = {
+            'result_map_guard_exemptions': [
+                {'file': file_rel, 'method': 'sendModeRequest', 'rationale': 'test exemption'}
+            ]
+        }
+        findings = run_rule(check_rule51_result_map_guard, self.BAD_UNGUARDED, config=config)
+        assert not any(f['rule_id'] == 'RULE51_result_map_guard' for f in findings), (
+            f"Exempted method must not flag RULE51, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE52 — private scheduled handler (unreachable runIn target)
+# ---------------------------------------------------------------------------
+
+class TestRule52PrivateScheduledHandler:
+    """
+    RULE52: a `private` method used as a string-literal runIn/runInMillis/schedule
+    handler in the same file will never fire — Hubitat's scheduler invokes handlers
+    by name via the Groovy MOP, which cannot reach a `private` (INVOKESPECIAL) method.
+    """
+
+    # MUST-CATCH: private method scheduled via runIn (the getDevices BP17 self-heal shape).
+    BAD_PRIVATE_RUNIN = textwrap.dedent("""\
+        private Boolean getDevices() {
+            return doFetch()
+        }
+        def ensurePollHealth() {
+            runIn(2, "getDevices")
+        }
+    """)
+
+    # MUST-CATCH: private method scheduled via schedule() (cron poll shape).
+    BAD_PRIVATE_SCHEDULE = textwrap.dedent("""\
+        private setupPoll() {
+            schedule(cron, "runPoll")
+        }
+        private void runPoll() {
+            updateDevices()
+        }
+    """)
+
+    # MUST-CATCH: private method scheduled via runInMillis.
+    BAD_PRIVATE_RUNINMILLIS = textwrap.dedent("""\
+        private void deferredApply() {
+            applyIt()
+        }
+        def kick() {
+            runInMillis(500, "deferredApply")
+        }
+    """)
+
+    # MUST-NOT-CATCH: non-private scheduled handler (the correct convention).
+    GOOD_NONPRIVATE = textwrap.dedent("""\
+        Boolean getDevices() {
+            return doFetch()
+        }
+        def ensurePollHealth() {
+            runIn(2, "getDevices")
+        }
+    """)
+
+    # MUST-NOT-CATCH: a private method that is never scheduled.
+    GOOD_PRIVATE_NEVER_SCHEDULED = textwrap.dedent("""\
+        private String helper(x) {
+            return x.toString()
+        }
+        def update(status) {
+            def s = helper(status)
+        }
+    """)
+
+    # MUST-NOT-CATCH: name appears only in unschedule() (does not invoke).
+    GOOD_UNSCHEDULE_ONLY = textwrap.dedent("""\
+        private void getDevices() {
+            doFetch()
+        }
+        def teardown() {
+            unschedule("getDevices")
+        }
+    """)
+
+    # MUST-NOT-CATCH: private FIELD initialized with a method call (not a method decl).
+    GOOD_PRIVATE_FIELD = textwrap.dedent("""\
+        private Integer refreshInterval = computeDefault()
+        def kick() {
+            runIn(2, "refreshInterval")
+        }
+    """)
+
+    def test_private_runin_handler_fails(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.BAD_PRIVATE_RUNIN, "VeSyncIntegration.groovy")
+        assert any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"Expected RULE52 for private runIn handler, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE52_private_scheduled_handler'), (
+            f"RULE52 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_private_schedule_handler_fails(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.BAD_PRIVATE_SCHEDULE, "VeSyncIntegration.groovy")
+        assert any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"Expected RULE52 for private schedule() handler, got: {findings}"
+        )
+
+    def test_private_runinmillis_handler_fails(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.BAD_PRIVATE_RUNINMILLIS, "LevoitVital200S.groovy")
+        assert any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"Expected RULE52 for private runInMillis handler, got: {findings}"
+        )
+
+    def test_nonprivate_handler_passes(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.GOOD_NONPRIVATE, "VeSyncIntegration.groovy")
+        assert not any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"Non-private scheduled handler must not flag RULE52, got: {findings}"
+        )
+
+    def test_private_never_scheduled_passes(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.GOOD_PRIVATE_NEVER_SCHEDULED, "VeSyncIntegration.groovy")
+        assert not any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"A private method that is never scheduled must not flag RULE52, got: {findings}"
+        )
+
+    def test_unschedule_only_passes(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.GOOD_UNSCHEDULE_ONLY, "VeSyncIntegration.groovy")
+        assert not any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"A name used only in unschedule() must not flag RULE52, got: {findings}"
+        )
+
+    def test_private_field_not_flagged(self):
+        findings = run_rule(check_rule52_private_scheduled_handler,
+                            self.GOOD_PRIVATE_FIELD, "VeSyncIntegration.groovy")
+        assert not any(f['rule_id'] == 'RULE52_private_scheduled_handler' for f in findings), (
+            f"A private FIELD (not a method decl) must not flag RULE52, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE53 — power-write reporter (on/off bypass BP22 dedup)
+# ---------------------------------------------------------------------------
+
+class TestRule53PowerWriteReporter:
+    """
+    RULE53: a power-write failure in on()/off() must route through reportWriteError
+    (or reportWriteFailure), not a raw logError + recordError — otherwise it bypasses
+    the BP22 child-side network-outage dedup and spams an ERROR + a diagnostics record
+    per device per retry during an outage.
+    """
+
+    # MUST-CATCH: on() with a raw recordError in the write-fail branch.
+    BAD_ON_RAW = textwrap.dedent("""\
+        def on(){
+            def resp = hubBypass("setSwitch", [powerSwitch: 1], "on")
+            if (httpOk(resp)) { device.sendEvent(name:"switch", value:"on") }
+            else { clearPowerOnWindow(); logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"]) }
+        }
+    """)
+
+    # MUST-CATCH: off() with a raw recordError in the write-fail branch.
+    BAD_OFF_RAW = textwrap.dedent("""\
+        def off(){
+            def resp = hubBypass("setSwitch", [powerSwitch: 0], "off")
+            if (httpOk(resp)) { device.sendEvent(name:"switch", value:"off") }
+            else { logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"]) }
+        }
+    """)
+
+    # MUST-NOT-CATCH: on() routed through reportWriteError (the fix).
+    GOOD_ON_REPORTWRITEERROR = textwrap.dedent("""\
+        def on(){
+            def resp = hubBypass("setSwitch", [powerSwitch: 1], "on")
+            if (httpOk(resp)) { device.sendEvent(name:"switch", value:"on") }
+            else { clearPowerOnWindow(); reportWriteError("Power on failed", [method:"setSwitch"]) }
+        }
+    """)
+
+    # MUST-NOT-CATCH: off() routed through reportWriteFailure (resp-in-scope variant).
+    GOOD_OFF_REPORTWRITEFAILURE = textwrap.dedent("""\
+        def off(){
+            def resp = hubBypass("setSwitch", [powerSwitch: 0], "off")
+            if (httpOk(resp)) { device.sendEvent(name:"switch", value:"off") }
+            else reportWriteFailure("Power off failed", resp, [method:"setSwitch"])
+        }
+    """)
+
+    # MUST-NOT-CATCH: a raw recordError in a NON-power method (setMode validation) is
+    # out of this rule's scope — validation branches correctly use raw logError+recordError.
+    GOOD_SETMODE_VALIDATION = textwrap.dedent("""\
+        def setMode(mode){
+            String m = (mode as String)?.toLowerCase()
+            if (!(m in ["auto","sleep"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setMode"]); return }
+            doSetMode(m)
+        }
+    """)
+
+    # MUST-NOT-CATCH: update() read-failure "No status returned" is not a power write.
+    GOOD_UPDATE_READ_FAIL = textwrap.dedent("""\
+        def update(status){
+            if (!status?.result) { logError "No status returned"; recordError("No status returned", [method:"update"]) }
+        }
+    """)
+
+    def test_on_raw_recorderror_fails(self):
+        findings = run_rule(check_rule53_power_write_reporter, self.BAD_ON_RAW, "LevoitEverestAir.groovy")
+        assert any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
+            f"Expected RULE53 for raw recordError in on(), got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE53_power_write_reporter'), (
+            f"RULE53 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_off_raw_recorderror_fails(self):
+        findings = run_rule(check_rule53_power_write_reporter, self.BAD_OFF_RAW, "LevoitFanLib.groovy")
+        assert any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
+            f"Expected RULE53 for raw recordError in off(), got: {findings}"
+        )
+
+    def test_on_reportwriteerror_passes(self):
+        findings = run_rule(check_rule53_power_write_reporter, self.GOOD_ON_REPORTWRITEERROR, "LevoitEverestAir.groovy")
+        assert not any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
+            f"on() using reportWriteError must not flag RULE53, got: {findings}"
+        )
+
+    def test_off_reportwritefailure_passes(self):
+        findings = run_rule(check_rule53_power_write_reporter, self.GOOD_OFF_REPORTWRITEFAILURE, "LevoitEverestAir.groovy")
+        assert not any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
+            f"off() using reportWriteFailure must not flag RULE53, got: {findings}"
+        )
+
+    def test_setmode_validation_not_flagged(self):
+        findings = run_rule(check_rule53_power_write_reporter, self.GOOD_SETMODE_VALIDATION, "LevoitEverestAir.groovy")
+        assert not any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
+            f"A raw recordError in a non-power method (setMode validation) must not flag RULE53, got: {findings}"
+        )
+
+    def test_update_read_fail_not_flagged(self):
+        findings = run_rule(check_rule53_power_write_reporter, self.GOOD_UPDATE_READ_FAIL, "LevoitEverestAir.groovy")
+        assert not any(f['rule_id'] == 'RULE53_power_write_reporter' for f in findings), (
+            f"A raw recordError in update() read-failure must not flag RULE53, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE54 — switch/toggle sync (toggle inverts wrong after external change)
+# ---------------------------------------------------------------------------
+
+class TestRule54SwitchToggleSync:
+    """
+    RULE54: a driver whose toggle() prefers state.lastSwitchSet must emit the poll switch
+    attribute via emitSwitchState() (which syncs the mirror), not a raw ternary sendEvent —
+    else an external power change seen only by the poll leaves a stale mirror that makes
+    toggle() invert the wrong way.
+    """
+
+    # MUST-CATCH: own toggle-mirror read + raw ternary poll switch-emit.
+    BAD_OWN = textwrap.dedent("""\
+        def toggle(){
+            String current = state.lastSwitchSet ?: device.currentValue("switch")
+            current == "on" ? off() : on()
+        }
+        def applyStatus(status){
+            def powerOn = status.powerSwitch == 1
+            device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+        }
+    """)
+
+    # MUST-CATCH via include-resolution: the toggle-mirror read lives in the real
+    # LevoitHumidifierLib (#include level99.LevoitHumidifier), and this driver body still
+    # raw-emits the ternary switch. Exercises the include-scope predicate against a real lib.
+    BAD_VIA_INCLUDE = textwrap.dedent("""\
+        #include level99.LevoitHumidifier
+        def applyStatus(status){
+            def powerOn = status.powerSwitch == 1
+            device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+        }
+    """)
+
+    # MUST-NOT-CATCH: the fix — emitSwitchState() (emits + syncs the mirror).
+    GOOD_HELPER = textwrap.dedent("""\
+        def toggle(){
+            String current = state.lastSwitchSet ?: device.currentValue("switch")
+            current == "on" ? off() : on()
+        }
+        def applyStatus(status){
+            def powerOn = status.powerSwitch == 1
+            emitSwitchState(powerOn)
+        }
+    """)
+
+    # MUST-NOT-CATCH: raw ternary emit but NO lastSwitchSet mirror in scope (Core200S/Generic
+    # shape — toggle uses currentValue directly, so there is nothing to keep in sync).
+    GOOD_NON_TOGGLE = textwrap.dedent("""\
+        def toggle(){
+            device.currentValue("switch") == "on" ? off() : on()
+        }
+        def applyStatus(status){
+            def powerOn = status.powerSwitch == 1
+            device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+        }
+    """)
+
+    # MUST-NOT-CATCH: the write-path literal emit (value:"on") is not the ternary poll shape.
+    GOOD_LITERAL_WRITE = textwrap.dedent("""\
+        def on(){
+            state.lastSwitchSet = "on"
+            device.sendEvent(name:"switch", value:"on")
+        }
+        def toggle(){
+            String current = state.lastSwitchSet ?: device.currentValue("switch")
+            current == "on" ? off() : on()
+        }
+    """)
+
+    def test_own_toggle_raw_emit_fails(self):
+        findings = run_rule(check_rule54_switch_toggle_sync, self.BAD_OWN, "LevoitEverestAir.groovy")
+        assert any(f['rule_id'] == 'RULE54_switch_toggle_sync' for f in findings), (
+            f"Expected RULE54 for raw ternary emit in a lastSwitchSet-toggle driver, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE54_switch_toggle_sync'), (
+            f"RULE54 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_include_resolved_toggle_raw_emit_fails(self):
+        findings = run_rule(check_rule54_switch_toggle_sync, self.BAD_VIA_INCLUDE, "LevoitClassic200S.groovy")
+        assert any(f['rule_id'] == 'RULE54_switch_toggle_sync' for f in findings), (
+            f"Expected RULE54 when the toggle-mirror read is in an #include'd lib, got: {findings}"
+        )
+
+    def test_emitswitchstate_passes(self):
+        findings = run_rule(check_rule54_switch_toggle_sync, self.GOOD_HELPER, "LevoitEverestAir.groovy")
+        assert not any(f['rule_id'] == 'RULE54_switch_toggle_sync' for f in findings), (
+            f"emitSwitchState() poll-emit must not flag RULE54, got: {findings}"
+        )
+
+    def test_non_toggle_raw_emit_passes(self):
+        findings = run_rule(check_rule54_switch_toggle_sync, self.GOOD_NON_TOGGLE, "LevoitGeneric.groovy")
+        assert not any(f['rule_id'] == 'RULE54_switch_toggle_sync' for f in findings), (
+            f"A raw ternary emit with no lastSwitchSet mirror must not flag RULE54, got: {findings}"
+        )
+
+    def test_literal_write_emit_passes(self):
+        findings = run_rule(check_rule54_switch_toggle_sync, self.GOOD_LITERAL_WRITE, "LevoitEverestAir.groovy")
+        assert not any(f['rule_id'] == 'RULE54_switch_toggle_sync' for f in findings), (
+            f"The write-path literal switch emit must not flag RULE54, got: {findings}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RULE55 — bare bool-flag == 0|1 coercion (BP7 divergence companion to RULE45)
+# ---------------------------------------------------------------------------
+
+class TestRule55BareBoolFlagEq:
+    """
+    RULE55: a bare `<recv>.<boolFlag> == 0|1` on a VeSync boolean flag returns the wrong
+    answer for the Boolean/String shapes (true==1 is false) — route it through asBool().
+    Distinct from RULE45's throw-prone `(x as Integer) == 1` cast form.
+    """
+
+    def test_bare_powerswitch_eq_fails(self):
+        findings = run_rule(check_rule55_bare_bool_flag_eq, 'def x = r.powerSwitch == 1\n', "LevoitGeneric.groovy")
+        assert any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == 'RULE55_bare_bool_flag_eq'), (
+            f"RULE55 must be FAIL to gate lint --strict; got: {findings}"
+        )
+
+    def test_bare_childlock_eq0_fails(self):
+        findings = run_rule(check_rule55_bare_bool_flag_eq,
+                            'device.sendEvent(name:"childLock", value: r.childLockSwitch == 0 ? "off":"on")\n')
+        assert any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+
+    def test_gstring_interpolated_coercion_fails(self):
+        # The primary finding shape: the coercion lives inside a GString ${...} interpolation.
+        findings = run_rule(check_rule55_bare_bool_flag_eq,
+                            'parts << "Power: ${r.powerSwitch == 1 ? \'on\' : \'off\'}"\n', "LevoitGeneric.groovy")
+        assert any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), (
+            f"A bool coercion inside a GString ${{...}} interpolation must be flagged, got: {findings}"
+        )
+
+    def test_asbool_passes(self):
+        findings = run_rule(check_rule55_bare_bool_flag_eq,
+                            'device.sendEvent(name:"switch", value: asBool(r.powerSwitch) ? "on":"off")\n')
+        assert not any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+
+    def test_as_integer_cast_form_not_flagged(self):
+        # RULE45's throw-form has `as Integer)` between the field and `==`, so RULE55 must not match.
+        findings = run_rule(check_rule55_bare_bool_flag_eq, 'def x = (r.powerSwitch as Integer) == 1\n')
+        assert not any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+
+    def test_enum_field_not_flagged(self):
+        # dryingState is a 0/1/2 ENUM, not a boolean flag — `== 1` is a legitimate enum test.
+        findings = run_rule(check_rule55_bare_bool_flag_eq, 'if (r.dryingState == 1) s = "active"\n')
+        assert not any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+
+    def test_local_var_not_flagged(self):
+        # A local variable (not a <recv>.<field> access) is out of scope — those are as-Integer locals.
+        findings = run_rule(check_rule55_bare_bool_flag_eq, 'device.sendEvent(name:"mute", value: muteState == 1 ? "on":"off")\n')
+        assert not any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+
+    def test_flag_in_log_string_not_flagged(self):
+        # A flag token inside a plain (non-interpolated) log-string literal is not code.
+        findings = run_rule(check_rule55_bare_bool_flag_eq, 'logDebug "the powerSwitch == 1 branch ran"\n')
+        assert not any(f['rule_id'] == 'RULE55_bare_bool_flag_eq' for f in findings), findings
+
+
+class TestRule56TemperatureScaleEmit:
+    """
+    RULE56: the `temperature` attribute must be emitted only through the shared
+    emitTemperature() helper (LevoitChildBaseLib). An inline sendEvent that hardcodes a
+    Fahrenheit unit (`unit:"°F"`) is the C5 hardcoded-scale bug class — flagged. The
+    helper's own definition file is exempt (it IS the sanctioned emitter); an
+    emitTemperature() call, a non-temperature sendEvent, and a commented-out inline emit
+    must NOT flag.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    _RULE_ID = 'RULE56_temperature_scale_emit'
+
+    # MUST-CATCH: the inline hardcoded-°F block (the C5 shape) — both °C and °F branches;
+    # keying on the °F branch flags it exactly once.
+    BAD_INLINE_F = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            if (r.temperature != null) {
+                double tempF = (r.temperature as Integer) / 10.0
+                if (location?.temperatureScale == "C") {
+                    double tempC = (tempF - 32) * 5.0 / 9.0
+                    device.sendEvent(name:"temperature", value: Math.round(tempC * 10) / 10.0, unit:"°C")
+                } else {
+                    device.sendEvent(name:"temperature", value: Math.round(tempF * 10) / 10.0, unit:"°F")
+                }
+            }
+        }
+    """)
+
+    # MUST-CATCH: the same bug expressed with a `\\u00B0F` escape unit literal — still an
+    # inline hardcoded-Fahrenheit emit bypassing the helper.
+    BAD_INLINE_ESCAPE = textwrap.dedent("""\
+        def applyStatus(status) {
+            device.sendEvent(name:"temperature", value: 68.3, unit:"\\u00B0F")
+        }
+    """)
+
+    # MUST-NOT-CATCH: the sanctioned emitTemperature() call — no temperature sendEvent here.
+    GOOD_HELPER_CALL = textwrap.dedent("""\
+        def applyStatus(status) {
+            def r = status.result
+            if (r.temperature != null) emitTemperature(r.temperature as Integer)
+        }
+    """)
+
+    # MUST-NOT-CATCH: the helper's OWN definition (lives in LevoitChildBaseLib.groovy, the
+    # one file allowed to carry the temperature sendEvent).
+    GOOD_HELPER_DEFINITION = textwrap.dedent("""\
+        void emitTemperature(rawTempTimesTen) {
+            double tempF = (rawTempTimesTen as Integer) / 10.0
+            if (location?.temperatureScale == "C") {
+                double tempC = (tempF - 32) * 5.0 / 9.0
+                device.sendEvent(name:"temperature", value: Math.round(tempC * 10) / 10.0, unit:"°C")
+            } else {
+                device.sendEvent(name:"temperature", value: Math.round(tempF * 10) / 10.0, unit:"°F")
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: a non-temperature sendEvent (even with a °F unit) is out of scope.
+    GOOD_NON_TEMPERATURE_EMIT = textwrap.dedent("""\
+        def applyStatus(status) {
+            device.sendEvent(name:"heatingSetpoint", value: 70, unit:"°F")
+        }
+    """)
+
+    # MUST-NOT-CATCH: a commented-out inline emit (comment-stripped before matching).
+    GOOD_COMMENTED_OUT = textwrap.dedent("""\
+        def applyStatus(status) {
+            // legacy: device.sendEvent(name:"temperature", value: 68.3, unit:"°F")
+            emitTemperature(683)
+        }
+    """)
+
+    def test_inline_fahrenheit_emit_fails(self):
+        findings = run_rule(check_rule56_temperature_scale_emit, self.BAD_INLINE_F)
+        assert any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"Expected RULE56 for inline hardcoded-°F temperature emit, got: {findings}"
+        )
+        assert any(f.get('severity') == 'FAIL' for f in findings
+                   if f.get('rule_id') == self._RULE_ID), (
+            f"RULE56 finding must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+        # Exactly one finding — keying on the °F branch flags an inline block once.
+        assert sum(1 for f in findings if f['rule_id'] == self._RULE_ID) == 1, (
+            f"Expected exactly one RULE56 finding per inline block, got: {findings}"
+        )
+
+    def test_inline_escape_unit_emit_fails(self):
+        findings = run_rule(check_rule56_temperature_scale_emit, self.BAD_INLINE_ESCAPE)
+        assert any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"Expected RULE56 for inline °F emit using a \\u00B0 escape unit, got: {findings}"
+        )
+
+    def test_helper_call_passes(self):
+        findings = run_rule(check_rule56_temperature_scale_emit, self.GOOD_HELPER_CALL)
+        assert not any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"emitTemperature() call must not flag RULE56, got: {findings}"
+        )
+
+    def test_helper_definition_file_exempt(self):
+        findings = run_rule(
+            check_rule56_temperature_scale_emit,
+            self.GOOD_HELPER_DEFINITION,
+            fname="LevoitChildBaseLib.groovy",
+        )
+        assert not any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"The helper's own definition file (LevoitChildBaseLib) must be exempt, got: {findings}"
+        )
+
+    def test_helper_definition_flags_elsewhere(self):
+        # Non-vacuity of the file exemption: the SAME helper body in a NON-helper file
+        # (a driver that hand-inlined the emit) DOES flag — proving the pass is the file
+        # exemption, not that the body is inherently unmatched.
+        findings = run_rule(check_rule56_temperature_scale_emit, self.GOOD_HELPER_DEFINITION)
+        assert any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"The inline emit body in a driver file (not the helper) must flag RULE56, got: {findings}"
+        )
+
+    def test_non_temperature_emit_passes(self):
+        findings = run_rule(check_rule56_temperature_scale_emit, self.GOOD_NON_TEMPERATURE_EMIT)
+        assert not any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"A non-temperature sendEvent must not flag RULE56, got: {findings}"
+        )
+
+    def test_commented_out_emit_passes(self):
+        findings = run_rule(check_rule56_temperature_scale_emit, self.GOOD_COMMENTED_OUT)
+        assert not any(f['rule_id'] == self._RULE_ID for f in findings), (
+            f"A commented-out inline emit must not flag RULE56, got: {findings}"
+        )
+
+
+class TestRule57SandboxForbiddenCalls:
+    """
+    RULE57: Hubitat-Groovy-sandbox-forbidden method calls / constructs must not
+    ship — they fail to COMPILE on the hub (and take down every driver that
+    #includes an offending library), and the Spock harness does not catch them.
+
+    MUST-CATCH: getClass() (the confirmed outage call, incl. the historical
+    `resp.data?.getClass()?.simpleName` shape), .execute(), bare System./Runtime./
+    Thread., GroovyShell, ClassLoader, .newInstance(, Eval.
+
+    MUST-NOT-CATCH: e.metaClass.respondsTo(...) (sandbox-legal; used in the parent
+    driver), a bare .simpleName without getClass(), instanceof checks, ordinary
+    method calls, and any forbidden token inside a comment or a string literal.
+
+    Both-ways proof: orchestrator-owned.
+    """
+
+    _RULE_ID = 'RULE57_sandbox_forbidden_call'
+
+    # MUST-CATCH: the exact historical shape that caused the outage.
+    BAD_GETCLASS_HISTORICAL = textwrap.dedent("""\
+        def httpOk(resp) {
+            if (!(resp.data instanceof Map)) {
+                logDebug "non-Map body ${resp.data?.getClass()?.simpleName}"
+                return false
+            }
+            return true
+        }
+    """)
+
+    BAD_EXECUTE = textwrap.dedent("""\
+        def doThing() {
+            "id".execute()
+        }
+    """)
+
+    BAD_SYSTEM = textwrap.dedent("""\
+        def doThing() {
+            System.exit(0)
+        }
+    """)
+
+    BAD_RUNTIME = textwrap.dedent("""\
+        def doThing() {
+            def r = Runtime.getRuntime()
+        }
+    """)
+
+    BAD_THREAD = textwrap.dedent("""\
+        def doThing() {
+            Thread.sleep(100)
+        }
+    """)
+
+    BAD_GROOVYSHELL = textwrap.dedent("""\
+        def doThing() {
+            def sh = new GroovyShell()
+        }
+    """)
+
+    BAD_CLASSLOADER = textwrap.dedent("""\
+        def doThing() {
+            def cl = this.class.classLoader as ClassLoader
+        }
+    """)
+
+    BAD_NEWINSTANCE = textwrap.dedent("""\
+        def doThing() {
+            def o = SomeType.newInstance()
+        }
+    """)
+
+    BAD_EVAL = textwrap.dedent("""\
+        def doThing() {
+            Eval.me("1 + 1")
+        }
+    """)
+
+    # MUST-NOT-CATCH: metaClass.respondsTo is sandbox-legal (parent uses it 3x).
+    GOOD_METACLASS_RESPONDSTO = textwrap.dedent("""\
+        def handle(e) {
+            if (e.metaClass.respondsTo(e, 'getResponse')) {
+                return e.getResponse()
+            }
+        }
+    """)
+
+    # MUST-NOT-CATCH: the actual fixed line — instanceof ternary, .simpleName absent.
+    GOOD_INSTANCEOF_TERNARY = textwrap.dedent("""\
+        def httpOk(resp) {
+            if (!(resp.data instanceof Map)) {
+                logDebug "non-Map body (${resp.data instanceof String ? 'String' : 'non-Map'})"
+                return false
+            }
+            return true
+        }
+    """)
+
+    # MUST-NOT-CATCH: a bare .simpleName on a non-getClass() expression.
+    GOOD_BARE_SIMPLENAME = textwrap.dedent("""\
+        def label(t) {
+            return t.simpleName
+        }
+    """)
+
+    # MUST-NOT-CATCH: forbidden tokens inside a comment and a string literal.
+    GOOD_TOKENS_IN_COMMENT_AND_STRING = textwrap.dedent("""\
+        def doThing() {
+            // avoid getClass() and System.exit and Thread.sleep in real code
+            logDebug "never call getClass() or Runtime.getRuntime() here"
+        }
+    """)
+
+    def _fail_ids(self, findings):
+        return [f for f in findings if f['rule_id'] == self._RULE_ID]
+
+    def test_getclass_historical_shape_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_GETCLASS_HISTORICAL)
+        hits = self._fail_ids(findings)
+        assert hits, (
+            f"Expected RULE57 on the historical resp.data?.getClass()?.simpleName shape, "
+            f"got: {findings}"
+        )
+        assert all(f['severity'] == 'FAIL' for f in hits), (
+            f"RULE57 must carry severity='FAIL' to gate lint --strict; got: {findings}"
+        )
+
+    def test_execute_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_EXECUTE)
+        assert self._fail_ids(findings), f"Expected RULE57 for .execute(), got: {findings}"
+
+    def test_system_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_SYSTEM)
+        assert self._fail_ids(findings), f"Expected RULE57 for System., got: {findings}"
+
+    def test_runtime_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_RUNTIME)
+        assert self._fail_ids(findings), f"Expected RULE57 for Runtime., got: {findings}"
+
+    def test_thread_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_THREAD)
+        assert self._fail_ids(findings), f"Expected RULE57 for Thread., got: {findings}"
+
+    def test_groovyshell_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_GROOVYSHELL)
+        assert self._fail_ids(findings), f"Expected RULE57 for GroovyShell, got: {findings}"
+
+    def test_classloader_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_CLASSLOADER)
+        assert self._fail_ids(findings), f"Expected RULE57 for ClassLoader, got: {findings}"
+
+    def test_newinstance_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_NEWINSTANCE)
+        assert self._fail_ids(findings), f"Expected RULE57 for .newInstance(, got: {findings}"
+
+    def test_eval_fails(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.BAD_EVAL)
+        assert self._fail_ids(findings), f"Expected RULE57 for Eval., got: {findings}"
+
+    def test_metaclass_respondsto_passes(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.GOOD_METACLASS_RESPONDSTO)
+        assert not self._fail_ids(findings), (
+            f"e.metaClass.respondsTo(...) is sandbox-legal and must NOT flag RULE57, got: {findings}"
+        )
+
+    def test_instanceof_ternary_passes(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.GOOD_INSTANCEOF_TERNARY)
+        assert not self._fail_ids(findings), (
+            f"The fixed instanceof-ternary line must NOT flag RULE57, got: {findings}"
+        )
+
+    def test_bare_simplename_passes(self):
+        findings = run_rule(check_rule57_sandbox_forbidden_calls, self.GOOD_BARE_SIMPLENAME)
+        assert not self._fail_ids(findings), (
+            f"A bare .simpleName (no getClass()) must NOT flag RULE57, got: {findings}"
+        )
+
+    def test_tokens_in_comment_and_string_pass(self):
+        findings = run_rule(
+            check_rule57_sandbox_forbidden_calls, self.GOOD_TOKENS_IN_COMMENT_AND_STRING
+        )
+        assert not self._fail_ids(findings), (
+            f"Forbidden tokens inside a comment or string literal must NOT flag RULE57, got: {findings}"
+        )
+
+    def test_non_driver_file_excluded(self):
+        # RULE57 scope is Drivers/Levoit/ .groovy only.
+        findings = run_rule(
+            check_rule57_sandbox_forbidden_calls,
+            self.BAD_GETCLASS_HISTORICAL,
+            fname="notes.md",
+        )
+        assert not self._fail_ids(findings), (
+            f"RULE57 must not scan non-Drivers/Levoit files, got: {findings}"
+        )
+
+    def test_exemption_suppresses_finding(self):
+        config = {
+            'sandbox_forbidden_calls_exemptions': [{
+                'file': 'Drivers/Levoit/TestDriver.groovy',
+                'construct': 'getClass()',
+                'rationale': 'test exemption',
+            }]
+        }
+        findings = run_rule(
+            check_rule57_sandbox_forbidden_calls, self.BAD_GETCLASS_HISTORICAL, config=config
+        )
+        assert not self._fail_ids(findings), (
+            f"A matching exemption must suppress the RULE57 finding, got: {findings}"
         )

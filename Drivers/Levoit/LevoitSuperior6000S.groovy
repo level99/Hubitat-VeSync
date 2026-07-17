@@ -59,15 +59,20 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Superior 6000S Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Levoit Superior 6000S (LEH-S601S) evaporative humidifier — mist 1-9, target humidity, modes, drying mode, auto-stop, water pump cleaning, ambient temp; canonical pyvesync payloads",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
         capability "SwitchLevel"                    // mist level 1-9 mapped to 0-100
+        // Sup6000S exposes mist as SwitchLevel (0-100) for dashboard-dimmer + voice "% mist" control;
+        // sibling humidifiers (Classic 200/300S, Dual 200S, LV600S, OasisMist 1000/450S, Sprout) keep
+        // mist on the discrete setMistLevel command and do NOT declare SwitchLevel — intentional: this
+        // model's continuous mist scale fits a 0-100 dimmer surface, the others' do not.
         capability "RelativeHumidityMeasurement"    // current ambient humidity
         capability "TemperatureMeasurement"         // ambient temp from device sensor
         capability "Actuator"
@@ -130,6 +135,14 @@ def setMode(mode){
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","manual","sleep"])) { logError "Invalid mode: ${m}"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     ensureSwitchOn()
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return false
+    }
     // autoPro is the canonical API value for "auto" on Superior 6000S
     String apiMode = (m == "auto") ? "autoPro" : m
     def resp = hubBypass("setHumidityMode", [workMode: apiMode], "setHumidityMode(${apiMode})")
@@ -138,11 +151,15 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
 
 // ---------- Mist level ----------
+// BP30: intentionally NOT dedup-gated — setMistLevel is a SwitchLevel setpoint, not a
+// redundant-mode storm vector; its collision class is already killed by L1 serialization.
+// (Same rationale fleet-wide for every humidifier's setMistLevel; see the BP30 fix-scope waiver.)
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
@@ -196,7 +213,9 @@ def setLevel(val){
     pct = Math.max(0, Math.min(100, pct))
     if (pct == 0) { off(); return }
     Integer lvl = levelFromPercent(pct)
-    sendEvent(name:"level", value: pct)
+    // BP29: do NOT pre-emit the level here. setMistLevel's success branch emits the reconciled
+    // level (percentFromLevel(clamped)); pre-emitting fired a level event even when setMistLevel
+    // short-circuited without a write (e.g. sleep-mode reject), reporting a level the device never took.
     setMistLevel(lvl)
 }
 
@@ -281,8 +300,8 @@ def applyStatus(status){
     logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
     // Power
-    def powerOn = (r.powerSwitch as Integer) == 1
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    def powerOn = asBool(r.powerSwitch)
+    emitSwitchState(powerOn)
 
     // Current ambient humidity
     if (r.humidity != null) device.sendEvent(name:"humidity", value: r.humidity as Integer)
@@ -290,16 +309,9 @@ def applyStatus(status){
     // Target humidity (auto setpoint)
     if (r.targetHumidity != null) device.sendEvent(name:"targetHumidity", value: r.targetHumidity as Integer)
 
-    // Temperature: API gives F × 10 (e.g. 683 → 68.3°F). Round to 1 decimal via Math.round.
-    if (r.temperature != null) {
-        double tempF = (r.temperature as Integer) / 10.0
-        if (location?.temperatureScale == "C") {
-            double tempC = (tempF - 32) * 5.0 / 9.0
-            device.sendEvent(name:"temperature", value: Math.round(tempC * 10) / 10.0, unit:"°C")
-        } else {
-            device.sendEvent(name:"temperature", value: Math.round(tempF * 10) / 10.0, unit:"°F")
-        }
-    }
+    // Temperature: API gives F × 10 (e.g. 683 → 68.3°F). emitTemperature (LevoitChildBase)
+    // rounds to 1 decimal and converts to the hub's configured scale.
+    if (r.temperature != null) emitTemperature(r.temperature as Integer)
 
     // Mode — reverse-map autoPro -> auto for user-friendly reporting
     String workMode = (r.workMode ?: "manual") as String
@@ -308,32 +320,40 @@ def applyStatus(status){
     device.sendEvent(name:"mode", value: reportedMode)
 
     // Mist levels: mistLevel = actual reported, virtualLevel = requested set level
-    if (r.mistLevel != null) device.sendEvent(name:"mistLevel", value: r.mistLevel as Integer)
+    // BP#6: clamp the actual mist level to 0 when off (mistLevel retains last-set value while off).
+    if (r.mistLevel != null) {
+        device.sendEvent(name:"mistLevel", value: clampOffLevel(r.mistLevel as Integer, powerOn))
+    }
     if (r.virtualLevel != null) {
         Integer vl = r.virtualLevel as Integer
+        // virtualLevel / level are the SETPOINT (dimmer/SwitchLevel target) — intentionally
+        // retain their value while off so the slider shows what the device will run at next.
         device.sendEvent(name:"virtualLevel", value: vl)
-        // SwitchLevel: map 1-9 to 0-100
         device.sendEvent(name:"level", value: percentFromLevel(vl))
     }
 
     // Water status — removed takes priority over empty
     String water = "ok"
-    if ((r.waterTankLifted as Integer) == 1)  water = "removed"
-    else if ((r.waterLacksState as Integer) == 1) water = "empty"
+    if (asBool(r.waterTankLifted))  water = "removed"
+    else if (asBool(r.waterLacksState)) water = "empty"
     if (state.lastWater != water) logInfo "Water: ${water}"
     state.lastWater = water
     device.sendEvent(name:"water", value: water)
 
-    // Display: prefer screenState (actual) over screenSwitch (config) if both present
-    Integer screen = (r.screenState != null ? r.screenState : r.screenSwitch) as Integer
-    device.sendEvent(name:"displayOn", value: screen == 1 ? "on" : "off")
+    // Display: prefer screenState (actual) over screenSwitch (config) if both present.
+    // asBool() coercion (matches the sibling display blocks) — never throws on a String
+    // flag value; the null-guard avoids emitting a bogus "off" when neither field is present.
+    def displayRaw = r.screenState != null ? r.screenState : r.screenSwitch
+    if (displayRaw != null) {
+        device.sendEvent(name:"displayOn", value: asBool(displayRaw) ? "on" : "off")
+    }
 
     // Child lock
-    device.sendEvent(name:"childLock", value: (r.childLockSwitch as Integer) == 1 ? "on" : "off")
+    device.sendEvent(name:"childLock", value: asBool(r.childLockSwitch) ? "on" : "off")
 
     // Auto-stop: config (switch) vs active state
-    device.sendEvent(name:"autoStopEnabled", value: (r.autoStopSwitch as Integer) == 1 ? "on" : "off")
-    device.sendEvent(name:"autoStopReached", value: (r.autoStopState as Integer) == 1 ? "yes" : "no")
+    device.sendEvent(name:"autoStopEnabled", value: asBool(r.autoStopSwitch) ? "on" : "off")
+    device.sendEvent(name:"autoStopReached", value: asBool(r.autoStopState) ? "yes" : "no")
 
     // Drying mode — nested map. dryingState enum (per pyvesync DryingModes): 0=OFF, 1=DRYING, 2=COMPLETE
     if (r.dryingMode instanceof Map) {
@@ -356,10 +376,11 @@ def applyStatus(status){
     }
 
     // Water pump cleaning cycle status (Superior 6000S exclusive — undocumented in pyvesync)
+    // cleanStatus is a 0/1 flag (0 = idle, 1 = cleaning) — asBool() coercion never throws on
+    // a String value; remainTime is a genuine numeric, so it keeps its plain `as Integer`.
     if (r.waterPump instanceof Map) {
-        Integer pumpClean = r.waterPump.cleanStatus as Integer  // 0 = idle, 1 = cleaning
         Integer pumpRemain = r.waterPump.remainTime as Integer
-        device.sendEvent(name:"pumpCleanStatus", value: pumpClean == 1 ? "cleaning" : "idle")
+        device.sendEvent(name:"pumpCleanStatus", value: asBool(r.waterPump.cleanStatus) ? "cleaning" : "idle")
         device.sendEvent(name:"pumpCleanRemain", value: pumpRemain ?: 0)
     }
 
@@ -384,7 +405,14 @@ def applyStatus(status){
     def parts = []
     if (r.humidity != null)          parts << "Humidity: ${r.humidity as Integer}%"
     if (r.targetHumidity != null)    parts << "Target: ${r.targetHumidity as Integer}%"
-    if (r.virtualLevel != null)      parts << "Mist: L${r.virtualLevel as Integer} (1-9)"
+    // BP#6: the info tile shows the SET mist level (virtualLevel setpoint), clamped to "off"
+    // when the device is powered off so the tile doesn't claim a running level on an off device.
+    // The virtualLevel/level ATTRIBUTES above keep the raw setpoint (dimmer convention) — only
+    // this human-readable label is clamped for display.
+    if (r.virtualLevel != null) {
+        Integer mistDisplay = clampOffLevel(r.virtualLevel as Integer, powerOn)
+        parts << "Mist: ${mistDisplay > 0 ? 'L'+mistDisplay+' (1-9)' : 'off'}"
+    }
     parts << "Mode: ${reportedMode}"
     parts << "Water: ${water}"
     if (r.filterLifePercent != null) parts << "Wick: ${r.filterLifePercent as Integer}%"
@@ -395,7 +423,10 @@ def applyStatus(status){
 private int percentFromLevel(Integer lvl){
     if (lvl == null || lvl < 1) return 0
     if (lvl >= 9) return 100
-    return Math.round((lvl - 1) * (100.0 / 8.0)) as int
+    // Level 1 is the lowest ACTIVE mist level, not "off": (lvl-1)*12.5 gave level 1 -> 0%, and 0%
+    // conventionally means OFF in SwitchLevel — contradicting switch=on while the device mists at L1.
+    // Floor an active level at 1% so a running L1 never emits level 0.
+    return Math.max(1, Math.round((lvl - 1) * (100.0 / 8.0)) as int)
 }
 
 private int levelFromPercent(Integer pct){

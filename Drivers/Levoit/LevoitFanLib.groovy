@@ -82,7 +82,13 @@ def installed() {
 
 def updated() {
     logDebug "Updated ${settings}"
+    // Preserve state.timerId across state.clear() — it's the only long-lived, load-bearing fan-line
+    // state (the id an active device timer must reference to be cancelled). Wiping it on every Save
+    // Preferences would leave cancelTimer() unable to cancel a running timer (silent no-op). Mirrors
+    // how the parent preserves state.terminalId across its own state.clear().
+    def savedTimerId = state.timerId
     state.clear(); unschedule(); initialize()
+    if (savedTimerId != null) state.timerId = savedTimerId
     runIn(3, "refresh")
     // Turn off debug log in 30 minutes (happy path — no hub reboot)
     if (settings?.debugOutput) {
@@ -99,6 +105,11 @@ def uninstalled() {
 
 def initialize() {
     logDebug "Initializing"
+    // FanControl: publish the static speed enum once so dashboard fan-tiles and
+    // integrations can populate their speed picker. The 1-12 raw fan level maps to
+    // these FanControl buckets via levelToFanControlEnum(); list its output set.
+    device.sendEvent(name:"supportedFanSpeeds",
+        value: groovy.json.JsonOutput.toJson(["off","low","medium-low","medium","medium-high","high"]))
 }
 
 // ---- Refresh ----
@@ -115,6 +126,9 @@ def on() {
     logDebug "on()"
     // state.turningOn prevents BP23 re-entrance: setLevel(N) -> on() -> (internal speed call) -> setLevel()
     if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    // BP30: async-window storm guard — collapse a burst of overlapping on() commands into ONE
+    // effective power sequence. Returns false while a power-on is already in flight.
+    if (!beginPowerOnWindow()) { logDebug "Power-on already in flight (BP30 storm guard); skipping redundant burst"; return }
     state.turningOn = true
     try {
         def resp = hubBypass("setSwitch", [powerSwitch: 1, switchIdx: 0], "setSwitch(power=1)")
@@ -123,7 +137,7 @@ def on() {
             state.lastSwitchSet = "on"
             device.sendEvent(name:"switch", value:"on")
         } else {
-            logError "Power on failed"; recordError("Power on failed", [method:"setSwitch"])
+            clearPowerOnWindow(); reportWriteError("Power on failed", [method:"setSwitch"])
         }
     } finally {
         state.remove('turningOn')
@@ -136,13 +150,15 @@ def off() {
     if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
     state.turningOff = true
     try {
+        // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence.
+        clearPowerOnWindow()
         def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(power=0)")
         if (httpOk(resp)) {
             logInfo "Power off"
             state.lastSwitchSet = "off"
             device.sendEvent(name:"switch", value:"off")
         } else {
-            logError "Power off failed"; recordError("Power off failed", [method:"setSwitch"])
+            reportWriteError("Power off failed", [method:"setSwitch"])
         }
     } finally {
         state.remove('turningOff')
@@ -233,6 +249,17 @@ private boolean sendLevel(Integer level) {
         recordError("sendLevel: invalid level ${level}", [method:"setLevel"])
         return false
     }
+    // BP30 Layer 3: drop an identical fanLevel write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("fanLevel", level)) {
+        logDebug "sendLevel: identical fanLevel write within dedup window (storm duplicate); skipping"
+        // dedup-suppress: write handled (already at target). Private helper whose callers discard
+        // the return — so it deliberately returns true ("at target"), NOT the public-setter
+        // false=did-nothing convention the other dedup-skips use.
+        return true
+    }
     def resp = hubBypass("setLevel", [levelIdx: 0, levelType: "wind", manualSpeedLevel: level], "setLevel{levelIdx,levelType,manualSpeedLevel=${level}}")
     if (httpOk(resp)) {
         state.fanLevel = level
@@ -242,6 +269,7 @@ private boolean sendLevel(Integer level) {
         logInfo "Speed: L${level} (${enumVal})"
         return true
     } else {
+        clearDuplicateWrite("fanLevel")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Speed write failed for level ${level}", [method:"setLevel"])
         return false
     }
@@ -369,8 +397,8 @@ private void noteOscillationOffState() {
 // Other modes (Tower: normal/turbo/auto; Pedestal: normal/turbo/eco) pass through unchanged.
 private Map applyFanCommonHead(Map r) {
     // ---- Power ----
-    boolean powerOn = (r.powerSwitch as Integer) == 1
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    boolean powerOn = asBool(r.powerSwitch)
+    emitSwitchState(powerOn)
 
     // ---- Fan speed ----
     // Prefer fanSpeedLevel (currently active) over manualSpeedLevel (last-set)
@@ -401,13 +429,16 @@ private Map applyFanCommonHead(Map r) {
 // muteState/screenState = actual hardware state; *Switch = configured. Prefer actual.
 // Returns muteState (Integer) for the info-HTML "Mute:" line.
 private Integer applyFanMuteDisplay(Map r) {
-    Integer muteState = (r.muteState != null) ? (r.muteState as Integer) : (r.muteSwitch as Integer)
-    device.sendEvent(name:"mute", value: muteState == 1 ? "on" : "off")
+    // asBool() coerces the flag robustly (Boolean/Number/String "1"/"true") without throwing;
+    // a bare `as Integer` on a Boolean- or String-typed flag from a firmware variant would throw
+    // mid-parse and abort applyStatus. Return 1/0 to preserve the Integer `== 1` contract callers use.
+    boolean muteOn = (r.muteState != null) ? asBool(r.muteState) : asBool(r.muteSwitch)
+    device.sendEvent(name:"mute", value: muteOn ? "on" : "off")
 
-    Integer screenState = (r.screenState != null) ? (r.screenState as Integer) : (r.screenSwitch as Integer)
-    device.sendEvent(name:"displayOn", value: screenState == 1 ? "on" : "off")
+    boolean screenOn = (r.screenState != null) ? asBool(r.screenState) : asBool(r.screenSwitch)
+    device.sendEvent(name:"displayOn", value: screenOn ? "on" : "off")
 
-    return muteState
+    return muteOn ? 1 : 0
 }
 
 // Ambient temperature. Raw / 10 = degrees F (HA finding #1 / pyvesync vesyncfan.py:314).
@@ -415,10 +446,9 @@ private Integer applyFanMuteDisplay(Map r) {
 private void applyFanTemperature(Map r) {
     if (r.temperature != null) {
         Integer rawTemp = r.temperature as Integer
-        if (rawTemp > 0) {
-            Float tempF = rawTemp / 10.0f
-            device.sendEvent(name:"temperature", value: tempF, unit:"°F")
-        }
+        // API gives F × 10; emitTemperature (LevoitChildBase) converts to the hub scale.
+        // Skip 0 raw (uninitialized field).
+        if (rawTemp > 0) emitTemperature(rawTemp)
     }
 }
 

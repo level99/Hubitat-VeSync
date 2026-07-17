@@ -26,6 +26,11 @@ import support.HubitatSpec
  *                            returns true silently when non-null
  *   safeIntArg (BP26)     — null/empty/blank/non-numeric/over-range/decimal contract;
  *                            4-arg clamp overload; W2 warn fires only on non-null/non-empty failures
+ *   asBool                — total never-throwing boolean coercion (Boolean/Number==1/truthy
+ *                            String -> true; 2/null/""/uncoercible -> false; never throws on
+ *                            a non-numeric String — the fault that aborted the old as-Integer path)
+ *   clampOffLevel (BP6)   — hardened to accept def; null/String/non-Number first arg passes
+ *                            through unchanged with no throw; Integer-caller behavior unchanged
  */
 class LevoitChildBaseLibSpec extends HubitatSpec {
 
@@ -291,6 +296,147 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         // so ensureSwitchOn WILL call on(). This is the correct/safe behavior — if we don't know the
         // switch state we should try to turn it on rather than silently skip.
         onCalled == true
+    }
+
+    // -------------------------------------------------------------------------
+    // beginPowerOnWindow / clearPowerOnWindow (BP30 Layer 2)
+    // now() is fixed in-harness, so two begin calls see the window still open;
+    // runInMillis is a no-op, so the safety timer never auto-fires — clearing is
+    // exercised directly. NON-VACUITY: a begin() that always returned true (no
+    // suppression) makes the second assertion RED; a clear() that did not remove
+    // powerOnPending makes the reopen assertion RED.
+    // -------------------------------------------------------------------------
+
+    def "beginPowerOnWindow opens the window on first call and suppresses within it (BP30)"() {
+        given:
+        state.remove("powerOnPending")
+        state.remove("powerOnWindowAt")
+
+        expect: "first call opens the window and returns true"
+        driver.beginPowerOnWindow() == true
+        state.powerOnPending == true
+
+        and: "a second call within the window returns false (storm suppressed)"
+        driver.beginPowerOnWindow() == false
+    }
+
+    def "clearPowerOnWindow reopens the window for the next power-on (BP30)"() {
+        given: "a window is open"
+        driver.beginPowerOnWindow()
+
+        when:
+        driver.clearPowerOnWindow()
+
+        then: "state is cleared and a subsequent begin re-opens"
+        state.powerOnPending == null
+        state.powerOnWindowAt == null
+        driver.beginPowerOnWindow() == true
+    }
+
+    // -------------------------------------------------------------------------
+    // isDuplicateWrite (BP30 Layer 3) — time-windowed dedup, NOT a cached-attribute
+    // equality gate. now() is fixed in-harness, so two calls at the "same instant"
+    // are within the window; the after-window leg backdates state.dupWriteAt_* directly.
+    // -------------------------------------------------------------------------
+
+    def "isDuplicateWrite suppresses an identical write within the dedup window (BP30 Layer 3)"() {
+        given:
+        state.remove("dupWriteVal_mode"); state.remove("dupWriteAt_mode")
+
+        expect: "first write proceeds (and is recorded)"
+        driver.isDuplicateWrite("mode", "auto") == false
+
+        and: "an identical write within the window is a storm duplicate"
+        driver.isDuplicateWrite("mode", "auto") == true
+    }
+
+    def "isDuplicateWrite ALWAYS fires an identical write after the window elapses (BP30 anti-wedge)"() {
+        given: "a prior identical write recorded well outside the dedup window"
+        // now() is fixed at 1745000000000L in-harness; backdate the last-write timestamp >2s.
+        state.dupWriteVal_mode = "auto"
+        state.dupWriteAt_mode = 1745000000000L - 5000L
+
+        expect: "the same value writes again — a drifted cloud state stays correctable from Hubitat"
+        driver.isDuplicateWrite("mode", "auto") == false
+    }
+
+    def "isDuplicateWrite tracks slots independently so mode and speed do not evict each other (BP30)"() {
+        given:
+        state.remove("dupWriteVal_mode"); state.remove("dupWriteAt_mode")
+        state.remove("dupWriteVal_speed"); state.remove("dupWriteAt_speed")
+
+        expect: "first write of each slot proceeds; the interleaved other-slot write does not reset it"
+        driver.isDuplicateWrite("mode", "auto") == false
+        driver.isDuplicateWrite("speed", "high") == false
+        driver.isDuplicateWrite("mode", "auto") == true
+        driver.isDuplicateWrite("speed", "high") == true
+    }
+
+    def "isDuplicateWrite suppresses an identical nightLight write within the window (BP30 Layer 3, nightLight slot)"() {
+        given:
+        state.remove("dupWriteVal_nightLight"); state.remove("dupWriteAt_nightLight")
+
+        expect: "first night-light write proceeds, an identical one within the window is a storm duplicate"
+        driver.isDuplicateWrite("nightLight", "on") == false
+        driver.isDuplicateWrite("nightLight", "on") == true
+    }
+
+    def "isDuplicateWrite fires an identical nightLight write after the window elapses (BP30 anti-wedge, nightLight slot)"() {
+        given: "a prior identical night-light write recorded outside the dedup window"
+        state.dupWriteVal_nightLight = "on"
+        state.dupWriteAt_nightLight = 1745000000000L - 5000L   // 5s ago, > DUP_WRITE_WINDOW_MS (2s)
+
+        expect: "the same value writes again — drift stays correctable from Hubitat"
+        driver.isDuplicateWrite("nightLight", "on") == false
+    }
+
+    // -------------------------------------------------------------------------
+    // clearDuplicateWrite (BP30 B1) — a FAILED write must not suppress the retry.
+    // NON-VACUITY: without clearDuplicateWrite the 3rd call below stays a duplicate (true).
+    // -------------------------------------------------------------------------
+
+    def "clearDuplicateWrite clears a recorded slot so an immediate same-value retry FIRES (BP30 B1)"() {
+        given: "a write was recorded (proceeded), and an identical one within the window is a dup"
+        state.remove("dupWriteVal_mode"); state.remove("dupWriteAt_mode")
+        assert driver.isDuplicateWrite("mode", "auto") == false   // 1st: records, proceeds
+        assert driver.isDuplicateWrite("mode", "auto") == true    // 2nd: within window -> dup
+
+        when: "the cloud write failed, so the failure branch clears the slot"
+        driver.clearDuplicateWrite("mode")
+
+        then: "the same value now FIRES (not falsely suppressed) — a failed write is retryable"
+        driver.isDuplicateWrite("mode", "auto") == false
+    }
+
+    // -------------------------------------------------------------------------
+    // beginPowerOnWindow / clearPowerOnWindow unschedule (BP30 B3) — the safety timer must
+    // be cancelled so an on->off->on sequence cannot leave an orphan timer that closes the
+    // next window early. NON-VACUITY: without the unschedule() the recorded list is empty -> RED.
+    // -------------------------------------------------------------------------
+
+    def "clearPowerOnWindow cancels the pending safety timer (BP30 B3)"() {
+        given:
+        List unscheduled = []
+        driver.metaClass.unschedule = { Object[] args -> unscheduled << (args ? args[0] : null) }
+
+        when:
+        driver.clearPowerOnWindow()
+
+        then: "the clearPowerOnWindow safety timer is unscheduled (no orphan to close the next window early)"
+        unscheduled.contains("clearPowerOnWindow")
+    }
+
+    def "beginPowerOnWindow unschedules any prior timer before arming a fresh one (BP30 B3)"() {
+        given:
+        state.remove("powerOnPending"); state.remove("powerOnWindowAt")
+        List unscheduled = []
+        driver.metaClass.unschedule = { Object[] args -> unscheduled << (args ? args[0] : null) }
+
+        when:
+        driver.beginPowerOnWindow()
+
+        then:
+        unscheduled.contains("clearPowerOnWindow")
     }
 
     // -------------------------------------------------------------------------
@@ -778,6 +924,32 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
         (hist["test-device-001"] ?: []).size() == 1
     }
 
+    // result.code non-Map crash class: httpOk reads resp.data.result.code
+    // ONLY on a 2xx status. The dangerous vector is therefore HTTP 200 with a NON-JSON
+    // String body (a CDN/gateway HTML interstitial, a proxy error page). Pre-fix, the bare
+    // `resp?.data?.result?.code` did a property access on the String and threw
+    // MissingPropertyException INSIDE httpOk, aborting the caller's command with a raw
+    // sandbox stack trace. Post-fix, the `!(resp.data instanceof Map)` guard returns false
+    // (a non-JSON body is not a valid success), so the caller takes its clean failure branch.
+    //
+    // DISCRIMINATION: reverting to `def inner = resp?.data?.result?.code` makes the
+    // `boolean ok = driver.httpOk(...)` line throw -> the notThrown block goes RED.
+    // (Orchestrator owns the both-ways proof.)
+    def "httpOk: HTTP 200 with a non-JSON String body returns false and does NOT throw (v2.10 result.code crash class)"() {
+        given:
+        settings.debugOutput = true
+
+        when: "httpOk is handed a 200 whose body is a raw HTML String, not a Map"
+        boolean ok
+        ok = driver.httpOk([status: 200, data: "<html><body>200 but not JSON</body></html>"])
+
+        then: "no MissingPropertyException from the .result read on a String"
+        notThrown(Exception)
+
+        and: "a non-Map body is not a valid success"
+        ok == false
+    }
+
     // LOAD-BEARING leak-regression spec (the exact QA-flagged BLOCKING):
     // A device-off rejection on one command must NOT suppress a later, unrelated
     // genuine error that hits logError/recordError with NO intervening httpOk.
@@ -955,5 +1127,108 @@ class LevoitChildBaseLibSpec extends HubitatSpec {
 
         expect: "the gate returns false, so callers behave exactly as pre-BP22"
         driver.networkOutageKnown() == false
+    }
+
+    def "emitSwitchState emits the switch attribute AND syncs state.lastSwitchSet"() {
+        // toggle() prefers state.lastSwitchSet over the switch attribute (read-after-write mirror).
+        // emitSwitchState is the poll-emit helper: it must ALSO update state.lastSwitchSet so an
+        // external power change seen only by the poll is honored by the next toggle().
+        given: "a stale lastSwitchSet from a prior local write"
+        state.lastSwitchSet = "on"
+
+        when: "a poll reflects the device now off"
+        driver.emitSwitchState(false)
+
+        then: "the switch attribute is emitted off AND the mirror is synced off"
+        lastEventValue("switch") == "off"
+        state.lastSwitchSet == "off"
+
+        when: "a later poll reflects on"
+        driver.emitSwitchState(true)
+
+        then: "both the attribute and the mirror reflect on"
+        lastEventValue("switch") == "on"
+        state.lastSwitchSet == "on"
+    }
+
+    // -------------------------------------------------------------------------
+    // asBool — total, never-throwing boolean coercion (replaces the ~69 throw-prone
+    // `(x instanceof Boolean) ? x : ((x as Integer) == 1)` sites). Number==1 semantics
+    // (2 -> false); truthy Strings -> true; everything else (null, "", uncoercible) -> false.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "asBool(#desc) == #expected"() {
+        expect:
+        driver.asBool(raw) == expected
+
+        where:
+        desc                 | raw            || expected
+        "Boolean true"       | true           || true
+        "Boolean false"      | false          || false
+        "Number 1"           | 1              || true
+        "Number 0"           | 0              || false
+        "Number 2 (->false)" | 2              || false   // ONLY 1 is true, matches old as-Integer==1
+        "String 'true'"      | "true"         || true
+        "String '1'"         | "1"            || true
+        "String 'on'"        | "on"           || true
+        "String 'yes'"       | "yes"          || true
+        "String 'TRUE'"      | "TRUE"         || true    // case-insensitive
+        "String 'false'"     | "false"        || false
+        "String 'off'"       | "off"          || false
+        "String '0'"         | "0"            || false
+        "String '' (empty)"  | ""             || false
+        "String '  on  '"    | "  on  "       || true    // trimmed
+        "null"               | null           || false
+        "uncoercible object" | [a: 1]         || false   // a Map -> not Boolean/Number/CharSequence
+    }
+
+    def "asBool never throws on a non-numeric String (the bug it fixes)"() {
+        when: "the value that broke the old `(x as Integer)` path"
+        boolean result = driver.asBool("false")
+
+        then: "no NumberFormatException; correctly parsed to false"
+        noExceptionThrown()
+        result == false
+    }
+
+    // -------------------------------------------------------------------------
+    // clampOffLevel — hardened to accept def (FIX E): a non-Integer/null first arg must
+    // pass through unchanged with no throw/NPE. Behavior for the current Integer callers
+    // is unchanged (positive Number while off -> 0; otherwise unchanged).
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "clampOffLevel(#v, powerOn=#powerOn) == #expected (#desc)"() {
+        expect:
+        driver.clampOffLevel(v, powerOn) == expected
+
+        where:
+        desc                          | v     | powerOn || expected
+        "off + positive -> 0"         | 5     | false   || 0
+        "on + positive -> unchanged"  | 5     | true    || 5
+        "off + zero -> unchanged"     | 0     | false   || 0
+        "off + null -> null (no NPE)" | null  | false   || null
+        "on + null -> null (no NPE)"  | null  | true    || null
+        "off + String -> unchanged"   | "x"   | false   || "x"
+        "off + Boolean -> unchanged"  | true  | false   || true
+    }
+
+    def "clampOffLevel does not throw on a null first arg (FIX E hardening)"() {
+        when:
+        def result = driver.clampOffLevel(null, false)
+
+        then:
+        noExceptionThrown()
+        result == null
+    }
+
+    def "clampOffLevel does not throw on a String first arg (FIX E hardening)"() {
+        when:
+        def result = driver.clampOffLevel("notanumber", false)
+
+        then: "non-Number passes through unchanged, no GroovyCastException"
+        noExceptionThrown()
+        result == "notanumber"
     }
 }

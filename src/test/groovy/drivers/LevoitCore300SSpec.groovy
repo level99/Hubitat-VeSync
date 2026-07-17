@@ -44,6 +44,57 @@ class LevoitCore300SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // F8: update(status, nightLight) must not NPE on a middle-wrapped/degenerate envelope
+    // ({code:0, result:null}) — status non-null but status.result null, so the bare
+    // status.result.level read would throw once per poll. The entry guard routes to the
+    // clean "No status" path (shared LevoitCoreAQPurifierLib code, covers 300S/400S/600S).
+    // NON-VACUITY: removing the `if (status?.result == null)` guard makes status.result.level
+    // throw NullPointerException -> noExceptionThrown() RED.
+    // -------------------------------------------------------------------------
+
+    def "update(status, nightLight) with null status.result does not NPE (F8)"() {
+        given: "a degenerate envelope: status present but status.result is null"
+        settings.descriptionTextEnable = false
+        def status = [code: 0, result: null]
+
+        when:
+        driver.update(status, null)
+
+        then: "no exception thrown, and the clean 'No status' error is reported"
+        noExceptionThrown()
+        testLog.errors.any { it.contains("No status returned from getPurifierStatus") }
+    }
+
+    // -------------------------------------------------------------------------
+    // F2: the self-fetch update() error path interpolates resp.msg. On a real hub resp is an
+    // HttpResponseDecorator with no 'msg' property, so a bare ${resp.msg} throws
+    // MissingPropertyException in the error path; resp?.hasProperty('msg') guards it.
+    // NON-VACUITY: reverting to a bare ${resp.msg} makes this throw -> noExceptionThrown() RED.
+    // -------------------------------------------------------------------------
+
+    def "update() self-fetch error path does not throw when the response has no 'msg' property (F2)"() {
+        given: "a parent that drives the closure with a msg-less response carrying null data"
+        settings.descriptionTextEnable = false
+        def noMsgResp = new NoMsgResponse()   // status 200, data null, NO 'msg' property
+        driver.metaClass.getParent = { ->
+            [ sendBypassRequest: { dev, payload, Closure cb -> cb(noMsgResp) } ]
+        }
+
+        when: "the self-fetch runs and hits the status==null error branch"
+        driver.update()
+
+        then: 'no MissingPropertyException — the resp.msg interpolation is guarded'
+        noExceptionThrown()
+        testLog.errors.any { it.contains("No status returned from getPurifierStatus") }
+    }
+
+    // Response object lacking a 'msg' property, matching Hubitat's HttpResponseDecorator.
+    static class NoMsgResponse {
+        Integer getStatus() { 200 }
+        def getData() { null }
+    }
+
+    // -------------------------------------------------------------------------
     // Bug Pattern #12: pref-seed
     // -------------------------------------------------------------------------
 
@@ -126,6 +177,37 @@ class LevoitCore300SSpec extends HubitatSpec {
         lastEventValue("speed") == "auto"
     }
 
+    def "auto_mode is not re-emitted every poll when the device reports no auto preference"() {
+        given: "a device whose auto_preference is absent, so auto_mode resolves to null"
+        settings.descriptionTextEnable = true
+        def fixture = loadYamlFixture("Core300S.yaml")
+        def status = fixture.responses.device_on_manual_speed2 as Map
+        status.result.configuration.auto_preference = null
+
+        when: "two consecutive polls with a null auto_mode"
+        driver.update(status, null)
+        driver.update(status, null)
+
+        then: "the null auto_mode is never emitted -- a null steady state stays silent"
+        testDevice.events.count { it.name == "auto_mode" } == 0
+    }
+
+    def "auto_mode still emits the first real value and genuine changes, but not a steady repeat"() {
+        given:
+        settings.descriptionTextEnable = true
+        def fixture = loadYamlFixture("Core300S.yaml")
+        def efficient = fixture.responses.device_on_auto_mode as Map      // auto_preference.type = efficient
+        def dflt      = fixture.responses.device_on_manual_speed2 as Map  // auto_preference.type = default
+
+        when: "first real value, then an identical repeat, then a change"
+        driver.update(efficient, null)   // null -> efficient : emit
+        driver.update(efficient, null)   // efficient -> efficient : no emit
+        driver.update(dflt, null)        // efficient -> default : emit
+
+        then: "emitted for the first value and the change only"
+        testDevice.events.findAll { it.name == "auto_mode" }.collect { it.value } == ["efficient", "default"]
+    }
+
     def "update() with device_off emits switch=off"() {
         given:
         settings.descriptionTextEnable = true
@@ -138,6 +220,43 @@ class LevoitCore300SSpec extends HubitatSpec {
         then:
         lastEventValue("switch") == "off"
         testLog.errors.isEmpty()
+    }
+
+    def "update(status, nightLight) off device reports speed 'off' despite mode=manual (Bug Pattern #6)"() {
+        given: "device off, but API still reports mode=manual, level=2 (last-set retained)"
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("Core300S.yaml")
+        def status = fixture.responses.device_off as Map
+        assert status.result.enabled == false
+        assert status.result.mode == "manual"   // API keeps mode while off
+        assert status.result.level == 2
+
+        when:
+        driver.update(status, null)
+
+        then: "speed reads 'off', not 'medium' — no switch=off/speed=medium contradiction"
+        lastEventValue("switch") == "off"
+        lastEventValue("speed") == "off"
+    }
+
+    def "update(status, nightLight) with enabled as STRING 'false' does not throw and reports off (CoreAQ defensive normalize)"() {
+        given: "API returns enabled as the String 'false' (the case the #5 normalize must survive)"
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("Core300S.yaml")
+        def base = fixture.responses.device_off as Map
+        // Override enabled to the String "false". `"false" as Integer` would throw in the
+        // CoreAQ update() path — the normalize must treat non-Boolean/non-Number as false.
+        def status = [code: 0, result: (base.result as Map) + [enabled: "false", mode: "manual", level: 2]]
+
+        when:
+        driver.update(status, null)
+
+        then: "no exception thrown (the whole status parse must not abort)"
+        noExceptionThrown()
+
+        and: "switch and speed both report off (String 'false' -> false)"
+        lastEventValue("switch") == "off"
+        lastEventValue("speed") == "off"
     }
 
     def "setMode sends setPurifierMode with mode field (Core-line convention)"() {
@@ -207,6 +326,30 @@ class LevoitCore300SSpec extends HubitatSpec {
         req.data.total == 300
     }
 
+    // -------------------------------------------------------------------------
+    // F4: updated() (Save Preferences) must preserve state.timerId across state.clear().
+    // The Core purifier line (200S/300S/400S/600S) wiped it, so cancelTimer became a silent
+    // no-op after a preferences save. Now preserved (mirrors LevoitFanLib.updated()).
+    // NON-VACUITY: removing the savedTimerId preservation in updated() clears state.timerId,
+    // so cancelTimer() finds no id, sends no delTimer, and the assertion goes RED.
+    // -------------------------------------------------------------------------
+
+    def "updated() preserves state.timerId so cancelTimer still fires the delTimer call (F4)"() {
+        given: "an active timer id is stored"
+        settings.descriptionTextEnable = false
+        state.timerId = 42
+
+        when: "the user saves preferences, then cancels the timer"
+        driver.updated()
+        testParent.allRequests.clear()
+        driver.cancelTimer()
+
+        then: "the delTimer cloud call was made -- the id survived the state.clear()"
+        def req = testParent.allRequests.find { it.method == "delTimer" }
+        req != null
+        req.data.id == 42
+    }
+
     def "resetFilter sends resetFilter method with empty data"() {
         given:
         settings.descriptionTextEnable = false
@@ -235,6 +378,21 @@ class LevoitCore300SSpec extends HubitatSpec {
         def pm25Events = testDevice.allEvents("pm25")
         pm25Events.size() > 0
         pm25Events.last().value == 3
+    }
+
+    def "update() with good air quality emits the green aqiColor, not the Hazardous maroon"() {
+        // The "Good" AQI band was mistakenly assigned the same dark maroon (7e0023) as "Hazardous".
+        // It is now EPA green (00e400) so a healthy reading is not alarming on a dashboard.
+        given:
+        settings.descriptionTextEnable = true
+        def fixture = loadYamlFixture("Core300S.yaml")
+        def status = fixture.responses.device_on_manual_speed1 as Map   // air_quality_value: 3 -> US-AQI "Good"
+
+        when:
+        driver.update(status, null)
+
+        then: "the Good-band swatch is green"
+        lastEventValue("aqiColor") == "00e400"
     }
 
     def "update() parses air_quality into airQualityIndex attribute"() {
@@ -408,6 +566,66 @@ class LevoitCore300SSpec extends HubitatSpec {
 
         and: "no error was logged"
         testLog.errors.isEmpty()
+    }
+
+    // -------------------------------------------------------------------------
+    // BP29: setSpeed must commit state.speed + emit the speed event ONLY when the
+    // cloud accepts the speed write. Previously the manual/recovery branches committed
+    // and emitted unconditionally even when handleSpeed failed, leaving the tile and
+    // stored speed contradicting a device still at its prior speed.
+    // NON-VACUITY: gating on `if (handleSpeed(s))` is what makes this pass; the pre-fix
+    // unconditional commit emits "medium" and sets state.speed -> both assertions go RED.
+    // -------------------------------------------------------------------------
+
+    def "setSpeed does NOT commit state.speed or emit speed when the write fails (BP29, manual branch)"() {
+        given: "device on, manual mode, no prior committed speed; the speed write will fail (HTTP 500)"
+        settings.descriptionTextEnable = false
+        state.mode = "manual"
+        state.remove("speed")
+        testDevice.events.add([name: "switch", value: "on"])
+        // handleSpeed's setLevel call gets an HTTP-500 -> checkHttpResponse returns false -> handleSpeed false.
+        testParent.cannedResponse = support.TestParent.httpErrorResponse(500)
+
+        when: "a speed is requested but the cloud write fails"
+        driver.setSpeed("medium")
+
+        then: "state.speed was NOT committed to the requested value"
+        state.speed != "medium"
+
+        and: "no speed event advanced the tile to the requested value"
+        lastEventValue("speed") != "medium"
+    }
+
+    // -------------------------------------------------------------------------
+    // BP29 sleep->manual branch: setSpeed from sleep mode must gate on BOTH the mode
+    // transition (setMode("manual")) AND the speed write. If setMode fails but the speed
+    // write would succeed, committing would report a manual speed on a still-sleeping
+    // device -- the exact stale-tile class this fix closes.
+    // NON-VACUITY: reverting to a bare `setMode("manual")` (ignoring its return) makes the
+    // speed commit/emit fire even though the mode transition failed -> assertions go RED.
+    // -------------------------------------------------------------------------
+
+    def "setSpeed from sleep does NOT commit speed when the mode transition fails (BP29 sleep->manual)"() {
+        given: "device on, mode sleep, no prior speed; setMode('manual')'s cloud write will FAIL"
+        settings.descriptionTextEnable = false
+        state.mode = "sleep"
+        state.remove("speed")
+        testDevice.events.add([name: "switch", value: "on"])
+        // First cloud write is setMode's setPurifierMode -> HTTP 500 -> handleMode false -> setMode false.
+        // Second (if the buggy path reached handleSpeed) would succeed; the fix must never consume it.
+        testParent.requestResponses = [
+            support.TestParent.httpErrorResponse(500),
+            support.TestParent.successResponse([:]),
+        ]
+
+        when: "a speed is requested from sleep mode but the mode transition fails"
+        driver.setSpeed("medium")
+
+        then: "state.speed was NOT committed -- the failed mode transition gates the speed commit"
+        state.speed != "medium"
+
+        and: "no speed event advanced the tile to the requested value"
+        lastEventValue("speed") != "medium"
     }
 
     def "BP24-B: setMode when switch is off calls on() before sending mode command (Core 300S)"() {
@@ -795,7 +1013,7 @@ class LevoitCore300SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // W3: setSpeed null state.mode — RECOVER instead of warn+drop (Tier-25)
+    // W3: setSpeed null state.mode — RECOVER instead of warn+drop
     // -------------------------------------------------------------------------
 
     def "W3: setSpeed null state.mode — device turns on AND speed is recovered, not dropped (Core 300S)"() {
@@ -804,7 +1022,7 @@ class LevoitCore300SSpec extends HubitatSpec {
         //   1. auto-on (ensureSwitchOn fires before the mode dispatch),
         //   2. RECOVER by calling setMode("manual") and applying the speed — NOT warn+drop.
         // Pre-fix: else { logWarn "cannot apply speed"; return } — speed was lost.
-        // Post-fix (Tier-25): else { setMode("manual"); handleSpeed(s); ... } — speed applied.
+        // Post-fix: else { setMode("manual"); handleSpeed(s); ... } — speed applied.
         //
         // Both-ways: orchestrator-owned.
         given: "device is off and state.mode is null (fresh device, pre-first-poll)"
@@ -835,6 +1053,50 @@ class LevoitCore300SSpec extends HubitatSpec {
 
         and: "no 'cannot apply speed' warning was emitted (recover path replaces warn+drop)"
         !testLog.warns.any { it.contains("cannot apply speed") }
+    }
+
+    def "setSpeed recovery does NOT commit manual mode when the mode write is rejected (BP29 gate)"() {
+        // The setSpeed unknown/null-state.mode recovery establishes manual mode. It must commit
+        // state.mode + emit the mode event ONLY when the cloud accepted the write -- the same gate
+        // setMode uses. Pre-fix a bare handleMode reported manual mode even when the write failed,
+        // leaving state.mode contradicting a device still in its prior mode.
+        given: "device on, state.mode null (recovery path), and the mode write will be rejected"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        // state.mode intentionally unset -> recovery branch. Reject every cloud write this call
+        // (queue drains per request) so the setPurifierMode / handleMode is rejected regardless of
+        // request order (ensureSwitchOn may issue its own setSwitch first).
+        // Core-line checkHttpResponse gates on HTTP status only, so an HTTP 500 (not an inner -1)
+        // is what makes handleMode return false here.
+        testParent.requestResponses = [TestParent.httpErrorResponse(500), TestParent.httpErrorResponse(500),
+                                       TestParent.httpErrorResponse(500), TestParent.httpErrorResponse(500)]
+
+        when:
+        driver.setSpeed("high")
+
+        then: "the mode write was attempted"
+        testParent.allRequests.find { it.method == "setPurifierMode" } != null
+
+        and: "state.mode was NOT optimistically committed to manual (the write failed)"
+        state.mode != "manual"
+
+        and: "no mode='manual' event was emitted"
+        !testDevice.events.any { it.name == "mode" && it.value == "manual" }
+    }
+
+    def "setSpeed recovery DOES commit manual mode when the mode write succeeds (both-ways twin)"() {
+        given: "device on, state.mode null, all writes succeed (default OK response)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setSpeed("high")
+
+        then: "state.mode committed to manual (cloud accepted the mode establishment)"
+        state.mode == "manual"
+
+        and: "a mode='manual' event was emitted"
+        testDevice.events.any { it.name == "mode" && it.value == "manual" }
     }
 
     def "re-entrancy guard: setSpeed from on() does not issue setPurifierMode (Core 300S)"() {

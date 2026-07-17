@@ -28,6 +28,22 @@ library(
 @groovy.transform.Field
 static final Integer BYPASS_DEVICE_IS_OFF = 11005000  // pyvesync utils/errors.py: device powered OFF (expected, not a fault)
 
+// BP30: upper bound (ms) on the async power-on storm window. A burst of overlapping
+// on() commands inside this window collapses to ONE effective power+mode sequence; the
+// window auto-closes after this many ms so a dropped cloud callback can never wedge the
+// device permanently off. 4s comfortably spans the Vital configureOnState runInMillis(500)
+// async leg plus cloud round-trip, while staying short enough that a genuine off->on a few
+// seconds later is never blocked (off() also clears the window immediately).
+@groovy.transform.Field
+static final Integer POWER_ON_WINDOW_MS = 4000
+
+// BP30 Layer 3: dedup window (ms) for identical mode/speed writes. Short by design — long
+// enough to absorb a command burst (the observed storm was ~360 ms), short enough that an
+// out-of-band "set it back" correction is only ever delayed by at most this much. NOT the
+// power-on window (that one spans the slower async power-on leg); kept separate on purpose.
+@groovy.transform.Field
+static final Integer DUP_WRITE_WINDOW_MS = 2000
+
 def logInfo(msg)   { if (settings?.descriptionTextEnable) log.info  msg }
 def logDebug(msg)  { if (settings?.debugOutput)           log.debug msg }
 def logError(msg)  { log.error msg }
@@ -71,6 +87,102 @@ private void ensureDebugWatchdog() {
 //   }
 void ensureSwitchOn() {
     if (!state.turningOn && device.currentValue("switch") != "on") on()
+}
+
+// BP30 async-window power-on storm guard. A burst of overlapping on() commands
+// (Rule Machine double-fire, dashboard taps, automations all firing within a few
+// hundred ms) would otherwise EACH issue the full power+speed+mode cloud sequence,
+// colliding in flight and producing "...write failed" errors plus a device that never
+// settles (the real-world incident: 3 on() in 360ms -> 4 "Mode write failed: manual",
+// and a dependent nightlight child starved for ~20 min). This guard collapses a storm
+// into ONE effective sequence.
+//
+// beginPowerOnWindow() opens the window synchronously and returns:
+//   true  -> caller is the first on() in the window; proceed with the full sequence
+//   false -> a power-on is already in flight; caller must no-op (skip the burst)
+//
+// The window is bounded TWO ways so it can never wedge the device in a can't-turn-on
+// state: (1) a runInMillis safety timer fires clearPowerOnWindow() after
+// POWER_ON_WINDOW_MS (string-literal handler form per Hubitat sandbox binding); and
+// (2) a belt-and-suspenders elapsed-time check reopens the window if that timer was
+// ever lost across the async boundary. off() also calls clearPowerOnWindow() so a
+// deliberate off -> on sequence is never blocked.
+//
+// This is the determinism layer; it is only sound BECAUSE the driver declares
+// singleThreaded:true (BP30 Layer 1) — that serializes command + async-callback
+// execution so these state reads/writes are race-free.
+boolean beginPowerOnWindow() {
+    Long nowMs = now()
+    Long openedAt = (state.powerOnWindowAt ?: 0L) as Long
+    if (state.powerOnPending && (nowMs - openedAt) < POWER_ON_WINDOW_MS) {
+        return false
+    }
+    state.powerOnPending = true
+    state.powerOnWindowAt = nowMs
+    // B3: cancel any prior safety timer before arming a fresh one so timers cannot stack
+    // (e.g. when the elapsed-time check reopens a window whose runInMillis is still pending).
+    unschedule("clearPowerOnWindow")
+    runInMillis(POWER_ON_WINDOW_MS, "clearPowerOnWindow")
+    return true
+}
+
+// BP30: close the async power-on window. Invoked by the runInMillis safety timer
+// (handler resolved as a string literal), synchronously by off(), AND by a FAILED on()
+// (B2 — so a power-on write failure does not hold the window open for the full
+// POWER_ON_WINDOW_MS and suppress an immediate retry). Idempotent — safe to call when no
+// window is open.
+void clearPowerOnWindow() {
+    // B3: cancel the pending safety timer so a later off->on cannot inherit an orphan timer
+    // that closes the next window early. Harmless when called BY the timer itself (already fired).
+    unschedule("clearPowerOnWindow")
+    state.remove("powerOnPending")
+    state.remove("powerOnWindowAt")
+}
+
+// BP30 Layer 3: time-windowed duplicate-write suppression for mode/speed setters. Returns
+// true (caller should SKIP the cloud write) ONLY when an identical write — same `slot`
+// (e.g. "mode" / "speed" / "fanSpeed") AND same `value` — was issued within
+// DUP_WRITE_WINDOW_MS. That is the storm-duplicate case (the same command re-fired in a burst).
+//
+// An identical re-request OUTSIDE the window ALWAYS returns false (caller writes). This is the
+// load-bearing anti-wedge property: it must remain possible to CORRECT a drifted cloud/device
+// state from Hubitat. Hubitat's cached attribute can diverge from reality (physical button,
+// VeSync app, Alexa routine, or a prior silently-failed write); an equality gate against the
+// cached attribute would refuse every "set it back" retry and strand the user until the next
+// poll. Time-scoping (not state-equality) drops ONLY burst duplicates. Poll reconciliation
+// (applyStatus / refresh updating the attribute from real cloud state) is the drift backstop.
+//
+// Deliberately keyed on recent WRITES, never on device.currentValue(...) — so it is immune to
+// cached-attribute drift by construction. Per-`slot` tracking (separate state fields per command
+// type) so a mode write and a speed write never evict each other's dedup record. Records THIS
+// write as the most recent on a non-suppressed (false) result.
+boolean isDuplicateWrite(String slot, value) {
+    String valField = "dupWriteVal_${slot}"
+    String atField  = "dupWriteAt_${slot}"
+    Long nowMs = now()
+    Long lastAt = (state[atField] ?: 0L) as Long
+    if (state[valField] == (value as String) && (nowMs - lastAt) < DUP_WRITE_WINDOW_MS) {
+        return true
+    }
+    state[valField] = (value as String)
+    state[atField] = nowMs
+    return false
+}
+
+// BP30 Layer 3 (B1): clear a dedup slot so a FAILED write does not suppress an immediate
+// same-value retry. isDuplicateWrite records the slot on-proceed (so the slot reflects the
+// NEW effective value even on A1's early-return-delegation paths, where the actual cloud write
+// happens in a delegated setter). When THIS site's cloud write then FAILS, call this from the
+// write-failure branch to undo the record — restoring the pre-write state so the retry is not
+// falsely deduped. Identical SUCCESSFUL writes still coalesce (success path does NOT clear).
+void clearDuplicateWrite(String slot) {
+    // String (not GString) keys — must match isDuplicateWrite's String valField/atField exactly,
+    // or state.remove() with a GString key would fail to match the String-keyed entry and the
+    // slot would NOT clear (GString and String with equal content are distinct Map keys).
+    String valField = "dupWriteVal_${slot}"
+    String atField  = "dupWriteAt_${slot}"
+    state.remove(valField)
+    state.remove(atField)
 }
 
 // BP18 null-guard helper: log a WARN and signal the caller to skip further
@@ -215,6 +327,103 @@ Integer parseLevelOrNull(raw) {
     }
 }
 
+// Single source of truth for converting a PM2.5 reading (micrograms/m3) to a US-AQI
+// (0-500) via the EPA breakpoint ladder. Shared so every AirQuality-capability driver
+// emits the SAME `airQuality` semantics: the Core purifiers, EverestAir, and Sprout Air
+// all report airQuality as this US-AQI, NOT a vendor categorical level. (airQualityIndex
+// stays the Levoit 1-4 categorical level, a separate attribute.)
+//
+// Returns a BigDecimal whole number (same type/value the Core line emitted from its
+// previous inline ladder, so Core's emitted aqi/airQuality are byte-identical). Returns
+// null if pm is null or non-numeric — callers gate their emit on a non-null result,
+// matching Core's "emit only when PM present" behavior. The linear-interpolation math
+// mirrors LevoitCoreAQPurifierLib.convertRange exactly, including the toFloat().round()
+// integer rounding (BigDecimal.round is unreliable on the Hubitat sandbox).
+BigDecimal usAqiFromPm25(pm) {
+    if (pm == null) return null
+    BigDecimal p
+    try {
+        p = (pm instanceof BigDecimal) ? pm : new BigDecimal(pm.toString().trim())
+    } catch (ignored) {
+        return null
+    }
+    BigDecimal inMin, inMax, outMin, outMax
+    if      (p <  12.1) { inMin =   0.0; inMax =  12.0; outMin =   0; outMax =  50 }
+    else if (p <  35.5) { inMin =  12.1; inMax =  35.4; outMin =  51; outMax = 100 }
+    else if (p <  55.5) { inMin =  35.5; inMax =  55.4; outMin = 101; outMax = 150 }
+    else if (p < 150.5) { inMin =  55.5; inMax = 150.4; outMin = 151; outMax = 200 }
+    else if (p < 250.5) { inMin = 150.5; inMax = 250.4; outMin = 201; outMax = 300 }
+    else if (p < 350.5) { inMin = 250.5; inMax = 350.4; outMin = 301; outMax = 400 }
+    else                { inMin = 350.5; inMax = 500.4; outMin = 401; outMax = 500 }
+    // Restrain input to the band (mirrors convertRange).
+    if (p < inMin) p = inMin
+    else if (p > inMax) p = inMax
+    BigDecimal v = ((p - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin
+    return v.toFloat().round().toBigDecimal()
+}
+
+// BP6 off-clamp: the single source of truth for "a level the device reports while
+// powered OFF should display as 0, not the retained last-set value." VeSync keeps
+// mist_virtual_level / warm_level / mistLevel etc. at their last-set value when the
+// device is off; emitting them verbatim produces a "switch=off, Mist: L5" contradiction
+// on dashboards. Every applyStatus level emit (mist + warm-mist event AND the info-tile
+// equivalents) routes the active-level value through this helper before display.
+// Returns 0 when off and the level is positive; otherwise the value unchanged (null
+// passes through so the caller's own null-guard still governs whether to emit at all).
+// NOT for SETPOINT values (Superior virtualLevel/level dimmer attribute) — those
+// intentionally retain the target while off; only the "currently misting at" display
+// is clamped.
+def clampOffLevel(v, boolean powerOn) {
+    // Accept AND return def (not strictly Integer): a future caller passing a null Boolean
+    // or a String must not NPE/throw at the parameter boundary, AND the unchanged value
+    // must pass through without an Integer-return coercion (which would throw on a String
+    // or silently turn a Boolean into 0/1). The clamp only fires for a positive Number;
+    // everything else (null, String, non-positive Number) passes through unchanged so the
+    // caller's own null-guard still governs whether to emit. Current Integer callers still
+    // receive an Integer (0 or the original Integer) — behavior is identical for them.
+    return (!powerOn && v instanceof Number && v > 0) ? 0 : v
+}
+
+// Single source of truth for emitting the `temperature` attribute from a VeSync
+// "F × 10" reading (e.g. 683 -> 68.3°F). Converts to the hub's configured scale
+// (°F by default; °C on °C hubs / EU-AUS SKUs) and sendEvent's the rounded value
+// with the matching unit. Every TemperatureMeasurement driver routes through here
+// so temperature semantics are identical fork-wide (RULE56 flags any inline
+// temperature emit that bypasses this helper — the hardcoded-°F C5 bug class).
+//
+// The caller supplies the raw F×10 value and OWNS the presence/zero guard: a null
+// or 0 raw reading is an uninitialized/absent sensor and must not be emitted, so
+// each caller wraps this in its existing `r.temperature != null` / `raw != 0` /
+// `raw > 0` guard. Centralizing the emit here collapses the four hand-inlined
+// temperature blocks (and their four ° unit literals) to a single site, which is
+// the whole point of RULE56 — one sanctioned degree-sign emit, not four.
+void emitTemperature(rawTempTimesTen) {
+    double tempF = (rawTempTimesTen as Integer) / 10.0
+    if (location?.temperatureScale == "C") {
+        double tempC = (tempF - 32) * 5.0 / 9.0
+        device.sendEvent(name:"temperature", value: Math.round(tempC * 10) / 10.0, unit:"°C")
+    } else {
+        device.sendEvent(name:"temperature", value: Math.round(tempF * 10) / 10.0, unit:"°F")
+    }
+}
+
+// Total, never-throwing boolean coercion for VeSync flag fields (enabled, water_lacks,
+// display, child_lock, warm_enabled, etc.) that may arrive as Boolean, Number (0/1), or
+// (defensively) a String. Single source of truth — replaces the hand-inlined
+// instanceof-Boolean-ternary-else-as-Integer sites that threw
+// NumberFormatException when the field arrived as a non-numeric String (e.g. "false").
+//
+// Number semantics intentionally match the prior as-Integer-equals-1 form: ONLY 1 is
+// true (2 -> false). Strings parse the truthy-variant set ("true"/"1"/"on"/"yes",
+// case-insensitive, trimmed) -> true; anything else (incl. null, empty string, or an
+// uncoercible object) -> false.
+boolean asBool(raw) {
+    if (raw instanceof Boolean) return raw
+    if (raw instanceof Number)  return raw.intValue() == 1
+    if (raw instanceof CharSequence) return raw.toString().trim().toLowerCase() in ["true","1","on","yes"]
+    return false
+}
+
 // BP25 canonical on/off coercion: the single blessed source for the permissive
 // truthy-variant set. Returns "on" when the (already-normalized, lowercase) input
 // is one of "on"/"true"/"1"/"yes"; otherwise "off". The input is re-normalized
@@ -325,7 +534,17 @@ private boolean httpOk(resp) {
     if (!resp) return false
     def st = resp.status as Integer
     if (st in [200,201,204]) {
-        def inner = resp?.data?.result?.code
+        // Type-guard before the .result read: on a non-JSON body (a CDN/gateway HTTP 200
+        // with an HTML interstitial, or a proxy error page) resp.data is a non-null String.
+        // A bare resp?.data?.result?.code would then do a property access on a String and
+        // throw MissingPropertyException, aborting the caller's command with a raw sandbox
+        // stack trace. A non-Map body is not a valid success -> return false (mirrors the
+        // hubBypass / isDeviceOffResp instanceof-Map guards elsewhere in this lib).
+        if (!(resp.data instanceof Map)) {
+            logDebug "HTTP ${st} with non-Map body (${resp.data instanceof String ? 'String' : 'non-Map'}); treating as failure"
+            return false
+        }
+        def inner = resp.data.result?.code
         if (inner == null || inner == 0) return true
         // BP29: device-off (inner 11005000) is an EXPECTED rejection, not a fault. httpOk()
         // simply returns false; the caller's failure branch decides how to report it.
@@ -431,4 +650,17 @@ def reportWriteError(String tag, Map ctx = [:]) {
     }
     logError tag
     recordError(tag, ctx)
+}
+
+// Emit the `switch` attribute from a poll/status parse AND keep state.lastSwitchSet in sync.
+// toggle() prefers state.lastSwitchSet over device.currentValue("switch") as a synchronous
+// read-after-write mirror (currentValue is not updated synchronously right after sendEvent within a
+// rapid toggle sequence). on()/off() set it on the write path; a poll switch-emit MUST also update it
+// here, otherwise an EXTERNAL power change (VeSync app / physical button / Alexa) seen only by the poll
+// leaves a stale lastSwitchSet shadowing the fresh switch attribute forever — so toggle() would keep
+// inverting the wrong way after any out-of-band on/off. Enforced by RULE54.
+void emitSwitchState(powerOn) {
+    String v = powerOn ? "on" : "off"
+    device.sendEvent(name:"switch", value: v)
+    state.lastSwitchSet = v
 }

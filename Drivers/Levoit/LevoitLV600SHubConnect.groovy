@@ -93,11 +93,12 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit LV600S Hub Connect Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit LV600S Hub Connect (LUH-A603S-WUS) — DIFFERENT from LevoitLV600S.groovy (A602S). Uses VeSyncLV600S class payloads: powerSwitch/switchIdx, workMode:'humidity' for auto mode, levelIdx/virtualLevel/levelType. Mist 1-9, warm mist 0-3, target humidity top-level camelCase. No setAutoStop command (passive read only). No night-light.",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -183,6 +184,14 @@ def setMode(mode){
         return
     }
     ensureSwitchOn()
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return false
+    }
     // Map user-facing "auto" to wire value "humidity" (VeSyncLV600S class convention)
     // This is the INVERSE of A602S where "humidity" is a firmware-variant fallback.
     // For A603S, "humidity" IS the canonical auto-mode wire value per device_map.py.
@@ -193,6 +202,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed: ${m} (wire: ${wireMode})", [method:"setHumidityMode"])
     }
 }
@@ -232,7 +242,10 @@ def setMistLevel(level){
 def setWarmMistLevel(level){
     if (!requireNotNull(level, "setWarmMistLevel")) return
     logDebug "setWarmMistLevel(${level})"
-    Integer lvl = safeIntArg(level, 0)   // BP26: safeIntArg never throws on non-numeric RM input
+    // BP28: distinguish explicit "0" (warm-off) from non-numeric garbage. safeIntArg would coerce
+    // garbage to 0, silently turning warm mist OFF (0 is in-range, indistinguishable from intent).
+    Integer lvl = parseLevelOrNull(level)
+    if (lvl == null) { logWarn "setWarmMistLevel: ignoring non-numeric value '${level}'"; return }
     if (lvl < 0 || lvl > 3) {
         logError "Invalid warm mist level ${lvl} -- must be 0-3 (0=off, 1-3=warm intensity)"
         recordError("Invalid warm mist level ${lvl}", [method:"setLevel"])
@@ -301,8 +314,8 @@ def applyStatus(status){
     // CROSS-CHECK: LV600S Hub Connect response uses `powerSwitch` (int 0|1), NOT `enabled` (bool).
     // This is the V2-class response convention: powerSwitch: int.
     def pwRaw = r.powerSwitch
-    boolean powerOn = (pwRaw instanceof Boolean) ? pwRaw : ((pwRaw as Integer) == 1)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    boolean powerOn = asBool(pwRaw)
+    emitSwitchState(powerOn)
 
     // ---- Humidity ----
     if (r.humidity != null) device.sendEvent(name:"humidity", value: r.humidity as Integer)
@@ -331,31 +344,39 @@ def applyStatus(status){
     } else if (r.mistLevel != null) {
         mistVirtual = r.mistLevel as Integer
     }
+    // BP#6: clamp the active mist level to 0 when off (retains last-set value while off).
+    mistVirtual = clampOffLevel(mistVirtual, powerOn)
     if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
 
     // ---- Warm mist ----
     // CROSS-CHECK: LV600SResult uses warmLevel (int 0-3) and warmPower (bool).
     // Derive warmMistEnabled from warmLevel value (level > 0 = on).
     // Same LV600S-correct logic as LevoitLV600S.groovy warm mist parsing.
+    // Hoist one clamped warm local (BP#6) reused by both the event emit and the info tile.
+    Integer warmLvl = null
     if (r.warmLevel != null) {
-        Integer warmLvl = r.warmLevel as Integer
+        // Persist the RAW last-set level (state.warmMistLevel resumes the user's choice);
+        // only the EMITTED attribute + info tile are clamped to 0 while off (BP#6).
+        Integer warmRaw = r.warmLevel as Integer
+        warmLvl = clampOffLevel(warmRaw, powerOn)
         boolean warmOn = (warmLvl > 0)
         String warmOnStr = warmOn ? "on" : "off"
         device.sendEvent(name:"warmMistLevel", value: warmLvl)
         device.sendEvent(name:"warmMistEnabled", value: warmOnStr)
-        state.warmMistLevel = warmLvl
+        state.warmMistLevel = warmRaw
         state.warmMistEnabled = warmOnStr
     } else if (r.warmPower != null) {
-        // warmLevel absent but warmPower present -- use as fallback
+        // warmLevel absent but warmPower present -- use as fallback.
+        // BP#6: when off, warm mist is never active regardless of the warmPower flag.
         def warmPowerRaw = r.warmPower
-        boolean warmOn = (warmPowerRaw instanceof Boolean) ? warmPowerRaw : ((warmPowerRaw as Integer) == 1)
+        boolean warmOn = powerOn && (asBool(warmPowerRaw))
         device.sendEvent(name:"warmMistEnabled", value: warmOn ? "on" : "off")
     }
 
     // ---- Water lacks ----
     // CROSS-CHECK: LV600SResult uses waterLacksState (int 0|1), NOT water_lacks (bool).
     def wlRaw = r.waterLacksState
-    boolean waterLacks = (wlRaw instanceof Boolean) ? wlRaw : ((wlRaw as Integer) == 1)
+    boolean waterLacks = asBool(wlRaw)
     String waterLacksStr = waterLacks ? "yes" : "no"
     if (state.lastWaterLacks != waterLacksStr) {
         if (waterLacks) logInfo "Water reservoir empty"
@@ -368,12 +389,12 @@ def applyStatus(status){
     // AUTO_STOP not in device_map.py features -- emitting as read-only attributes only.
     if (r.autoStopSwitch != null) {
         def asRaw = r.autoStopSwitch
-        boolean asEnabled = (asRaw instanceof Boolean) ? asRaw : ((asRaw as Integer) == 1)
+        boolean asEnabled = asBool(asRaw)
         device.sendEvent(name:"autoStopEnabled", value: asEnabled ? "on" : "off")
     }
     if (r.autoStopState != null) {
         def asStateRaw = r.autoStopState
-        boolean asReached = (asStateRaw instanceof Boolean) ? asStateRaw : ((asStateRaw as Integer) == 1)
+        boolean asReached = asBool(asStateRaw)
         device.sendEvent(name:"autoStopReached", value: asReached ? "yes" : "no")
     }
 
@@ -388,7 +409,7 @@ def applyStatus(status){
         displayRaw = r.screenSwitch
     }
     if (displayRaw != null) {
-        boolean displayOn = (displayRaw instanceof Boolean) ? displayRaw : ((displayRaw as Integer) == 1)
+        boolean displayOn = asBool(displayRaw)
         device.sendEvent(name:"displayOn", value: displayOn ? "on" : "off")
     }
 
@@ -399,12 +420,10 @@ def applyStatus(status){
     def parts = []
     if (r.humidity != null) parts << "Humidity: ${r.humidity as Integer}%"
     if (r.targetHumidity != null) parts << "Target: ${r.targetHumidity as Integer}%"
-    if (mistVirtual != null) parts << "Mist: L${mistVirtual} (1-9)"
+    if (mistVirtual != null) parts << "Mist: ${mistVirtual > 0 ? 'L'+mistVirtual+' (1-9)' : 'off'}"
     parts << "Mode: ${userMode}"
-    if (r.warmLevel != null) {
-        Integer wl = r.warmLevel as Integer
-        parts << "Warm: ${wl > 0 ? 'L'+wl : 'off'}"
-    }
+    // BP#6: reuse the already-clamped warmLvl local (no second parse of r.warmLevel).
+    if (warmLvl != null) parts << "Warm: ${warmLvl > 0 ? 'L'+warmLvl : 'off'}"
     parts << "Water: ${waterLacksStr == 'yes' ? 'empty' : 'ok'}"
     device.sendEvent(name:"info", value: parts.join("<br>"))
 }

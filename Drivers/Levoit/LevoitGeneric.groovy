@@ -49,11 +49,12 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Generic Device",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "Fall-through diagnostic driver for unsupported Levoit models. Provides best-effort power control and diagnostic capture for new-device-support issue filing.",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -101,6 +102,9 @@ def initialize(){ logDebug "Initializing" }
 
 def on(){
     logDebug "on()"
+    // BP30: async-window storm guard — collapse a burst of overlapping on() commands into ONE
+    // effective power sequence. Returns false while a power-on is already in flight.
+    if (!beginPowerOnWindow()) { logDebug "Power-on already in flight (BP30 storm guard); skipping redundant burst"; return }
     // Try modern V2 payload first (setSwitch + switchIdx).
     // Only fall back to V1 setPower when inner code is exactly -1, which signals the device
     // rejected this method variant (try the other envelope). Do NOT fall back on rate-limit
@@ -117,15 +121,19 @@ def on(){
             logInfo "Power on (V1 fallback)"
             device.sendEvent(name:"switch", value:"on")
         } else {
-            logError "Power on failed (setSwitch returned -1; setPower also failed)"; recordError("Power on failed (V1 fallback also failed)", [method:"setPower"])
+            clearPowerOnWindow()   // B2: failed power-on is retryable immediately (don't hold the window)
+            reportWriteError("Power on failed (setSwitch returned -1; setPower V1 fallback also failed)", [method:"setPower"])
         }
     } else {
-        logError "Power on failed (setSwitch returned non-fallback error; see debug log)"; recordError("Power on failed (non-fallback error)", [method:"setSwitch"])
+        clearPowerOnWindow()   // B2: failed power-on is retryable immediately (don't hold the window)
+        reportWriteError("Power on failed (setSwitch returned non-fallback error; see debug log)", [method:"setSwitch"])
     }
 }
 
 def off(){
     logDebug "off()"
+    // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence.
+    clearPowerOnWindow()
     def resp = hubBypass("setSwitch", [powerSwitch: 0, switchIdx: 0], "setSwitch(power=0)")
     if (httpOk(resp)) {
         logInfo "Power off"
@@ -137,10 +145,10 @@ def off(){
             logInfo "Power off (V1 fallback)"
             device.sendEvent(name:"switch", value:"off")
         } else {
-            logError "Power off failed (setSwitch returned -1; setPower also failed)"; recordError("Power off failed (V1 fallback also failed)", [method:"setPower"])
+            reportWriteError("Power off failed (setSwitch returned -1; setPower V1 fallback also failed)", [method:"setPower"])
         }
     } else {
-        logError "Power off failed (setSwitch returned non-fallback error; see debug log)"; recordError("Power off failed (non-fallback error)", [method:"setSwitch"])
+        reportWriteError("Power off failed (setSwitch returned non-fallback error; see debug log)", [method:"setSwitch"])
     }
 }
 
@@ -195,9 +203,11 @@ def update(){
         applyStatus(resp2?.data)
         return
     }
-    // Both failed or returned no device fields; still call applyStatus so compat is updated
-    if (resp?.data) applyStatus(resp?.data)
-    else if (resp2?.data) applyStatus(resp2?.data)
+    // Both failed or returned no device fields; still call applyStatus so compat is updated.
+    // Guard instanceof Map (matching hasDeviceFields): a non-JSON error body makes resp.data a
+    // non-null String, and applyStatus -> peelEnvelope(Map response) would throw on a String arg.
+    if (resp?.data instanceof Map) applyStatus(resp?.data)
+    else if (resp2?.data instanceof Map) applyStatus(resp2?.data)
     else { logError "No status data returned from either getPurifierStatus or getHumidifierStatus"; recordError("No status data returned from either status method", [method:"getPurifierStatus"]) }
 }
 
@@ -240,7 +250,7 @@ def applyStatus(status){
 
     // --- Power (all known shapes use powerSwitch) ---
     if (r.powerSwitch != null) {
-        boolean powerOn = (r.powerSwitch as Integer) == 1
+        boolean powerOn = asBool(r.powerSwitch)
         device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
     }
 
@@ -306,7 +316,7 @@ def applyStatus(status){
     // --- Info HTML (for dashboard tiles) ---
     def parts = []
     parts << "Shape: ${detectedCompat}"
-    if (r.powerSwitch != null)       parts << "Power: ${r.powerSwitch == 1 ? 'on' : 'off'}"
+    if (r.powerSwitch != null)       parts << "Power: ${asBool(r.powerSwitch) ? 'on' : 'off'}"
     if (r.humidity != null)          parts << "Humidity: ${r.humidity as Integer}%"
     if (r.PM25 != null)              parts << "PM2.5: ${r.PM25}µg/m³"
     if (localAqLabel != null)        parts << "Air Quality: ${localAqLabel}"
@@ -486,7 +496,9 @@ private boolean shouldFallback(resp){
     if (!resp) return false
     def st = resp?.status as Integer
     if (!(st in [200, 201, 204])) return false
-    def inner = resp?.data?.result?.code
+    // Type-guard: a non-JSON error body makes resp.data a String; resp?.data?.result?.code
+    // would then throw. Non-Map body -> null -> not the -1 fallback signal (clean, no crash).
+    def inner = (resp?.data instanceof Map) ? resp.data.result?.code : null
     return (inner as Integer) == -1
 }
 

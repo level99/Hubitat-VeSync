@@ -80,11 +80,12 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Classic 200S Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit Classic 200S (literal deviceType 'Classic200S') — mist 1-9, target humidity 30-80%, auto/manual modes only (no sleep), auto-stop, display (via setIndicatorLightSwitch -- different from Classic 300S). No warm mist. Night-light brightness passive read-only. pyvesync VeSyncHumid200S class. CROSS-CHECK: different from Classic 300S (VeSyncHumid200300S).",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -171,12 +172,21 @@ def setMode(mode){
         return
     }
     ensureSwitchOn()
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return false
+    }
     def resp = hubBypass("setHumidityMode", [mode: m], "setHumidityMode(${m})")
     if (httpOk(resp)) {
         state.mode = m
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
@@ -187,6 +197,7 @@ def setMode(mode){
 //   Same range as Classic 300S. (Dual 200S has a different 1-2 range -- different class.)
 // setVirtualLevel payload: {id: 0, level: N, type: 'mist'}
 // NOTE: field names id/level/type -- NOT levelIdx/virtualLevel/levelType (Superior 6000S / LV600S Hub Connect)
+// BP30: setMistLevel is a SwitchLevel setpoint, intentionally NOT dedup-gated (see Superior6000S waiver).
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
@@ -264,8 +275,8 @@ def applyStatus(status){
     // ---- Power ----
     // Classic 200S response uses `enabled` (boolean), same as other VeSyncHumid200300S class devices
     def enabledRaw = r.enabled
-    boolean powerOn = (enabledRaw instanceof Boolean) ? enabledRaw : ((enabledRaw as Integer) == 1)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    boolean powerOn = asBool(enabledRaw)
+    emitSwitchState(powerOn)
 
     // ---- Humidity ----
     if (r.humidity != null) device.sendEvent(name:"humidity", value: r.humidity as Integer)
@@ -296,11 +307,13 @@ def applyStatus(status){
     } else if (r.mist_level != null) {
         mistVirtual = r.mist_level as Integer
     }
+    // BP#6: clamp the active mist level to 0 when off (retains last-set value while off).
+    mistVirtual = clampOffLevel(mistVirtual, powerOn)
     if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
 
     // ---- Water lacks ----
     def waterLacksRaw = r.water_lacks
-    boolean waterLacks = (waterLacksRaw instanceof Boolean) ? waterLacksRaw : ((waterLacksRaw as Integer) == 1)
+    boolean waterLacks = asBool(waterLacksRaw)
     String waterLacksStr = waterLacks ? "yes" : "no"
     if (state.lastWaterLacks != waterLacksStr) {
         if (waterLacks) logInfo "Water reservoir empty"
@@ -310,14 +323,14 @@ def applyStatus(status){
 
     // ---- Auto-stop reached ----
     def autoStopReach = r.automatic_stop_reach_target
-    boolean autoStopBool = (autoStopReach instanceof Boolean) ? autoStopReach : ((autoStopReach as Integer) == 1)
+    boolean autoStopBool = asBool(autoStopReach)
     device.sendEvent(name:"autoStopReached", value: autoStopBool ? "yes" : "no")
 
     // ---- Auto-stop enabled -- from configuration.automatic_stop ----
     Boolean autoStopEnabled = null
     if (r.configuration instanceof Map && r.configuration.automatic_stop != null) {
         def asRaw = r.configuration.automatic_stop
-        autoStopEnabled = (asRaw instanceof Boolean) ? asRaw : ((asRaw as Integer) == 1)
+        autoStopEnabled = asBool(asRaw)
     }
     if (autoStopEnabled != null) device.sendEvent(name:"autoStopEnabled", value: autoStopEnabled ? "on" : "off")
 
@@ -346,7 +359,7 @@ def applyStatus(status){
         }
     }
     if (displayRaw != null) {
-        boolean displayOn = (displayRaw instanceof Boolean) ? displayRaw : ((displayRaw as Integer) == 1)
+        boolean displayOn = asBool(displayRaw)
         device.sendEvent(name:"displayOn", value: displayOn ? "on" : "off")
     }
 
@@ -362,7 +375,7 @@ def applyStatus(status){
     def parts = []
     if (r.humidity != null) parts << "Humidity: ${r.humidity as Integer}%"
     if (targetH != null)    parts << "Target: ${targetH}%"
-    if (mistVirtual != null) parts << "Mist: L${mistVirtual} (1-9)"
+    if (mistVirtual != null) parts << "Mist: ${mistVirtual > 0 ? 'L'+mistVirtual+' (1-9)' : 'off'}"
     parts << "Mode: ${userMode}"
     parts << "Water: ${waterLacksStr == 'yes' ? 'empty' : 'ok'}"
     device.sendEvent(name:"info", value: parts.join("<br>"))

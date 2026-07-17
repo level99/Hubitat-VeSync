@@ -373,7 +373,7 @@ metadata {
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson (original); Dan Cox (fork: Vital 200S, Superior 6000S, parent fixes); elfege (contributor)",
         description: "Integrates Levoit air purifiers and humidifiers with Hubitat Elevation via VeSync cloud API",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Actuator"
@@ -865,6 +865,28 @@ private void emitNetworkWarnIfDue() {
     }
 }
 
+// Re-auth storm cooldown: after a FAILED login() (e.g. bad credentials), every subsequent
+// auth-failed response would otherwise re-run a full two-stage login() — for bad credentials
+// that means indefinite login hammering, which risks a VeSync account lockout. Once a login
+// has failed within the last 15 minutes, skip re-auth entirely (the token isn't going to
+// refresh with the same bad credentials) and log an hourly-throttled WARN pointing the user at
+// their credentials. A SUCCESSFUL login() clears state.lastAuthFailAt (see login()), so a
+// transient failure that later recovers resumes normal re-auth immediately.
+private boolean reAuthCooldownActive() {
+    Long failedAt = state.lastAuthFailAt as Long
+    if (failedAt == null) return false
+    long elapsed = now() - failedAt
+    if (elapsed >= 15 * 60 * 1000L) return false   // cooldown window elapsed; allow re-auth
+    // Still cooling down: emit at most one WARN per hour so bad credentials don't spam the log.
+    long bucket = (now() / 3600000L) as long
+    Long lastBucket = state.lastAuthFailWarnHourBucket as Long
+    if (lastBucket == null || bucket != lastBucket) {
+        logWarn "VeSync re-auth suppressed: a login attempt failed recently; not retrying for 15 min to avoid account lockout. Check the VeSync email/password in driver settings."
+        state.lastAuthFailWarnHourBucket = bucket
+    }
+    return true
+}
+
 /**
  * Returns the configured API region ("US" or "EU").
  * Reads from settings?.deviceRegion; defaults to "US" when preference is unset
@@ -951,7 +973,7 @@ private Boolean retryableHttp(String label, Integer maxAttempts, Closure httpCal
  *   docs/oauth-flow.md
  */
 Boolean login() {
-    return retryableHttp("login", 3) {
+    Boolean ok = retryableHttp("login", 3) {
         Map stage1 = getAuthorizationCode()
         if (!stage1?.authCode) {
             // getAuthorizationCode() logged the failure detail via logError + recordError.
@@ -963,6 +985,16 @@ Boolean login() {
         // "both state.token and state.accountID are set, or both are absent").
         return exchangeAuthCode(stage1.authCode, stage1.stage1AccountID, null, null, 0)
     }
+    // Re-auth storm cooldown bookkeeping (see reAuthCooldownActive()): record a failed login so
+    // repeated auth-failed responses don't hammer login() (lockout risk); clear on success so a
+    // recovered login resumes normal re-auth immediately.
+    if (ok) {
+        state.remove('lastAuthFailAt')
+        state.remove('lastAuthFailWarnHourBucket')
+    } else {
+        state.lastAuthFailAt = now()
+    }
+    return ok
 }
 
 /**
@@ -1825,7 +1857,13 @@ private Boolean isLevoitClimateDevice(String code) {
     return false
 }
 
-private Boolean getDevices() {
+// NOT private: getDevices is invoked as a string-literal handler via
+// runIn(2, "getDevices") by the BP17 poll-health self-heal. Hubitat's scheduler
+// resolves handler names through the Groovy MOP, which cannot reach a `private`
+// method (private compiles to INVOKESPECIAL, outside the MOP — the same reason
+// login() is non-private for test mocking). A private target here would make the
+// self-heal Resync silently never fire. Enforced by RULE52.
+Boolean getDevices() {
     return retryableHttp("getDevices", 3) {
         def params = [
             uri: "https://${getApiHost()}/cloud/v1/deviceManaged/devices",
@@ -1881,9 +1919,18 @@ private Boolean getDevices() {
                 }
 
                 def newList = [:]
+                // Track EVERY cid present in the raw response, regardless of whether the device
+                // classified into a known dtype. A present-but-unclassified device (null/blank
+                // deviceType, or a firmware code we don't yet map) is absent from newList but its
+                // child must NOT be deleted -- deleting it and re-adding later gives a new ID that
+                // breaks Rule Machine rules and dashboards. The removal loop below spares any child
+                // whose base cid is in this raw set even when it didn't make it into newList.
+                def rawCids = [] as Set
 
                 for (device in resp.data.result.list) {
                     logDebug "Device found: ${device.deviceType} / ${device.deviceName} / ${device.macID}"
+
+                    if (device.cid != null) rawCids << (device.cid as String)
 
                     def dtype = deviceType(device.deviceType);
 
@@ -1906,12 +1953,28 @@ private Boolean getDevices() {
 
                 // Remove devices that are no longer present.
                 def list = getChildDevices();
-                if (list) list.each {
-                    String dni = it.getDeviceNetworkId();
-                    if (newList.containsKey(dni) == false) {
-                        logInfo "Removed child device: ${dni}"
-                        logDebug "Deleting ${dni}"
-                        deleteChildDevice(dni);
+                // Guard against a transient empty/degenerate device list deleting every
+                // child. getDevices runs unattended (poll-health self-heal), so an empty
+                // response must not wipe existing children -- re-added children get new IDs
+                // and break Rule Machine rules and dashboards. An empty newList with
+                // existing children means the response carried no usable devices; skip the
+                // removal loop and leave the children in place until a good response arrives.
+                if (newList.isEmpty() && list) {
+                    logWarn "getDevices returned an empty/degenerate device list; skipping child removal to avoid deleting devices on a transient response"
+                } else if (list) {
+                    list.each {
+                        String dni = it.getDeviceNetworkId();
+                        // A child's base cid is its DNI minus the "-nl" night-light suffix.
+                        String baseCid = dni?.endsWith("-nl") ? dni.substring(0, dni.length() - 3) : dni;
+                        // Delete only when the device is truly gone: absent from newList AND its base
+                        // cid is not present in the raw response at all. A present-but-unclassified
+                        // device (in rawCids, absent from newList) is spared -- never delete a child
+                        // whose device the cloud still reports, just because we couldn't classify it.
+                        if (newList.containsKey(dni) == false && !rawCids.contains(baseCid)) {
+                            logInfo "Removed child device: ${dni}"
+                            logDebug "Deleting ${dni}"
+                            deleteChildDevice(dni);
+                        }
                     }
                 }
 
@@ -2625,7 +2688,7 @@ private Boolean getDevices() {
         // Mirrors the same pattern used in sendBypassRequest. Re-uses the
         // state.reAuthInProgress guard so the two entry points don't collide.
         Closure effectiveClosure = { resp ->
-            if (isAuthFailure(resp) && !state.reAuthInProgress) {
+            if (isAuthFailure(resp) && !state.reAuthInProgress && !reAuthCooldownActive()) {
                 logInfo "VeSync token expired or invalid (getDevices) -- re-authenticating"
                 state.reAuthInProgress = true
                 try {
@@ -2646,11 +2709,32 @@ private Boolean getDevices() {
                     state.remove('reAuthInProgress')
                 }
             }
-            // Not an auth failure (or re-auth failed): process the response as-is
+            // Not an auth failure (or re-auth failed / cooling down): process the response as-is
             processResponse(resp)
         }
 
-        httpPost(params, effectiveClosure)
+        try {
+            httpPost(params, effectiveClosure)
+        } catch (Exception e) {
+            // BP13: httpPost throws on non-2xx, so a genuine HTTP 401 never reaches
+            // effectiveClosure. Route a synthetic 401 through the SAME effectiveClosure to
+            // trigger re-auth-and-retry.
+            // Non-401 handling is INTENTIONALLY DIFFERENT from sendBypassRequest's (do NOT
+            // unify them): here we RE-THROW, because this block runs inside
+            // retryableHttp("getDevices", 3), whose catch needs the exception to drive its
+            // connection-pool retry + error logging. sendBypassRequest is NOT
+            // retryableHttp-wrapped, so it instead routes non-401 through its own BP22
+            // network-suppression path. Each is correct for its own caller context.
+            Integer thrownStatus = null
+            if (!state.reAuthInProgress && e.metaClass.respondsTo(e, 'getResponse')) {
+                try { thrownStatus = e.getResponse()?.status as Integer } catch (ignored) { }
+            }
+            if (thrownStatus == 401) {
+                effectiveClosure([status: 401, data: null])
+            } else {
+                throw e
+            }
+        }
         return resultHolder[0]
     }
 }
@@ -2784,7 +2868,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
     // login() itself somehow triggers sendBypassRequest (it does NOT — login()
     // uses httpPost directly via retryableHttp — but we guard defensively).
     Closure effectiveClosure = { resp ->
-        if (isAuthFailure(resp) && !state.reAuthInProgress) {
+        if (isAuthFailure(resp) && !state.reAuthInProgress && !reAuthCooldownActive()) {
             logInfo "VeSync token expired or invalid -- re-authenticating"
             state.reAuthInProgress = true
             try {
@@ -2806,7 +2890,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
                 state.remove('reAuthInProgress')
             }
         }
-        // Not an auth failure (or re-auth failed): pass through to inner closure
+        // Not an auth failure (or re-auth failed / cooling down): pass through to inner closure
         tracingClosure(resp)
     }
 
@@ -2854,6 +2938,28 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
         return false
     }
     catch (Exception e) {
+        // BP13: Hubitat's httpPost THROWS HttpResponseException on a non-2xx status,
+        // so a genuine transport-level HTTP 401 never reaches effectiveClosure (which
+        // only runs on 2xx). Detect the 401 here and feed a synthetic 401 response into
+        // the SAME effectiveClosure, so the existing re-auth-and-retry-once path runs
+        // (no duplicated auth logic). The retry itself is guarded by the effectiveClosure's
+        // state.reAuthInProgress flag; wrap the call so a retry-throw can't escape.
+        // Only 401 triggers this — any other thrown status falls through to the normal
+        // network/error handling unchanged.
+        if (!state.reAuthInProgress && e.metaClass.respondsTo(e, 'getResponse')) {
+            Integer thrownStatus = null
+            try { thrownStatus = e.getResponse()?.status as Integer } catch (ignored) { }
+            if (thrownStatus == 401) {
+                try {
+                    effectiveClosure([status: 401, data: null])
+                    return true
+                } catch (reauthEx) {
+                    logError "sendBypassRequest: re-auth retry after HTTP 401 failed: ${reauthEx}"
+                    recordError("sendBypassRequest: re-auth retry after HTTP 401 failed", [method:"sendBypassRequest"])
+                    return false
+                }
+            }
+        }
         // BP22: distinguish network-layer errors from other failures.
         // Network errors during an outage flood logs with one ERROR per child per poll cycle.
         // Apply tiered suppression: one-time WARN on first error; DEBUG-only while outage continues.
@@ -2864,6 +2970,12 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure) {
                 // Seed the current epoch-hour bucket so emitNetworkWarnIfDue() does not re-fire
                 // this same hour — the first-fire WARN is emitted right here.
                 state.lastNetworkWarnHourBucket = (ts / 3600000L) as long
+                // Seed the current 5-min probe bucket too (mirrors the recovery-clear which
+                // resets BOTH buckets). The failing call that JUST set the outage effectively
+                // consumed this bucket's probe slot, so the next recovery probe should wait for
+                // the next 5-min bucket rather than letting another same-cycle child fire an
+                // immediate (guaranteed-to-fail) probe.
+                state.lastNetworkProbeBucket = (ts / 300000L) as long
                 logWarn "BP22: VeSync API unreachable — ${e.class.simpleName}: ${e.message}. Suppressing further per-poll errors until recovery; will re-surface hourly while down."
             } else {
                 logDebug "BP22: still unreachable (${e.class.simpleName})"

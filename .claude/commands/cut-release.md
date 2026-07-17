@@ -12,6 +12,7 @@ Run these in parallel and report any failure:
 - `./gradlew test --no-daemon` — Spock harness must PASS. (If `JAVA_HOME` isn't set on the host, set it to a JDK 17 install or rely on the Gradle wrapper's toolchain auto-provisioning.)
 - `uv run --python 3.12 tests/lint.py --strict` — lint must PASS clean. (Requires `uv` on PATH — install via [astral.sh/uv](https://docs.astral.sh/uv/) if not already present.)
 - `PYTHONIOENCODING=utf-8 uv run --python 3.12 --with pytest --with pyyaml -m pytest tests/lint_test.py -q` — lint rule pytest suite must PASS (must-catch + must-not-catch fixtures for every rule).
+- `PYTHONIOENCODING=utf-8 uv run --python 3.12 --with pytest -m pytest tests/test_no_process_pii_leak.py -q` — outbound-text hygiene guard must PASS (no "cluster N" process-tokens or "device NNNN" install-ids in shipped driver/spec/lint source; covers the Spock specs that lint.py cannot scan).
 - `uv run --python 3.12 tests/check_bp24_classification.py` — BP24 classification verifier must exit 0 (every on/off setter has its BP24 comment).
 - `uv run --python 3.12 tests/check_c3_gate_coverage.py` — C3 gate coverage verifier must exit 0 (every attribute-emitting on/off setter has the idempotency gate).
 - `uv run --python 3.12 tests/check_bp26_spec_coverage.py` — BP26 spec coverage verifier must exit 0 (every safeIntArg command method has a Spock regression spec).

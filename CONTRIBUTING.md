@@ -47,7 +47,7 @@ Hubitat-VeSync/
 ├── src/test/groovy/drivers/              ← Spock unit-test specs (one per driver)
 ├── tests/
 │   ├── lint.py                            ← static lint orchestrator
-│   ├── lint_rules/                        ← 25 pluggable rules (BP1-16, RULE15-25)
+│   ├── lint_rules/                        ← 47 pluggable rules (BP1-30, RULE15-57)
 │   ├── lint_config.yaml                   ← frozen_driver_names, exemptions
 │   └── fixtures/*.yaml                    ← captured pyvesync API responses
 ├── levoitManifest.json                    ← HPM package manifest
@@ -258,7 +258,7 @@ The catalog itself lives in **`docs/BUG-PATTERNS.md`** (the single source of tru
 
 ## Conventions enforced by lint/tests
 
-The Spock harness + 22 lint rules catch a long tail of regressions. Most of these you don't need to memorize — you'll trip them, read the finding, fix. But a few are worth knowing up-front because they shape how a driver is written.
+The Spock harness + 47 lint rules catch a long tail of regressions. Most of these you don't need to memorize — you'll trip them, read the finding, fix. But a few are worth knowing up-front because they shape how a driver is written.
 
 ### High-leverage conventions
 
@@ -407,6 +407,7 @@ Each finding includes:
 - **File-system case sensitivity.** Linux CI is case-sensitive; Windows/macOS dev machines often aren't. A driver file named `LevoitClassic300s.groovy` (lowercase `s`) will pass on a Mac and fail on Linux CI. Match the canonical capitalization in the manifest.
 - **Line endings.** `.gitattributes` enforces LF for `.groovy` and `.py` files. If your editor inserts CRLF, lint may complain. Re-clone with proper Git config (`git config core.autocrlf input`) or run `git add --renormalize .` to fix.
 - **Stale Gradle daemon.** If `./gradlew test` hangs or returns ghost results after a code change, `./gradlew --stop` then re-run.
+- **Driver-only changes can false-pass `./gradlew test` (use `--rerun-tasks`).** The Spock harness reads driver/lib `.groovy` files at *runtime* (resolved by `HubitatSpec`), so they are not Gradle compile inputs. If you change ONLY driver/lib source (no `.groovy` change under `src/test/`), Gradle may judge the `test` task `UP-TO-DATE` and skip it, silently reusing the previous run's results — a false GREEN. This bites hardest in a both-ways revert (revert a driver fix, run `./gradlew test`, see green because nothing re-ran). Force execution with `./gradlew test --rerun-tasks` whenever you're validating a driver/lib-only change — especially the "fails when the fix is reverted" leg of an empirical both-ways proof. (Editing a spec or fixture under `src/test/` makes the task non-`UP-TO-DATE` on its own, so the bare command is fine then.)
 - **`uv` first run is slow.** First invocation downloads Python 3.12 (~30s). Subsequent runs use the cached interpreter (~5s).
 
 ### CI matches local exactly

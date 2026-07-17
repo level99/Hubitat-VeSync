@@ -65,11 +65,12 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit LV600S Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.2] Levoit LV600S (LUH-A602S-WUSR/-WUS/-WEUR/-WEU/-WJP/-WUSC) — mist 1-9, warm mist 0-3, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display; no night-light; canonical pyvesync payloads. NOTE: auto-mode may use 'humidity' payload on some firmware -- see pyvesync PR #505 and driver source CROSS-CHECK.",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -167,10 +168,19 @@ def setMode(mode){
     // Validate BEFORE ensureSwitchOn() so invalid input does not auto-turn on an off device.
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be one of: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     ensureSwitchOn()
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return false
+    }
     if (m == "auto") {
         // Multi-firmware try-canonical-then-fallback with cache
         String preferred = (state.firmwareVariant == "alt") ? "humidity" : "auto"
-        sendModeRequest(preferred, "auto", false)
+        // B1 fail-safe: the delegated setter's false can mean a genuine failure OR its own dedup-suppress; clearing the outer slot on either is harmless (inner write stays deduped -> no extra cloud write).
+        if (!sendModeRequest(preferred, "auto", false)) clearDuplicateWrite("mode")   // A1-delegation: failed mode-delegate must not block retry
     } else {
         // sleep and manual have no known firmware variant issue -- send directly
         def resp = hubBypass("setHumidityMode", [mode: m], "setHumidityMode(${m})")
@@ -179,6 +189,7 @@ def setMode(mode){
             device.sendEvent(name:"mode", value: m)
             logInfo "Mode: ${m}"
         } else {
+            clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
             reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
         }
     }
@@ -188,10 +199,14 @@ def setMode(mode){
 // payloadValue -- the 'mode' field value being sent to the device API ("auto" or "humidity").
 // userMode     -- the canonical user-facing mode string to emit if successful ("auto").
 // isRetry      -- true when this is the alternate-payload retry (prevents infinite recursion).
-private void sendModeRequest(String payloadValue, String userMode, boolean isRetry){
+private boolean sendModeRequest(String payloadValue, String userMode, boolean isRetry){
     def resp = hubBypass("setHumidityMode", [mode: payloadValue], "setHumidityMode(${payloadValue})")
-    def innerCode = resp?.data?.result?.code
-    boolean ok = (resp?.status in [200,201,204]) && (innerCode == null || innerCode == 0)
+    // Type-guard before the .result read: a non-JSON error body makes resp.data a String, and
+    // resp?.data?.result?.code would then throw MissingPropertyException. A non-Map body is not
+    // a success -> bodyIsMap gates ok to false (clean retry/fail, never a raw stack-trace crash).
+    boolean bodyIsMap = resp?.data instanceof Map
+    def innerCode = bodyIsMap ? resp.data.result?.code : null
+    boolean ok = bodyIsMap && (resp?.status in [200,201,204]) && (innerCode == null || innerCode == 0)
     if (ok) {
         String detectedVariant = (payloadValue == "auto") ? "std" : "alt"
         if (state.firmwareVariant != detectedVariant) {
@@ -201,14 +216,16 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
         state.mode = userMode
         device.sendEvent(name:"mode", value: userMode)
         logInfo "Mode: ${userMode}"
+        return true
     } else if (!isRetry) {
         // Canonical payload rejected -- try alternate once
         String alternate = (payloadValue == "auto") ? "humidity" : "auto"
         logDebug "setMode(${userMode}): payload '${payloadValue}' rejected (inner code: ${innerCode}); trying alternate firmware variant '${alternate}'"
-        sendModeRequest(alternate, userMode, true)
+        return sendModeRequest(alternate, userMode, true)
     } else {
         // Both variants rejected
         reportWriteError("Mode '${userMode}' rejected by both payload variants ('auto' and 'humidity', inner code: ${innerCode}). Check device connectivity or report via GitHub issue.", [method:"setHumidityMode"])
+        return false
     }
 }
 
@@ -218,6 +235,7 @@ private void sendModeRequest(String payloadValue, String userMode, boolean isRet
 //   Payload: {id:0, level:N, type:'mist'} -- same as Classic 300S and OasisMist 450S.
 //   NOT levelIdx/virtualLevel/levelType (Superior 6000S style).
 // setVirtualLevel payload: {id: 0, level: N, type: 'mist'}
+// BP30: setMistLevel is a SwitchLevel setpoint, intentionally NOT dedup-gated (see Superior6000S waiver).
 def setMistLevel(level){
     logDebug "setMistLevel(${level})"
     if (!requireNotNull(level, "setMistLevel")) return
@@ -263,7 +281,10 @@ def setMistLevel(level){
 def setWarmMistLevel(level){
     if (!requireNotNull(level, "setWarmMistLevel")) return
     logDebug "setWarmMistLevel(${level})"
-    Integer lvl = safeIntArg(level, 0)   // BP26: safeIntArg never throws on non-numeric RM input
+    // BP28: distinguish explicit "0" (warm-off) from non-numeric garbage. safeIntArg would coerce
+    // garbage to 0, silently turning warm mist OFF (0 is in-range, indistinguishable from intent).
+    Integer lvl = parseLevelOrNull(level)
+    if (lvl == null) { logWarn "setWarmMistLevel: ignoring non-numeric value '${level}'"; return }
     if (lvl < 0 || lvl > 3) {
         logError "Invalid warm mist level ${lvl} -- must be 0-3 (0=off, 1-3=warm intensity)"
         recordError("Invalid warm mist level ${lvl}", [method:"setVirtualLevel"])
@@ -336,8 +357,8 @@ def applyStatus(status){
     // LV600S response uses `enabled` (boolean), NOT `powerSwitch` (int)
     // Same humidifier shape as Classic 300S / OasisMist 450S (all VeSyncHumid200300S class)
     def enabledRaw = r.enabled
-    boolean powerOn = (enabledRaw instanceof Boolean) ? enabledRaw : ((enabledRaw as Integer) == 1)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    boolean powerOn = asBool(enabledRaw)
+    emitSwitchState(powerOn)
 
     // ---- Humidity ----
     if (r.humidity != null) device.sendEvent(name:"humidity", value: r.humidity as Integer)
@@ -376,6 +397,8 @@ def applyStatus(status){
     } else if (r.mist_level != null) {
         mistVirtual = r.mist_level as Integer
     }
+    // BP#6: clamp the active mist level to 0 when off (retains last-set value while off).
+    mistVirtual = clampOffLevel(mistVirtual, powerOn)
     if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
 
     // ---- Warm-mist ----
@@ -386,25 +409,31 @@ def applyStatus(status){
     //     emitted even when warm_level=0.
     //   See setWarmMistLevel() CROSS-CHECK block above for full rationale.
     // warm_enabled and warm_level are top-level response fields (ClassicLVHumidResult)
+    // Hoist one clamped warm local (BP#6) reused by both the event emit and the info tile.
+    Integer warmLvl = null
     if (r.warm_level != null) {
-        Integer warmLvl = r.warm_level as Integer
-        // Derive enabled state from level value (correct logic from LV600S class)
+        // Persist the RAW last-set level (state.warmMistLevel resumes the user's choice);
+        // only the EMITTED attribute + info tile are clamped to 0 while off (BP#6).
+        Integer warmRaw = r.warm_level as Integer
+        warmLvl = clampOffLevel(warmRaw, powerOn)
+        // Derive enabled state from the CLAMPED level value (off => not active).
         boolean warmOn = (warmLvl > 0)
         String warmOnStr = warmOn ? "on" : "off"
         device.sendEvent(name:"warmMistLevel", value: warmLvl)
         device.sendEvent(name:"warmMistEnabled", value: warmOnStr)
-        state.warmMistLevel = warmLvl
+        state.warmMistLevel = warmRaw
         state.warmMistEnabled = warmOnStr
     } else if (r.warm_enabled != null) {
-        // warm_level absent but warm_enabled present -- use it as fallback
+        // warm_level absent but warm_enabled present -- use it as fallback.
+        // BP#6: when off, warm mist is never active regardless of the warm_enabled flag.
         def warmEnabledRaw = r.warm_enabled
-        boolean warmOn = (warmEnabledRaw instanceof Boolean) ? warmEnabledRaw : ((warmEnabledRaw as Integer) == 1)
+        boolean warmOn = powerOn && (asBool(warmEnabledRaw))
         device.sendEvent(name:"warmMistEnabled", value: warmOn ? "on" : "off")
     }
 
     // ---- Water lacks ----
     def waterLacksRaw = r.water_lacks
-    boolean waterLacks = (waterLacksRaw instanceof Boolean) ? waterLacksRaw : ((waterLacksRaw as Integer) == 1)
+    boolean waterLacks = asBool(waterLacksRaw)
     String waterLacksStr = waterLacks ? "yes" : "no"
     if (state.lastWaterLacks != waterLacksStr) {
         if (waterLacks) logInfo "Water reservoir empty"
@@ -414,14 +443,14 @@ def applyStatus(status){
 
     // ---- Auto-stop reached ----
     def autoStopReach = r.automatic_stop_reach_target
-    boolean autoStopBool = (autoStopReach instanceof Boolean) ? autoStopReach : ((autoStopReach as Integer) == 1)
+    boolean autoStopBool = asBool(autoStopReach)
     device.sendEvent(name:"autoStopReached", value: autoStopBool ? "yes" : "no")
 
     // ---- Auto-stop enabled -- from configuration.automatic_stop ----
     Boolean autoStopEnabled = null
     if (r.configuration instanceof Map && r.configuration.automatic_stop != null) {
         def asRaw = r.configuration.automatic_stop
-        autoStopEnabled = (asRaw instanceof Boolean) ? asRaw : ((asRaw as Integer) == 1)
+        autoStopEnabled = asBool(asRaw)
     }
     if (autoStopEnabled != null) device.sendEvent(name:"autoStopEnabled", value: autoStopEnabled ? "on" : "off")
 
@@ -447,7 +476,7 @@ def applyStatus(status){
         displayRaw = r.configuration.display
     }
     if (displayRaw != null) {
-        boolean displayOn = (displayRaw instanceof Boolean) ? displayRaw : ((displayRaw as Integer) == 1)
+        boolean displayOn = asBool(displayRaw)
         device.sendEvent(name:"displayOn", value: displayOn ? "on" : "off")
     }
 
@@ -459,12 +488,10 @@ def applyStatus(status){
     def parts = []
     if (r.humidity != null) parts << "Humidity: ${r.humidity as Integer}%"
     if (targetH != null)    parts << "Target: ${targetH}%"
-    if (mistVirtual != null) parts << "Mist: L${mistVirtual} (1-9)"
+    if (mistVirtual != null) parts << "Mist: ${mistVirtual > 0 ? 'L'+mistVirtual+' (1-9)' : 'off'}"
     parts << "Mode: ${userMode}"
-    if (r.warm_level != null) {
-        Integer wl = r.warm_level as Integer
-        parts << "Warm: ${wl > 0 ? 'L'+wl : 'off'}"
-    }
+    // BP#6: reuse the already-clamped warmLvl local (no second parse of r.warm_level).
+    if (warmLvl != null) parts << "Warm: ${warmLvl > 0 ? 'L'+warmLvl : 'off'}"
     parts << "Water: ${waterLacksStr == 'yes' ? 'empty' : 'ok'}"
     device.sendEvent(name:"info", value: parts.join("<br>"))
 }

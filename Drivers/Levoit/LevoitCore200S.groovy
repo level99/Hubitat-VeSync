@@ -71,11 +71,12 @@ SOFTWARE.
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Core200S Air Purifier",
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson",
         description: "Supports controlling the Levoit 200S air purifier",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -121,6 +122,11 @@ private boolean supportsAutoMode() { false }
 // mapIntegerStringToSpeed helpers (Bucket B1, #142 Phase 2c).
 private Map getSpeedBands() { [1:"low", 2:"medium", 3:"high"] }
 
+// Per-driver FanControl speed enum (no sleep/auto/max on the 200S). Emitted once by the
+// lib's initialize() as the standard supportedFanSpeeds attribute. Must match the setSpeed
+// command's ENUM constraints above.
+private String supportedFanSpeedsJson() { groovy.json.JsonOutput.toJson(["off","low","medium","high"]) }
+
 // logDebug, logError, logInfo, logDebugOff, ensureDebugWatchdog, ensureSwitchOn
 // are provided by #include level99.LevoitChildBase (LevoitChildBaseLib.groovy).
 // installed, uninstalled, initialize, updated, on, off, toggle, setDisplay, handlePower,
@@ -143,9 +149,12 @@ def update() {
             ]) { resp ->
 			if (checkHttpResponse("update", resp))
 			{
-                def status = resp.data.result
+                // Type-guard: a non-JSON error body makes resp.data a String, and the bare
+                // resp.data.result read would throw MissingPropertyException. Non-Map -> null
+                // -> the status == null branch reports a clean failure (no stack-trace crash).
+                def status = (resp?.data instanceof Map) ? resp.data.result : null
                 if (status == null) {
-                    logError "No status returned from getPurifierStatus: ${resp.msg}"
+                    logError "No status returned from getPurifierStatus: ${resp?.hasProperty('msg') ? resp.msg : ''}"
                     recordError("No status returned from getPurifierStatus", [method:"update"])
                 } else
                     result = update(status, nightLight)
@@ -162,10 +171,26 @@ def update(status, nightLight)
 
     logDebug status
 
+    // A middle-wrapped/degenerate envelope ({code:0, result:{code:<err>, result:null}}) leaves
+    // status non-null but status.result null; the bare status.result.level read below would NPE
+    // once per poll. Guard at entry and report the clean "No status" path instead of crashing.
+    if (status?.result == null) {
+        logError "No status returned from getPurifierStatus"
+        recordError("No status returned from getPurifierStatus", [method:"update"])
+        return
+    }
+
     state.speed = mapIntegerToSpeed(status.result.level)
     state.mode = status.result.mode
 
-    device.sendEvent(name: "switch", value: status.result.enabled ? "on" : "off")
+    // Normalize enabled defensively without ever throwing via the shared asBool() helper:
+    // Boolean -> as-is; Number 1 -> true (2 -> false); String "true"/"1"/"on"/"yes" -> true;
+    // anything else -> false. Avoids `as Integer` (which throws NumberFormatException on a
+    // String like "false" and would abort the whole status parse).
+    def enabledRaw = status.result.enabled
+    boolean enabled = asBool(enabledRaw)
+
+    device.sendEvent(name: "switch", value: enabled ? "on" : "off")
     device.sendEvent(name: "mode", value: status.result.mode)
 
     def fl = status.result.filter_life
@@ -182,21 +207,28 @@ def update(status, nightLight)
         state.lastFilterLife = flInt
     }
 
-    switch(state.mode)
-    {
-        case "manual":
-            device.sendEvent(name: "speed", value: mapIntegerToSpeed(status.result.level))
-            break;
-        case "sleep":
-            device.sendEvent(name: "speed", value: "on")
-            break;
+    // BP#6: when the device is off, speed reports "off" regardless of last-set mode/level.
+    // The API keeps mode=manual/sleep even when enabled:false, so without this gate the speed
+    // tile would show a non-off value (e.g. "medium") on a powered-off device.
+    if (!enabled) {
+        device.sendEvent(name: "speed", value: "off")
+    } else {
+        switch(state.mode)
+        {
+            case "manual":
+                device.sendEvent(name: "speed", value: mapIntegerToSpeed(status.result.level))
+                break;
+            case "sleep":
+                device.sendEvent(name: "speed", value: "on")
+                break;
+        }
     }
 
     // New v2.3 fields: child_lock, display, timer_remain
     if (status.result?.child_lock != null)
-        device.sendEvent(name: "childLock", value: status.result.child_lock ? "on" : "off")
+        device.sendEvent(name: "childLock", value: asBool(status.result.child_lock) ? "on" : "off")   // A2: robust 0/1/bool/"false" coercion
     if (status.result?.display != null)
-        device.sendEvent(name: "display", value: status.result.display ? "on" : "off")
+        device.sendEvent(name: "display", value: asBool(status.result.display) ? "on" : "off")         // A2: robust coercion
     if (status.result?.extension?.timer_remain != null)
         device.sendEvent(name: "timerRemain", value: status.result.extension.timer_remain as Integer)
 

@@ -66,11 +66,12 @@ SOFTWARE.
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Core300S Air Purifier",
         namespace: "NiklasGustafsson",
         author: "Niklas Gustafsson and elfege (contributor)",
         description: "Supports controlling the Levoit 300S air purifier",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
         {
             capability "Switch"
@@ -127,6 +128,11 @@ private boolean supportsAutoMode() { true }
 // mapIntegerStringToSpeed helpers (Bucket B1, #142 Phase 2c).
 private Map getSpeedBands() { [1:"low", 2:"medium", 3:"high"] }
 
+// Per-driver FanControl speed enum. Emitted once by the lib's initialize() as the standard
+// supportedFanSpeeds attribute. Must match the setSpeed command's ENUM constraints above
+// (includes sleep/auto, which are modes selectable via the speed picker on the 300S).
+private String supportedFanSpeedsJson() { groovy.json.JsonOutput.toJson(["off","sleep","auto","low","medium","high"]) }
+
 // Auto-preference modes for Core 300S. MUST match the setAutoMode command-constraint enum above.
 // Consumed by the lib's setAutoMode to reject invalid input before waking an off device (BP24).
 private List getAutoModes() { ["default", "quiet", "efficient"] }
@@ -138,6 +144,6 @@ private List getAutoModes() { ["default", "quiet", "efficient"] }
 // checkHttpResponse, setLevel(value, duration), setLevel(value), cycleSpeed, mapSpeedToInteger,
 // mapIntegerToSpeed, mapIntegerStringToSpeed, setSpeed, setMode, handleEvent
 // are provided by #include level99.LevoitCorePurifier (LevoitCorePurifierLib.groovy).
-// update, update(status, nightLight), setAutoMode, handleAutoMode, updateAQIandFilter,
-// convertRange are provided by #include level99.LevoitCoreAQPurifier (LevoitCoreAQPurifierLib.groovy).
+// update, update(status, nightLight), setAutoMode, handleAutoMode, updateAQIandFilter
+// are provided by #include level99.LevoitCoreAQPurifier (LevoitCoreAQPurifierLib.groovy).
 

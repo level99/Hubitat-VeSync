@@ -22,7 +22,7 @@ import spock.lang.Unroll
  *                   -- setMode("auto") with cached "alt": goes direct to "humidity" without retry
  *                   -- updated() clears state.firmwareVariant so firmware updates are re-detected
  *   Mode read-path  -- "auto"/"autoPro"/"humidity" all normalize to user-facing "auto"
- *   PR #505 check   -- mode payload uses 'mode' field key (not 'workMode')
+ *   pyvesync PR #505 check -- mode payload uses 'mode' field key (not 'workMode')
  *   Target humidity -- setHumidity(55) produces setTargetHumidity with {target_humidity:55}
  *   Display field   -- 'display' key first; fallback to 'indicator_light_switch'
  *   No night-light  -- driver declares no setNightLight command, no night_light_brightness parsing
@@ -132,6 +132,67 @@ class LevoitLV600SSpec extends HubitatSpec {
         then:
         lastEventValue("switch") == "off"
         lastEventValue("mistLevel") == 0
+    }
+
+    def "applyStatus off but API retains nonzero mist/warm levels -> both clamp to 0 (Bug Pattern #6)"() {
+        given: "device is OFF yet the cloud still reports the last-set levels (mist=5, warm=2)"
+        settings.descriptionTextEnable = false
+        def deviceData = [
+            enabled: false,
+            humidity: 50,
+            mist_virtual_level: 5,   // retained while off
+            mist_level: 5,
+            mode: "manual",
+            water_lacks: false,
+            humidity_high: false,
+            water_tank_lifted: false,
+            warm_enabled: true,
+            warm_level: 2,           // retained while off
+            display: true,
+            automatic_stop_reach_target: false,
+            configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
+        ]
+
+        when:
+        driver.applyStatus(v2StatusEnvelope(deviceData))
+
+        then: "switch off, and both mist and warm levels report 0 (no stale 'Mist: 5' on an off device)"
+        lastEventValue("switch") == "off"
+        lastEventValue("mistLevel") == 0
+        lastEventValue("warmMistLevel") == 0
+        lastEventValue("warmMistEnabled") == "off"
+    }
+
+    def "applyStatus off: info HTML warm tile reads 'Warm: off', not the stale level (Bug Pattern #6)"() {
+        given: "device OFF but cloud still reports warm_level=2 (info tile re-reads raw response)"
+        settings.descriptionTextEnable = false
+        def deviceData = [
+            enabled: false,
+            humidity: 50,
+            mist_virtual_level: 5,
+            mist_level: 5,
+            mode: "manual",
+            water_lacks: false,
+            humidity_high: false,
+            water_tank_lifted: false,
+            warm_enabled: true,
+            warm_level: 2,
+            display: true,
+            automatic_stop_reach_target: false,
+            configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
+        ]
+
+        when:
+        driver.applyStatus(v2StatusEnvelope(deviceData))
+
+        then: "the info status tile shows 'Warm: off' and 'Mist: off', not the retained levels"
+        // FIX 1 (v2.10 R1): an off device renders 'Mist: off', NOT the bare 'Mist: L0' the
+        // pre-fix tile produced (clampOffLevel returns 0, so the >0 ? : 'off' guard reads 'off').
+        def info = lastEventValue("info") as String
+        info.contains("Warm: off")
+        !info.contains("Warm: L2")
+        info.contains("Mist: off")
+        !info.contains("Mist: L")
     }
 
     // -------------------------------------------------------------------------
@@ -440,6 +501,42 @@ class LevoitLV600SSpec extends HubitatSpec {
         testLog.errors.any { it.contains("4") || it.contains("warm") || it.contains("0-3") }
     }
 
+    @Unroll
+    def "setWarmMistLevel('#input') non-numeric is ignored, warm mist unchanged (BP28)"() {
+        given: "device is ON; a non-numeric value (RM blank slot / dashboard typo) arrives"
+        testDevice.events.add([name: "switch", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setWarmMistLevel(input)
+
+        then: "no warm write is sent — garbage must NOT silently turn warm mist off"
+        testParent.allRequests.findAll { it.method == "setVirtualLevel" && it.data.type == "warm" }.isEmpty()
+        and: "a warning is logged pointing at the bad value"
+        testLog.warns.any { it.contains("setWarmMistLevel") }
+        and: "garbage input is a WARN, NOT an ERROR/recordError (bad input != driver fault)"
+        testLog.errors.isEmpty()
+        noExceptionThrown()
+
+        where:
+        input << ["abc", "", "hgih", "true"]
+    }
+
+    def "setWarmMistLevel(0) explicit zero still turns warm mist off (BP28 contract preserved)"() {
+        given: "device is ON so the lvl==0 no-op-when-off branch does not apply"
+        testDevice.events.add([name: "switch", value: "on"])
+        settings.descriptionTextEnable = false
+
+        when:
+        driver.setWarmMistLevel(0)
+
+        then: "explicit 0 still routes to the warm-off write (level=0)"
+        def req = testParent.allRequests.find { it.method == "setVirtualLevel" && it.data.type == "warm" }
+        req != null
+        req.data.level == 0
+        state.warmMistEnabled == "off"
+    }
+
     // -------------------------------------------------------------------------
     // Warm mist applyStatus: level=0 correct semantics (BP#6-adjacent)
     // -------------------------------------------------------------------------
@@ -502,8 +599,35 @@ class LevoitLV600SSpec extends HubitatSpec {
         testDevice.events.find { it.name == "warmMistLevel" } == null
     }
 
+    def "applyStatus warm_enabled fallback while OFF: warm_level absent + warm_enabled=true -> warmMistEnabled='off' (Bug Pattern #6)"() {
+        given: "device OFF, warm_level ABSENT (so the fallback branch runs), warm_enabled=true retained"
+        settings.descriptionTextEnable = false
+        def deviceData = [
+            enabled: false,                 // device is OFF
+            humidity: 50,
+            mist_virtual_level: 0,
+            mist_level: 3,
+            mode: "manual",
+            water_lacks: false,
+            humidity_high: false,
+            water_tank_lifted: false,
+            warm_enabled: true,             // retained-on flag; must NOT report "on" while off
+            // warm_level deliberately absent -> exercises the warm_enabled fallback branch
+            display: true,
+            automatic_stop_reach_target: false,
+            configuration: [auto_target_humidity: 55, display: true, automatic_stop: false]
+        ]
+
+        when:
+        driver.applyStatus(v2StatusEnvelope(deviceData))
+
+        then: "warmMistEnabled reports 'off' — the fallback branch is power-gated (BP6)"
+        lastEventValue("switch") == "off"
+        lastEventValue("warmMistEnabled") == "off"
+    }
+
     // -------------------------------------------------------------------------
-    // Mode write-path: multi-firmware try-canonical-then-fallback-with-cache (PR #505)
+    // Mode write-path: multi-firmware try-canonical-then-fallback-with-cache (pyvesync PR #505)
     // -------------------------------------------------------------------------
 
     def "setMode('auto') canonical-accept: first attempt uses 'auto' payload, cached as 'std'"() {
@@ -635,7 +759,7 @@ class LevoitLV600SSpec extends HubitatSpec {
     // Mode read-path normalization: "auto"/"autoPro"/"humidity" all map to user-facing "auto"
     // -------------------------------------------------------------------------
 
-    def "applyStatus mode='humidity' (EU firmware per PR #505) normalized to user-facing 'auto'"() {
+    def "applyStatus mode='humidity' (EU firmware per pyvesync PR #505) normalized to user-facing 'auto'"() {
         given:
         settings.descriptionTextEnable = false
         // Simulate LUH-A602S-WEU reporting mode='humidity' (its auto-mode alias)

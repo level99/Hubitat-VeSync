@@ -12,7 +12,7 @@ permanently-dead branch: the condition is always false, on() is never called,
 and the device stays off when a configure-style command fires from automation.
 
 Historical occurrence:
-  Round 1.5 audit (2026-05-03) found exactly 4 sites across 4 Core line drivers:
+  A 2026-05-03 audit found exactly 4 sites across 4 Core line drivers:
     LevoitCore200S.groovy  cycleSpeed() line ~184
     LevoitCore300S.groovy  cycleSpeed() line ~211
     LevoitCore400S.groovy  cycleSpeed() line ~214

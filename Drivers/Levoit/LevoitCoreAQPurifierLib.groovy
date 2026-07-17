@@ -37,7 +37,7 @@ library(
 //             consumes it to reject invalid input BEFORE waking an off device (BP24 invariant).
 //   PROVIDES: update() (0-arg self-fetch), update(status, nightLight) (2-arg poll dispatcher),
 //             setAutoMode(mode), setAutoMode(mode, roomSize), handleAutoMode(mode),
-//             handleAutoMode(mode, size), updateAQIandFilter(String, filter), convertRange(...)
+//             handleAutoMode(mode, size), updateAQIandFilter(String, filter)
 
 // Bucket A5 (#142 Phase 2b-amended): byte-identical 0-arg self-fetch across 300S/400S/600S.
 // Issues getPurifierStatus bypassV2 request, validates the response envelope, and
@@ -56,9 +56,12 @@ def update() {
             ]) { resp ->
 			if (checkHttpResponse("update", resp))
 			{
-                def status = resp.data.result
+                // Type-guard: a non-JSON error body makes resp.data a String, and the bare
+                // resp.data.result read would throw MissingPropertyException. Non-Map -> null
+                // -> the status == null branch reports a clean failure (no stack-trace crash).
+                def status = (resp?.data instanceof Map) ? resp.data.result : null
                 if (status == null) {
-                    logError "No status returned from getPurifierStatus: ${resp.msg}"
+                    logError "No status returned from getPurifierStatus: ${resp?.hasProperty('msg') ? resp.msg : ''}"
                     recordError("No status returned from getPurifierStatus", [method:"update"])
                 } else
                     result = update(status, null)
@@ -84,15 +87,36 @@ def update(status, nightLight)
 
     logDebug status
 
+    // A middle-wrapped/degenerate envelope ({code:0, result:{code:<err>, result:null}}) leaves
+    // status non-null but status.result null; the bare status.result.level read below would NPE
+    // once per poll. Guard at entry and report the clean "No status" path instead of crashing.
+    if (status?.result == null) {
+        logError "No status returned from getPurifierStatus"
+        recordError("No status returned from getPurifierStatus", [method:"update"])
+        return
+    }
+
     def speed = mapIntegerToSpeed(status.result.level)
     def mode = status.result.mode
     def auto_mode = status?.result?.configuration?.auto_preference?.type
     def room_size = status?.result?.configuration?.auto_preference?.room_size
 
-    handleEvent("switch", status.result.enabled ? "on" : "off")
+    // Normalize enabled defensively without ever throwing via the shared asBool() helper:
+    // Boolean -> as-is; Number 1 -> true (2 -> false); String "true"/"1"/"on"/"yes" -> true;
+    // anything else -> false. Avoids `as Integer` (which throws NumberFormatException on a
+    // String like "false" and would abort the whole status parse).
+    def enabledRaw = status.result.enabled
+    boolean enabled = asBool(enabledRaw)
+
+    handleEvent("switch", enabled ? "on" : "off")
     if (state.mode == null || mode != state.mode)
         handleEvent("mode",   status.result.mode)
-    if (state.auto_mode == null || auto_mode != state.auto_mode)
+    // auto_preference.type is absent (null) on devices/modes without an auto preference, so a
+    // `state.auto_mode == null` first-emit clause (as the mode gate above uses, where mode is
+    // always non-null) would never latch off here — it would re-emit a null auto_mode every
+    // poll. Gate on an actual change only: both-null is equal, so the null steady state stays
+    // silent while the first real value and genuine changes still emit.
+    if (auto_mode != state.auto_mode)
         handleEvent("auto_mode", auto_mode)
 
     // state.mode must be set BEFORE switch evaluates — see Core 200S line 336/355 for canonical ordering
@@ -101,24 +125,31 @@ def update(status, nightLight)
     state.auto_mode = auto_mode
     state.room_size = room_size
 
-    switch(state.mode)
-    {
-        case "manual":
-            handleEvent("speed",  speed)
-            break;
-        case "auto":
-            handleEvent("speed",  "auto")
-            break;
-        case "sleep":
-            handleEvent("speed",  "on")
-            break;
+    // BP#6: when the device is off, speed reports "off" regardless of last-set mode/level.
+    // The API keeps mode=manual/auto/sleep even when enabled:false, so without this gate the
+    // speed tile would show a non-off value (e.g. "medium") on a powered-off device.
+    if (!enabled) {
+        handleEvent("speed", "off")
+    } else {
+        switch(state.mode)
+        {
+            case "manual":
+                handleEvent("speed",  speed)
+                break;
+            case "auto":
+                handleEvent("speed",  "auto")
+                break;
+            case "sleep":
+                handleEvent("speed",  "on")
+                break;
+        }
     }
 
     // New v2.3 fields: child_lock, display, timer, pm25, airQualityIndex
     if (status.result?.child_lock != null)
-        handleEvent("childLock", status.result.child_lock ? "on" : "off")
+        handleEvent("childLock", asBool(status.result.child_lock) ? "on" : "off")   // A2: robust 0/1/bool/"false" coercion
     if (status.result?.display != null)
-        handleEvent("display", status.result.display ? "on" : "off")
+        handleEvent("display", asBool(status.result.display) ? "on" : "off")         // A2: robust coercion
     if (status.result?.extension?.timer_remain != null)
         handleEvent("timerRemain", status.result.extension.timer_remain as Integer)
     if (status.result?.air_quality_value != null)
@@ -258,26 +289,21 @@ private void updateAQIandFilter(String val, filter) {
         state.prevPM = pm;
         state.prevFilter = filter;
 
-        if      (pm <  12.1) aqi = convertRange(pm,   0.0,  12.0,   0,  50);
-        else if (pm <  35.5) aqi = convertRange(pm,  12.1,  35.4,  51, 100);
-        else if (pm <  55.5) aqi = convertRange(pm,  35.5,  55.4, 101, 150);
-        else if (pm < 150.5) aqi = convertRange(pm,  55.5, 150.4, 151, 200);
-        else if (pm < 250.5) aqi = convertRange(pm, 150.5, 250.4, 201, 300);
-        else if (pm < 350.5) aqi = convertRange(pm, 250.5, 350.4, 301, 400);
-        else                 aqi = convertRange(pm, 350.5, 500.4, 401, 500);
+        // US-AQI from PM2.5 via the shared EPA breakpoint ladder (LevoitChildBase.usAqiFromPm25).
+        // Extracted from the former inline ladder here so EverestAir + Sprout Air emit the SAME
+        // airQuality US-AQI semantics; output is byte-identical to the prior convertRange ladder.
+        aqi = usAqiFromPm25(pm);
 
         handleEvent("aqi", aqi);
-        // Adds a conventional `airQuality` NUMBER (US-AQI) attribute for Rule Machine / dashboard
-        // ergonomics. The AirQuality capability's required attribute (`airQualityIndex`) is emitted
-        // by the per-driver applyStatus before this method is called; this adds `airQuality` as
-        // additive convenience under the conventional name, not a capability-contract fix.
-        // airQualityIndex and aqi are unchanged — backward-compatible.
+        // `airQuality` is the conventional US-AQI (0-500) NUMBER for Rule Machine / dashboard /
+        // voice. The AirQuality capability's `airQualityIndex` (Levoit 1-4 categorical level) is
+        // emitted by the per-driver applyStatus before this method runs; aqi == airQuality here.
         handleEvent("airQuality", aqi);
 
         String danger;
         String color;
 
-        if      (aqi <  51) { danger = "Good";                           color = "7e0023"; }
+        if      (aqi <  51) { danger = "Good";                           color = "00e400"; }
         else if (aqi < 101) { danger = "Moderate";                       color = "fff300"; }
         else if (aqi < 151) { danger = "Unhealthy for Sensitive Groups"; color = "f18b00"; }
         else if (aqi < 201) { danger = "Unhealthy";                      color = "e53210"; }
@@ -309,22 +335,4 @@ private void updateAQIandFilter(String val, filter) {
         handleEvent("info", html)
         handleEvent("filter", filter)
     }
-}
-
-private BigDecimal convertRange(BigDecimal val, BigDecimal inMin, BigDecimal inMax, BigDecimal outMin, BigDecimal outMax, Boolean returnInt = true) {
-  // Let make sure ranges are correct
-  assert (inMin <= inMax);
-  assert (outMin <= outMax);
-
-  // Restrain input value
-  if (val < inMin) val = inMin;
-  else if (val > inMax) val = inMax;
-
-  val = ((val - inMin) * (outMax - outMin)) / (inMax - inMin) + outMin;
-  if (returnInt) {
-    // If integer is required we use the Float round because the BigDecimal one is not supported/not working on Hubitat
-    val = val.toFloat().round().toBigDecimal();
-  }
-
-  return (val);
 }

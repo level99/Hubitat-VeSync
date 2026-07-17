@@ -454,6 +454,33 @@ class LevoitCorePurifierLibSpec extends HubitatSpec {
         testDevice.events.any { it.name == "airQualityIndex" && it.value == 1 }
     }
 
+    def "update(status, nightLight) emits exact US-AQI aqi/airQuality from PM2.5 via shared helper"() {
+        // Guards the v2.10 extraction of the PM2.5->US-AQI ladder into the shared
+        // LevoitChildBase.usAqiFromPm25 helper. The emitted aqi/airQuality MUST be the
+        // exact US-AQI for the fixture's PM2.5 — proves the refactor stayed byte-identical
+        // and that the Core path actually depends on the helper.
+        // NON-VACUITY: mutating usAqiFromPm25's output makes these exact-value assertions
+        // go RED (the pre-existing "between 0 and 500" test only checks >=0 and would NOT).
+        // PM2.5 = 3 (air_quality_value) -> EPA band 0-12 -> US-AQI 13.
+        given: "prevPM cleared so the updateAQIandFilter change-gate does not suppress the emit"
+        // updateAQIandFilter only re-emits when PM/filter changed since the last poll
+        // (state.prevPM gate). Clear it so this test is order-independent regardless of
+        // which fixture a prior test in the spec left in state.
+        state.remove("prevPM")
+        state.remove("prevFilter")
+        def fixture = loadYamlFixture("Core400S.yaml")
+        def status = fixture.responses.device_on_manual_speed1 as Map
+
+        when:
+        driver.update(status, null)
+
+        then: "aqi = 13 (US-AQI for PM2.5=3)"
+        testDevice.events.any { it.name == "aqi" && (it.value as BigDecimal) == 13 }
+
+        and: "airQuality = aqi = 13 (standard capability attribute, same US-AQI)"
+        testDevice.events.any { it.name == "airQuality" && (it.value as BigDecimal) == 13 }
+    }
+
     def "update(status, nightLight) auto-mode emits speed='auto' (state machine)"() {
         given: "auto-mode fixture (mode = auto)"
         def fixture = loadYamlFixture("Core400S.yaml")

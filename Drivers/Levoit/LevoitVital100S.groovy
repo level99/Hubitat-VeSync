@@ -59,11 +59,12 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Vital 100S Air Purifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Vital 100S (LAP-V102S) — power, fan speed, mode, timer, AQ/PM2.5, filter health; canonical pyvesync payloads",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -122,8 +123,8 @@ def applyStatus(status) {
     // Diagnostic: gated by debugOutput pref — quiet in production, easy to triage when needed.
     logDebug "applyStatus raw r keys=${r?.keySet()}, values=${r}"
 
-    def powerOn = r.powerSwitch == 1
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    def powerOn = asBool(r.powerSwitch)
+    emitSwitchState(powerOn)
 
     // Filter
     if (r.filterLifePercent != null) {
@@ -163,6 +164,9 @@ def applyStatus(status) {
             default:       device.sendEvent(name:"speed", value:"auto"); break
         }
     }
+    // SwitchLevel `level` mirror of the current fan level (0 while off) — kept in sync every poll so
+    // the dimmer tile does not drift from the real device level, which setLevel() alone previously owned.
+    device.sendEvent(name:"level", value: powerOn ? speedToLevel(sp) : 0)
 
     // AQ — compute label locally so we can also use it in the info HTML below (avoids race with sendEvent)
     String localAQ = null
@@ -199,8 +203,8 @@ def applyStatus(status) {
     //   Refutation: community user confirms setLightDetection WORKS on V102S hardware -->
     //     expose the toggle conditionally (feature-flag check or simple expose).
 
-    device.sendEvent(name:"childLock", value: r.childLockSwitch == 1 ? "on":"off")
-    device.sendEvent(name:"display",   value: r.screenSwitch == 1 ? "on":"off")
+    device.sendEvent(name:"childLock", value: asBool(r.childLockSwitch) ? "on":"off")
+    device.sendEvent(name:"display",   value: asBool(r.screenSwitch) ? "on":"off")
 
     // Error code and timer remain
     if (r.errorCode != null) {

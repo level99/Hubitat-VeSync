@@ -37,6 +37,23 @@ class LevoitCore200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // FanControl coherence (v2.10): supportedFanSpeeds published once on initialize()
+    // so dashboard fan-tiles can populate their speed picker. The Core 200S list is
+    // model-specific (no sleep/auto/max). NON-VACUITY: removing the emit from the
+    // lib's initialize() (or the per-driver supportedFanSpeedsJson) makes this RED.
+    // -------------------------------------------------------------------------
+
+    def "initialize() emits supportedFanSpeeds matching the Core 200S setSpeed enum"() {
+        when:
+        driver.initialize()
+
+        then: "supportedFanSpeeds emitted as a JSON list of the 200S's speeds"
+        def raw = lastEventValue("supportedFanSpeeds")
+        raw != null
+        new groovy.json.JsonSlurper().parseText(raw as String) == ["off", "low", "medium", "high"]
+    }
+
+    // -------------------------------------------------------------------------
     // Bug Pattern #1: 2-arg update signature
     // -------------------------------------------------------------------------
 
@@ -52,6 +69,62 @@ class LevoitCore200SSpec extends HubitatSpec {
         noExceptionThrown()
         // Returns the parsed status map
         result != null
+    }
+
+    // -------------------------------------------------------------------------
+    // F8: update(status, nightLight) must not NPE on a middle-wrapped/degenerate envelope
+    // ({code:0, result:null}) — status is non-null but status.result is null, so the bare
+    // status.result.level read would throw once per poll. The entry guard routes to the clean
+    // "No status" logError path instead.
+    // NON-VACUITY: removing the `if (status?.result == null)` guard makes the bare
+    // status.result.level read throw NullPointerException -> noExceptionThrown() goes RED.
+    // -------------------------------------------------------------------------
+
+    def "update(status, nightLight) with null status.result does not NPE (F8)"() {
+        given: "a degenerate envelope: status present but status.result is null"
+        settings.descriptionTextEnable = false
+        def status = [code: 0, result: null]
+
+        when:
+        driver.update(status, null)
+
+        then: "no exception thrown, and the clean 'No status' error is reported"
+        noExceptionThrown()
+        testLog.errors.any { it.contains("No status returned from getPurifierStatus") }
+    }
+
+    // -------------------------------------------------------------------------
+    // F2: the self-fetch update() error path interpolates resp.msg. On a real hub resp is an
+    // HttpResponseDecorator with no 'msg' property, so a bare ${resp.msg} throws
+    // MissingPropertyException exactly in the error path. The fix guards with
+    // resp?.hasProperty('msg'). This test drives the closure with a response object that has
+    // NO 'msg' property (unlike the harness default) and asserts the error path does not throw.
+    // NON-VACUITY: reverting to a bare ${resp.msg} makes this throw -> noExceptionThrown() RED.
+    // -------------------------------------------------------------------------
+
+    def "update() self-fetch error path does not throw when the response has no 'msg' property (F2)"() {
+        given: "a parent that drives the closure with a msg-less response carrying null data"
+        settings.descriptionTextEnable = false
+        def noMsgResp = new NoMsgResponse()   // status 200, data null, NO 'msg' property
+        driver.metaClass.getParent = { ->
+            [ getChildDevice   : { String dni -> null },
+              sendBypassRequest: { dev, payload, Closure cb -> cb(noMsgResp) } ]
+        }
+
+        when: "the self-fetch runs and hits the status==null error branch"
+        driver.update()
+
+        then: 'no MissingPropertyException — the resp.msg interpolation is guarded'
+        noExceptionThrown()
+        testLog.errors.any { it.contains("No status returned from getPurifierStatus") }
+    }
+
+    // A response object that lacks a 'msg' property, matching Hubitat's HttpResponseDecorator
+    // (which has no 'msg'). A bare ${resp.msg} on this throws MissingPropertyException; the
+    // resp?.hasProperty('msg') guard yields '' instead. status 200 so checkHttpResponse passes.
+    static class NoMsgResponse {
+        Integer getStatus() { 200 }
+        def getData() { null }
     }
 
     // -------------------------------------------------------------------------
@@ -139,6 +212,43 @@ class LevoitCore200SSpec extends HubitatSpec {
 
         and: "no errors logged"
         testLog.errors.isEmpty()
+    }
+
+    def "update(status, nightLight) off device reports speed 'off' despite mode=manual (Bug Pattern #6)"() {
+        given: "device off, but API still reports mode=manual, level=2 (last-set retained)"
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def status = fixture.responses.device_off as Map
+        assert status.result.enabled == false
+        assert status.result.mode == "manual"   // API keeps mode while off
+        assert status.result.level == 2         // retained last-set level
+
+        when:
+        driver.update(status, null)
+
+        then: "speed reads 'off', not 'medium' — no switch=off/speed=medium contradiction"
+        lastEventValue("switch") == "off"
+        lastEventValue("speed") == "off"
+    }
+
+    def "update(status, nightLight) with enabled as STRING 'false' does not throw and reports off (defensive normalize)"() {
+        given: "API returns enabled as the String 'false' (the case the #5 normalize must survive)"
+        settings.descriptionTextEnable = false
+        def fixture = loadYamlFixture("Core200S.yaml")
+        def base = fixture.responses.device_off as Map
+        // Override enabled to the String "false". `"false" as Integer` would throw — the
+        // normalize must treat any non-Boolean/non-Number as false WITHOUT coercing.
+        def status = [code: 0, result: (base.result as Map) + [enabled: "false", mode: "manual", level: 2]]
+
+        when:
+        driver.update(status, null)
+
+        then: "no exception thrown (the whole status parse must not abort)"
+        noExceptionThrown()
+
+        and: "switch and speed both report off (String 'false' -> false)"
+        lastEventValue("switch") == "off"
+        lastEventValue("speed") == "off"
     }
 
     def "filter life threshold INFO logs when below 10 percent"() {
@@ -507,6 +617,58 @@ class LevoitCore200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // BP29: off() must gate its optimistic switch/speed emit on the
+    // power-off write succeeding. Pre-fix, off() called handlePower(false) BARE then
+    // emitted switch:off + speed:off unconditionally — so a FAILED power-off reported
+    // the device OFF (while it was still ON) and surfaced no failure. Discriminating:
+    // on a failed write the pre-fix code emits switch:off (the `!= "off"` assertions go
+    // RED) and logs no "Failed to turn off device" (the error assertion goes RED).
+    // -------------------------------------------------------------------------
+
+    def "off() with a FAILED power-off write does NOT report switch off and surfaces the failure (BP29)"() {
+        given: "device on; the power-off write fails (HTTP 500 -> handlePower(false) returns false)"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = false
+        state.speed = "medium"
+        testDevice.events.add([name: "switch", value: "on"])
+        testParent.cannedResponse = TestParent.httpErrorResponse(500)
+
+        when:
+        driver.off()
+
+        then: "the power-off write was attempted"
+        testParent.allRequests.find { it.method == "setSwitch" && it.data.enabled == false } != null
+
+        and: "switch is NOT optimistically reported off (the device may still be on)"
+        lastEventValue("switch") != "off"
+
+        and: "speed is NOT optimistically reported off either"
+        lastEventValue("speed") != "off"
+
+        and: "the failure is surfaced via reportWriteError, not silently swallowed"
+        testLog.errors.any { it.contains("Failed to turn off device") }
+    }
+
+    def "off() with a SUCCESSFUL power-off write reports switch off + speed off, no failure (BP29 both-ways twin)"() {
+        given: "device on; the power-off write succeeds (default OK response)"
+        settings.descriptionTextEnable = false
+        state.speed = "medium"
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.off()
+
+        then: "switch is reported off"
+        lastEventValue("switch") == "off"
+
+        and: "speed is reported off"
+        lastEventValue("speed") == "off"
+
+        and: "no power-off failure was surfaced"
+        !testLog.errors.any { it.contains("Failed to turn off device") }
+    }
+
+    // -------------------------------------------------------------------------
     // C3: state-change gate — setChildLock and setDisplay (retroactive fix via lib)
     // -------------------------------------------------------------------------
 
@@ -653,10 +815,10 @@ class LevoitCore200SSpec extends HubitatSpec {
         // setSpeed("high") must:
         //   1. auto-on (ensureSwitchOn fires before the mode dispatch),
         //   2. RECOVER by calling setMode("manual") and applying the speed — NOT warn+drop.
-        //      The Tier-24 form (warn+drop) was adversarially proven to turn the device on
+        //      The earlier warn+drop form was proven to turn the device on
         //      but discard the requested speed: user sees device powered but wrong speed.
         // Pre-fix: else { logWarn "cannot apply speed"; return } — speed was lost.
-        // Post-fix (Tier-25): else { setMode("manual"); handleSpeed(s); ... } — speed applied.
+        // Post-fix: else { setMode("manual"); handleSpeed(s); ... } — speed applied.
         //
         // Distinct from BP18 spec: that spec passes null as the *argument*;
         // this spec passes a valid speed string but leaves *state.mode* null.

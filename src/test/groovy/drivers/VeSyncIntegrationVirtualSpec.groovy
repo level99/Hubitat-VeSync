@@ -650,7 +650,7 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // BLOCKING #4: detectRealParent false-negative — known limitation test
+    // detectRealParent false-negative — known limitation test
     // -------------------------------------------------------------------------
 
     def "detectRealParent returns false when getChildDevices is empty and no flag set (known false-negative limitation)"() {
@@ -672,7 +672,7 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // BLOCKING #5: addTimer via sendBypassRequest uses canonicalDefaultState path
+    // addTimer via sendBypassRequest uses canonicalDefaultState path
     // Exercises the deep-copy fix — would throw UnsupportedOperationException
     // without it, because V1_PURIFIER_DEFAULT_STATE.extension is immutable.
     // -------------------------------------------------------------------------
@@ -973,8 +973,8 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
 
     // -------------------------------------------------------------------------
     // Test 11b: v1_humidifier RGB nightlight — LUH-O451S-WEU (OasisMist 450S EU variant)
-    // Exercises the RGB-nightlight setLightStatus op (driver-side extension per pyvesync
-    // PR #502, absent from upstream YAML; reachable via virtual_parent_extensions.json).
+    // Exercises the RGB-nightlight setLightStatus op (driver-side extension per
+    // pyvesync PR #502, absent from upstream YAML; reachable via virtual_parent_extensions.json).
     // The WEU fixture maps to deviceType LUH-O451S-WEU so the driver's runtime RGB gate
     // engages on a real hub; here we verify the parent-side key-set validation + the
     // rgbNightLight sub-object in the canned getHumidifierStatus response.
@@ -1056,7 +1056,7 @@ class VeSyncIntegrationVirtualSpec extends HubitatSpec {
     // -------------------------------------------------------------------------
     // Tests 13 & 14: fan mode-setter round-trips (driver-side extensions absent
     // from pyvesync's upstream YAML; reachable through FIXTURE_OPS via
-    // virtual_parent_extensions.json). Regression guard for BLOCKING #1 fix.
+    // virtual_parent_extensions.json). Regression guard for the toggle-vs-brightness split fix.
     // Both cases share an identical assertion shape — snapshot.workMode mutated,
     // synthesizeStatusResponse carries it in the single-wrapped fan envelope,
     // no ERROR, DEBUG "Payload validated" naming the method — and vary only in

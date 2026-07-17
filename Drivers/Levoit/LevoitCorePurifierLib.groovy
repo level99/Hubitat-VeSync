@@ -55,6 +55,11 @@ def uninstalled() {
 
 def initialize() {
 	logDebug "initializing"
+	// FanControl: publish the static speed enum once so dashboard fan-tiles and
+	// integrations can populate their speed picker. The Core line's supported speed
+	// set differs per model (200S has no sleep/auto/max; 400S/600S add max), so each
+	// driver supplies its own list via supportedFanSpeedsJson().
+	device.sendEvent(name:"supportedFanSpeeds", value: supportedFanSpeedsJson())
 }
 
 // Bucket A3 (#142 Phase 2a): byte-identical lifecycle across all 4 Core drivers.
@@ -62,7 +67,12 @@ def initialize() {
 // records state.debugEnabledAt for cross-reboot auto-disable per LevoitChildBase.
 def updated() {
     logDebug "Updated with settings: ${settings}"
+    // Preserve state.timerId across state.clear() — it's the id an active device timer must
+    // reference to be cancelled. Wiping it on every Save Preferences would leave cancelTimer()
+    // unable to cancel a running timer (silent no-op). Mirrors LevoitFanLib.updated().
+    def savedTimerId = state.timerId
     state.clear()
+    if (savedTimerId != null) state.timerId = savedTimerId
     unschedule()
     initialize()
 
@@ -85,24 +95,34 @@ def on() {
     logDebug "on()"
 
     if (state.turningOn) { logDebug "Already turning on, skipping re-entrant call"; return }
+    // BP30: async-window storm guard — collapse a burst of overlapping on() commands into
+    // ONE effective power+speed+mode sequence. Returns false while a power-on is in flight.
+    if (!beginPowerOnWindow()) { logDebug "Power-on already in flight (BP30 storm guard); skipping redundant burst"; return }
     state.turningOn = true
     try {
-        handlePower(true)
-        logInfo "Power on"
-        handleEvent("switch", "on")
+        if (handlePower(true)) {
+            logInfo "Power on"
+            handleEvent("switch", "on")
 
-        if (state.speed != null) {
-            setSpeed(state.speed)
-        }
-        else {
-            setSpeed("low")
-        }
+            if (state.speed != null) {
+                setSpeed(state.speed)
+            }
+            else {
+                setSpeed("low")
+            }
 
-        if (state.mode != null) {
-            setMode(state.mode)
-        }
-        else {
-            update()
+            if (state.mode != null) {
+                setMode(state.mode)
+            }
+            else {
+                update()
+            }
+        } else {
+            // B2: a FAILED power-on must not hold the BP30 window open for POWER_ON_WINDOW_MS and
+            // suppress an immediate retry; clear it so the next on() fires a fresh sequence. Also
+            // stops the burst from running speed/mode writes into a device that never powered on.
+            clearPowerOnWindow()
+            reportWriteError("Failed to turn on device", [method:"on"])
         }
     } finally {
         state.remove('turningOn')
@@ -119,10 +139,20 @@ def off() {
     if (state.turningOff) { logDebug "Already turning off, skipping re-entrant call"; return }
     state.turningOff = true
     try {
-        handlePower(false)
-        logInfo "Power off"
-        handleEvent("switch", "off")
-        handleEvent("speed", "off")
+        // BP30: cancel any open power-on window so a deliberate off -> on fires a fresh sequence.
+        clearPowerOnWindow()
+        // BP29: gate the optimistic switch/speed emit on the power-off write actually succeeding.
+        // A bare handlePower(false) previously reported the device OFF (and speed off) even when the
+        // write failed — leaving the driver's state contradicting a device that was still ON, with no
+        // failure surfaced. Mirrors on()'s handlePower(true) gate and the sibling off() convention
+        // (Vital/EverestAir/Fan/Humidifier all gate their power-off write).
+        if (handlePower(false)) {
+            logInfo "Power off"
+            handleEvent("switch", "off")
+            handleEvent("speed", "off")
+        } else {
+            reportWriteError("Failed to turn off device", [method:"off"])
+        }
     } finally {
         state.remove('turningOff')
     }
@@ -300,27 +330,61 @@ def setSpeed(speed) {
         return
     }
     ensureSwitchOn()                                                             // BP24-B auto-on (after short-circuit)
+    // BP30 Layer 3: drop an identical speed write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("speed", s)) {
+        logDebug "setSpeed: identical speed write within dedup window (storm duplicate); skipping"
+        return false
+    }
     if (supportsAutoMode() && s == "auto") {
-        setMode(s)
-        state.speed = s
-        handleEvent("speed", s)
+        // A1-delegation: this branch delegated to setMode after recording the "speed" slot; if the
+        // delegated mode write FAILS, clear "speed" so a same-value retry is not falsely suppressed.
+        // Commit state + emit only when the cloud accepted the mode write (matches the setMode gate
+        // below and the sibling Vital setSpeed) — a bare emit reported the new speed even on failure.
+        if (setMode(s)) {
+            state.speed = s
+            handleEvent("speed", s)
+        } else {
+            clearDuplicateWrite("speed")
+        }
     }
     else if (s == "sleep") {
-        setMode(s)
-        handleEvent("speed", "on")
+        // A1-delegation: failed mode-delegate must not block speed retry, and must not emit "on".
+        if (setMode(s)) {
+            handleEvent("speed", "on")
+        } else {
+            clearDuplicateWrite("speed")
+        }
     }
     else if (state.mode == "manual") {
-        handleSpeed(s)
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
+        // Commit state + emit only when the cloud accepted the speed write; a failed write left
+        // state.speed/the speed event advanced to a value the device never took (matches Vital).
+        if (handleSpeed(s)) {
+            state.speed = s
+            handleEvent("speed", s)
+            logInfo "Speed: ${s}"
+        } else {
+            clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
+        }
     }
     else if (state.mode == "sleep") {
-        setMode("manual")
-        handleSpeed(s)
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
+        // Gate the speed commit/emit on BOTH the mode transition AND the speed write succeeding.
+        // If setMode("manual") fails but handleSpeed succeeds, committing here would report a
+        // manual speed on a device still in sleep mode -- the exact stale-tile class this fix
+        // closes. (Every other branch already gates on its own write.)
+        if (setMode("manual")) {
+            if (handleSpeed(s)) {
+                state.speed = s
+                handleEvent("speed", s)
+                logInfo "Speed: ${s}"
+            } else {
+                clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
+            }
+        } else {
+            clearDuplicateWrite("speed")   // failed mode transition must not block a same-value retry
+        }
     }
     else {
         // Recover: unknown or null state.mode (e.g. fresh device, pre-first-poll).
@@ -329,14 +393,21 @@ def setSpeed(speed) {
         // setPurifierMode that would clobber a concurrently-dispatched setMode command.
         // on() will call setMode(state.mode) or update() after this setSpeed returns.
         if (!state.turningOn) {
-            handleMode("manual")
-            state.mode = "manual"
-            handleEvent("mode", "manual")
+            // Commit state + emit only when the cloud accepted the mode establishment — same gate
+            // as setMode. A bare handleMode here optimistically reported manual mode even when the
+            // write failed; on failure leave state untouched and let the next poll reconcile.
+            if (handleMode("manual")) {
+                state.mode = "manual"
+                handleEvent("mode", "manual")
+            }
         }
-        handleSpeed(s)
-        state.speed = s
-        handleEvent("speed", s)
-        logInfo "Speed: ${s}"
+        if (handleSpeed(s)) {
+            state.speed = s
+            handleEvent("speed", s)
+            logInfo "Speed: ${s}"
+        } else {
+            clearDuplicateWrite("speed")   // B1: a failed speed write must not block the retry
+        }
     }
 }
 
@@ -356,6 +427,15 @@ def setMode(mode) {
         return false
     }
     ensureSwitchOn()                                                             // BP24-B auto-on (after rejection checks)
+
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return false
+    }
 
     // Only commit state + emit events when the cloud accepted the mode change. Previously
     // state.mode + the mode/speed events were set unconditionally, creating a state-vs-reality
@@ -381,8 +461,10 @@ def setMode(mode) {
                 break;
         }
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed: ${m}", [method:"setMode"])
     }
+    return ok   // A1-delegation: callers (Core.setSpeed auto/sleep) observe this to clear their own slot on failure
 }
 
 // Bucket B5 (#142 Phase 2e): table-driven speed cycle. The cycle order is the
@@ -503,7 +585,8 @@ def setTimer(seconds) {
                 "source": "APP"
             ]) { resp ->
         if (checkHttpResponse("setTimer", resp)) {
-            def tid = resp?.data?.result?.id
+            // Type-guard: a non-JSON body makes resp.data a String; the .result read would throw.
+            def tid = (resp?.data instanceof Map) ? resp.data.result?.id : null
             if (tid != null) state.timerId = tid
             logInfo "Timer set: power off in ${secs}s (id=${tid})"
             result = true

@@ -6,7 +6,7 @@ For what's already shipped, see [`CHANGELOG.md`](CHANGELOG.md). For day-to-day i
 
 ---
 
-## v2.10 — next release candidates
+## v2.11 — next release candidates
 
 Items locked to the next release because they're internally actionable (no external blockers).
 
@@ -25,6 +25,7 @@ Items here can ship in any future release once the external signal arrives. List
 ### Upstream pyvesync (merge / patch pending)
 
 - **Pyvesync PR #502 fold-in.** Reconciles RGB nightlight `colorSliderLocation` anchor table + re-verifies HSV-brightness adjustment against pyvesync's `_apply_brightness_to_rgb`. **Status:** verified still OPEN upstream as of 2026-05-29 (head ref `dev`, last activity 2026-05-27). Wait for merge.
+- **Pyvesync PR #505 (LV600S auto mode = `humidity`) — already superseded by our adaptive retry; do NOT adopt its static flip.** PR #505 flips the LUH-A602S `auto` mist-mode value from `"auto"` to `"humidity"` after a WEU-firmware owner reported `"auto"` is silently ignored. Our `LevoitLV600S.setMode` already handles this *more robustly* than the PR: it tries the canonical `"auto"` payload, and on rejection falls back to `"humidity"` once, caching the working `state.firmwareVariant` — so both firmware variants work. The PR's unconditional static flip would instead *break* any A602S firmware that only accepts `"auto"`. **Action when #505 merges: do nothing to our `setMode` logic.** Optionally drop the "follow canonical fixture" hedge in the driver header CROSS-CHECK and note the canonical value moved to `humidity`, but keep the adaptive try-both retry — it strictly dominates either static value. (Verified open + diff confirmed 2026-06-14.)
 - **Upstream pyvesync PR — regional code roll-up.** Single PR contributing model codes back upstream that we cover but pyvesync's `device_map.py` doesn't enumerate: `LAP-V201S-WUSR`, `LAP-V201S-WEUR` (Vital 200S), `LAP-C201S-WUSR` (Core 200S), `LAP-C401S-KUSR` (PlasmaPro 400S-P black), `LPF-R432S-AUK` (UK Pedestal Fan), `LTF-F362S-WUSR` (36-inch Tower Fan, with note that hardware is sibling of F422S). Low-controversy patch; eliminates 6 of our enumeration gaps in one upstream merge. **Action:** we can write the patch ourselves and file the PR; benefit unlocks once pyvesync maintainer merges.
 
 ### Hubitat platform (parser fix pending)
@@ -118,7 +119,7 @@ Open questions about VeSync API behavior that we haven't fully resolved. If you 
 
 ### Adjacent product directions
 
-- **Alexa-aware capability surfaces.** Drivers currently expose standard capabilities (Switch, SwitchLevel, AudioVolume, etc.) — Alexa interprets these via Hubitat's Echo Skill but with limited semantic richness. Adding richer capabilities like `MediaInputSource` might give voice-control polish. Worth a research pass + pilot on one driver.
+- **Alexa voice-control richness — RESEARCHED 2026-06-14: not worth pursuing as an "add richer capabilities" effort; capped by Hubitat's built-in Amazon Echo Skill.** The built-in skill is a fixed, capability-driven gateway. It exposes `Switch` (on/off), `SwitchLevel` (percentage — the *reliable* speed path), `FanControl` (named speeds, but community-reported flaky), and `TemperatureMeasurement` (readable). It does **not** expose `AirQuality` or `RelativeHumidityMeasurement` (no humidity/AQI readout by voice — also an Amazon-side gap), does **not** surface custom commands (`setMode`/`setMistLevel`/`setHumidity` — so "set the purifier to auto" is unreachable), and does **not** map any Hubitat capability to Alexa's ModeController/RangeController (those are custom-Smart-Home-skill-only — adding Hubitat capabilities cannot conjure them). Richer semantics (modes, humidity/AQI, an "Air Purifier"/"Humidifier" device category) require authoring a custom Alexa Smart Home skill (AWS Lambda) — a separate project, out of scope for a driver. Echo Speaks is TTS/media, not richer device control. Sources: Hubitat `docs2.hubitat.com/en/apps/amazon-echo-skill` (verbatim supported-capability list) + community threads on humidity/fan-control exposure + Alexa Smart Home `ModeController`/`RangeController` docs. **The only reachable improvement the research surfaced** is an under-declaration gap (EverestAir + Sprout Air have a `setFanSpeed` command but declare neither `SwitchLevel` nor `FanControl`, so they're on/off-only via Alexa/RM/dashboards while Core/Vital purifiers get percentage speed) — rolled into the capability-alignment audit rather than treated as an Alexa feature.
 - **Migration guide for users coming from a Home Assistant + Homebridge bridge.** Some community users used HA-as-bridge to get Vital 200S working before our v2.0 native support; a migration-from-bridge guide could ease their transition.
 
 ### Far backlog — maybe (not committed)

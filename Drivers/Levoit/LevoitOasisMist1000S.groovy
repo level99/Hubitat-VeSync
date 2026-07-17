@@ -91,11 +91,12 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit OasisMist 1000S Humidifier",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.3] Levoit OasisMist 1000S (LUH-M101S-WUS/-WUSR/-WEUR) — mist 1-9, target humidity 30-80%, auto/sleep/manual modes, auto-stop, display; WEUR adds nightlight (runtime-gated). pyvesync VeSyncHumid1000S class; V2-style payloads (powerSwitch/workMode/virtualLevel). No warm mist.",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -164,12 +165,21 @@ def setMode(mode){
     String m = (mode as String).trim().toLowerCase()
     if (!(m in ["auto","sleep","manual"])) { logError "Invalid mode: ${m} -- must be: auto, sleep, manual"; recordError("Invalid mode: ${m}", [method:"setHumidityMode"]); return }
     ensureSwitchOn()
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return false
+    }
     def resp = hubBypass("setHumidityMode", [workMode: m], "setHumidityMode(${m})")
     if (httpOk(resp)) {
         state.mode = m
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed: ${m}", [method:"setHumidityMode"])
     }
 }
@@ -263,7 +273,12 @@ def setNightlight(onOff, brightness = null){
     if (!isNightlightVariant()) return
     // BP25: normalize to lowercase before all comparisons.
     String nl = (onOff as String).trim().toLowerCase()
-    if (brightness == null) {
+    // BP28: a non-numeric brightness ("abc", a blank Rule Machine slot) must NOT invert an
+    // explicit on/off into an OFF write. parseLevelOrNull returns null for non-numeric/empty
+    // input, which routes to the on/off toggle path (honoring onOff); a genuinely-numeric value
+    // (including an explicit 0) takes the brightness path below, where 0 still means off.
+    Integer br = (brightness == null) ? null : parseLevelOrNull(brightness)
+    if (br == null) {
         // Pure on/off toggle -- use setNightLightStatus (pyvesync toggle_nightlight path)
         Integer nlSwitch = (canonOnOff(nl) == "on") ? 1 : 0
         def resp = hubBypass("setNightLightStatus", [nightLightSwitch: nlSwitch], "setNightLightStatus(${nl})")
@@ -277,7 +292,7 @@ def setNightlight(onOff, brightness = null){
         }
     } else {
         // Brightness control -- use setLightStatus (pyvesync set_nightlight_brightness path)
-        Integer br = Math.max(0, Math.min(100, safeIntArg(brightness, 0)))   // BP26: safeIntArg handles non-numeric RM input ("abc", "", "5.7")
+        br = Math.max(0, Math.min(100, br))
         if (nl == "off") br = 0
         Integer nlSwitch = (br > 0) ? 1 : 0
         def resp = hubBypass("setLightStatus", [brightness: br, nightLightSwitch: nlSwitch], "setLightStatus(brightness=${br})")
@@ -316,8 +331,8 @@ def applyStatus(status){
     // ---- Power ----
     // 1000S response: powerSwitch (int 0|1) NOT `enabled` (bool).
     def powerRaw = r.powerSwitch
-    boolean powerOn = (powerRaw instanceof Boolean) ? powerRaw : ((powerRaw as Integer) == 1)
-    device.sendEvent(name:"switch", value: powerOn ? "on" : "off")
+    boolean powerOn = asBool(powerRaw)
+    emitSwitchState(powerOn)
 
     // ---- Humidity ----
     if (r.humidity != null) device.sendEvent(name:"humidity", value: r.humidity as Integer)
@@ -343,18 +358,18 @@ def applyStatus(status){
     } else if (r.mistLevel != null) {
         mistVirtual = r.mistLevel as Integer
     }
-    // When switch is off, clamp mist to 0 (last-set level retained in API response; BP#6).
-    if (!powerOn && mistVirtual != null && mistVirtual > 0) mistVirtual = 0
+    // BP#6: clamp the active mist level to 0 when off (retains last-set value while off).
+    mistVirtual = clampOffLevel(mistVirtual, powerOn)
     if (mistVirtual != null) device.sendEvent(name:"mistLevel", value: mistVirtual)
 
     // ---- Water lacks ----
     // 1000S: waterLacksState (int 0|1 or bool). Also check waterTankLifted.
     def waterLacksRaw = r.waterLacksState
-    boolean waterLacks = (waterLacksRaw instanceof Boolean) ? waterLacksRaw : ((waterLacksRaw as Integer) == 1)
+    boolean waterLacks = asBool(waterLacksRaw)
     // Also consider tank lifted as a water-unavailable signal.
     if (!waterLacks && r.waterTankLifted != null) {
         def liftedRaw = r.waterTankLifted
-        waterLacks = (liftedRaw instanceof Boolean) ? liftedRaw : ((liftedRaw as Integer) == 1)
+        waterLacks = asBool(liftedRaw)
     }
     String waterLacksStr = waterLacks ? "yes" : "no"
     if (state.lastWaterLacks != waterLacksStr) {
@@ -367,12 +382,12 @@ def applyStatus(status){
     // autoStopSwitch = config; autoStopState = currently active
     def autoStopSwitchRaw = r.autoStopSwitch
     if (autoStopSwitchRaw != null) {
-        boolean autoStopEnabled = (autoStopSwitchRaw instanceof Boolean) ? autoStopSwitchRaw : ((autoStopSwitchRaw as Integer) == 1)
+        boolean autoStopEnabled = asBool(autoStopSwitchRaw)
         device.sendEvent(name:"autoStopEnabled", value: autoStopEnabled ? "on" : "off")
     }
     def autoStopStateRaw = r.autoStopState
     if (autoStopStateRaw != null) {
-        boolean autoStopReached = (autoStopStateRaw instanceof Boolean) ? autoStopStateRaw : ((autoStopStateRaw as Integer) == 1)
+        boolean autoStopReached = asBool(autoStopStateRaw)
         device.sendEvent(name:"autoStopReached", value: autoStopReached ? "yes" : "no")
     }
 
@@ -386,7 +401,7 @@ def applyStatus(status){
         displayRaw = r.screenSwitch
     }
     if (displayRaw != null) {
-        boolean displayOn = (displayRaw instanceof Boolean) ? displayRaw : ((displayRaw as Integer) == 1)
+        boolean displayOn = asBool(displayRaw)
         device.sendEvent(name:"displayOn", value: displayOn ? "on" : "off")
     }
 
@@ -401,7 +416,7 @@ def applyStatus(status){
         def nlSwitchRaw = nl.nightLightSwitch
         def nlBrightness = nl.brightness
         if (nlSwitchRaw != null) {
-            boolean nlOn = (nlSwitchRaw instanceof Boolean) ? nlSwitchRaw : ((nlSwitchRaw as Integer) == 1)
+            boolean nlOn = asBool(nlSwitchRaw)
             device.sendEvent(name:"nightlightOn", value: nlOn ? "on" : "off")
         }
         if (nlBrightness != null) {
@@ -413,7 +428,7 @@ def applyStatus(status){
     def parts = []
     if (r.humidity != null)    parts << "Humidity: ${r.humidity as Integer}%"
     if (targetH != null)       parts << "Target: ${targetH}%"
-    if (mistVirtual != null)   parts << "Mist: L${mistVirtual} (1-9)"
+    if (mistVirtual != null)   parts << "Mist: ${mistVirtual > 0 ? 'L'+mistVirtual+' (1-9)' : 'off'}"
     parts << "Mode: ${userMode}"
     parts << "Water: ${waterLacksStr == 'yes' ? 'empty' : 'ok'}"
     device.sendEvent(name:"info", value: parts.join("<br>"))

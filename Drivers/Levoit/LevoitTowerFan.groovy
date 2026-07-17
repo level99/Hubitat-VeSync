@@ -88,11 +88,12 @@
 
 metadata {
     definition(
+        singleThreaded: true,  // BP30 Layer 1: serialize command + async-callback execution (storm hardening)
         name: "Levoit Tower Fan",
         namespace: "NiklasGustafsson",
         author: "Dan Cox (community fork)",
         description: "[PREVIEW v2.1] Levoit Tower Fan (LTF-F422S-WUS/WUSR/KEU/WJP) — power, fan speed 1-12, modes (normal/turbo/auto/sleep), oscillation, mute, display, timer, ambient temperature; canonical pyvesync payloads",
-        version: "2.9",
+        version: "2.10",
         documentationLink: "https://github.com/level99/Hubitat-VeSync")
     {
         capability "Switch"
@@ -227,6 +228,14 @@ def setMode(mode){
         return
     }
     ensureSwitchOn()
+    // BP30 Layer 3: drop an identical mode write issued within the storm dedup window. An
+    // out-of-window re-request always fires, so a drifted cloud state stays correctable from
+    // Hubitat (see isDuplicateWrite). The turningOn/powerOnPending guard keeps an in-flight
+    // power-on's establishment write from being suppressed. Layers 1+2 are the primary storm fix.
+    if (!state.turningOn && !state.powerOnPending && isDuplicateWrite("mode", m)) {
+        logDebug "setMode: identical mode write within dedup window (storm duplicate); skipping"
+        return false
+    }
     // Map user-facing "sleep" to API "advancedSleep" (HA finding #d + pyvesync device_map.py)
     String apiMode = (m == "sleep") ? "advancedSleep" : m
     def resp = hubBypass("setTowerFanMode", [workMode: apiMode], "setTowerFanMode(${apiMode})")
@@ -235,6 +244,7 @@ def setMode(mode){
         device.sendEvent(name:"mode", value: m)
         logInfo "Mode: ${m}"
     } else {
+        clearDuplicateWrite("mode")   // B1: failed write must not suppress an immediate retry
         reportWriteError("Mode write failed: ${m}", [method:"setTowerFanMode"])
     }
 }
@@ -269,7 +279,7 @@ def setOscillation(onOff){
 
 // CROSS-CHECK [pyvesync VeSyncTowerFan._set_fan_state + device_map.py LTF-F422S sleep_preferences]:
 //   setSleepPreference was attempted in v2.4 but deferred to v2.5+ after Pedestal Fan live
-//   verification (device 1132, 2026-05-01) found both flat {sleepPreferenceType} and nested
+//   verification (live hardware, 2026-05-01) found both flat {sleepPreferenceType} and nested
 //   {sleepPreference: {...}} payloads rejected with inner 11000000. Both fan families share the
 //   same sleepPreference API shape — applying the same deferral. The sleepPreferenceType
 //   READ-ONLY attribute stays declared (populated on poll). Resolution path: mitmproxy capture.
@@ -294,8 +304,9 @@ def setTimer(seconds, action="off"){
     logDebug "setTimer(${secs}s, action=${act})"
     def resp = hubBypass("setTimer", [action: act, total: secs], "setTimer(${secs}s,${act})")
     if (httpOk(resp)) {
-        // Capture timer ID from response so cancelTimer can reference it
-        def tid = resp?.data?.result?.result?.id ?: resp?.data?.result?.id
+        // Capture timer ID from response so cancelTimer can reference it.
+        // Type-guard: a non-JSON body makes resp.data a String; the .result read would throw.
+        def tid = (resp?.data instanceof Map) ? (resp.data.result?.result?.id ?: resp.data.result?.id) : null
         if (tid != null) {
             state.timerId = tid
         } else {
@@ -366,8 +377,11 @@ def applyStatus(status){
     // ---- Oscillation (single-axis; Tower-specific) ----
     // oscillationState = actual hardware state; oscillationSwitch = configured setting.
     // Prefer state (actual) for reporting.
-    Integer oscState = (r.oscillationState != null) ? (r.oscillationState as Integer) : (r.oscillationSwitch as Integer)
-    device.sendEvent(name:"oscillation", value: oscState == 1 ? "on" : "off")
+    // asBool() coerces the flag robustly (Boolean/Number/String "1"/"true") without throwing;
+    // a bare `as Integer` on a Boolean- or String-typed flag from a firmware variant would throw
+    // mid-parse and abort applyStatus. oscillationState (actual) preferred over oscillationSwitch (configured).
+    boolean oscOn = (r.oscillationState != null) ? asBool(r.oscillationState) : asBool(r.oscillationSwitch)
+    device.sendEvent(name:"oscillation", value: oscOn ? "on" : "off")
 
     // ---- Mute + Display (shared LevoitFanLib block) ----
     Integer muteState = applyFanMuteDisplay(r)
@@ -422,7 +436,7 @@ def applyStatus(status){
     def parts = []
     parts << "Mode: ${reportedMode}"
     parts << "Speed: ${powerOn ? levelToFanControlEnum(activeSpeed) + ' (L' + activeSpeed + ')' : 'off'}"
-    parts << "Oscillation: ${oscState == 1 ? 'on' : 'off'}"
+    parts << "Oscillation: ${oscOn ? 'on' : 'off'}"
     parts << "Mute: ${muteState == 1 ? 'on' : 'off'}"
     if (r.temperature != null && (r.temperature as Integer) > 0) {
         Float tf = (r.temperature as Integer) / 10.0f

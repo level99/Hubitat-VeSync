@@ -93,6 +93,26 @@ class LevoitGenericSpec extends HubitatSpec {
         lastEventValue("airQuality") != null
     }
 
+    def "info tile power state agrees with the switch attribute when powerSwitch is a Boolean"() {
+        // The switch event derives via asBool; the info tile previously used a raw `== 1`. For a
+        // Boolean-typed powerSwitch (true == 1 is false), the two diverged — the tile said "off"
+        // while the switch said "on". Both now route through asBool. Discriminating: pre-fix the
+        // tile shows "Power: off" here.
+        given: "powerSwitch arrives as a Boolean true (not the integer 1)"
+        def status = [code: 0, result: [powerSwitch: true]]
+
+        when:
+        driver.applyStatus(status)
+
+        then: "the switch attribute reads on"
+        lastEventValue("switch") == "on"
+
+        and: "the info tile agrees — 'Power: on', not 'Power: off'"
+        def info = lastEventValue("info")
+        info?.contains("Power: on")
+        !(info?.contains("Power: off"))
+    }
+
     def "applyStatus peels double-wrap envelope to reach humidifier device fields (Bug Pattern #3)"() {
         given: "a double-wrapped humidifier status response"
         def fixture = loadYamlFixture("LevoitGeneric.yaml")
@@ -522,5 +542,41 @@ class LevoitGenericSpec extends HubitatSpec {
 
         and: "a logWarn naming 'setLevel' was emitted (requireNotNull rejection)"
         testLog.warns.any { it.contains("setLevel") }
+    }
+
+    def "on() power-write failure during a known outage is DEBUG-suppressed, not ERROR/recorded (BP22)"() {
+        given: "the parent reports a known network outage and the cloud write fails"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = true
+        testParent.networkUnreachable = true
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+
+        when:
+        driver.on()
+
+        then: "the power-on write was attempted"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "the failure is DEBUG-suppressed (BP22), not ERROR spam or a diagnostics record"
+        !testLog.errors.any { it.contains("Power on failed") }
+        (state.errorHistory == null) || (state.errorHistory.isEmpty())
+    }
+
+    def "off() power-write failure during a known outage is DEBUG-suppressed, not ERROR/recorded (BP22)"() {
+        given: "the parent reports a known network outage and the cloud write fails"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = true
+        testParent.networkUnreachable = true
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+
+        when:
+        driver.off()
+
+        then: "the power-off write was attempted"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "the failure is DEBUG-suppressed (BP22), not ERROR spam or a diagnostics record"
+        !testLog.errors.any { it.contains("Power off failed") }
+        (state.errorHistory == null) || (state.errorHistory.isEmpty())
     }
 }

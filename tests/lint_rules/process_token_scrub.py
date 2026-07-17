@@ -158,12 +158,29 @@ _CORE_PATTERN_PARTS = (
     # Bot names
     r'|\b[Gg]emini\b'                    # Gemini / gemini
     r'|gemini-code-assist'               # gemini-code-assist
+    # C2: this-fork issue/round process-LABEL shapes (the forms that prompted the v2.10 C1
+    # scrub). Deliberately NARROW — a bare `#<digits>` is NOT added because this codebase uses
+    # `#N` pervasively for legitimate internal documentation (FIX #N, GAP #N, Bug Pattern #N,
+    # Task #N, HA finding #N, pyvesync issue #N); a bare-`#N` rule would false-positive on all of
+    # those. These shapes are unambiguous this-fork process context and collide with no
+    # legitimate `#N` use.
+    r'|#\s*\d+\s+(?:follow-up|lesson|class-wide)\b'   # (#N follow-up) / (#N lesson: / #N class-wide
+    r'|\bBLOCKING\s+#?\s*\d+'                         # BLOCKING #N (QA/review finding label)
+    r'|\bv\d+\.\d+\s*/\s*#\s*\d+'                     # vX.Y / #N (release-label + issue ref)
 )
 
 _PR_ISSUE_PATTERN_PARTS = (
     # PR/Issue (this-fork; allowlist suppresses external-provenance lines)
     r'|\bPR\s*#?\s*\d+'                  # PR N / PR #N / PR#N
     r'|\b[Ii]ssue\s*#?\s*\d+'           # Issue N / issue N / Issue #N / Issue#N
+    # C2 (a): bare hash-digits this-fork issue ref (Python files only) — hash IMMEDIATELY
+    # followed by digits (no space), so a numbered-list comment such as "1." / "   3." after a
+    # comment marker is NOT matched. MUST come AFTER the PR/Issue/BLOCKING/follow-up forms in the
+    # alternation so those consume their digits first. HEAVILY allowlisted in the loop —
+    # suppressed on any line carrying an internal-doc prefix (FIX/GAP/Bug Pattern/Pattern/BP/Task)
+    # or external provenance, so legitimate documentation is not flagged. Forward-guards a genuine
+    # this-fork issue ref appearing in a Python comment.
+    r'|#\d+\b'
 )
 
 _GROOVY_TOKEN_RE = re.compile(
@@ -201,6 +218,17 @@ _PR_ISSUE_RE = re.compile(
     r'(?:\bPR\s*#?\s*\d+|\b[Ii]ssue\s*#?\s*\d+)',
     re.IGNORECASE,
 )
+
+# C2 (a): a bare hash-digits match (used to gate the internal-doc allowlist below).
+_BARE_HASH_RE = re.compile(r'#\d+\b')
+
+# C2 (a): internal-documentation prefixes that legitimately precede `#<digits>` and are NOT
+# this-fork process refs — a bare-#digits match on a line carrying any of these is suppressed.
+#   FIX #N / GAP #N        — a lint rule's own numbered fixes/gaps in its docstring
+#   Bug Pattern #N / BP #N — the durable bug-pattern catalog
+#   Pattern #N             — catalog phrasing
+#   Task #N                — left out of scope this round (pre-existing; broader Spock sweep TODO)
+_INTERNAL_DOC_RE = re.compile(r'\b(?:fix|gap|bug\s+pattern|pattern|bp|task)\s*#', re.IGNORECASE)
 
 
 def _has_external_provenance(line: str) -> bool:
@@ -302,6 +330,17 @@ def check_rule38_process_token_scrub(
             if (file_ext == '.py'
                     and _PR_ISSUE_RE.match(m.group())
                     and _has_external_provenance(line)):
+                continue
+            # C2 (a): for a BARE `#<digits>` match (Python only), suppress if the token is the
+            # comment's leading text -- a numbered-list item whose comment starts with a hash then a
+            # digit (`#` is the Python comment char) -- or the line carries an internal-doc prefix
+            # (FIX/GAP/Bug Pattern/Pattern/BP/Task) or external provenance -- those are legitimate
+            # `#N` uses, not this-fork issue refs.
+            if (file_ext == '.py'
+                    and _BARE_HASH_RE.fullmatch(m.group().strip())
+                    and (line.strip().startswith(m.group().strip())
+                         or _INTERNAL_DOC_RE.search(line)
+                         or _has_external_provenance(line))):
                 continue
             findings.append(make_finding_for_file(
                 severity='FAIL',

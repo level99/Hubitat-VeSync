@@ -124,6 +124,34 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
         noExceptionThrown()
     }
 
+    def "applyStatus converts temperature to °C on a Celsius hub (°F passthrough on a Fahrenheit hub)"() {
+        // API returns F × 10; the emit must honor location.temperatureScale (wrong on °C hubs / EU-AUS
+        // SKUs). 717 -> 71.7°F -> 22.1°C. Pre-fix emitted the raw 71.7 with a hardcoded °F unit.
+        given: "hub configured for Celsius"
+        driver.metaClass.getLocation = { -> [temperatureScale: "C"] as Object }
+
+        when:
+        driver.applyStatus([code: 0, result: [powerSwitch: 1, workMode: "manual", humidity: 45, temperature: 717]])
+
+        then: "temperature is converted to Celsius (22.1) with the Celsius unit"
+        def ev = testDevice.events.reverse().find { it.name == "temperature" }
+        Math.abs((ev.value as Double) - 22.1d) < 0.05d
+        // Assert the scale LETTER (ASCII, encoding-robust) rather than the exact degree glyph:
+        // the Spock harness reads driver source with a different charset than it compiles this
+        // spec, so a literal "\u00b0C" comparison is flaky. The converted value + the C/F letter are
+        // what the localization fix guarantees; both flip if the conversion is reverted.
+        ev.unit?.endsWith("C")
+
+        when: "hub configured for Fahrenheit"
+        driver.metaClass.getLocation = { -> [temperatureScale: "F"] as Object }
+        driver.applyStatus([code: 0, result: [powerSwitch: 1, workMode: "manual", humidity: 45, temperature: 717]])
+
+        then: "temperature passes through as °F (71.7) with unit °F"
+        def ev2 = testDevice.events.reverse().find { it.name == "temperature" }
+        Math.abs((ev2.value as Double) - 71.7d) < 0.05d
+        ev2.unit?.endsWith("F")
+    }
+
     // -------------------------------------------------------------------------
     // Bug Pattern #6: mist level 0 when device is off
     // -------------------------------------------------------------------------
@@ -1076,5 +1104,41 @@ class LevoitSproutHumidifierSpec extends HubitatSpec {
 
         and: "no mode command was sent"
         testParent.allRequests.find { it.method == "setHumidityMode" } == null
+    }
+
+    def "on() power-write failure during a known outage is DEBUG-suppressed, not ERROR/recorded (BP22)"() {
+        given: "the parent reports a known network outage and the cloud write fails"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = true
+        testParent.networkUnreachable = true
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+
+        when:
+        driver.on()
+
+        then: "the power-on write was attempted"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "the failure is DEBUG-suppressed (BP22), not ERROR spam or a diagnostics record"
+        !testLog.errors.any { it.contains("Power on failed") }
+        (state.errorHistory == null) || (state.errorHistory.isEmpty())
+    }
+
+    def "off() power-write failure during a known outage is DEBUG-suppressed, not ERROR/recorded (BP22)"() {
+        given: "the parent reports a known network outage and the cloud write fails"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = true
+        testParent.networkUnreachable = true
+        testParent.cannedResponse = TestParent.innerErrorResponse()
+
+        when:
+        driver.off()
+
+        then: "the power-off write was attempted"
+        testParent.allRequests.find { it.method == "setSwitch" } != null
+
+        and: "the failure is DEBUG-suppressed (BP22), not ERROR spam or a diagnostics record"
+        !testLog.errors.any { it.contains("Power off failed") }
+        (state.errorHistory == null) || (state.errorHistory.isEmpty())
     }
 }

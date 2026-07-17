@@ -88,6 +88,40 @@ class LevoitVital100SSpec extends HubitatSpec {
         lastEventValue("pm25") == 3
     }
 
+    def "applyStatus mirrors the fan level to the SwitchLevel level attribute, agreeing with the speed attribute"() {
+        // Previously applyStatus never emitted `level`, so the dimmer tile drifted from the real fan
+        // level. It now mirrors the fan level each poll (matching Vital 200S / EverestAir / Sprout Air).
+        // applyStatus derives sp from fanSpeedLevel — the SAME source as the speed attribute — so level
+        // and speed always agree. The fixture's device_on_manual_speed2 has fanSpeedLevel:1; override to
+        // 2 so the level is an unambiguous mid-band value.
+        given: "a manual-mode status at fan speed level 2"
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
+        def deviceData = (fixture.responses.device_on_manual_speed2 as Map) + [fanSpeedLevel: 2]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "level mirrors the fan level (band 2 -> 50%) AND agrees with the speed attribute (band 2 -> 'low')"
+        lastEventValue("level") == 50
+        lastEventValue("speed") == "low"
+    }
+
+    def "applyStatus syncs state.lastSwitchSet so toggle honors an external power change"() {
+        given: "stale lastSwitchSet 'on'; the poll now reports the device off (external change)"
+        state.lastSwitchSet = "on"
+        def fixture = loadYamlFixture("LAP-V102S.yaml")
+        def deviceData = (fixture.responses.device_on_manual_speed2 as Map) + [powerSwitch: 0]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "switch reads off AND the toggle mirror is synced off"
+        lastEventValue("switch") == "off"
+        state.lastSwitchSet == "off"
+    }
+
     def "applyStatus envelope peel handles double-wrapped responses (Bug Pattern #3)"() {
         // LevoitVital100S.groovy has a defensive while-loop peel matching LevoitVital200S.groovy.
         // This test passes a double-wrapped envelope (humidifier shape applied to purifier data)
@@ -143,7 +177,7 @@ class LevoitVital100SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
 
-        when: "setLevel(50) is called -- maps to speed level 3"
+        when: "setLevel(50) is called -- ceiling bands map 50 to fan level 2"
         driver.setLevel(50)
 
         then: "sendBypassRequest was called with correct V102S field names"
@@ -612,13 +646,13 @@ class LevoitVital100SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
 
-        when: "setLevel(50) is called -- maps to lvl=3 (val >= 40), which is 'medium' speed"
+        when: "setLevel(50) is called -- ceiling bands map 50 to lvl=2 ('low')"
         driver.setLevel(50)
 
         then: "state.speed is set (not null) so configureOnState can replay it"
         state.speed != null
-        // lvl=3 maps to "medium" via mapIntegerToSpeed
-        state.speed == "medium"
+        // lvl=2 maps to "low" via mapIntegerToSpeed (ceiling bands: 50 <= 50 -> lvl 2)
+        state.speed == "low"
 
         and: "state.mode is 'manual'"
         state.mode == "manual"
@@ -768,6 +802,213 @@ class LevoitVital100SSpec extends HubitatSpec {
         "setAutoPreference" | "setAutoPreference"
         "setPetMode"        | "setPurifierMode"
         "setRoomSize"       | "setAutoPreference"
+    }
+
+    // -------------------------------------------------------------------------
+    // Cross-driver consistency (v2.10): Vital setChildLock/setDisplay write-fail
+    // feedback. The else { reportWriteFailure(...) } branch lives in the SHARED
+    // LevoitVitalPurifierLib #include'd by BOTH Vital100S and Vital200S; these guards
+    // exercise it through the Vital100S include (Vital200S has the parallel pair).
+    //
+    // Both-ways: deleting the lib's `else { reportWriteFailure(...) }` branch makes
+    // these go RED (no ERROR logged on a genuine -1 failure).
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "#driverMethod genuine write failure (inner -1) is reported, not swallowed silently"() {
+        given: "#attr currently 'off' so the C3 gate passes, and the cloud returns a genuine failure"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: attr, value: "off"])
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver."$driverMethod"("on")
+
+        then: "the write was attempted"
+        testParent.allRequests.find { it.method == apiMethod } != null
+
+        and: "the failure is surfaced (ERROR via reportWriteFailure for a genuine -1), not silently dropped"
+        testLog.errors.any { it.contains(tag) }
+
+        and: "the attribute is NOT advanced to 'on' on a failed write"
+        lastEventValue(attr) != "on"
+
+        where:
+        driverMethod   | apiMethod      | attr        | tag
+        "setChildLock" | "setChildLock" | "childLock" | "Child lock write failed"
+        "setDisplay"   | "setDisplay"   | "display"   | "Display write failed"
+    }
+
+    @Unroll
+    def "#driverMethod device-off rejection (11005000) logs one WARN, no ERROR (BP29 via reportWriteFailure)"() {
+        given: "#attr 'off' so C3 passes; cloud rejects with BYPASS_DEVICE_IS_OFF (device powered off)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: attr, value: "off"])
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver."$driverMethod"("on")
+
+        then: "device-off is an EXPECTED condition: WARN only, no ERROR spam"
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains(tag) }
+
+        where:
+        driverMethod   | apiMethod      | attr        | tag
+        "setChildLock" | "setChildLock" | "childLock" | "Child lock write failed"
+        "setDisplay"   | "setDisplay"   | "display"   | "Display write failed"
+    }
+
+    // -------------------------------------------------------------------------
+    // Cross-driver consistency: setAutoPreference + setRoomSize NO-ON preference-setter
+    // write-fail feedback, exercised through the Vital100S include. The
+    // else { reportWriteFailure(...) } branch lives in the SHARED lib, so both consumers
+    // (Vital100S + Vital200S) must be guarded. Vital200S has the parallel pair.
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "#driverMethod genuine write failure (inner -1) is reported, not swallowed (NO-ON preference setter)"() {
+        given: "cloud returns a genuine failure (inner -1)"
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver."$driverMethod"(input)
+
+        then: "the write was attempted (setAutoPreference cloud method)"
+        testParent.allRequests.find { it.method == "setAutoPreference" } != null
+
+        and: "the failure is surfaced (ERROR via reportWriteFailure), not silently dropped"
+        testLog.errors.any { it.contains(tag) }
+
+        and: "the attribute is NOT advanced on a failed write"
+        lastEventValue(attr) == null
+
+        where:
+        driverMethod        | input       | attr             | tag
+        "setAutoPreference" | "efficient" | "autoPreference" | "Auto preference write failed"
+        "setRoomSize"       | 500         | "roomSize"       | "Room size write failed"
+    }
+
+    @Unroll
+    def "#driverMethod device-off rejection (11005000) logs one WARN, no ERROR (BP29, NO-ON preference setter)"() {
+        given: "cloud rejects with BYPASS_DEVICE_IS_OFF (device powered off)"
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver."$driverMethod"(input)
+
+        then: "device-off is an EXPECTED condition: WARN only, no ERROR spam"
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains(tag) }
+
+        where:
+        driverMethod        | input       | tag
+        "setAutoPreference" | "efficient" | "Auto preference write failed"
+        "setRoomSize"       | 500         | "Room size write failed"
+    }
+
+    // -------------------------------------------------------------------------
+    // Cross-driver consistency (class-wide): resetFilter / setTimer / cancelTimer NO-ON
+    // action-setter write-fail feedback, exercised through the Vital100S include
+    // (shared lib — guard both consumers). Vital200S has the parallel.
+    // Preconditions: setTimer needs a positive value; cancelTimer needs state.timerId.
+    // -------------------------------------------------------------------------
+
+    def "resetFilter genuine write failure (inner -1) is reported, not swallowed"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver.resetFilter()
+
+        then:
+        testParent.allRequests.find { it.method == "resetFilter" } != null
+        testLog.errors.any { it.contains("Filter reset failed") }
+    }
+
+    def "resetFilter device-off rejection (11005000) logs one WARN, no ERROR"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver.resetFilter()
+
+        then:
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Filter reset failed") }
+    }
+
+    def "setTimer genuine write failure (inner -1) is reported, not swallowed"() {
+        given: "a positive value so setTimer reaches the cloud (n<=0 would route to cancelTimer)"
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver.setTimer(30)
+
+        then:
+        testParent.allRequests.find { it.method == "addTimerV2" } != null
+        testLog.errors.any { it.contains("Timer set failed") }
+    }
+
+    def "setTimer device-off rejection (11005000) logs one WARN, no ERROR"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver.setTimer(30)
+
+        then:
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Timer set failed") }
+    }
+
+    def "cancelTimer genuine write failure (inner -1) is reported, not swallowed"() {
+        given: "state.timerId seeded so cancelTimer passes the no-active-timer early-exit"
+        settings.descriptionTextEnable = false
+        state.timerId = "t1"
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver.cancelTimer()
+
+        then:
+        testParent.allRequests.find { it.method == "delTimerV2" } != null
+        testLog.errors.any { it.contains("Timer cancel failed") }
+    }
+
+    def "cancelTimer device-off rejection (11005000) logs one WARN, no ERROR"() {
+        given:
+        settings.descriptionTextEnable = false
+        state.timerId = "t1"
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver.cancelTimer()
+
+        then:
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Timer cancel failed") }
     }
 
     // ---- BP25: setPetMode (VitalPurifierLib shared) ----

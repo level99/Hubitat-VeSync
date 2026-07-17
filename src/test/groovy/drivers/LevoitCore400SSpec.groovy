@@ -791,7 +791,7 @@ class LevoitCore400SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
-    // W3: setSpeed null state.mode — RECOVER instead of warn+drop (Tier-25)
+    // W3: setSpeed null state.mode — RECOVER instead of warn+drop
     // -------------------------------------------------------------------------
 
     def "W3: setSpeed null state.mode — device turns on AND speed is recovered, not dropped (Core 400S)"() {
@@ -800,7 +800,7 @@ class LevoitCore400SSpec extends HubitatSpec {
         //   1. auto-on (ensureSwitchOn fires before the mode dispatch),
         //   2. RECOVER by calling setMode("manual") and applying the speed — NOT warn+drop.
         // Pre-fix: else { logWarn "cannot apply speed"; return } — speed was lost.
-        // Post-fix (Tier-25): else { setMode("manual"); handleSpeed(s); ... } — speed applied.
+        // Post-fix: else { setMode("manual"); handleSpeed(s); ... } — speed applied.
         //
         // Both-ways: orchestrator-owned.
         given: "device is off and state.mode is null (fresh device, pre-first-poll)"

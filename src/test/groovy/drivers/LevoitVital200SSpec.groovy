@@ -36,6 +36,22 @@ class LevoitVital200SSpec extends HubitatSpec {
     }
 
     // -------------------------------------------------------------------------
+    // FanControl coherence (v2.10): supportedFanSpeeds published once on initialize()
+    // (Vital line emits a uniform list from LevoitVitalPurifierLib). NON-VACUITY:
+    // removing the emit from the Vital lib's initialize() makes this RED.
+    // -------------------------------------------------------------------------
+
+    def "initialize() emits supportedFanSpeeds matching the Vital setSpeed enum"() {
+        when:
+        driver.initialize()
+
+        then: "supportedFanSpeeds emitted as a JSON list of the Vital line's speeds"
+        def raw = lastEventValue("supportedFanSpeeds")
+        raw != null
+        new groovy.json.JsonSlurper().parseText(raw as String) == ["off", "sleep", "low", "medium", "high", "max"]
+    }
+
+    // -------------------------------------------------------------------------
     // Bug Pattern #1: 2-arg update signature
     // -------------------------------------------------------------------------
 
@@ -112,6 +128,114 @@ class LevoitVital200SSpec extends HubitatSpec {
         lastEventValue("pm25") == 3
     }
 
+    def "applyStatus mirrors the fan level to the SwitchLevel level attribute, agreeing with the speed attribute"() {
+        // Previously applyStatus never emitted `level`, so the dimmer tile drifted from the real fan
+        // level after mode changes / external adjustments. It now mirrors the fan level each poll.
+        // applyStatus derives sp from fanSpeedLevel — the SAME source as the speed attribute — so level
+        // and speed always agree. The fixture's device_on_manual_speed2 has fanSpeedLevel:1; override to
+        // 2 so the level is an unambiguous mid-band value.
+        given: "a manual-mode status at fan speed level 2"
+        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def deviceData = (fixture.responses.device_on_manual_speed2 as Map) + [fanSpeedLevel: 2]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "level mirrors the fan level (band 2 -> 50%) AND agrees with the speed attribute (band 2 -> 'low')"
+        lastEventValue("level") == 50
+        lastEventValue("speed") == "low"
+    }
+
+    def "applyStatus syncs state.lastSwitchSet so toggle honors an external power change"() {
+        given: "stale lastSwitchSet 'on'; the poll now reports the device off (external change)"
+        state.lastSwitchSet = "on"
+        def fixture = loadYamlFixture("LAP-V201S.yaml")
+        def deviceData = (fixture.responses.device_on_manual_speed2 as Map) + [powerSwitch: 0]
+        def status = v2StatusEnvelope(deviceData)
+
+        when:
+        driver.applyStatus(status)
+
+        then: "switch reads off AND the toggle mirror is synced off"
+        lastEventValue("switch") == "off"
+        state.lastSwitchSet == "off"
+    }
+
+    def "setLevel emits the speed attribute on success (was updated only by setSpeed/setMode)"() {
+        // setLevel updated state.speed + mode/petMode but never emitted the FanControl `speed` event,
+        // so the named-speed tile lagged the slider until the next poll. It now emits on success.
+        given: "device already on so setLevel proceeds without an on() side-trip"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when:
+        driver.setLevel(50)
+
+        then: "the fan-speed tile is updated immediately (ceiling bands: 50 -> band 2 'low')"
+        lastEventValue("speed") == "low"
+    }
+
+    def "setLevel emits the BANDED level so command and poll agree (no raw-pct 30->50 snap)"() {
+        // A 4-speed device has only discrete levels; applyStatus mirrors speedToLevel(sp). setLevel must
+        // emit the same banded value, not the raw requested pct — else setLevel(30) showed 30 then the
+        // next poll snapped it to 50. Discriminating: pre-fix (raw pct) level==30.
+        given: "device already on"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "setLevel(30) maps to fan band 2"
+        driver.setLevel(30)
+
+        then: "level is the banded value (band 2 -> 50%), identical to what a poll at speed 2 emits"
+        lastEventValue("level") == 50
+    }
+
+    @Unroll
+    def "setLevel banding is a fixed point: re-applying emitted level #v stays at #v (round-trip, no escalation)"() {
+        // Bands must be CEILINGS aligned to speedToLevel (1->25,2->50,3->75,4->100) so re-applying an
+        // emitted level does not walk the speed up a step. Pre-fix open-interval bands (<20/<40/<60)
+        // escalated: setLevel(25)->lvl2->emits 50; setLevel(50)->lvl3->emits 75; etc.
+        // NON-VACUITY: reverting to the open-interval bands makes setLevel(25) emit 50 (RED at v=25),
+        // setLevel(50) emit 75 (RED at v=50), setLevel(75) emit 100 (RED at v=75).
+        given: "device already on so setLevel proceeds without an on() side-trip"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+
+        when: "an emitted level value is re-applied"
+        driver.setLevel(v)
+
+        then: "the emitted level equals the input — no band drift on round-trip"
+        lastEventValue("level") == v
+
+        where:
+        v << [25, 50, 75, 100]
+    }
+
+    // -------------------------------------------------------------------------
+    // BP6 off-edge: off() clears the active FanControl/SwitchLevel mirrors so the
+    // dashboard reads off/0 immediately (matches sibling EverestAir/SproutAir off()).
+    // NON-VACUITY: deleting the two sendEvent lines in Vital off() makes speed/level
+    // stay at their last-set values -> both assertions go RED.
+    // -------------------------------------------------------------------------
+
+    def "off() emits speed='off' and level=0 on the off edge (BP6)"() {
+        given: "device is on at a known speed"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "switch", value: "on"])
+        driver.setSpeed("high")
+        testParent.allRequests.clear()
+        // A successful power-off so off()'s success branch runs.
+        testParent.cannedResponse = support.TestParent.successResponse([powerSwitch: 0])
+
+        when: "the device is turned off"
+        driver.off()
+
+        then: "the fan-speed and level tiles read off/0 immediately (not the retained value)"
+        lastEventValue("speed") == "off"
+        lastEventValue("level") == 0
+    }
+
     def "applyStatus handles null status gracefully without throwing"() {
         when: "applyStatus is called with null"
         driver.applyStatus(null)
@@ -131,7 +255,7 @@ class LevoitVital200SSpec extends HubitatSpec {
         settings.descriptionTextEnable = false
         testDevice.events.add([name: "switch", value: "on"])
 
-        when: "setLevel(50) is called — maps to speed level 3"
+        when: "setLevel(50) is called — ceiling bands map 50 to fan level 2"
         driver.setLevel(50)
 
         then: "sendBypassRequest was called with correct V201S field names"
@@ -810,6 +934,328 @@ class LevoitVital200SSpec extends HubitatSpec {
         driverMethod   | apiMethod      | attr
         "setChildLock" | "setChildLock" | "childLock"
         "setDisplay"   | "setDisplay"   | "display"
+    }
+
+    // -------------------------------------------------------------------------
+    // Cross-driver consistency (v2.10): Vital setChildLock/setDisplay write-fail
+    // feedback. Pre-fix these NO-ON setters had `if (httpOk(resp)) {...}` with NO
+    // else, so a failed write produced ZERO user feedback (the sibling Superior
+    // 6000S already reported failures). Post-fix they route the failure branch
+    // through reportWriteFailure(tag, resp, ctx).
+    //
+    // Both-ways: deleting the new `else { reportWriteFailure(...) }` branch makes
+    // these go RED (no ERROR logged on a genuine -1 failure).
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "#driverMethod genuine write failure (inner -1) is reported, not swallowed silently"() {
+        given: "#attr currently 'off' so the C3 gate passes, and the cloud returns a genuine failure"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: attr, value: "off"])
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver."$driverMethod"("on")
+
+        then: "the write was attempted"
+        testParent.allRequests.find { it.method == apiMethod } != null
+
+        and: "the failure is surfaced (ERROR via reportWriteFailure for a genuine -1), not silently dropped"
+        testLog.errors.any { it.contains(tag) }
+
+        and: "the attribute is NOT advanced to 'on' on a failed write"
+        lastEventValue(attr) != "on"
+
+        where:
+        driverMethod   | apiMethod      | attr        | tag
+        "setChildLock" | "setChildLock" | "childLock" | "Child lock write failed"
+        "setDisplay"   | "setDisplay"   | "display"   | "Display write failed"
+    }
+
+    @Unroll
+    def "#driverMethod device-off rejection (11005000) logs one WARN, no ERROR (BP29 via reportWriteFailure)"() {
+        given: "#attr 'off' so C3 passes; cloud rejects with BYPASS_DEVICE_IS_OFF (device powered off)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: attr, value: "off"])
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver."$driverMethod"("on")
+
+        then: "device-off is an EXPECTED condition: WARN only, no ERROR spam"
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains(tag) }
+
+        where:
+        driverMethod   | apiMethod      | attr        | tag
+        "setChildLock" | "setChildLock" | "childLock" | "Child lock write failed"
+        "setDisplay"   | "setDisplay"   | "display"   | "Display write failed"
+    }
+
+    // -------------------------------------------------------------------------
+    // Cross-driver consistency: the remaining Vital NO-ON preference
+    // setters — setAutoPreference + setRoomSize — now report write failures via
+    // reportWriteFailure, matching setChildLock/setDisplay. Both route to the same
+    // setAutoPreference cloud method. Both-ways: deleting the new else branch makes
+    // the genuine-fail leg go RED (no ERROR) and the device-off leg go RED (no WARN).
+    // -------------------------------------------------------------------------
+
+    @Unroll
+    def "#driverMethod genuine write failure (inner -1) is reported, not swallowed (NO-ON preference setter)"() {
+        given: "cloud returns a genuine failure (inner -1)"
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver."$driverMethod"(input)
+
+        then: "the write was attempted (setAutoPreference cloud method)"
+        testParent.allRequests.find { it.method == "setAutoPreference" } != null
+
+        and: "the failure is surfaced (ERROR via reportWriteFailure), not silently dropped"
+        testLog.errors.any { it.contains(tag) }
+
+        and: "the attribute is NOT advanced on a failed write"
+        lastEventValue(attr) == null
+
+        where:
+        driverMethod        | input       | attr             | tag
+        "setAutoPreference" | "efficient" | "autoPreference" | "Auto preference write failed"
+        "setRoomSize"       | 500         | "roomSize"       | "Room size write failed"
+    }
+
+    @Unroll
+    def "#driverMethod device-off rejection (11005000) logs one WARN, no ERROR (BP29, NO-ON preference setter)"() {
+        given: "cloud rejects with BYPASS_DEVICE_IS_OFF (device powered off)"
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver."$driverMethod"(input)
+
+        then: "device-off is an EXPECTED condition: WARN only, no ERROR spam"
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains(tag) }
+
+        where:
+        driverMethod        | input       | tag
+        "setAutoPreference" | "efficient" | "Auto preference write failed"
+        "setRoomSize"       | 500         | "Room size write failed"
+    }
+
+    // -------------------------------------------------------------------------
+    // BP29 class-completion: the LAST remaining Vital NO-ON setter —
+    // setLightDetection (V200S-only) — previously had `if (httpOk(resp))` with NO else
+    // at all, silently swallowing a genuine cloud failure AND a device-off rejection.
+    // The BP29 catalog had explicitly left it out ("never spammed"), but that predates
+    // reportWriteFailure (which downgrades device-off to a single WARN), and the sibling
+    // setLightDetection on EverestAir already reports — so leaving Vital's silent was a
+    // real cross-driver inconsistency. Now routes through reportWriteFailure.
+    //
+    // Both-ways: deleting the new `else { reportWriteFailure(...) }` branch makes the
+    // genuine-fail leg go RED (no ERROR logged) and the device-off leg go RED (no WARN).
+    // -------------------------------------------------------------------------
+
+    def "setLightDetection genuine write failure (inner -1) is reported, not swallowed silently (BP29)"() {
+        given: "lightDetection 'off' so the C3 gate passes, and the cloud returns a genuine failure"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "lightDetection", value: "off"])
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver.setLightDetection("on")
+
+        then: "the write was attempted"
+        testParent.allRequests.find { it.method == "setLightDetection" } != null
+
+        and: "the failure is surfaced (ERROR via reportWriteFailure for a genuine -1), not silently dropped"
+        testLog.errors.any { it.contains("Light detection write failed") }
+
+        and: "the attribute is NOT advanced to 'on' on a failed write"
+        lastEventValue("lightDetection") != "on"
+    }
+
+    def "setLightDetection device-off rejection (11005000) logs one WARN, no ERROR (BP29 via reportWriteFailure)"() {
+        given: "lightDetection 'off' so C3 passes; cloud rejects with BYPASS_DEVICE_IS_OFF (device powered off)"
+        settings.descriptionTextEnable = false
+        testDevice.events.add([name: "lightDetection", value: "off"])
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver.setLightDetection("on")
+
+        then: "device-off is an EXPECTED condition: WARN only, no ERROR spam"
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Light detection write failed") }
+    }
+
+    // -------------------------------------------------------------------------
+    // BP22 network-outage suppression for migrated Vital NO-ON setters (v2.10).
+    // reportWriteFailure() routes the genuine-fault leg through
+    //   `if (networkOutageKnown()) { logDebug; return }`
+    // BEFORE the logError/recordError path. The "genuine -1 is reported" specs above
+    // pass only because TestParent.networkUnreachable defaults false; this guard
+    // exercises the suppression leg with the parent's outage flag set TRUE.
+    //
+    // Both-ways: with networkUnreachable=true, an inner -1 (a genuine non-device-off
+    // failure) must be DEBUG-suppressed (parent already surfaced the outage), NOT
+    // logged at ERROR nor written to the diagnostics ring-buffer (state.errorHistory).
+    // If the networkOutageKnown() gate in reportWriteFailure() is removed, this goes RED
+    // (the failure would hit logError + recordError despite the known outage).
+    // -------------------------------------------------------------------------
+
+    def "setChildLock genuine -1 during a known network outage is DEBUG-suppressed, not ERROR/recorded (BP22)"() {
+        given: "childLock 'off' so C3 passes; parent reports a known network outage; cloud returns inner -1"
+        settings.descriptionTextEnable = false
+        settings.debugOutput = true   // logDebug is debugOutput-gated; enable so the suppression DEBUG is captured
+        testDevice.events.add([name: "childLock", value: "off"])
+        testParent.networkUnreachable = true                      // parent.isNetworkUnreachable() -> true
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1 (genuine, non-device-off)
+
+        when:
+        driver.setChildLock("on")
+
+        then: "the write was attempted"
+        testParent.allRequests.find { it.method == "setChildLock" } != null
+
+        and: "the failure is DEBUG-suppressed (parent already surfaced the outage), not ERROR spam"
+        testLog.debugs.any { it.contains("Child lock write failed") && it.contains("BP22") }
+        !testLog.errors.any { it.contains("Child lock write failed") }
+
+        and: "no diagnostics ring-buffer record was written (recordError skipped)"
+        (state.errorHistory == null) || (state.errorHistory.isEmpty())
+
+        and: "the attribute is NOT advanced to 'on' on a failed write"
+        lastEventValue("childLock") != "on"
+    }
+
+    // -------------------------------------------------------------------------
+    // Cross-driver consistency (class-wide): the remaining Vital NO-ON
+    // action/scheduling setters — resetFilter, setTimer, cancelTimer — now report
+    // write failures via reportWriteFailure, matching the EverestAir precedent.
+    // Preconditions: setTimer needs a positive value (n<=0 routes to cancelTimer and
+    // never hits the cloud); cancelTimer needs state.timerId seeded (else early-exits).
+    // -------------------------------------------------------------------------
+
+    def "resetFilter genuine write failure (inner -1) is reported, not swallowed"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver.resetFilter()
+
+        then:
+        testParent.allRequests.find { it.method == "resetFilter" } != null
+        testLog.errors.any { it.contains("Filter reset failed") }
+    }
+
+    def "resetFilter device-off rejection (11005000) logs one WARN, no ERROR"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver.resetFilter()
+
+        then:
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Filter reset failed") }
+    }
+
+    def "setTimer genuine write failure (inner -1) is reported, not swallowed"() {
+        given: "a positive value so setTimer reaches the cloud (n<=0 would route to cancelTimer)"
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver.setTimer(30)
+
+        then:
+        testParent.allRequests.find { it.method == "addTimerV2" } != null
+        testLog.errors.any { it.contains("Timer set failed") }
+    }
+
+    def "setTimer device-off rejection (11005000) logs one WARN, no ERROR"() {
+        given:
+        settings.descriptionTextEnable = false
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver.setTimer(30)
+
+        then:
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Timer set failed") }
+    }
+
+    def "cancelTimer genuine write failure (inner -1) is reported, not swallowed"() {
+        given: "state.timerId seeded so cancelTimer passes the no-active-timer early-exit"
+        settings.descriptionTextEnable = false
+        state.timerId = "t1"
+        testParent.cannedResponse = TestParent.innerErrorResponse()  // inner code -1
+
+        when:
+        driver.cancelTimer()
+
+        then:
+        testParent.allRequests.find { it.method == "delTimerV2" } != null
+        testLog.errors.any { it.contains("Timer cancel failed") }
+    }
+
+    def "cancelTimer device-off rejection (11005000) logs one WARN, no ERROR"() {
+        given:
+        settings.descriptionTextEnable = false
+        state.timerId = "t1"
+        testParent.cannedResponse = [
+            status: 200,
+            data: [code: 0, result: [code: 11005000, result: [:], traceId: "t"], traceId: "t"]
+        ]
+
+        when:
+        driver.cancelTimer()
+
+        then:
+        testLog.warns.any { it.contains("BYPASS_DEVICE_IS_OFF") }
+        !testLog.errors.any { it.contains("Timer cancel failed") }
+    }
+
+    // -------------------------------------------------------------------------
+    // F4: updated() (Save Preferences) must preserve state.timerId across state.clear().
+    // The Vital line wiped it, so cancelTimer became a silent no-op after a preferences save.
+    // NON-VACUITY: removing the savedTimerId preservation in the Vital lib's updated() clears
+    // state.timerId, so cancelTimer() early-exits (no delTimerV2 call), and the assertion RED.
+    // -------------------------------------------------------------------------
+
+    def "updated() preserves state.timerId so cancelTimer still fires the delTimerV2 call (F4)"() {
+        given: "an active timer id is stored"
+        settings.descriptionTextEnable = false
+        state.timerId = "t42"
+
+        when: "the user saves preferences, then cancels the timer"
+        driver.updated()
+        testParent.allRequests.clear()
+        driver.cancelTimer()
+
+        then: "the delTimerV2 cloud call was made -- the id survived the state.clear()"
+        def req = testParent.allRequests.find { it.method == "delTimerV2" }
+        req != null
+        req.data.id == "t42"
     }
 
     // ---- BP25: setLightDetection (Vital200S-only setter) ----

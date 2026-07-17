@@ -48,18 +48,19 @@ codex login status 2>&1
 - Exit non-zero / `command not found` → `codex_available = false`. Warn once: *"Codex CLI not on PATH. Proceeding without it. Install: `npm install -g @openai/codex`."*
 - Output indicates the ChatGPT plan's usage window is exhausted / rate-limited (substrings `usage limit`, `rate limit`, `quota`, `429`, `reset at`) → `codex_available = false`. Warn once: *"Codex authenticated but ChatGPT usage window exhausted (resets later). Proceeding without it."* Do NOT burn a probe message to confirm.
 
-**OpenCode pack (`opencode_available`) — family-level gate; if YES, dispatch ALL pack members (Step 4b):**
+**OpenCode pack (`opencode_available`) — via the direct client; MAINTAINER-LOCAL, fail-safe:**
+The pack runs through the **non-agentic direct client** `/z/claude/bin/opencode_go_qa_client.py` (handoff §5b-pre, mandatory 2026-06-13) — ONE HTTPS call per model, NO agent loop, NO `opencode run`. The agentic CLI is retired for review (it silently truncated at the read→write boundary and swallowed provider errors). **The client is a maintainer-local tool — it lives in Z:/claude/bin, NOT in the repo** — so this entire family is OPTIONAL and gated: a 3rd-party contributor who doesn't have it gets the Claude fan-out (+ Codex if they have it) and nothing breaks.
 ```bash
-opencode --version 2>&1   # CLI present?
-command -v rg             # ripgrep on PATH? agentic repo-search shells out to it (stalls without)
+test -f /z/claude/bin/opencode_go_qa_client.py && echo PRESENT || echo ABSENT      # client present?
+uv run --no-project --python 3.12 /z/claude/bin/opencode_go_qa_client.py --models >/dev/null 2>&1 && echo AUTHOK || echo AUTHFAIL   # OpenCode authed?
 ```
-- `opencode` prints a version AND `rg` is on PATH → `opencode_available = true`.
-- `opencode` `command not found` / exit non-zero → `opencode_available = false`. Warn once: *"OpenCode CLI not on PATH. Proceeding without the pack. Install per opencode.ai."*
-- `opencode` present but **`rg` absent** → `opencode_available = false`. Warn once: *"OpenCode present but ripgrep (`rg`) not on PATH — agentic search stalls on a built-in-grep timeout. Install `rg`. Proceeding without the pack."*
-- **`--version` only gates install presence — it does NOT verify per-provider auth.** OpenCode is a multi-provider *router*; individual pack members can still fail auth at run time (a member's provider key missing). That surfaces per-member in Step 6 (tiny output + `API key not valid`), where you drop just that member and keep the rest. **Smoke-test trap:** a one-token ping proves nothing about whether the real multi-turn review will auth or hit a provider cap. Don't burn a probe run. **Free-seat hard-cap hang:** the 3 FREE pack members (`mimo-v2.5-free`, `big-pickle`, `deepseek-v4-flash-free`) can hit the OpenCode HARD free cap (`FreeUsageLimitError`), which does NOT error cleanly — it swallows the 429 and retries to timeout, so the member *hangs* and returns a banner-only stub. This is already handled by design: the `timeout` wrapper on each dispatch (Step 4b) bounds the hang, and because the pack runs as parallel background calls you synthesize from whatever returned and drop the stub member at Step 6 (tiny output, no findings → "pack: N/6, free-seat-X capped"). No mandatory pre-probe (that would contradict the don't-burn-a-probe rule + add per-run cost). The cheap DEBUG cap-detector (`timeout 15 opencode run --model <free> --log-level DEBUG … "ok" | grep FreeUsageLimitError`) is an OPTIONAL pre-drop if you want to skip a known-capped free seat up front rather than wait out its timeout; it's mandatory only for a free-*only* sweep (`/free-audit` Step 2.5), not here where paid seats + Claude lenses carry the review.
+- client PRESENT AND `--models` AUTHOK → `opencode_available = true`.
+- client ABSENT (the 3rd-party-contributor case) → `opencode_available = false`. Warn once: *"OpenCode direct QA client not present (maintainer-only tool, not in-repo). Proceeding without the pack — the Claude lenses (+ Codex if available) carry the review."* This is NOT an error — it's the expected path for any non-maintainer clone.
+- client present but `--models` AUTHFAIL (OpenCode not authenticated — `~/.local/share/opencode/auth.json` missing) → `opencode_available = false`. Warn once: *"OpenCode client present but not authenticated. Proceeding without the pack."*
+- **Per-model cap / retirement is per-call, NOT gated here.** A FREE member can hit its daily cap (clean `FreeUsageLimitError` in that model's output — the direct client returns real error bodies, no silent hang) or be retired (404 / `model not found`). Either way it surfaces cleanly at Step 6; drop just that member and keep the rest. No smoke-test probe beyond `--models`.
 - **No cherry-picking at dispatch.** If the gate is YES, dispatch every standard pack member (Step 4b). Cost-aware dropping (e.g. near a monthly cap) is an explicit orchestrator decision stated to the user, never a silent partial dispatch.
 
-**Do NOT spend a real `codex exec` / `opencode run` probe just to test usage** — the per-message / per-token budget is the scarce resource the gate protects. The free `--version` / `login status` checks plus the Step 6 runtime guards are sufficient.
+**Do NOT spend a real `codex exec` probe just to test usage** — the per-message budget is the scarce resource the Codex gate protects. The free `codex login status` / client `--models` checks plus the Step 6 runtime guards are sufficient.
 
 **Gemini: deferred, not probed.** Its required paid Google AI/Vertex tier is cost-uncompetitive vs the OpenCode pack at this scale (handoff doc §5b-ter). Don't probe or dispatch it. The recipe is preserved there as documented-but-dormant if a future re-evaluation is wanted.
 
@@ -129,27 +130,29 @@ For reference, the matrix the pre-flight agent applies (don't re-compute it; tru
 
 External-reviewer (`codex` column) rationale: `maybe` for pure-docs (externals are strong at doc-vs-code drift), `YES` for new driver / behavior change / new library / cut-release-skill (sibling-pattern incompleteness + stale-narration + cross-variant correctness pay off), `maybe` for spec-only (vacuous-guard axis), `maybe` for lint rule change (over-zealous enforcement axis), `NO` for trivial mechanical changes (version bump / manifest-only / CI). When in doubt, lean YES — Codex is ~one ChatGPT-Plus message and the OpenCode pack is dollar-per-token against a monthly cap (each member's input is one shared prompt; a huge-input/tiny-output review is cheap), so both are cheap relative to the catch value.
 
-### Step 4a — External-reviewer working tree + pre-staged diff (skip if both external flags false)
+### Step 4a — External-reviewer working tree + staged context (skip if both external flags false)
 
-Both families review against a tree on disk; both can share one `REVIEW_CWD`:
+The two families consume context differently:
 
-- **Codex** runs `-s read-only` (no writes) via `-C $REVIEW_CWD`, and runs `git diff` itself in its sandbox.
-- **OpenCode pack members** run `--dir .` (file access scoped to the cwd; **the `--dir .` policy auto-rejects `/tmp/*`**). A member that tries the natural `git diff > /tmp/x` pattern gets auto-rejected and gives up mid-review. The workaround has **TWO required parts** — staging alone is NOT sufficient: (1) **pre-stage the diff into the workdir**, AND (2) in the prompt, **positively direct** the model to read the staged file **and explicitly forbid** `git diff` + scratch-writes (the named `DO NOT run git diff yourself` / `DO NOT write any scratch files` lines in the Step-4c prompt). A negative-only `/tmp` warning is insufficient — some models (observed: a 1M-context paid Flash) still reach for `git diff > /tmp/x` despite it and abandon the review.
+- **Codex** is CONTENT-FED read-only on the ChatGPT subscription: a self-contained prompt (shared prompt + convention docs + the FULL diff, all inlined) via stdin, run from a LOCAL cwd (`/c/tmp/qa`) — it never touches the repo/share. The old `-C <repo>` recipe is DEAD on this `Z:`/UNC+SMB host (Codex's restricted-token sandbox can't reach the share and dies `CreateRestrictedToken: 87` the moment it spawns any child command; handoff §5b-ter, 2026-06-17). `REVIEW_CWD` below is for diff STAGING + the OpenCode client's cwd, NOT Codex.
+- **OpenCode direct client** reads any path you hand it — **NO `--dir`/`/tmp`-sandbox, NO pre-stage-to-dodge-rejection dance, NO worktree requirement** (all retired with `opencode run`). It makes ONE HTTPS POST per model and **reads the attached files itself — their bytes never enter THIS session's context, only paths do.** Context is the caller's job now: a diff-only review false-positives (e.g. a phantom "missing import" for a symbol 190 lines above the hunk), so you ATTACH the FULL changed files + convention docs, not just the diff.
 
-**Pick `REVIEW_CWD`** (Mode A/B, shared by both families):
+**Pick `REVIEW_CWD`** (diff-staging cwd + the OpenCode client's cwd for relative `-a` paths; Mode A/B — Codex no longer uses it, it's content-fed):
 - *Mode A* — audit SHA == current HEAD and tree clean (`git status --porcelain -- '*.groovy' '*.md' 'tests/**'` empty): `REVIEW_CWD=<repo-root>`, no worktree.
 - *Mode B* (cross-PR / historical SHA / dirty tree): `git worktree add ../review_<short-sha> <HEAD-SHA>`; `REVIEW_CWD=<repo-parent>/review_<short-sha>`. Remove it in Step 6.
 
-**Pre-stage the diff** inside `REVIEW_CWD` (workdir-relative path, gitignored) so the OpenCode pack can read it without tripping the `/tmp` auto-reject:
+**Stage the diff + list the changed files** (off the repo, so OneDrive doesn't churn — the direct client reads any path):
 ```bash
-git -C $REVIEW_CWD diff <BASE_SHA>..<HEAD_SHA> > $REVIEW_CWD/.review_diff_<short-sha>.txt
+mkdir -p /c/tmp/qa
+git -C $REVIEW_CWD diff <BASE_SHA>..<HEAD_SHA> > /c/tmp/qa/review_diff_<short-sha>.txt
+git -C $REVIEW_CWD diff --name-only <BASE_SHA>..<HEAD_SHA>     # → the changed files to attach IN FULL (Step 4b)
 ```
 
-`<short-sha>` = first 8 chars of the audit HEAD SHA. (Codex doesn't need the pre-staged file — it runs git itself — but staging once for the pack is harmless and keeps one diff source of truth.)
+`<short-sha>` = first 8 chars of the audit HEAD SHA. **No diff-size ceiling any more** — the old 7K-line ceiling was an agentic step-cap artifact; the direct client is bounded only by the model's ~1M context window, so a large diff is just a larger single POST (input+output must stay under ~1M tokens).
 
 ### Step 4b — Issue the parallel fan-out
 
-**First author the shared prompt file (ONCE).** Codex AND every OpenCode pack member consume the SAME prompt — identical input makes the cross-reviewer comparison meaningful and saves authoring N prompts. Build the Step-4c prompt (with `<BASE_SHA>`/`<HEAD_SHA>`, the explicit changed-file list, and the per-diff HUNT invariants substituted) and `Write` it to `<repo-parent>/.final_review_prompt_<short-sha>.md`. Tell the prompt to read the pre-staged diff at `.review_diff_<short-sha>.txt` (workdir-relative — the OpenCode `--dir .` policy can read that but not `/tmp`); Codex can also just run `git diff` itself.
+**First author the shared prompt file (ONCE).** Codex AND every OpenCode pack member consume the SAME prompt — identical input makes the cross-reviewer comparison meaningful and saves authoring N prompts. Build the Step-4c prompt (with `<BASE_SHA>`/`<HEAD_SHA>`, the explicit changed-file list, and the per-diff HUNT invariants substituted) and `Write` it to `/c/tmp/qa/final_review_prompt_<short-sha>.md`. The prompt tells reviewers the diff + changed files + convention docs are **provided** to them — Codex gets them inlined into its self-contained prompt (built below); the OpenCode client gets them as `-a` attachments (Step 4a staged the diff; attach the changed files + docs in full below).
 
 Then dispatch the YES Claude sub-agents in a SINGLE message with multiple `Agent({...})` calls, AND in the same message fire Codex (if `codex_available`) + one background `Bash` call per OpenCode pack member (if `opencode_available`). All run concurrently. Each Claude sub-agent gets the same diff context but its scope is its specialization:
 
@@ -171,38 +174,54 @@ Return your standard structured report per your definition.
 Agent({ subagent_type: 'vesync-driver-qa-platform', name: 'qa-platform', prompt: <same shape> })
 ... (other YES Claude sub-agents) ...
 
-// External reviewer 1 — Codex (can run git in its read-only sandbox; reads prompt from stdin):
+// External reviewer 1 — Codex: CONTENT-FED, read-only, ChatGPT-subscription (handoff §5b-ter, 2026-06-17).
+// The old `-C <repo>` recipe is DEAD on this Z:/UNC+SMB host — Codex's restricted-token sandbox can't reach
+// the share and dies `CreateRestrictedToken: 87` the instant it spawns ANY child command. Feed it INLINE
+// (like the OpenCode client) so it never touches the repo/share. FIRST build a self-contained prompt =
+// shared prompt + convention docs + the FULL diff, all inline (run from the repo cwd so the doc paths resolve):
+//   { cat /c/tmp/qa/final_review_prompt_<short-sha>.md; printf '\n\n## Convention docs (inline)\n\n'; \
+//     cat docs/BUG-PATTERNS.md CONTRIBUTING.md; printf '\n```diff\n'; cat /c/tmp/qa/review_diff_<short-sha>.txt; \
+//     printf '\n```\n'; } > /c/tmp/qa/codex_prompt_<short-sha>.md
+// THEN run from a LOCAL cwd (C:\tmp\qa, NOT the repo), read-only, prompt via stdin, SUBSCRIPTION auth
+// (do NOT set OPENAI_API_KEY — that silently switches to pay-per-token billing):
 Bash({
-  command: `codex exec -s read-only -C $REVIEW_CWD - < <repo-parent>/.final_review_prompt_<short-sha>.md > <repo-parent>/.codex_review_<short-sha>.md 2>&1`,
-  run_in_background: true, timeout: 1200000, description: 'Codex CLI second-opinion pass'
+  command: `cd /c/tmp/qa && codex exec --sandbox read-only --skip-git-repo-check --model gpt-5.5 -o /c/tmp/qa/codex_review_<short-sha>.md - < /c/tmp/qa/codex_prompt_<short-sha>.md > /c/tmp/qa/codex_run_<short-sha>.log 2>&1`,
+  run_in_background: true, timeout: 1200000, description: 'Codex CLI second-opinion pass (content-fed, read-only)'
 })   // only if codex_available
+//   --skip-git-repo-check  REQUIRED — C:\tmp\qa is not a git repo
+//   --model gpt-5.5        current Codex subscription model
+//   everything inline → Codex spawns no command → no UNC/share denial, no wander.
+//   GOTCHA: if a run dies `CreateRestrictedToken: 87` or starts enumerating disk, the model tried to spawn a
+//   command despite the inline diff → make the diff fully self-contained + add "review ONLY the inline diff;
+//   run NO commands" to the prompt. NEVER fall back to `-s danger-full-access` (re-enables the wander).
 
-// External family 2 — OpenCode PACK: one background Bash call PER MEMBER, all in this beat.
-// Standard 6-pack (3 free seats anchor it + 3 paid Go) ≈ $0.85/run. --dir . scopes file
-// access to the cwd (auto-rejects /tmp), so the prompt points at the pre-staged diff.
-// TWO mandatory guards on every line: (1) `< /dev/null` — without it `opencode run` hangs
-// on stdin under the Claude Code Bash tool on Windows/Git-Bash (bootstraps, then NEVER calls
-// the model, 0 bytes on both streams; verified 2026-06-05). (2) command-level `timeout 2700`
-// (45 min, generous for the paid premium members) — under Git-Bash `opencode run` frequently
-// leaves a WRAPPER PROCESS that never exits AFTER the model wrote its full output, so a
-// backgrounded call's completion notification NEVER fires and a `wait` blocks forever (lived
-// 2026-06-06: a free-audit sweep hung ~9h with all outputs on disk + 3 orphan wrappers). The
-// `run_in_background`/`timeout:` Bash-tool param does NOT save you — a detached wrapper
-// outlives it; the per-call `timeout` in the command is the only ceiling that fires (output
-// already on disk → nothing lost). NOTE: --dangerously-skip-permissions is a Claude Code flag
-// — OpenCode silently drops it (no-op); do NOT add it.
-// PROMPT="$(cat <repo-parent>/.final_review_prompt_<short-sha>.md)"; OUT=<repo-parent>/.opencode_<model>_<short-sha>.md
-Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode/mimo-v2.5-free   --dir . "$PROMPT" < /dev/null > .opencode_mimo_<short-sha>.md     2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — mimo-v2.5-free (FREE, distinct-family lens)' })
-Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode/big-pickle       --dir . "$PROMPT" < /dev/null > .opencode_bigpickle_<short-sha>.md 2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — big-pickle (FREE, concise high-signal)' })
-Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode/deepseek-v4-flash-free --dir . "$PROMPT" < /dev/null > .opencode_dsflashfree_<short-sha>.md 2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — deepseek-v4-flash-free (FREE, same arch as paid Flash @ 200K ctx)' })
-Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode-go/deepseek-v4-flash --dir . "$PROMPT" < /dev/null > .opencode_dsflash_<short-sha>.md 2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — deepseek-v4-flash (PAID ~$0.033, dominant $/finding)' })
-Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode-go/kimi-k2.6       --dir . "$PROMPT" < /dev/null > .opencode_kimi_<short-sha>.md     2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — kimi-k2.6 (PAID ~$0.50, sibling-gap specialist)' })
-Bash({ command: `cd $REVIEW_CWD && timeout 2700 opencode run --model opencode-go/deepseek-v4-pro  --dir . "$PROMPT" < /dev/null > .opencode_dspro_<short-sha>.md   2>&1`, run_in_background: true, timeout: 2700000, description: 'OpenCode pack — deepseek-v4-pro (PAID ~$0.31, premium voice)' })
-// All 6 only if opencode_available; dispatch ALL if the family gate is YES (no cherry-pick).
-// The 3 free seats keep distinct-family signal at $0 even if the paid Go account is rate-capped.
+// External family 2 — OpenCode PACK via the DIRECT CLIENT (§5b-pre): one background Bash call PER
+// MEMBER, all in this beat. Standard 5-pack (3 FREE distinct families + 2 PAID Go) ≈ $0.34/run.
+// NO `opencode run` — so NO `--dir`/`< /dev/null`/`timeout 2700`/`OPENCODE_DB`/ANSI-strip; that
+// entire agentic gotcha pile is retired. The client makes ONE HTTPS POST per model, reads the
+// attached files ITSELF (bytes never enter THIS session — only paths do), returns clean markdown,
+// and cannot side-write or step-cap-truncate. Context is the caller's job → ATTACH the convention
+// docs + the FULL changed files + the staged diff (a diff-only review false-positives).
+//   CLI="uv run --no-project --python 3.12 /z/claude/bin/opencode_go_qa_client.py"  # absolute Z: path —
+//        no tilde to expand (sidesteps the $HOME-vs-~ var-expansion gotcha entirely); --no-project so the
+//        repo's pyproject requires-python doesn't block --python 3.12 when run from the repo cwd.
+//   PROMPT=/c/tmp/qa/final_review_prompt_<short-sha>.md
+//   ATTACH="-a bugpatterns=docs/BUG-PATTERNS.md -a contributing=CONTRIBUTING.md -a claudemd=CLAUDE.md \
+//           -a diff=/c/tmp/qa/review_diff_<short-sha>.txt <one  -a label=<path>  per changed file, IN FULL>"
+//   ROUTING (§5b-pre): FREE seats add `--base https://opencode.ai/zen/v1`; PAID Go seats use the
+//   DEFAULT base (the /zen/go/v1 quota — $0 within plan). Bare model ids — the opencode/ or
+//   opencode-go/ CLI prefix 401s the API. Outputs to /c/tmp/qa (off the repo / OneDrive).
+Bash({ command: `cd $REVIEW_CWD && $CLI -m mimo-v2.5-free         --base https://opencode.ai/zen/v1 --user-file $PROMPT $ATTACH > /c/tmp/qa/oc_mimo_<short-sha>.md       2>&1`, run_in_background: true, timeout: 1500000, description: 'OpenCode — mimo-v2.5-free (FREE, Xiaomi family)' })
+Bash({ command: `cd $REVIEW_CWD && $CLI -m deepseek-v4-flash-free --base https://opencode.ai/zen/v1 --user-file $PROMPT $ATTACH > /c/tmp/qa/oc_dsflashfree_<short-sha>.md 2>&1`, run_in_background: true, timeout: 1500000, description: 'OpenCode — deepseek-v4-flash-free (FREE, DeepSeek @200K)' })
+Bash({ command: `cd $REVIEW_CWD && $CLI -m nemotron-3-ultra-free  --base https://opencode.ai/zen/v1 --user-file $PROMPT $ATTACH > /c/tmp/qa/oc_nemotron_<short-sha>.md   2>&1`, run_in_background: true, timeout: 1500000, description: 'OpenCode — nemotron-3-ultra-free (FREE, Nvidia family — most precise free voice)' })
+Bash({ command: `cd $REVIEW_CWD && $CLI -m deepseek-v4-flash      --user-file $PROMPT $ATTACH > /c/tmp/qa/oc_dsflash_<short-sha>.md  2>&1`, run_in_background: true, timeout: 1500000, description: 'OpenCode — deepseek-v4-flash (PAID Go ~$0.033, recall/breadth)' })
+Bash({ command: `cd $REVIEW_CWD && $CLI -m deepseek-v4-pro        --user-file $PROMPT $ATTACH > /c/tmp/qa/oc_dspro_<short-sha>.md    2>&1`, run_in_background: true, timeout: 1500000, description: 'OpenCode — deepseek-v4-pro (PAID Go ~$0.31, precision/judgment)' })
+// All 5 only if opencode_available; dispatch ALL if the gate is YES (no cherry-pick). The 3 FREE
+// distinct families (Xiaomi / DeepSeek / Nvidia) anchor signal at $0; the 2 PAID Go seats are the
+// throttle-proof fallback when the free seats hit their daily cap (flash=recall, pro=judgment).
 ```
 
-Each `Bash` uses `run_in_background: true` so it returns immediately; you're notified when each job exits. Outputs go to `<repo-parent>/.{codex,opencode_<model>}_review-ish_<short-sha>.md` (siblings of the repo) so they survive Mode B worktree cleanup. Per-family differences (do NOT assume one recipe transfers): **Codex** reads the prompt via stdin redirect (`- < file`) and runs git in its read-only sandbox. **OpenCode pack members** take the prompt as a positional arg (`"$(cat promptfile)"` — fine, individual prompts are <100K), run `--dir .` scoped to `REVIEW_CWD`, and read the **pre-staged** `.review_diff_<short-sha>.txt` (the `--dir .` policy blocks `/tmp`, so a `git diff > /tmp` pattern self-rejects — §4a pre-stage avoids it). **`< /dev/null` is MANDATORY** — without it `opencode run` hangs on stdin under the Claude Code Bash tool on Windows/Git-Bash (it bootstraps, then never calls the model, 0 bytes on both streams; verified 2026-06-05). **The command-level `timeout 2700` wrapper is equally MANDATORY** — under Git-Bash `opencode run` frequently leaves a wrapper process that never exits after the model already wrote its full output, so a backgrounded call's completion notification never fires and the orchestrator waits forever (lived 2026-06-06: a free-audit sweep hung ~9h, all outputs already on disk); the Bash-tool `timeout:` param does NOT save you (a detached wrapper outlives it), so the per-call `timeout` is the only effective ceiling. Do NOT add `--dangerously-skip-permissions` — that's a Claude Code flag, OpenCode silently drops it (no-op). `opencode run`'s TUI emits ANSI even non-interactively → **strip ANSI before parsing** (Step 6); `--format json` is an alternative for clean machine-parseable output, but is orthogonal to the hang. Pack members are stateless (no resume); cherry-picking members at dispatch is a process bug — dispatch all if the gate is YES.
+Each `Bash` uses `run_in_background: true` so it returns immediately; you're notified when each job exits. All outputs go to `/c/tmp/qa/` (off the repo, so they survive Mode B worktree cleanup and don't churn OneDrive). Per-family differences (do NOT assume one recipe transfers): **Codex** reads the self-contained prompt (diff + convention docs inlined) via stdin redirect (`- < file`) and runs NO commands — everything is inline, so it never touches the repo/share (the `-C <repo>` recipe is dead on this UNC+SMB host). **OpenCode pack members** run through the direct client — a single HTTPS POST that reads `--user-file` + every `-a` attachment itself and writes clean markdown to stdout. None of the old `opencode run` machinery applies: no `< /dev/null` (no agentic stdin hang), no `timeout 2700` exit-wedge (the client exits cleanly; its own `--timeout`, default 1200s, is the per-call ceiling — the Bash-tool `timeout:` just bounds the wrapper), no `OPENCODE_DB` (one HTTPS call, no shared SQLite WAL to race), no `--dir`/ANSI-strip/side-write/step-cap-truncation. The client also surfaces real HTTP errors (a free-cap `FreeUsageLimitError`, a 404, an auth fail) as clean text in its output instead of hanging. Pack members are stateless (no resume); cherry-picking members at dispatch is a process bug — dispatch all if the gate is YES.
 
 **Capture each Claude sub-agent's agent ID** from the dispatch result. Store for SendMessage on re-review rounds. The pattern:
 
@@ -214,7 +233,7 @@ Record these in your working memory for this skill invocation. Neither external 
 
 ### Step 4c — Shared external-reviewer prompt (Codex + every OpenCode pack member consume it)
 
-This is the SINGLE prompt all external reviewers read (authored to `<repo-parent>/.final_review_prompt_<short-sha>.md` in Step 4b), and it's the SAME template the §5c pipeline-tier parallel external reuses — author it once, don't fork a second prompt. Substitute `<BASE_SHA>`/`<HEAD_SHA>` with the Step-1 refs, the explicit changed-file list, the pre-staged diff path (`.review_diff_<short-sha>.txt`), and a per-diff **HUNT** list of the load-bearing invariants THIS change must preserve.
+This is the SINGLE prompt all external reviewers read (authored to `/c/tmp/qa/final_review_prompt_<short-sha>.md` in Step 4b), and it's the SAME template the §5c pipeline-tier parallel external reuses — author it once, don't fork a second prompt. Substitute `<BASE_SHA>`/`<HEAD_SHA>` with the Step-1 refs, the explicit changed-file list, and a per-diff **HUNT** list of the load-bearing invariants THIS change must preserve. (The diff + changed files reach the reviewer as attachments / git, not a path baked into the prompt.)
 
 **Frame it as a FULL independent review — NOT "find what our lenses missed."** This is the load-bearing reframe: the external reviewers' highest-value catches are INDEPENDENT findings (in this project: cross-variant correctness bugs and a missed state-freshness gate — none flagged by the in-house lenses). Priming with the full invariant set AND an open-ended "flag anything beyond this" surfaces those; narrowing to "just the gaps" suppresses the second-opinion value they exist to provide. (This broad-and-doc-loading framing applies to the EXTERNAL reviewers ONLY — the Claude lenses stay durably specialized per their per-lens defs; do not collapse them into freeform prompts.) A *soft* "our in-house lenses already cover X well" hint is fine to cut duplicate noise, but never as a scope boundary.
 
@@ -232,7 +251,7 @@ You are a senior Hubitat Elevation platform engineer reviewing a Hubitat Groovy 
 
 # Required reading FIRST (before you start)
 
-Read these files in the working tree to load the fork's specific conventions, architecture, and bug-pattern catalog into your context. They're the canonical, always-current source of truth — read them at task time, do not rely on training-data knowledge:
+These files are PROVIDED to you — as attachments to this request (the OpenCode direct client inlines them), or readable in the working tree if you have file access (Codex). Use them to load the fork's specific conventions, architecture, and bug-pattern catalog; they're the canonical, always-current source of truth — do not rely on training-data knowledge:
 
 1. **`docs/BUG-PATTERNS.md`** — the canonical bug-pattern catalog (BP1–BP29: symptom, root cause, fix scope, canonical fix, lint rule, regression coverage); read this FIRST. **`CONTRIBUTING.md`** — every lint rule's purpose, the 5-driver-family layout, parent-child architecture, HPM packaging via `bundles[]`, every convention this codebase enforces.
 2. **`CLAUDE.md`** — fork-specific AI-pipeline overlay; contains the architecture summary, family-line cleavage, bug-pattern conventions, and the cross-cutting / fix-scope discipline rules.
@@ -242,7 +261,7 @@ Read these files in the working tree to load the fork's specific conventions, ar
 
 # Your task — FULL independent review
 
-Review the entire change. **The full git diff for this review is ALREADY pre-staged at `.review_diff_<short-sha>.txt` (workdir-relative) — read THAT file directly with your file-read tool.** If your file access is sandboxed to the working directory (OpenCode pack members): **DO NOT run `git diff` yourself** — it has already been computed for you — and **DO NOT write any scratch files** (no `/tmp`, no `cp`/`mv`/`tee`/helper-script bypass); you have read-only access for this task. (Reaching for `/tmp` gets auto-rejected and aborts your review mid-stream — a negative-only "don't use /tmp" warning is not enough, hence the positive direction here.) *(Codex only: you may instead run `git diff <BASE_SHA>..<HEAD_SHA>` in your read-only sandbox if you prefer.)* The changed files are: `<explicit changed-file list>`. Read whatever additional files you need for context. Exclude generated/vendored paths and the dependency dir.
+Review the entire change. **The full git diff and the full changed files are PROVIDED to you** — as attachments to this request (the `diff=` attachment is the unified diff; each changed file is attached in full so you can verify claims in context), or — if you have a git-capable sandbox (Codex) — runnable via `git diff <BASE_SHA>..<HEAD_SHA>`. The changed files are: `<explicit changed-file list>`. Output your findings INLINE as your response — this is a one-shot review. Exclude generated/vendored paths and the dependency dir.
 
 WHAT THIS CHANGE IS: `<2-3 lines: what the diff does, what must stay true>`.
 
@@ -281,28 +300,31 @@ If you find nothing material, say so explicitly. Don't pad with style nits or hy
 
 This template is the source of truth; do not duplicate it elsewhere in the codebase.
 
+**Keep the authored prompt file framing-free — it MUST open cold with the `# Your role` heading.** When you `Write` the prompt to `.final_review_prompt_<short-sha>.md` (Step 4b), do NOT prepend any meta-framing — no "this is the shared prompt template", no "dispatch contract", no orchestrator notes, not even wrapped in `<!-- -->` (HTML comments are still passed to the model as input text; they don't strip). Strong-RLHF models read framing-about-the-task as a document *describing* a task and pivot to clarifying-question mode instead of executing the review — empirically isolated across three model families (two returned only a meta-question / A-B-C menu until the framing was stripped, then produced full substantive reviews from the identical body). Orchestrator-facing notes (template purpose, placeholder list) live HERE in the SKILL, never in the reviewer-facing file.
+
 ### Step 5 — Run sub-agents in background optional
 
 If the PR is large and the user is doing other work, dispatch each sub-agent with `run_in_background: true`. Otherwise foreground is fine (parallel dispatch finishes when the slowest sub-agent finishes — typically 6-12 min for full fan-out on a typical driver PR).
 
 ### Step 6 — Gather reports + synthesize
 
-When all dispatched Claude sub-agents return AND each dispatched external background job notifies completion, read each available external output into your context: `<repo-parent>/.codex_review_<short-sha>.md` and each `<repo-parent>/.opencode_<model>_<short-sha>.md`. Skip the merge logic for any family/member not dispatched.
+When all dispatched Claude sub-agents return AND each dispatched external background job notifies completion, read each available external output into your context: `/c/tmp/qa/codex_review_<short-sha>.md` and each `/c/tmp/qa/oc_<model>_<short-sha>.md`. Skip the merge logic for any family/member not dispatched.
 
-**Pull the verdict out of the noisy logs.** All logs carry spinner frames, retries, ANSI, and boilerplate; the findings are at the END:
+**Pull the verdict out.** Codex's log is noisy (spinner/banner); the OpenCode direct-client outputs are CLEAN markdown (no ANSI, no TUI frames — read them whole or grep the severity blocks):
 ```bash
 # Codex: content follows the final `codex` banner line
-awk '/^codex$/{f=1} f' <repo-parent>/.codex_review_<short-sha>.md | tail -40
-# OpenCode (per member): strip ANSI escapes, then grep the severity/verdict blocks
-sed 's/\x1b\[[0-9;]*[mGKHF]//g' <repo-parent>/.opencode_<model>_<short-sha>.md | grep -E "BLOCKING|WARNING|NIT|Verdict|shippable" | tail -40
+awk '/^codex$/{f=1} f' /c/tmp/qa/codex_review_<short-sha>.md | tail -40
+# OpenCode (per member): clean markdown — just read it, or grep the severity/verdict blocks
+grep -E "BLOCKING|WARNING|NIT|Verdict|shippable" /c/tmp/qa/oc_<model>_<short-sha>.md | tail -40
 ```
 
-**OpenCode pack per-member failure modes (drop the member, keep the pack).** A pack member can fail independently:
-- **Tiny output (< ~200 bytes) + `API key not valid` in tail** → that provider's key isn't configured in the OpenCode router. The other members still ran. Drop it: note "pack: N/M dispatched, `<model>` skipped — auth".
-- **Output ends mid-stream + `permission requested: external_directory; auto-rejecting`** → the member tried `/tmp` despite the prompt and gave up. The §4a pre-staged diff should prevent this; if it recurs, confirm the prompt names the workdir-relative diff path and re-dispatch just that member.
-- **Per-member cost variance is wide** — within the same nominal tier, one member can spend an order of magnitude more than another on the same prompt. Watch $/run per member, not per family; the cheapest member often matches or beats the priciest on $/real-finding.
+**OpenCode per-member failure modes (drop the member, keep the pack).** The direct client surfaces real HTTP error bodies as clean text — no silent hang, no side-write, no truncation to diagnose:
+- **`FreeUsageLimitError` in the output** → that FREE member hit its daily cap (resets in hours). Drop it: "pack: N/5, `<model>` skipped — free-cap". The 2 PAID Go seats draw a separate quota and are unaffected.
+- **`401` / auth error** → OpenCode not authenticated for that route (should've been caught by the Step-1b `--models` gate; if it slips through, drop the member).
+- **`404` / `model not found`** → that model was retired. Drop it and note it; do NOT silently swap in an unvetted model.
+- **Per-member cost variance is wide** — within the PAID tier, `deepseek-v4-pro` (~$0.31) can spend ~10× `deepseek-v4-flash` (~$0.033) on the same prompt. Watch $/run per member; the cheap flash often matches the pro seat on $/real-finding (pro earns its seat on the judgment/design-altitude angle, not raw count).
 
-**Brief throttle (wait) vs structural rate cap (needs paid tier) — by the reset interval in the error text.** "retry after *N **seconds***" auto-recovers → within the parallel window, grant a short grace then proceed. "reset after *N **hours***" / "quota exhausted" is a structural cap → waiting and model-switching won't fix it; it needs the paid tier. Don't retry-loop a structural cap.
+**Brief throttle (wait) vs structural rate cap (needs the paid seats) — by the reset interval in the error text.** "retry after *N **seconds***" auto-recovers. "reset after *N **hours***" / `FreeUsageLimitError` is the structural daily free cap → waiting and model-switching across FREE seats won't fix it (they share one IP-day bucket); fall back to the 2 PAID Go seats for the round.
 
 **Drop an external family/member only on a sustained outage (or structural cap), and state the drop EXPLICITLY in synthesis, never silently** (a drop is itself availability/cost data). Absent at dispatch → proceed without it; briefly throttled → wait within the window; structurally capped or per-member auth-fail → note it (e.g. "Codex: unavailable (usage/rate-limit)" / "pack: 4/5, `<model>` skipped — auth") and synthesize with the rest. The Claude fan-out is the authoritative result; externals are always additive.
 
@@ -357,7 +379,7 @@ Produce a unified report with this structure:
 - **Preserve reviewer voice**: cite the original reports verbatim in the appendix when clear. Don't paraphrase if it loses precision.
 - **External-only findings**: if an external reviewer caught something no Claude lens flagged, label it `[codex-only]` / `[opencode-<model>-only]` in the unified report. This is exactly the second-opinion value the integration exists to capture — surface it prominently, not buried. **Verify each external finding against the actual code before acting on it** (permanent, per-finding, every family — a hallucinated finding caught late costs a wasted fix round; doc/narration claims especially, per the stale-narration guard above).
 - **Disagreement — reviewer-vs-reviewer too, not just external-vs-Claude**: if any two reviewers contradict on the same finding (Claude-vs-external, OR two externals **split** — including two siblings *inside* the OpenCode pack calling it BLOCKING vs WARN — they reason independently and will sometimes disagree), present both perspectives, adjudicate against the actual code first, and surface the residual to the user. Don't auto-pick a side.
-- **Worktree cleanup**: if Step 4a chose Mode B (temporary worktree), run `git worktree remove ../review_<short-sha>` after the unified report is delivered. Skip in Mode A. The output files (`.codex_review_<short-sha>.md`, each `.opencode_<model>_<short-sha>.md`), the pre-staged `.review_diff_<short-sha>.txt`, and the `.final_review_prompt_<short-sha>.md` prompt file are left as audit artifacts — clean up manually if no longer needed.
+- **Worktree cleanup**: if Step 4a chose Mode B (temporary worktree), run `git worktree remove ../review_<short-sha>` after the unified report is delivered. Skip in Mode A. The `/c/tmp/qa/` scratch (each `oc_<model>_<short-sha>.md` + `codex_review_<short-sha>.md`, the `review_diff_<short-sha>.txt`, the `final_review_prompt_<short-sha>.md`) lives off the repo, so it never dirties the tree — clean up `/c/tmp/qa/*_<short-sha>.*` when no longer needed.
 
 ### Verdict rules
 
@@ -388,18 +410,18 @@ When the dev pushes fixes addressing prior findings, the user will re-invoke `/f
 6. **All externals re-run fresh each round.** None has a transcript-resume API — every invocation is independent. Re-stage the diff + re-author the shared prompt for the updated tree, then re-fire Codex + each OpenCode pack member. Decide whether to re-run by what the fix touched:
    - If the fix touched `Drivers/Levoit/*.groovy`, `Drivers/Levoit/*Lib.groovy`, `tests/lint_rules/`, `tests/check_*.py`, `levoitManifest.json`, or `tools/build-bundle.py` → re-run the externals (findings may have shifted).
    - If the fix was doc-only (CHANGELOG `[Unreleased]`, README rows, BP-catalog entries) → skip the external re-run; their prior production-code findings still hold. The re-review is Claude-side only.
-   - Re-running spends +1 ChatGPT-Plus message (Codex) and one OpenCode 6-pack run (~$0.85; 3 free seats + 3 paid Go) per round.
+   - Re-running spends +1 ChatGPT-Plus message (Codex) and one OpenCode 5-pack run (~$0.34; 3 FREE seats + 2 paid Go) per round.
 
 ### Cost discipline
 
 | Scenario | Cost estimate |
 |---|---|
-| Full round-1 (6 sub-agents + Codex + OpenCode 6-pack) | ~200-300K Claude tokens, ~8-12 min wall, +1 ChatGPT-Plus message, +1 OpenCode 6-pack run (~$0.85 = $0+$0+$0 free seats + $0.033+$0.50+$0.31 paid Go) |
+| Full round-1 (6 sub-agents + Codex + OpenCode 5-pack via direct client) | ~200-300K Claude tokens, ~8-12 min wall, +1 ChatGPT-Plus message, +1 OpenCode 5-pack run (~$0.34 = $0+$0+$0 FREE seats + $0.033+$0.31 paid Go); the attached-file bytes hit the model quota, NOT this session's context |
 | Re-review with 1 sub-agent resumed (no externals) | ~40-70K tokens, ~3-5 min |
 | Re-review with 3 sub-agents resumed + externals | ~100-150K tokens, ~5-8 min, +1 ChatGPT-Plus message, +1 OpenCode pack run |
 | Trivial doc-only fix re-review (no re-dispatch, no externals) | ~10-20K tokens, ~30s |
 
-Target: 2-3 round convergence for a typical PR. A typical cycle spends ~2-3 ChatGPT-Plus messages across Codex runs (inside Plus's weekly headroom) plus matching OpenCode pack runs (per-token; watch $/run per member, not per family — within-tier variance is wide, §5b-bis).
+Target: 2-3 round convergence for a typical PR. A typical cycle spends ~2-3 ChatGPT-Plus messages across Codex runs (inside Plus's weekly headroom) plus matching OpenCode 5-pack runs (PAID Go seats draw the Go subscription quota — $0 within plan; watch $/run per member, the pro seat can be ~10× the flash seat — §5b-bis).
 
 ## When NOT to use this skill
 
@@ -429,5 +451,5 @@ If you (main session) start doing the audit work directly instead of dispatching
 | `vesync-driver-qa-design` | Claude / Sonnet | Claude sub-agent | Parallel | Lib boundary integrity (Phase 1-5 architecture), cross-line consistency (Core/Vital/Classic/V2/Fan family), helper-extraction opportunities, intentional-asymmetry rationale, BP24 SHOULD-ON/NO-ON/SKIP-OK classification |
 | `vesync-driver-qa-operator` | Claude / Sonnet | Claude sub-agent | Parallel | BREAKING flag honesty (what breaks vs what's preserved), TMI filter (no impl-detail in user-facing prose), CHANGELOG `[Unreleased]` per-commit discipline, dashboard/RM impact disclosure, log discipline + PII sanitize routing, `Drivers/Levoit/readme.md` device-row updates, cut-release invariant trips |
 | Codex CLI | OpenAI / GPT family | Skill-orchestrated `Bash` call (NOT a Claude sub-agent) | Parallel | FULL independent second-opinion review (runs git in its read-only sandbox). Highest-value catches are independent findings — cross-variant correctness, doc-vs-code drift, sibling-pattern incompleteness, vacuous guards, stale narration, HPM-bundle integrity. Consumes the shared prompt (Step 4b/4c). |
-| OpenCode pack (standard 6) | Multi-provider router → 6 siblings: `opencode/mimo-v2.5-free` (FREE) + `opencode/big-pickle` (FREE) + `opencode/deepseek-v4-flash-free` (FREE) + `opencode-go/deepseek-v4-flash` (PAID ~$0.033) + `opencode-go/kimi-k2.6` (PAID ~$0.50) + `opencode-go/deepseek-v4-pro` (PAID ~$0.31) ≈ **$0.85/run** | Skill-orchestrated `Bash` call PER MEMBER (NOT Claude sub-agents) | Parallel | FULL independent second-opinion review from several distinct model families at once — blind-spot benefit compounds (each catches BLOCKINGs the others miss). Three free seats anchor the pack so a rate-capped session keeps distinct-family signal at $0. Runs `--dir .` scoped to the cwd reading the pre-staged `.review_diff_<short-sha>.txt` with stdin from `/dev/null` (mandatory — else `opencode run` hangs on stdin); the `--dir .` policy blocks `/tmp`; needs `rg` on PATH. Dispatch ALL 6 if the family gate is YES (no cherry-pick); per-member auth-fail/cost varies — drop a member, keep the pack (Step 6). Consumes the SAME shared prompt. |
+| OpenCode pack (standard 5, via direct client) | 5 siblings via `/z/claude/bin/opencode_go_qa_client.py` (bare model ids): `mimo-v2.5-free` (FREE, Xiaomi) + `deepseek-v4-flash-free` (FREE, DeepSeek @200K) + `nemotron-3-ultra-free` (FREE, Nvidia) + `deepseek-v4-flash` (PAID Go ~$0.033, recall) + `deepseek-v4-pro` (PAID Go ~$0.31, judgment) ≈ **$0.34/run** | Skill-orchestrated `Bash` call PER MEMBER (NOT Claude sub-agents; **MAINTAINER-LOCAL client — absent for 3rd parties → whole family gated off, fail-safe**) | Parallel | FULL independent second-opinion review from several distinct families at once — blind-spot benefit compounds. 3 FREE distinct families (Xiaomi/DeepSeek/Nvidia) anchor signal at $0; 2 PAID Go seats are the throttle-proof fallback. ONE HTTPS POST per model (NO `opencode run` → no `--dir`/`< /dev/null`/`timeout`/`OPENCODE_DB`/ANSI/side-write/step-cap); reads the attached diff + full changed files + convention docs itself (bytes never enter this session). FREE seats route `--base …/zen/v1`, PAID Go use the default `/zen/go/v1` quota. Dispatch ALL 5 if the gate is YES (no cherry-pick); per-member free-cap/retire varies — drop a member, keep the pack (Step 6). Consumes the SAME shared prompt. |
 | ~~Gemini CLI~~ | Google / Gemini family | — | **DEFERRED** | Not in the active fan-out — its required paid Google AI/Vertex tier is cost-uncompetitive vs the OpenCode pack at ship-gate scale. Recipe preserved (documented-but-dormant) in handoff doc §5b-ter; re-evaluate if pricing/usage changes. |
