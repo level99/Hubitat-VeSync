@@ -1,6 +1,6 @@
 # pyvesync canonical request fixtures — LEH-B381S (Sprout Humidifier)
 # Source: https://github.com/webdjoe/pyvesync
-# Tag: 3.4.2 (commit 01196b9 — 2026-04-16)
+# Tag: 3.5.1 (commit 6ce2ae4 — 2026-11-08)
 # Original path: src/tests/api/vesynchumidifier/LEH-B381S.yaml
 
 set_auto_mode:
@@ -33,8 +33,18 @@ set_mist_level:
       data:
         levelIdx: 0
         levelType: mist
-        virtualLevel: 1
+        virtualLevel: 2
       method: setVirtualLevel
+      source: APP
+
+set_nightlight_brightness:
+  json_object:
+    payload:
+      data:
+        brightness: 50
+        colorTemperature: 3500
+        nightLightSwitch: 1
+      method: setLightStatus
       source: APP
 
 turn_off:
@@ -62,6 +72,16 @@ turn_off_display:
       method: setDisplay
       source: APP
 
+turn_off_nightlight:
+  json_object:
+    payload:
+      data:
+        brightness: 100
+        colorTemperature: 3500
+        nightLightSwitch: 0
+      method: setLightStatus
+      source: APP
+
 turn_on:
   json_object:
     payload:
@@ -85,6 +105,16 @@ turn_on_display:
       data:
         screenSwitch: 1
       method: setDisplay
+      source: APP
+
+turn_on_nightlight:
+  json_object:
+    payload:
+      data:
+        brightness: 100
+        colorTemperature: 3500
+        nightLightSwitch: 1
+      method: setLightStatus
       source: APP
 
 update:

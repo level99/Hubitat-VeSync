@@ -1,6 +1,6 @@
 # pyvesync canonical request fixtures — LUH-A603S-WUS (LV600S Hub Connect / VeSyncLV600S)
 # Source: https://github.com/webdjoe/pyvesync
-# Tag: 3.4.2 (commit 01196b9 — 2026-04-16)
+# Tag: 3.5.1 (commit 6ce2ae4 — 2026-11-08)
 # Original path: src/tests/api/vesynchumidifier/LUH-A603S-WUS.yaml
 
 set_auto_mode:
@@ -33,7 +33,7 @@ set_mist_level:
       data:
         levelIdx: 0
         levelType: mist
-        virtualLevel: 3
+        virtualLevel: 2
       method: setVirtualLevel
       source: APP
 
@@ -44,7 +44,7 @@ set_warm_level:
         levelIdx: 0
         levelType: warm
         mistLevel: 0
-        warmLevel: 2
+        warmLevel: 3
       method: setLevel
       source: APP
 

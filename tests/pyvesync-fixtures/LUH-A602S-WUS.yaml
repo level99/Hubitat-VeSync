@@ -1,6 +1,6 @@
 # pyvesync canonical request fixtures — LUH-A602S-WUS (LV600S Humidifier / VeSyncHumid200300S)
 # Source: https://github.com/webdjoe/pyvesync
-# Tag: 3.4.2 (commit 01196b9 — 2026-04-16)
+# Tag: 3.5.1 (commit 6ce2ae4 — 2026-11-08)
 # Original path: src/tests/api/vesynchumidifier/LUH-A602S-WUS.yaml
 
 set_auto_mode:
@@ -32,7 +32,7 @@ set_mist_level:
     payload:
       data:
         id: 0
-        level: 3
+        level: 2
         type: mist
       method: setVirtualLevel
       source: APP
@@ -42,7 +42,7 @@ set_warm_level:
     payload:
       data:
         id: 0
-        level: 2
+        level: 3
         type: warm
       method: setVirtualLevel
       source: APP

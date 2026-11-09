@@ -1,6 +1,6 @@
 # pyvesync canonical request fixtures — LPF-R423S (Pedestal Fan)
 # Source: https://github.com/webdjoe/pyvesync
-# Tag: 3.4.2 (commit 01196b9 — 2026-04-16)
+# Tag: 3.5.1 (commit 6ce2ae4 — 2026-11-08)
 # Original path: src/tests/api/vesyncfan/LPF-R423S.yaml
 #
 # Note: pyvesync fixture filename uses LPF-R423S (number-transposition typo vs real
@@ -22,8 +22,8 @@ set_horizontal_oscillation_range:
       data:
         actType: default
         horizontalOscillationState: 1
-        left: 30
-        right: 30
+        left: 10
+        right: 80
       method: setOscillationStatus
       source: APP
 
@@ -32,8 +32,8 @@ set_vertical_oscillation_range:
     payload:
       data:
         actType: default
-        bottom: 30
-        top: 30
+        bottom: 20
+        top: 100
         verticalOscillationState: 1
       method: setOscillationStatus
       source: APP

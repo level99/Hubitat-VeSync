@@ -5,9 +5,9 @@ payload field-name parity between our driver fixtures and pyvesync's canonical r
 
 ## Pinned version
 
-**pyvesync tag: 3.4.2 (commit 01196b9 — 2026-04-16)**
+**pyvesync tag: 3.5.1 (commit 6ce2ae4 — 2026-11-08)**
 
-Source: https://github.com/webdjoe/pyvesync/tree/3.4.2/src/tests/api/
+Source: https://github.com/webdjoe/pyvesync/tree/3.5.1/src/tests/api/
 
 ## Format
 
