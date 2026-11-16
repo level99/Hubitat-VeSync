@@ -1,6 +1,6 @@
 # pyvesync canonical request fixtures — LUH-M101S-WUS (OasisMist 1000S Humidifier)
 # Source: https://github.com/webdjoe/pyvesync
-# Tag: 3.4.2 (commit 01196b9 — 2026-04-16)
+# Tag: 3.5.1 (commit 6ce2ae4 — 2026-11-08)
 # Original path: src/tests/api/vesynchumidifier/LUH-M101S-WUS.yaml
 #
 # Note: mist level method is 'virtualLevel' (NOT 'setVirtualLevel') — this is a
@@ -36,8 +36,8 @@ set_mist_level:
       data:
         levelIdx: 0
         levelType: mist
-        virtualLevel: 3
-      method: virtualLevel
+        virtualLevel: 2
+      method: setVirtualLevel
       source: APP
 
 turn_off:
